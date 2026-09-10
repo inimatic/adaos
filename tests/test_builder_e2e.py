@@ -14,9 +14,13 @@ from adaos.apps.cli.commands import builder as builder_cli
 from adaos.e2e.builder import (
     BuilderE2EError,
     BuilderE2ERunner,
+    BuilderE2EUnavailable,
     compare_builder_e2e_baseline,
     create_builder_e2e_baseline,
     load_builder_e2e_suite,
+)
+from adaos.services.builder.llm_input_attribution import (
+    build_llm_input_attribution,
 )
 
 
@@ -347,3 +351,215 @@ def test_builder_e2e_cli_is_registered() -> None:
     assert result.exit_code == 0
     assert "--baseline" in result.stdout
     assert "--repetitions" in result.stdout
+    assert "--resume" in result.stdout
+    assert "--run-id" in result.stdout
+
+
+def test_case_repetitions_use_distinct_webspaces(tmp_path: Path) -> None:
+    case = _case()
+    case["steps"] = case["steps"][:1]
+    suite = _write_suite(tmp_path / "definitions", cases=[case], repetitions=2)
+    executor = FixtureExecutor(
+        {"first": {"ok": True, "result": {"id": "scenario-created"}}}
+    )
+
+    BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="isolated-run",
+        executor=executor,
+    ).run()
+
+    webspaces = [str(inputs["webspace_id"]) for _, inputs in executor.calls]
+    assert len(set(webspaces)) == 2
+    assert all("case-en" in item for item in webspaces)
+
+
+def test_declared_retry_is_counted_and_first_attempt_is_retained(tmp_path: Path) -> None:
+    class RetryExecutor(FixtureExecutor):
+        def execute(self, step_type, inputs, context):
+            if not self.calls:
+                self.calls.append((step_type, dict(inputs)))
+                raise BuilderE2EUnavailable("temporary test dependency")
+            return super().execute(step_type, inputs, context)
+
+    case = _case()
+    case["steps"] = case["steps"][:1]
+    case["steps"][0]["retry"] = {
+        "max_attempts": 2,
+        "on": ["unavailable"],
+    }
+    suite = _write_suite(tmp_path / "definitions", cases=[case])
+    executor = RetryExecutor(
+        {"first": {"ok": True, "result": {"id": "scenario-created"}}}
+    )
+
+    report = BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="retry-run",
+        executor=executor,
+    ).run()
+    result = json.loads(
+        (
+            Path(report["bundle_dir"])
+            / "cases"
+            / "case-en"
+            / "attempt-01.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert result["status"] == "passed"
+    assert result["metrics"]["step_attempts"] == 2
+    assert result["metrics"]["step_retries"] == 1
+    assert [item["status"] for item in result["steps"][0]["attempts"]] == [
+        "inconclusive",
+        "passed",
+    ]
+
+
+def test_interrupted_case_resumes_from_validated_checkpoint(tmp_path: Path) -> None:
+    class InterruptExecutor(FixtureExecutor):
+        def execute(self, step_type, inputs, context):
+            raise KeyboardInterrupt("simulated interruption")
+
+    case = _case()
+    case["steps"] = case["steps"][:1]
+    suite = _write_suite(tmp_path / "definitions", cases=[case])
+    output_root = tmp_path / "runs"
+    interrupted = BuilderE2ERunner(
+        suite,
+        output_root=output_root,
+        repo_root=tmp_path,
+        run_id="resume-run",
+        executor=InterruptExecutor({}),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        interrupted.run()
+
+    checkpoint = json.loads(
+        (
+            output_root
+            / "resume-run"
+            / "checkpoints"
+            / "case-en"
+            / "attempt-01.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert checkpoint["active_step"] == {"attempt": 1, "id": "first", "index": 0}
+
+    executor = FixtureExecutor(
+        {"first": {"ok": True, "result": {"id": "scenario-created"}}}
+    )
+    report = BuilderE2ERunner(
+        suite,
+        output_root=output_root,
+        repo_root=tmp_path,
+        run_id="resume-run",
+        resume=True,
+        executor=executor,
+    ).run()
+    result = json.loads(
+        (
+            Path(report["bundle_dir"])
+            / "cases"
+            / "case-en"
+            / "attempt-01.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert result["status"] == "passed"
+    assert result["metrics"]["resumed"] is True
+    assert result["metrics"]["step_retries"] == 1
+    assert [item["status"] for item in result["steps"][0]["attempts"]] == [
+        "interrupted",
+        "passed",
+    ]
+
+
+def test_input_attribution_violation_invalidates_otherwise_passing_case(
+    tmp_path: Path,
+) -> None:
+    class AttributionExecutor(FixtureExecutor):
+        def collect_input_attribution(self, context):
+            return {
+                "status": "failed",
+                "violations": [{"code": "domain_pack_mismatch"}],
+            }
+
+    case = _case()
+    case["steps"] = case["steps"][:1]
+    suite = _write_suite(tmp_path / "definitions", cases=[case])
+    report = BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="attribution-run",
+        executor=AttributionExecutor(
+            {"first": {"ok": True, "result": {"id": "scenario-created"}}}
+        ),
+    ).run()
+
+    assert report["status"] == "inconclusive"
+    result = json.loads(
+        (
+            Path(report["bundle_dir"])
+            / "cases"
+            / "case-en"
+            / "attempt-01.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert result["failure"]["step_id"] == "input_attribution"
+
+
+def test_compatibility_executor_validates_actual_generic_request_journal(
+    tmp_path: Path,
+) -> None:
+    from adaos.e2e.builder import CompatibilityBuilderExecutor
+
+    artifact_root = tmp_path / "scenario"
+    journal_dir = artifact_root / "llm_jobs"
+    journal_dir.mkdir(parents=True)
+    messages = [
+        {"role": "system", "content": "Policy"},
+        {"role": "user", "content": "Contracts"},
+        {"role": "user", "content": "Request"},
+    ]
+    attribution = build_llm_input_attribution(
+        request_id="request-actual",
+        route="prototype.transform.async",
+        stage="generate",
+        attempt=1,
+        messages=messages,
+        message_purposes=("system_policy", "stable_context", "user_delta"),
+        capability_selection={
+            "items": [],
+            "input_attribution": {"profile": "generic", "domain_packs": []},
+        },
+        created_at="2026-09-10T10:00:00+00:00",
+    )
+    (journal_dir / "request-actual.request.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.builder.llm_job_input.v1",
+                "message_sha256": "message-digest",
+                "input_attribution": attribution,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CompatibilityBuilderExecutor(repo_root=tmp_path).collect_input_attribution(
+        {
+            "profile": "generic",
+            "domain_packs": [],
+            "outputs": {"create": {"artifact_root": str(artifact_root)}},
+        }
+    )
+
+    assert result["status"] == "passed"
+    assert result["journal_count"] == 1
+    assert result["unique_receipt_count"] == 1
+    assert result["receipts"][0]["request_id"] == "request-actual"

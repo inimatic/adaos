@@ -164,8 +164,12 @@ For each selected case, the runner:
    cleans or retains isolated state according to policy.
 
 The runner resumes only from a validated stage checkpoint with the same run
-manifest digest. A retry is measured as a retry; it never overwrites the first
-attempt.
+manifest digest. It writes a pre-step checkpoint before invoking an adapter,
+so an interrupted state-changing step is replayed with the same deterministic
+request identity and retained as an `interrupted` attempt. A retry is measured
+as a retry; it never overwrites the first attempt. Ordinary retries are opt-in
+per step by failure class and bounded. Case/repetition webspaces are distinct,
+and a completed resumed run returns its existing immutable report.
 
 The executable model-input receipt is
 `adaos.builder.llm_input_attribution.v1`. Exact messages remain local in the
@@ -177,6 +181,13 @@ provider submission so a timeout cannot erase the evaluated input. Provider
 usage returned after inference remains authoritative for billing; the
 receipt's `utf8_bytes_div_4_ceil` value is only a provider-independent
 preflight estimate.
+
+Before cleanup and scoring, the compatibility executor reads the actual
+scenario journals, schema-validates every unique receipt, and compares the
+observed profile/domain-pack set with the resolved suite policy. A model call
+without a receipt or any profile/domain-pack mismatch makes the case
+inconclusive as invalid evidence. Compact validated receipts are copied into
+the run bundle before scenario cleanup.
 
 ## Metric Model
 
@@ -310,8 +321,11 @@ outputs are gzip-compressed behind a digest-bearing evidence ref while the
 case result remains compact; in-memory full outputs still drive typed step
 references and usage accounting.
 
-The current adapter is explicitly `legacy_dev_chat.v1`. Isolation
-provisioning, interruption/resume checkpoints, full stage telemetry, browser
-task assertions, graders, sealed datasets, and the target `sdk.v1` adapter
-remain open. Therefore this implementation is an evaluation bootstrap, not
-the R2 clean-baseline exit proof.
+The current adapter is explicitly `legacy_dev_chat.v1`. Case/repetition
+webspaces are isolated; checkpoints and run identity support interruption and
+resume; retry attempts remain explicit; and actual input receipts are checked
+before cleanup. Isolated filesystem/state provisioning, internal
+Core/provider/runtime stage spans, browser task assertions, graders, sealed
+datasets, and the target `sdk.v1` adapter remain open. Therefore this
+implementation is an evaluation bootstrap, not the R2 clean-baseline exit
+proof.

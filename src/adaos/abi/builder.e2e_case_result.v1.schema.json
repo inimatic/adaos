@@ -4,7 +4,7 @@
   "title": "AdaOS Builder E2E Case Result",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "run_id", "case_id", "case_digest", "repetition", "status", "started_at", "ended_at", "duration_ms", "steps", "metrics", "evidence_refs"],
+  "required": ["schema", "run_id", "case_id", "case_digest", "repetition", "status", "started_at", "ended_at", "duration_ms", "steps", "metrics", "input_attribution", "evidence_refs"],
   "properties": {
     "schema": {"const": "adaos.builder.e2e_case_result.v1"},
     "run_id": {"type": "string"},
@@ -17,6 +17,7 @@
     "duration_ms": {"type": "number", "minimum": 0},
     "steps": {"type": "array", "items": {"type": "object"}},
     "metrics": {"type": "object"},
+    "input_attribution": {"type": "object"},
     "evidence_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
     "failure": {"type": ["object", "null"]},
     "cleanup": {"type": ["object", "null"]}

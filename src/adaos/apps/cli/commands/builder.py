@@ -685,11 +685,19 @@ def e2e(
     output: Path = typer.Option(
         Path("e2e/artifacts/builder"), "--output", file_okay=False, dir_okay=True
     ),
+    run_id: str | None = typer.Option(
+        None, "--run-id", help="Stable run id; required with --resume."
+    ),
+    resume: bool = typer.Option(
+        False, "--resume", help="Resume an interrupted run from validated checkpoints."
+    ),
     json_output: bool = typer.Option(
         False, "--json", help="Print the complete E2E report."
     ),
 ) -> None:
     """Run a declarative Builder E2E suite or selected cases."""
+    if resume and not run_id:
+        raise typer.BadParameter("--resume requires --run-id")
     try:
         report = BuilderE2ERunner(
             suite,
@@ -700,6 +708,8 @@ def e2e(
             repetitions=repetitions,
             browser=browser,
             baseline_path=baseline,
+            run_id=run_id,
+            resume=resume,
         ).run()
     except BuilderE2EError as exc:
         if json_output:

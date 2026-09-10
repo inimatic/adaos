@@ -141,6 +141,15 @@ call and took about 14 seconds, dominated by Builder chat and session reads.
 This identifies process/tool startup and missing internal stage spans as
 development measurements, not as acceptable target latency.
 
+The hardened runner now uses case/repetition-specific webspaces, pre-step and
+post-step checkpoints bound to the immutable run manifest, validated resume,
+explicit bounded retry policy and attempt history, actual model-input receipt
+checks before scoring, and per-step-type latency. A completed resumed run
+returns its existing report byte-for-byte. A second local Notes run passed in
+19.3 seconds with zero model calls and exact cleanup; 15.6 seconds was the
+legacy chat adapter and 2.55 seconds a second runtime session read. These are
+compatibility-adapter overhead, not target SDK latency.
+
 - [x] `[must]` Publish and validate the declarative E2E suite, case, resolved
   run, case-result, report, and immutable baseline contracts defined by the
   [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md). Reuse

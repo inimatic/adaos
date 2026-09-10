@@ -30,6 +30,7 @@ RUN_SCHEMA = "adaos.builder.e2e_run.v1"
 CASE_RESULT_SCHEMA = "adaos.builder.e2e_case_result.v1"
 REPORT_SCHEMA = "adaos.builder.e2e_report.v1"
 BASELINE_SCHEMA = "adaos.builder.e2e_baseline.v1"
+CHECKPOINT_SCHEMA = "adaos.builder.e2e_checkpoint.v1"
 RUNNER_VERSION = "0.1.0"
 _INLINE_STEP_OUTPUT_BYTES = 16_384
 _RESULTS = {"passed", "failed", "inconclusive", "skipped"}
@@ -42,6 +43,7 @@ _LOWER_IS_BETTER = {
     "output_tokens",
     "reasoning_tokens",
     "model_calls",
+    "step_retries",
     "failed",
     "inconclusive",
 }
@@ -396,6 +398,10 @@ class BuilderE2EStepExecutor(Protocol):
 
     def cleanup(self, context: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
+    def collect_input_attribution(
+        self, context: Mapping[str, Any]
+    ) -> Mapping[str, Any]: ...
+
 
 class CompatibilityBuilderExecutor:
     """Bootstrap adapter for the current DEV Builder chat tool."""
@@ -619,6 +625,104 @@ class CompatibilityBuilderExecutor:
             return self._browser_probe(inputs, context)
         raise BuilderE2EError(f"unsupported Builder E2E step type: {step_type}")
 
+    def collect_input_attribution(
+        self, context: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        roots: set[Path] = set()
+
+        def visit(value: Any) -> None:
+            if isinstance(value, Mapping):
+                artifact_root = str(value.get("artifact_root") or "").strip()
+                if artifact_root:
+                    roots.add(Path(artifact_root).expanduser().resolve())
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+
+        outputs = context.get("outputs") if isinstance(context.get("outputs"), Mapping) else {}
+        visit(outputs)
+        expected_packs = sorted(
+            str(pack_id)
+            for pack_id in context.get("domain_packs") or []
+            if str(pack_id)
+        )
+        expected_profile = str(context.get("profile") or "generic")
+        violations: list[dict[str, Any]] = []
+        receipts: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        journal_count = 0
+        for root in sorted(roots, key=str):
+            for path in sorted((root / "llm_jobs").glob("*.request.json")):
+                journal_count += 1
+                try:
+                    journal = json.loads(path.read_text(encoding="utf-8"))
+                    receipt = validate_builder_e2e_record(
+                        "adaos.builder.llm_input_attribution.v1",
+                        dict(journal.get("input_attribution") or {}),
+                    )
+                except Exception as exc:
+                    violations.append(
+                        {
+                            "code": "invalid_input_attribution",
+                            "path": str(path),
+                            "detail": str(exc),
+                        }
+                    )
+                    continue
+                identity = (
+                    str(receipt.get("request_id") or ""),
+                    str(journal.get("message_sha256") or ""),
+                )
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                actual_packs = sorted(
+                    str(pack.get("pack_id") or "")
+                    for pack in dict(receipt.get("capabilities") or {}).get(
+                        "domain_packs", []
+                    )
+                    if isinstance(pack, Mapping)
+                )
+                if actual_packs != expected_packs:
+                    violations.append(
+                        {
+                            "code": "domain_pack_mismatch",
+                            "request_id": receipt.get("request_id"),
+                            "expected": expected_packs,
+                            "actual": actual_packs,
+                        }
+                    )
+                if expected_profile == "generic" and receipt.get("profile") != "generic":
+                    violations.append(
+                        {
+                            "code": "profile_mismatch",
+                            "request_id": receipt.get("request_id"),
+                            "expected": "generic",
+                            "actual": receipt.get("profile"),
+                        }
+                    )
+                receipts.append(receipt)
+        usage = _collect_usage(outputs)
+        if usage["model_calls"] and not receipts:
+            violations.append(
+                {
+                    "code": "model_call_without_input_attribution",
+                    "model_calls": usage["model_calls"],
+                }
+            )
+        return {
+            "status": "failed" if violations else "passed",
+            "journal_count": journal_count,
+            "unique_receipt_count": len(receipts),
+            "observed_model_calls": usage["model_calls"],
+            "expected_profile": expected_profile,
+            "expected_domain_packs": expected_packs,
+            "receipts": receipts,
+            "violations": violations,
+        }
+
     def cleanup(self, context: Mapping[str, Any]) -> Mapping[str, Any]:
         owned = [
             dict(item)
@@ -739,12 +843,23 @@ def _aggregate_metrics(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
     required_total = 0
     required_passed = 0
+    step_attempts = 0
+    step_retries = 0
+    resumed_case_attempts = 0
+    stage_duration_ms: dict[str, float] = {}
     for result in results:
         metrics = (
             result.get("metrics") if isinstance(result.get("metrics"), Mapping) else {}
         )
         for key in usage:
             usage[key] += int(metrics.get(key) or 0)
+        step_attempts += int(metrics.get("step_attempts") or 0)
+        step_retries += int(metrics.get("step_retries") or 0)
+        resumed_case_attempts += int(bool(metrics.get("resumed")))
+        for stage, duration in dict(metrics.get("stage_duration_ms") or {}).items():
+            stage_duration_ms[str(stage)] = round(
+                stage_duration_ms.get(str(stage), 0.0) + float(duration or 0), 3
+            )
         for step in result.get("steps") or []:
             if isinstance(step, Mapping) and step.get("required") is True:
                 required_total += 1
@@ -760,6 +875,10 @@ def _aggregate_metrics(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "duration_ms_p50": round(median(durations), 3) if durations else 0.0,
         "duration_ms_p90": _percentile(durations, 0.90),
         "duration_ms_p95": _percentile(durations, 0.95),
+        "step_attempts": step_attempts,
+        "step_retries": step_retries,
+        "resumed_case_attempts": resumed_case_attempts,
+        "stage_duration_ms": stage_duration_ms,
         **usage,
     }
 
@@ -842,6 +961,7 @@ class BuilderE2ERunner:
         browser: str | None = None,
         baseline_path: Path | None = None,
         run_id: str | None = None,
+        resume: bool = False,
         executor: BuilderE2EStepExecutor | None = None,
     ) -> None:
         self.loaded = load_builder_e2e_suite(suite_path)
@@ -853,6 +973,7 @@ class BuilderE2ERunner:
         )
         self.output_root = Path(output_root).expanduser().resolve()
         self.bundle_dir = self.output_root / self.run_id
+        self.resume = bool(resume)
         self.case_ids = tuple(str(item) for item in case_ids if str(item))
         self.tags = tuple(str(item) for item in tags if str(item))
         self.profile = str(profile or defaults.get("profile") or "generic").strip()
@@ -903,9 +1024,79 @@ class BuilderE2ERunner:
             raise BuilderE2EError("Builder E2E selection is empty")
         return selected
 
-    def _run_case(self, case: Mapping[str, Any], repetition: int) -> dict[str, Any]:
+    def _checkpoint_path(self, case: Mapping[str, Any], repetition: int) -> Path:
+        return (
+            self.bundle_dir
+            / "checkpoints"
+            / str(case["case_id"])
+            / f"attempt-{repetition:02d}.json"
+        )
+
+    def _write_case_checkpoint(
+        self,
+        *,
+        path: Path,
+        run_manifest_digest: str,
+        case: Mapping[str, Any],
+        repetition: int,
+        stage: str,
+        next_step_index: int,
+        context: Mapping[str, Any],
+        steps: Sequence[Mapping[str, Any]],
+        full_outputs: Sequence[Mapping[str, Any]],
+        evidence_refs: Sequence[str],
+        started_at: str,
+        elapsed_ms: float,
+        active_step: Mapping[str, Any] | None = None,
+        failure: Mapping[str, Any] | None = None,
+        input_attribution: Mapping[str, Any] | None = None,
+        cleanup: Mapping[str, Any] | None = None,
+    ) -> None:
+        checkpoint = validate_builder_e2e_record(
+            CHECKPOINT_SCHEMA,
+            {
+                "schema": CHECKPOINT_SCHEMA,
+                "run_id": self.run_id,
+                "run_manifest_digest": run_manifest_digest,
+                "case_id": case["case_id"],
+                "case_digest": self.loaded.case_digests[str(case["case_id"])],
+                "repetition": repetition,
+                "stage": stage,
+                "next_step_index": next_step_index,
+                "active_step": redact_value(active_step)
+                if active_step is not None
+                else None,
+                "context": redact_value(dict(context)),
+                "steps": redact_value(list(steps)),
+                "full_outputs": redact_value(list(full_outputs)),
+                "evidence_refs": sorted(set(evidence_refs)),
+                "failure": redact_value(failure) if failure is not None else None,
+                "input_attribution": redact_value(input_attribution)
+                if input_attribution is not None
+                else None,
+                "cleanup": redact_value(cleanup) if cleanup is not None else None,
+                "started_at": started_at,
+                "elapsed_ms": round(max(0.0, elapsed_ms), 3),
+                "updated_at": _utc_now(),
+            },
+        )
+        _write_json(path, checkpoint)
+
+    def _run_case(
+        self,
+        case: Mapping[str, Any],
+        repetition: int,
+        *,
+        run_manifest_digest: str,
+    ) -> dict[str, Any]:
+        invocation_started = time.perf_counter()
+        checkpoint_path = self._checkpoint_path(case, repetition)
         started_at = _utc_now()
-        started = time.perf_counter()
+        elapsed_before_ms = 0.0
+        case_webspace_id = _safe_token(
+            f"e2e-{self.run_id}-{case['case_id']}-{repetition}",
+            fallback=f"e2e-{self.run_id}-{repetition}",
+        )
         context: dict[str, Any] = {
             "run_id": self.run_id,
             "case_id": case["case_id"],
@@ -913,7 +1104,12 @@ class BuilderE2ERunner:
             "locale": case["locale"],
             "profile": self.profile,
             "browser": self.browser,
-            "bundle_dir": self.bundle_dir,
+            "bundle_dir": str(self.bundle_dir),
+            "webspace_id": case_webspace_id,
+            "domain_packs": list(
+                dict(self.loaded.suite.get("defaults") or {}).get("domain_packs")
+                or []
+            ),
             "outputs": {},
             "owned_artifacts": [],
             "timeout_seconds": float(
@@ -925,76 +1121,186 @@ class BuilderE2ERunner:
         full_outputs: list[Mapping[str, Any]] = []
         evidence_refs: list[str] = []
         failure: dict[str, Any] | None = None
-        for declaration in case["steps"]:
+        next_step_index = 0
+        interrupted_attempt = 0
+        if self.resume and checkpoint_path.is_file():
+            checkpoint = validate_builder_e2e_record(
+                CHECKPOINT_SCHEMA, _load_document(checkpoint_path)
+            )
+            expected = {
+                "run_id": self.run_id,
+                "run_manifest_digest": run_manifest_digest,
+                "case_id": case["case_id"],
+                "case_digest": self.loaded.case_digests[str(case["case_id"])],
+                "repetition": repetition,
+            }
+            mismatches = [
+                key for key, value in expected.items() if checkpoint.get(key) != value
+            ]
+            if mismatches:
+                raise BuilderE2EError(
+                    "checkpoint identity mismatch: " + ", ".join(mismatches)
+                )
+            context = copy.deepcopy(dict(checkpoint["context"]))
+            context["bundle_dir"] = str(self.bundle_dir)
+            steps = copy.deepcopy(list(checkpoint["steps"]))
+            full_outputs = copy.deepcopy(list(checkpoint["full_outputs"]))
+            evidence_refs = list(checkpoint["evidence_refs"])
+            failure = (
+                copy.deepcopy(dict(checkpoint["failure"]))
+                if isinstance(checkpoint.get("failure"), Mapping)
+                else None
+            )
+            started_at = str(checkpoint["started_at"])
+            elapsed_before_ms = float(checkpoint["elapsed_ms"])
+            next_step_index = int(checkpoint["next_step_index"])
+            active = checkpoint.get("active_step")
+            if isinstance(active, Mapping):
+                interrupted_attempt = int(active.get("attempt") or 0)
+
+        declarations = list(case["steps"])
+        for step_index in range(next_step_index, len(declarations)):
+            declaration = declarations[step_index]
             step_started = time.perf_counter()
             required = bool(declaration.get("required", True))
+            retry_policy = dict(declaration.get("retry") or {})
+            max_attempts = int(retry_policy.get("max_attempts") or 1)
+            retry_on = set(retry_policy.get("on") or [])
+            backoff_seconds = float(retry_policy.get("backoff_seconds") or 0)
+            first_attempt = interrupted_attempt + 1 if step_index == next_step_index else 1
+            max_attempts = max(max_attempts, first_attempt)
             resolved_input: dict[str, Any] = {}
-            try:
-                resolved_input = _resolve_value(declaration.get("input") or {}, context)
-                if declaration.get("timeout_seconds") is not None:
-                    resolved_input["timeout_seconds"] = declaration["timeout_seconds"]
-                if declaration["type"] in {"builder.chat", "builder.session"}:
-                    resolved_input.setdefault("webspace_id", f"e2e-{self.run_id}")
-                    context["webspace_id"] = str(resolved_input["webspace_id"])
-                output = dict(
-                    self.executor.execute(
-                        str(declaration["type"]), resolved_input, context
-                    )
-                )
-                findings = _expectation_findings(
-                    output, declaration.get("expect") or {}
-                )
-                if output.get("skipped") is True:
-                    status = "skipped"
-                elif findings or output.get("ok") is False:
-                    status = "failed"
-                else:
-                    status = "passed"
-                context["outputs"][str(declaration["id"])] = copy.deepcopy(output)
-                if resolved_input.get("owns_created_draft") is True:
-                    draft_id = str(output.get("draft_id") or "").strip()
-                    if draft_id:
-                        project = (
-                            dict(output.get("project"))
-                            if isinstance(output.get("project"), Mapping)
-                            else {}
-                        )
-                        primary = next(
-                            (
-                                item
-                                for item in dict(project.get("components") or {}).get(
-                                    "owned", []
-                                )
-                                if isinstance(item, Mapping)
-                                and item.get("role") == "primary"
-                            ),
-                            {},
-                        )
-                        context["owned_artifacts"].append(
+            attempt_results: list[dict[str, Any]] = []
+            if step_index == next_step_index and interrupted_attempt:
+                attempt_results.append(
+                    {
+                        "attempt": interrupted_attempt,
+                        "status": "interrupted",
+                        "duration_ms": 0.0,
+                        "findings": [
                             {
-                                "draft_id": draft_id,
-                                "project_id": str(
-                                    output.get("project_id")
-                                    or project.get("id")
-                                    or ""
-                                ),
-                                "project_manifest_digest": str(
-                                    project.get("manifest_digest") or ""
-                                ),
-                                "primary_ref": str(primary.get("ref") or ""),
+                                "code": "interrupted_before_checkpoint_commit",
+                                "detail": "The idempotent step is replayed during resume.",
                             }
+                        ],
+                    }
+                )
+            output: dict[str, Any] = {}
+            findings: list[dict[str, Any]] = []
+            status = "failed"
+            for attempt in range(first_attempt, max_attempts + 1):
+                active_step = {
+                    "index": step_index,
+                    "id": declaration["id"],
+                    "attempt": attempt,
+                }
+                self._write_case_checkpoint(
+                    path=checkpoint_path,
+                    run_manifest_digest=run_manifest_digest,
+                    case=case,
+                    repetition=repetition,
+                    stage="executing",
+                    next_step_index=step_index,
+                    context=context,
+                    steps=steps,
+                    full_outputs=full_outputs,
+                    evidence_refs=evidence_refs,
+                    started_at=started_at,
+                    elapsed_ms=elapsed_before_ms
+                    + (time.perf_counter() - invocation_started) * 1000.0,
+                    active_step=active_step,
+                    failure=failure,
+                )
+                attempt_started = time.perf_counter()
+                retry_category = ""
+                try:
+                    resolved_input = _resolve_value(
+                        declaration.get("input") or {}, context
+                    )
+                    if declaration.get("timeout_seconds") is not None:
+                        resolved_input["timeout_seconds"] = declaration[
+                            "timeout_seconds"
+                        ]
+                    if declaration["type"] in {"builder.chat", "builder.session"}:
+                        resolved_input.setdefault("webspace_id", context["webspace_id"])
+                    output = dict(
+                        self.executor.execute(
+                            str(declaration["type"]), resolved_input, context
                         )
-                evidence = str(output.get("evidence_ref") or "").strip()
-                if evidence:
-                    evidence_refs.append(evidence)
-            except BuilderE2EUnavailable as exc:
-                output = {"error": type(exc).__name__, "detail": str(exc)}
-                findings = [{"code": "runner_unavailable", "detail": str(exc)}]
-                status = "inconclusive"
-            except Exception as exc:
-                output = {"error": type(exc).__name__, "detail": str(exc)}
-                findings = [{"code": "step_exception", "detail": str(exc)}]
-                status = "failed"
+                    )
+                    findings = _expectation_findings(
+                        output, declaration.get("expect") or {}
+                    )
+                    if output.get("skipped") is True:
+                        status = "skipped"
+                    elif findings or output.get("ok") is False:
+                        status = "failed"
+                        retry_category = "failed_expectation"
+                    else:
+                        status = "passed"
+                except BuilderE2EUnavailable as exc:
+                    output = {"error": type(exc).__name__, "detail": str(exc)}
+                    findings = [{"code": "runner_unavailable", "detail": str(exc)}]
+                    status = "inconclusive"
+                    retry_category = "unavailable"
+                except Exception as exc:
+                    output = {"error": type(exc).__name__, "detail": str(exc)}
+                    findings = [{"code": "step_exception", "detail": str(exc)}]
+                    status = "failed"
+                    retry_category = "exception"
+                attempt_results.append(
+                    {
+                        "attempt": attempt,
+                        "status": status,
+                        "duration_ms": round(
+                            (time.perf_counter() - attempt_started) * 1000.0, 3
+                        ),
+                        "findings": redact_value(findings),
+                    }
+                )
+                if (
+                    retry_category not in retry_on
+                    or attempt >= max_attempts
+                    or status in {"passed", "skipped"}
+                ):
+                    break
+                if backoff_seconds:
+                    time.sleep(backoff_seconds)
+
+            context["outputs"][str(declaration["id"])] = copy.deepcopy(output)
+            if resolved_input.get("owns_created_draft") is True:
+                draft_id = str(output.get("draft_id") or "").strip()
+                if draft_id:
+                    project = (
+                        dict(output.get("project"))
+                        if isinstance(output.get("project"), Mapping)
+                        else {}
+                    )
+                    primary = next(
+                        (
+                            item
+                            for item in dict(project.get("components") or {}).get(
+                                "owned", []
+                            )
+                            if isinstance(item, Mapping) and item.get("role") == "primary"
+                        ),
+                        {},
+                    )
+                    ownership = {
+                        "draft_id": draft_id,
+                        "project_id": str(
+                            output.get("project_id") or project.get("id") or ""
+                        ),
+                        "project_manifest_digest": str(
+                            project.get("manifest_digest") or ""
+                        ),
+                        "primary_ref": str(primary.get("ref") or ""),
+                    }
+                    if ownership not in context["owned_artifacts"]:
+                        context["owned_artifacts"].append(ownership)
+            evidence = str(output.get("evidence_ref") or "").strip()
+            if evidence:
+                evidence_refs.append(evidence)
             full_outputs.append(copy.deepcopy(output))
             persisted_output, persisted_evidence = _compact_step_output(
                 output,
@@ -1010,19 +1316,42 @@ class BuilderE2ERunner:
                 "type": declaration["type"],
                 "required": required,
                 "status": status,
-                "duration_ms": round((time.perf_counter() - step_started) * 1000.0, 3),
+                "duration_ms": round(
+                    (time.perf_counter() - step_started) * 1000.0, 3
+                ),
+                "attempts": attempt_results,
                 "input": redact_value(resolved_input),
                 "output": persisted_output,
                 "findings": redact_value(findings),
             }
             steps.append(step_result)
+            interrupted_attempt = 0
+            next_step_index = step_index + 1
             if required and status in {"failed", "inconclusive"}:
                 failure = {
                     "step_id": declaration["id"],
                     "status": status,
                     "findings": redact_value(findings),
                 }
+            self._write_case_checkpoint(
+                path=checkpoint_path,
+                run_manifest_digest=run_manifest_digest,
+                case=case,
+                repetition=repetition,
+                stage="executing",
+                next_step_index=next_step_index,
+                context=context,
+                steps=steps,
+                full_outputs=full_outputs,
+                evidence_refs=evidence_refs,
+                started_at=started_at,
+                elapsed_ms=elapsed_before_ms
+                + (time.perf_counter() - invocation_started) * 1000.0,
+                failure=failure,
+            )
+            if failure is not None:
                 break
+
         required_statuses = [step["status"] for step in steps if step["required"]]
         if "failed" in required_statuses:
             status = "failed"
@@ -1030,10 +1359,66 @@ class BuilderE2ERunner:
             status = "inconclusive"
         else:
             status = "passed"
+
+        collector = getattr(self.executor, "collect_input_attribution", None)
+        if callable(collector):
+            try:
+                input_attribution = dict(collector(context))
+            except Exception as exc:
+                input_attribution = {
+                    "status": "failed",
+                    "violations": [
+                        {
+                            "code": "input_attribution_collection_failed",
+                            "detail": f"{type(exc).__name__}: {exc}",
+                        }
+                    ],
+                }
+        else:
+            input_attribution = {
+                "status": "not_enforced",
+                "reason": "executor does not expose input attribution",
+            }
+        attribution_path = (
+            self.bundle_dir
+            / "evidence"
+            / "input-attribution"
+            / f"{case['case_id']}-attempt-{repetition:02d}.json"
+        )
+        _write_json(attribution_path, redact_value(input_attribution))
+        evidence_refs.append(attribution_path.relative_to(self.bundle_dir).as_posix())
+        if input_attribution.get("status") == "failed" and status == "passed":
+            status = "inconclusive"
+            failure = {
+                "step_id": "input_attribution",
+                "status": "inconclusive",
+                "findings": redact_value(input_attribution.get("violations") or []),
+            }
+        self._write_case_checkpoint(
+            path=checkpoint_path,
+            run_manifest_digest=run_manifest_digest,
+            case=case,
+            repetition=repetition,
+            stage="cleanup",
+            next_step_index=next_step_index,
+            context=context,
+            steps=steps,
+            full_outputs=full_outputs,
+            evidence_refs=evidence_refs,
+            started_at=started_at,
+            elapsed_ms=elapsed_before_ms
+            + (time.perf_counter() - invocation_started) * 1000.0,
+            failure=failure,
+            input_attribution=input_attribution,
+        )
+
         cleanup: Mapping[str, Any] | None = None
-        cleanup_policy = str(dict(case.get("cleanup") or {}).get("policy") or "never")
-        should_cleanup = cleanup_policy == "always" or (
-            cleanup_policy == "on-success" and status == "passed"
+        cleanup_options = dict(case.get("cleanup") or {})
+        cleanup_policy = str(cleanup_options.get("policy") or "never")
+        retain_failure = bool(cleanup_options.get("retain_on_failure"))
+        should_cleanup = not (retain_failure and status != "passed") and (
+            cleanup_policy == "always"
+            or (cleanup_policy == "on-success" and status == "passed")
         )
         if should_cleanup:
             try:
@@ -1044,22 +1429,26 @@ class BuilderE2ERunner:
                     "error": type(exc).__name__,
                     "detail": str(exc),
                 }
-                if status == "passed":
-                    status = "inconclusive"
-                    failure = {
-                        "step_id": "cleanup",
-                        "status": "inconclusive",
-                        "findings": [cleanup],
-                    }
-            if cleanup is not None and cleanup.get("status") == "failed":
-                if status == "passed":
-                    status = "inconclusive"
-                    failure = {
-                        "step_id": "cleanup",
-                        "status": "inconclusive",
-                        "findings": [cleanup],
-                    }
+            if cleanup is not None and cleanup.get("status") == "failed" and status == "passed":
+                status = "inconclusive"
+                failure = {
+                    "step_id": "cleanup",
+                    "status": "inconclusive",
+                    "findings": [cleanup],
+                }
+
         usage = _collect_usage(full_outputs)
+        stage_duration_ms: dict[str, float] = {}
+        for step in steps:
+            key = str(step.get("type") or "unknown")
+            stage_duration_ms[key] = round(
+                stage_duration_ms.get(key, 0.0) + float(step.get("duration_ms") or 0),
+                3,
+            )
+        step_attempts = sum(len(step.get("attempts") or []) for step in steps)
+        elapsed_ms = elapsed_before_ms + (
+            time.perf_counter() - invocation_started
+        ) * 1000.0
         result = validate_builder_e2e_record(
             CASE_RESULT_SCHEMA,
             {
@@ -1071,16 +1460,21 @@ class BuilderE2ERunner:
                 "status": status,
                 "started_at": started_at,
                 "ended_at": _utc_now(),
-                "duration_ms": round((time.perf_counter() - started) * 1000.0, 3),
+                "duration_ms": round(elapsed_ms, 3),
                 "steps": steps,
                 "metrics": {
                     **usage,
                     "step_count": len(steps),
+                    "step_attempts": step_attempts,
+                    "step_retries": max(0, step_attempts - len(steps)),
+                    "resumed": elapsed_before_ms > 0,
+                    "stage_duration_ms": stage_duration_ms,
                     "required_step_count": len(required_statuses),
                     "required_step_passed": sum(
                         item == "passed" for item in required_statuses
                     ),
                 },
+                "input_attribution": redact_value(input_attribution),
                 "evidence_refs": sorted(set(evidence_refs)),
                 "failure": failure,
                 "cleanup": redact_value(cleanup) if cleanup is not None else None,
@@ -1093,18 +1487,35 @@ class BuilderE2ERunner:
             / f"attempt-{repetition:02d}.json"
         )
         _write_json(result_path, result)
+        self._write_case_checkpoint(
+            path=checkpoint_path,
+            run_manifest_digest=run_manifest_digest,
+            case=case,
+            repetition=repetition,
+            stage="complete",
+            next_step_index=next_step_index,
+            context=context,
+            steps=steps,
+            full_outputs=full_outputs,
+            evidence_refs=evidence_refs,
+            started_at=started_at,
+            elapsed_ms=elapsed_ms,
+            failure=failure,
+            input_attribution=input_attribution,
+            cleanup=cleanup,
+        )
         return result
 
     def run(self) -> dict[str, Any]:
         selected = self._selected_cases()
-        try:
-            self.bundle_dir.mkdir(parents=True, exist_ok=False)
-        except FileExistsError as exc:
+        if self.bundle_dir.exists() and not self.resume:
             raise BuilderE2EError(
                 f"Builder E2E run bundle already exists: {self.bundle_dir}"
-            ) from exc
+            )
+        if not self.bundle_dir.exists():
+            self.bundle_dir.mkdir(parents=True, exist_ok=False)
         environment = _repository_environment(self.repo_root)
-        run_manifest = validate_builder_e2e_record(
+        proposed_manifest = validate_builder_e2e_record(
             RUN_SCHEMA,
             {
                 "schema": RUN_SCHEMA,
@@ -1154,12 +1565,78 @@ class BuilderE2ERunner:
                 "started_at": _utc_now(),
             },
         )
-        _write_json(self.bundle_dir / "run.json", run_manifest)
-        results = [
-            self._run_case(case, repetition)
-            for case in selected
-            for repetition in range(1, self.repetitions + 1)
-        ]
+        run_path = self.bundle_dir / "run.json"
+        if self.resume:
+            if not run_path.is_file():
+                raise BuilderE2EError(
+                    f"Builder E2E resume manifest is missing: {run_path}"
+                )
+            run_manifest = validate_builder_e2e_record(
+                RUN_SCHEMA, _load_document(run_path)
+            )
+            identity_keys = (
+                "suite",
+                "adapter",
+                "profile",
+                "repetitions",
+                "browser",
+                "cases",
+                "selection",
+                "input_attribution",
+                "baseline",
+            )
+            mismatches = [
+                key
+                for key in identity_keys
+                if run_manifest.get(key) != proposed_manifest.get(key)
+            ]
+            if mismatches:
+                raise BuilderE2EError(
+                    "resume configuration does not match run manifest: "
+                    + ", ".join(mismatches)
+                )
+            report_path = self.bundle_dir / "report.json"
+            if report_path.is_file():
+                report = validate_builder_e2e_record(
+                    REPORT_SCHEMA, _load_document(report_path)
+                )
+                if report.get("run_id") != self.run_id:
+                    raise BuilderE2EError("resume report run_id mismatch")
+                return {**report, "bundle_dir": str(self.bundle_dir)}
+        else:
+            run_manifest = proposed_manifest
+            _write_json(run_path, run_manifest)
+        run_manifest_digest = _digest(run_manifest)
+        results: list[dict[str, Any]] = []
+        for case in selected:
+            for repetition in range(1, self.repetitions + 1):
+                result_path = (
+                    self.bundle_dir
+                    / "cases"
+                    / str(case["case_id"])
+                    / f"attempt-{repetition:02d}.json"
+                )
+                if self.resume and result_path.is_file():
+                    result = validate_builder_e2e_record(
+                        CASE_RESULT_SCHEMA, _load_document(result_path)
+                    )
+                    if (
+                        result.get("run_id") != self.run_id
+                        or result.get("case_id") != case["case_id"]
+                        or result.get("case_digest")
+                        != self.loaded.case_digests[str(case["case_id"])]
+                        or result.get("repetition") != repetition
+                    ):
+                        raise BuilderE2EError(
+                            f"resume case result identity mismatch: {result_path}"
+                        )
+                else:
+                    result = self._run_case(
+                        case,
+                        repetition,
+                        run_manifest_digest=run_manifest_digest,
+                    )
+                results.append(result)
         metrics = _aggregate_metrics(results)
         comparison = (
             compare_builder_e2e_baseline(
