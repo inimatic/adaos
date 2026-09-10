@@ -208,10 +208,7 @@ def test_cleanup_failure_makes_successful_case_inconclusive(tmp_path: Path) -> N
     assert report["status"] == "inconclusive"
     result = json.loads(
         (
-            Path(report["bundle_dir"])
-            / "cases"
-            / "case-en"
-            / "attempt-01.json"
+            Path(report["bundle_dir"]) / "cases" / "case-en" / "attempt-01.json"
         ).read_text(encoding="utf-8")
     )
     assert result["failure"]["step_id"] == "cleanup"
@@ -244,10 +241,7 @@ def test_large_step_output_is_compressed_without_breaking_refs_or_usage(
 
     result = json.loads(
         (
-            Path(report["bundle_dir"])
-            / "cases"
-            / "case-en"
-            / "attempt-01.json"
+            Path(report["bundle_dir"]) / "cases" / "case-en" / "attempt-01.json"
         ).read_text(encoding="utf-8")
     )
     compact = result["steps"][0]["output"]
@@ -376,7 +370,9 @@ def test_case_repetitions_use_distinct_webspaces(tmp_path: Path) -> None:
     assert all("case-en" in item for item in webspaces)
 
 
-def test_declared_retry_is_counted_and_first_attempt_is_retained(tmp_path: Path) -> None:
+def test_declared_retry_is_counted_and_first_attempt_is_retained(
+    tmp_path: Path,
+) -> None:
     class RetryExecutor(FixtureExecutor):
         def execute(self, step_type, inputs, context):
             if not self.calls:
@@ -404,10 +400,7 @@ def test_declared_retry_is_counted_and_first_attempt_is_retained(tmp_path: Path)
     ).run()
     result = json.loads(
         (
-            Path(report["bundle_dir"])
-            / "cases"
-            / "case-en"
-            / "attempt-01.json"
+            Path(report["bundle_dir"]) / "cases" / "case-en" / "attempt-01.json"
         ).read_text(encoding="utf-8")
     )
 
@@ -441,11 +434,7 @@ def test_interrupted_case_resumes_from_validated_checkpoint(tmp_path: Path) -> N
 
     checkpoint = json.loads(
         (
-            output_root
-            / "resume-run"
-            / "checkpoints"
-            / "case-en"
-            / "attempt-01.json"
+            output_root / "resume-run" / "checkpoints" / "case-en" / "attempt-01.json"
         ).read_text(encoding="utf-8")
     )
     assert checkpoint["active_step"] == {"attempt": 1, "id": "first", "index": 0}
@@ -463,10 +452,7 @@ def test_interrupted_case_resumes_from_validated_checkpoint(tmp_path: Path) -> N
     ).run()
     result = json.loads(
         (
-            Path(report["bundle_dir"])
-            / "cases"
-            / "case-en"
-            / "attempt-01.json"
+            Path(report["bundle_dir"]) / "cases" / "case-en" / "attempt-01.json"
         ).read_text(encoding="utf-8")
     )
 
@@ -505,13 +491,55 @@ def test_input_attribution_violation_invalidates_otherwise_passing_case(
     assert report["status"] == "inconclusive"
     result = json.loads(
         (
-            Path(report["bundle_dir"])
-            / "cases"
-            / "case-en"
-            / "attempt-01.json"
+            Path(report["bundle_dir"]) / "cases" / "case-en" / "attempt-01.json"
         ).read_text(encoding="utf-8")
     )
     assert result["failure"]["step_id"] == "input_attribution"
+
+
+def test_attribution_call_count_and_aggregate_usage_are_not_double_counted(
+    tmp_path: Path,
+) -> None:
+    class AttributionUsageExecutor(FixtureExecutor):
+        def collect_input_attribution(self, context):
+            return {
+                "status": "passed",
+                "unique_receipt_count": 3,
+                "receipts": [{"request_id": str(index)} for index in range(3)],
+                "violations": [],
+            }
+
+    case = _case()
+    case["steps"] = case["steps"][:1]
+    suite = _write_suite(tmp_path / "definitions", cases=[case])
+    executor = AttributionUsageExecutor(
+        {
+            "first": {
+                "ok": True,
+                "result": {"id": "scenario-created"},
+                "telemetry": {
+                    "usage": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 40,
+                        "output_tokens": 20,
+                    }
+                },
+            }
+        }
+    )
+
+    report = BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="attribution-usage",
+        executor=executor,
+    ).run()
+
+    assert report["metrics"]["model_calls"] == 3
+    assert report["metrics"]["fresh_input_tokens"] == 60
+    assert report["metrics"]["cached_input_tokens"] == 40
+    assert report["metrics"]["output_tokens"] == 20
 
 
 def test_compatibility_executor_validates_actual_generic_request_journal(
@@ -563,3 +591,211 @@ def test_compatibility_executor_validates_actual_generic_request_journal(
     assert result["journal_count"] == 1
     assert result["unique_receipt_count"] == 1
     assert result["receipts"][0]["request_id"] == "request-actual"
+
+
+def test_compatibility_executor_waits_for_exact_llm_job(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.e2e.builder import CompatibilityBuilderExecutor
+
+    class Manager:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run_dev_tool(self, _skill, tool, payload, *, timeout):
+            assert tool == "get_session"
+            assert payload == {"session_id": "session-1", "webspace_id": "e2e-space"}
+            assert timeout == 5.0
+            self.calls += 1
+            status = "running" if self.calls == 1 else "succeeded"
+            return {
+                "session": {
+                    "id": "session-1",
+                    "pending_llm_jobs": {
+                        "local-job": {
+                            "job_id": "root-job",
+                            "local_job_id": "local-job",
+                            "status": status,
+                        }
+                    },
+                }
+            }
+
+    executor = CompatibilityBuilderExecutor(repo_root=tmp_path)
+    manager = Manager()
+    executor._skill_manager = manager
+    monkeypatch.setattr("adaos.e2e.builder.time.sleep", lambda _seconds: None)
+
+    result = executor.execute(
+        "builder.wait",
+        {
+            "session_id": "session-1",
+            "job_id": "root-job",
+            "webspace_id": "e2e-space",
+            "timeout_seconds": 5,
+        },
+        {"run_id": "run", "timeout_seconds": 5},
+    )
+
+    assert result["ok"] is True
+    assert result["status"] == "succeeded"
+    assert result["poll_count"] == 2
+    assert manager.calls == 2
+
+
+def test_compatibility_executor_waits_for_durable_terminal_artifact(
+    tmp_path: Path,
+) -> None:
+    from adaos.e2e.builder import CompatibilityBuilderExecutor
+
+    artifact_root = tmp_path / "scenario"
+    journal_dir = artifact_root / "llm_jobs"
+    journal_dir.mkdir(parents=True)
+    (journal_dir / "root-job.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.builder.llm_job_result.v1",
+                "job_id": "root-job",
+                "related_ids": ["local-job", "root-job"],
+                "status": "succeeded",
+                "diagnostic": {
+                    "telemetry": {
+                        "usage": {
+                            "input_tokens": 120,
+                            "cached_input_tokens": 80,
+                            "output_tokens": 15,
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    executor = CompatibilityBuilderExecutor(repo_root=tmp_path)
+
+    result = executor.execute(
+        "builder.wait",
+        {
+            "session_id": "session-1",
+            "job_id": "root-job",
+            "webspace_id": "e2e-space",
+            "artifact_root": str(artifact_root),
+        },
+        {"run_id": "run", "timeout_seconds": 5},
+    )
+
+    assert result["ok"] is True
+    assert result["status"] == "succeeded"
+    assert result["telemetry"]["usage"]["cached_input_tokens"] == 80
+    assert result["terminal_artifact"].endswith("root-job.json")
+
+
+def test_runner_injects_case_webspace_into_builder_wait(tmp_path: Path) -> None:
+    case = _case()
+    case["steps"] = [
+        {
+            "id": "create",
+            "type": "builder.chat",
+            "input": {"text": "Create a small application"},
+            "expect": {"values": {"ok": True}},
+        },
+        {
+            "id": "wait",
+            "type": "builder.wait",
+            "input": {"session_id": "session-1", "job_id": "job-1"},
+            "expect": {"values": {"ok": True}},
+        },
+    ]
+    suite = _write_suite(tmp_path / "definitions", cases=[case])
+    executor = FixtureExecutor(
+        {
+            "builder.chat": {
+                "ok": True,
+                "artifact_root": str(tmp_path / "scenario"),
+            },
+            "builder.wait": {"ok": True, "status": "succeeded"},
+        }
+    )
+
+    BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="wait-context",
+        executor=executor,
+    ).run()
+
+    step_type, inputs = executor.calls[1]
+    assert step_type == "builder.wait"
+    assert inputs["webspace_id"] == "e2e-wait-context-case-en-1"
+    assert inputs["artifact_root"] == str(tmp_path / "scenario")
+
+
+def test_runner_captures_compact_project_primary_ref_for_cleanup(
+    tmp_path: Path,
+) -> None:
+    case = _case()
+    case["steps"] = [
+        {
+            "id": "create",
+            "type": "builder.chat",
+            "input": {
+                "text": "Create a small application",
+                "owns_created_draft": True,
+            },
+            "expect": {"values": {"ok": True}},
+        }
+    ]
+    suite = _write_suite(tmp_path / "definitions", cases=[case])
+    executor = FixtureExecutor(
+        {
+            "builder.chat": {
+                "ok": True,
+                "draft_id": "draft-1",
+                "project_id": "project-1",
+                "project": {
+                    "id": "project-1",
+                    "manifest_digest": "sha256:digest",
+                    "primary_ref": "scenario:project-1",
+                },
+            }
+        }
+    )
+
+    BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="cleanup-ownership",
+        executor=executor,
+    ).run()
+
+    ownership = executor.cleanup_calls[0]["owned_artifacts"][0]
+    assert ownership["primary_ref"] == "scenario:project-1"
+
+
+def test_visible_archetype_suite_uses_ordinary_prompts_without_internal_hints() -> None:
+    suite_path = Path("e2e/builder/development/archetypes/suite.yaml").resolve()
+    loaded = load_builder_e2e_suite(suite_path)
+
+    assert len(loaded.cases) == 8
+    assert {case["locale"] for case in loaded.cases} == {"en", "ru"}
+    prohibited = (
+        "scenario_default",
+        "widget",
+        "component id",
+        "domain pack",
+        "adaos/",
+        "page_schema",
+        "semantic abi",
+        "recipe.",
+    )
+    for case in loaded.cases:
+        assert "visible" in case.get("tags", [])
+        chat_text = "\n".join(
+            str(step.get("input", {}).get("text") or "")
+            for step in case["steps"]
+            if step["type"] == "builder.chat"
+        ).lower()
+        assert chat_text
+        assert not any(token in chat_text for token in prohibited)

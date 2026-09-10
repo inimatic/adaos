@@ -1,0 +1,37 @@
+schema: adaos.builder.e2e_case.v1
+case_id: media-review-ru
+title: Проверка медиаматериалов
+description: Видимый пример каталога материалов, просмотра и обсуждения редакции.
+locale: ru
+tags: [visible, media, review]
+requirements:
+  primary_jobs: [найти материал, просмотреть, оставить замечание, принять решение]
+  representative_states: [нет материалов, ожидает проверки, есть замечания, одобрено]
+prohibited_assumptions: [решение можно принять без выбранного материала, комментарии можно потерять]
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Создай новое приложение "Проверка материалов ${run_id}" для редактора небольшой медиакоманды.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: Покажи содержательную первую версию. Редактор должен находить материалы по проекту, типу и статусу, видеть обложку и основные свойства, открывать изображение или видео, оставлять замечания с привязкой ко времени или области, запрашивать исправления и одобрять редакцию. Добавь реалистичные примеры и состояния пусто, загружается и файл недоступен.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+cleanup: {policy: always, retain_on_failure: true}

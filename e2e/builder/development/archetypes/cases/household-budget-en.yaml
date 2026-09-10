@@ -1,0 +1,37 @@
+schema: adaos.builder.e2e_case.v1
+case_id: household-budget-en
+title: Household budget
+description: Visible development case for money, computed values, and period comparison.
+locale: en
+tags: [visible, finance, dashboard]
+requirements:
+  primary_jobs: [record transaction, review monthly balance, compare categories, track limits]
+  representative_states: [new month, within budget, over budget]
+prohibited_assumptions: [currency can be omitted, totals may be hard-coded]
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Create a new application named "Household Budget ${run_id}" for two people managing shared monthly spending.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: Make the first version usable now. We need to record income and expenses with date, category, person, amount, currency and note; see the current balance and category totals; compare this month with the previous month; set monthly category limits; and clearly see when a limit is exceeded. Use realistic sample data and include an empty new-month state.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+cleanup: {policy: always, retain_on_failure: true}

@@ -1,0 +1,26 @@
+schema: adaos.builder.e2e_suite.v1
+suite_id: builder-visible-archetypes
+version: "1"
+title: Builder visible cross-domain archetypes
+description: Visible development cases for diagnosing intent, component, context, cost, and latency gaps.
+cohort: development
+case_refs:
+  - cases/operations-work-queue-en.yaml
+  - cases/service-appointments-ru.yaml
+  - cases/household-budget-en.yaml
+  - cases/equipment-inspections-ru.yaml
+  - cases/knowledge-library-en.yaml
+  - cases/media-review-ru.yaml
+  - cases/volunteer-roster-en.yaml
+  - cases/inventory-procurement-ru.yaml
+defaults:
+  adapter: legacy_dev_chat.v1
+  profile: generic
+  repetitions: 1
+  timeout_seconds: 420
+  browser: "off"
+  domain_packs: []
+tags:
+  - visible
+  - archetypes
+  - generic

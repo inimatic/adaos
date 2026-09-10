@@ -1,0 +1,37 @@
+schema: adaos.builder.e2e_case.v1
+case_id: volunteer-roster-en
+title: Volunteer roster
+description: Visible development case for people, availability, and shift assignment.
+locale: en
+tags: [visible, people, scheduling]
+requirements:
+  primary_jobs: [review availability, fill shift, contact volunteer, find coverage gap]
+  representative_states: [unfilled shifts, fully staffed, conflicting availability]
+prohibited_assumptions: [private contact details are public, one person can cover overlapping shifts]
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Create a new application named "Volunteer Roster ${run_id}" for coordinating a weekend community event.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: Build a practical first version now. A coordinator needs to review volunteers and their roles and availability, see shifts and coverage gaps, assign or remove a person, avoid overlapping assignments, and open contact details only when needed. Include realistic examples and clear states for no volunteers, an unfilled shift and a fully staffed day.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+cleanup: {policy: always, retain_on_failure: true}

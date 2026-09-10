@@ -1,0 +1,37 @@
+schema: adaos.builder.e2e_case.v1
+case_id: service-appointments-ru
+title: Запись клиентов на услуги
+description: Видимый пример расписания, доступности и изменения записи.
+locale: ru
+tags: [visible, scheduling, calendar]
+requirements:
+  primary_jobs: [найти свободное время, создать запись, перенести запись, отменить запись]
+  representative_states: [нет записей, загруженный день, конфликт времени]
+prohibited_assumptions: [все сотрудники оказывают все услуги, конфликт можно игнорировать]
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Создай новое приложение "Запись на услуги ${run_id}" для небольшой мастерской.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: Покажи рабочую первую версию. Администратор должен видеть загрузку на день и неделю, находить свободное время с учетом услуги и мастера, создавать и переносить запись, отменять ее с подтверждением и быстро открывать карточку клиента. Добавь правдоподобные примеры, пустой день и понятное отображение конфликта времени.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+cleanup: {policy: always, retain_on_failure: true}

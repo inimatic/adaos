@@ -15,6 +15,7 @@ from adaos.services.ui_capabilities import (
     qualify_ui_request,
     selected_ui_capabilities,
     ui_capability_catalog,
+    validate_webui_capabilities,
 )
 
 
@@ -96,6 +97,51 @@ def test_generic_evaluation_records_clean_attribution() -> None:
     result = evaluate_ui_request("Create a simple page", _empty_webui())
 
     assert result["input_attribution"] == {"profile": "generic", "domain_packs": []}
+
+
+def test_resource_move_diagnostic_exposes_the_inconsistent_source_and_action() -> None:
+    webui = _empty_webui()
+    webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"] = [
+        {
+            "id": "work",
+            "type": "collection.board",
+            "area": "main",
+            "inputs": {
+                "lanes": [{"id": "new", "label": "New"}],
+                "laneKey": "status",
+                "titleKey": "title",
+                "dragDrop": True,
+            },
+            "dataSource": {
+                "kind": "static",
+                "value": [{"id": "one", "title": "One", "status": "new"}],
+            },
+            "actions": [
+                {
+                    "on": "move",
+                    "type": "resourceOperation",
+                    "target": "prototype.work",
+                    "params": {
+                        "operation_id": "update",
+                        "record_id": "$event.id",
+                        "payload": "$event.patch",
+                    },
+                }
+            ],
+        }
+    ]
+
+    result = validate_webui_capabilities(webui)
+
+    finding = next(
+        item
+        for item in result["findings"]
+        if item["code"] == "ui.board.resource_move_invalid"
+    )
+    assert finding["actual"]["dataSource.kind"] == "static"
+    assert finding["actual"]["dataSource.resourceType"] == ""
+    assert finding["actual"]["action.target"] == "prototype.work"
+    assert finding["expected"]["dataSource.kind"] == "resourceQuery"
 
 
 def test_generic_core_sources_have_no_subject_vocabulary() -> None:

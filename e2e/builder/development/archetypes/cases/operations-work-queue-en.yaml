@@ -1,0 +1,39 @@
+schema: adaos.builder.e2e_case.v1
+case_id: operations-work-queue-en
+title: Operations work queue
+description: Visible development case for a dense operational queue and detail workflow.
+locale: en
+tags: [visible, operations, master-detail]
+requirements:
+  primary_jobs: [triage work, inspect details, assign ownership, change status]
+  representative_states: [empty, populated, filtered, overdue]
+prohibited_assumptions: [all work is public, status changes require no confirmation]
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Create a new application named "Operations Queue ${run_id}" for a small support team that tracks incoming work.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: Show a useful first version now. Team members need to scan work by status, priority, owner and due date, open one item without losing the queue, add a request, assign it and move it through New, In progress, Blocked and Done. Include realistic examples and clear empty and overdue states.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input:
+      session_id: $steps.create.session_id
+      job_id: $steps.design.llm_job.job_id
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+cleanup: {policy: always, retain_on_failure: true}

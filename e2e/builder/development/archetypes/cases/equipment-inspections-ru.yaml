@@ -1,0 +1,37 @@
+schema: adaos.builder.e2e_case.v1
+case_id: equipment-inspections-ru
+title: Осмотр оборудования
+description: Видимый пример повторяемой формы, вложений и жизненного цикла проверки.
+locale: ru
+tags: [visible, inspection, form]
+requirements:
+  primary_jobs: [начать осмотр, заполнить пункты, приложить подтверждение, завершить осмотр]
+  representative_states: [новый, в работе, есть дефект, завершен]
+prohibited_assumptions: [дефект можно закрыть без комментария, вложение всегда доступно]
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Создай новое приложение "Осмотр оборудования ${run_id}" для выездного техника.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: Сделай рабочую первую версию. Техник выбирает объект, проходит повторяемый список проверок, отмечает результат каждого пункта, добавляет измерение, комментарий и фотографию дефекта, сохраняет незавершенный осмотр и затем завершает его. Покажи правдоподобные данные, состояние без назначенных осмотров и запрети завершение дефекта без комментария.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+cleanup: {policy: always, retain_on_failure: true}

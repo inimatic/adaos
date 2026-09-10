@@ -261,7 +261,9 @@ def _domain_metadata(domain_packs: Sequence[str] | None) -> dict[str, Any]:
             "domain_packs": domain_pack_receipts(domain_packs),
         },
         "domain_policy": policies[0] if len(policies) == 1 else {"policies": policies},
-        "repair_guidance": guidance[0] if len(guidance) == 1 else {"guidance": guidance},
+        "repair_guidance": guidance[0]
+        if len(guidance) == 1
+        else {"guidance": guidance},
     }
 
 
@@ -970,9 +972,35 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                                 "severity": "error",
                                 "path": f"{widget_path}.actions[{action_index}]",
                                 "message": (
-                                    "A Resource Workbench move must target the board resourceType "
-                                    "and use update with record_id=$event.id and payload=$event.patch."
+                                    "A resourceOperation move requires the board dataSource to use "
+                                    "kind=resourceQuery with a non-empty resourceType. The action target "
+                                    "must equal that resourceType and use operation_id=update, "
+                                    "record_id=$event.id, and payload=$event.patch."
                                 ),
+                                "expected": {
+                                    "dataSource.kind": "resourceQuery",
+                                    "dataSource.resourceType": "<same non-empty value as action.target>",
+                                    "action.type": "resourceOperation",
+                                    "action.params.operation_id": "update",
+                                    "action.params.record_id": "$event.id",
+                                    "action.params.payload": "$event.patch",
+                                },
+                                "actual": {
+                                    "dataSource.kind": str(
+                                        data_source.get("kind") or ""
+                                    ),
+                                    "dataSource.resourceType": resource_type,
+                                    "action.target": str(action.get("target") or ""),
+                                    "action.params.operation_id": str(
+                                        params.get("operation_id") or ""
+                                    ),
+                                    "action.params.record_id": str(
+                                        params.get("record_id") or ""
+                                    ),
+                                    "action.params.payload": str(
+                                        params.get("payload") or ""
+                                    ),
+                                },
                             }
                         )
             actions = (

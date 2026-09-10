@@ -1,0 +1,37 @@
+schema: adaos.builder.e2e_case.v1
+case_id: inventory-procurement-ru
+title: Запасы и закупки
+description: Видимый пример остатков, поставщиков, цен и согласования закупки.
+locale: ru
+tags: [visible, inventory, approval]
+requirements:
+  primary_jobs: [найти дефицит, подготовить заказ, сравнить поставщиков, согласовать]
+  representative_states: [достаточный запас, ниже минимума, ожидает согласования]
+prohibited_assumptions: [цена не зависит от поставщика, заявку может согласовать любой]
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Создай новое приложение "Запасы и закупки ${run_id}" для небольшой мастерской.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: Сделай пригодную для работы первую версию. Нужно быстро видеть позиции ниже минимального остатка, фильтровать их по категории, открывать историю движения, собирать заявку на закупку, сравнивать цены и сроки нескольких поставщиков и отправлять заявку на согласование. Добавь реалистичные данные, валюту и единицы измерения, пустой список дефицита и состояние ожидания решения.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+cleanup: {policy: always, retain_on_failure: true}

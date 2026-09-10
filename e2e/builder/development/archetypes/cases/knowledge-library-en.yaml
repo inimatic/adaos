@@ -1,0 +1,37 @@
+schema: adaos.builder.e2e_case.v1
+case_id: knowledge-library-en
+title: Team knowledge library
+description: Visible development case for search, facets, documents, and detail continuity.
+locale: en
+tags: [visible, knowledge, search]
+requirements:
+  primary_jobs: [find article, inspect details, add article, revise article]
+  representative_states: [empty library, search results, no results, archived article]
+prohibited_assumptions: [archived content is editable, every attachment can be previewed]
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Create a new application named "Team Library ${run_id}" for internal how-to articles and reference files.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: Produce a useful first version now. People need to search by words, filter by topic, owner and status, scan matching articles, open an article without losing their search, read its formatted content and attachments, create a draft and revise it before publishing. Include realistic examples plus empty-library and no-results states.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+cleanup: {policy: always, retain_on_failure: true}

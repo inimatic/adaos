@@ -54,11 +54,7 @@ class _Yaml12SafeLoader(yaml.SafeLoader):
 
 
 _Yaml12SafeLoader.yaml_implicit_resolvers = {
-    key: [
-        resolver
-        for resolver in resolvers
-        if resolver[0] != "tag:yaml.org,2002:bool"
-    ]
+    key: [resolver for resolver in resolvers if resolver[0] != "tag:yaml.org,2002:bool"]
     for key, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
 }
 _Yaml12SafeLoader.add_implicit_resolver(
@@ -148,15 +144,22 @@ def _compact_step_output(
     step_id: str,
 ) -> tuple[dict[str, Any], str | None]:
     redacted = redact_value(dict(output))
-    raw = json.dumps(
-        redacted, ensure_ascii=True, indent=2, sort_keys=True
-    ).encode("utf-8") + b"\n"
+    raw = (
+        json.dumps(redacted, ensure_ascii=True, indent=2, sort_keys=True).encode(
+            "utf-8"
+        )
+        + b"\n"
+    )
     if len(raw) <= _INLINE_STEP_OUTPUT_BYTES:
         return dict(redacted), None
 
-    relative = Path("evidence") / "steps" / (
-        f"{_safe_token(case_id, fallback='case')}-attempt-{repetition:02d}-"
-        f"{_safe_token(step_id, fallback='step')}.json.gz"
+    relative = (
+        Path("evidence")
+        / "steps"
+        / (
+            f"{_safe_token(case_id, fallback='case')}-attempt-{repetition:02d}-"
+            f"{_safe_token(step_id, fallback='step')}.json.gz"
+        )
     )
     target = bundle_dir / relative
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -526,6 +529,164 @@ class CompatibilityBuilderExecutor:
             timeout=float(inputs.get("timeout_seconds") or 30),
         )
 
+    @staticmethod
+    def _matching_llm_jobs(
+        session: Mapping[str, Any], job_id: str
+    ) -> list[dict[str, Any]]:
+        pending = session.get("pending_llm_jobs")
+        if not isinstance(pending, Mapping):
+            return []
+        matches: list[dict[str, Any]] = []
+        for key, raw in pending.items():
+            if not isinstance(raw, Mapping):
+                continue
+            item = dict(raw)
+            identities = {
+                str(key),
+                str(item.get("job_id") or ""),
+                str(item.get("root_job_id") or ""),
+                str(item.get("local_job_id") or ""),
+                str(item.get("request_id") or ""),
+            }
+            if not job_id or job_id in identities:
+                item.setdefault("job_id", str(key))
+                matches.append(item)
+        return matches
+
+    def _wait_for_builder_job(
+        self, inputs: Mapping[str, Any], context: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        session_id = str(inputs.get("session_id") or "").strip()
+        if not session_id:
+            raise BuilderE2EError("builder.wait requires input.session_id")
+        job_id = str(inputs.get("job_id") or "").strip()
+        webspace_id = str(
+            inputs.get("webspace_id") or f"e2e-{context['run_id']}"
+        ).strip()
+        timeout = float(
+            inputs.get("timeout_seconds") or context.get("timeout_seconds") or 300
+        )
+        poll_interval = max(
+            0.1, min(float(inputs.get("poll_interval_seconds") or 1.0), 10.0)
+        )
+        terminal = {"succeeded", "failed", "cancelled", "canceled"}
+        artifact_root = str(inputs.get("artifact_root") or "").strip()
+        terminal_path: Path | None = None
+        if artifact_root and job_id:
+            safe_job_id = (
+                re.sub(r"[^A-Za-z0-9_.-]+", "_", job_id).strip("._-")
+                or hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:8]
+            )
+            terminal_path = (
+                Path(artifact_root).expanduser().resolve()
+                / "llm_jobs"
+                / f"{safe_job_id}.json"
+            )
+        started = time.monotonic()
+        polls = 0
+        last_session: dict[str, Any] = {}
+        last_jobs: list[dict[str, Any]] = []
+        while True:
+            polls += 1
+            if terminal_path is not None and terminal_path.is_file():
+                journal = json.loads(terminal_path.read_text(encoding="utf-8"))
+                related_ids = {
+                    str(item or "").strip()
+                    for item in journal.get("related_ids") or []
+                    if str(item or "").strip()
+                }
+                related_ids |= {
+                    str(journal.get("job_id") or "").strip(),
+                    str(journal.get("root_job_id") or "").strip(),
+                    str(journal.get("local_job_id") or "").strip(),
+                }
+                status = str(journal.get("status") or "").strip().lower()
+                if (
+                    journal.get("schema") == "adaos.builder.llm_job_result.v1"
+                    and job_id in related_ids
+                    and status in terminal
+                ):
+                    diagnostic = (
+                        journal.get("diagnostic")
+                        if isinstance(journal.get("diagnostic"), Mapping)
+                        else {}
+                    )
+                    telemetry = (
+                        diagnostic.get("telemetry")
+                        if isinstance(diagnostic.get("telemetry"), Mapping)
+                        else {}
+                    )
+                    telemetry_summary = {
+                        key: copy.deepcopy(telemetry.get(key))
+                        for key in (
+                            "root_job_id",
+                            "request_id",
+                            "status",
+                            "wait_elapsed_ms",
+                            "timing",
+                            "provider",
+                            "usage",
+                            "tools",
+                            "mcp",
+                        )
+                        if telemetry.get(key) not in (None, "", [], {})
+                    }
+                    return {
+                        "ok": status == "succeeded",
+                        "status": "failed" if status != "succeeded" else status,
+                        "job_id": job_id,
+                        "terminal_artifact": str(terminal_path),
+                        "telemetry": telemetry_summary,
+                        "poll_count": polls,
+                        "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
+                    }
+            if terminal_path is None:
+                response = self._manager().run_dev_tool(
+                    "builder_skill",
+                    "get_session",
+                    {"session_id": session_id, "webspace_id": webspace_id},
+                    timeout=min(max(timeout, 1.0), 30.0),
+                )
+                last_session = (
+                    dict(response.get("session") or {})
+                    if isinstance(response, Mapping)
+                    else {}
+                )
+                last_jobs = self._matching_llm_jobs(last_session, job_id)
+                statuses = {
+                    str(item.get("status") or "").strip().lower() for item in last_jobs
+                }
+                terminal_statuses = sorted(
+                    status for status in statuses if status in terminal
+                )
+                active_statuses = statuses - terminal
+                if terminal_statuses and not active_statuses:
+                    status = (
+                        "failed"
+                        if any(value != "succeeded" for value in terminal_statuses)
+                        else "succeeded"
+                    )
+                    return {
+                        "ok": status == "succeeded",
+                        "status": status,
+                        "job_id": job_id or None,
+                        "jobs": last_jobs,
+                        "session": last_session,
+                        "poll_count": polls,
+                        "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
+                    }
+            if time.monotonic() - started >= timeout:
+                return {
+                    "ok": False,
+                    "status": "timeout",
+                    "job_id": job_id or None,
+                    "jobs": last_jobs,
+                    "session": last_session,
+                    "poll_count": polls,
+                    "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
+                }
+            time.sleep(poll_interval)
+
     def _scenario_validate(self, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
         from adaos.apps.cli.commands.dev import _scenario_validation_roots
         from adaos.services.agent_context import get_ctx
@@ -619,6 +780,8 @@ class CompatibilityBuilderExecutor:
             return self._chat(inputs, context)
         if step_type == "builder.session":
             return self._session(inputs, context)
+        if step_type == "builder.wait":
+            return self._wait_for_builder_job(inputs, context)
         if step_type == "scenario.validate":
             return self._scenario_validate(inputs)
         if step_type == "browser.probe":
@@ -641,7 +804,11 @@ class CompatibilityBuilderExecutor:
                 for child in value:
                     visit(child)
 
-        outputs = context.get("outputs") if isinstance(context.get("outputs"), Mapping) else {}
+        outputs = (
+            context.get("outputs")
+            if isinstance(context.get("outputs"), Mapping)
+            else {}
+        )
         visit(outputs)
         expected_packs = sorted(
             str(pack_id)
@@ -694,7 +861,10 @@ class CompatibilityBuilderExecutor:
                             "actual": actual_packs,
                         }
                     )
-                if expected_profile == "generic" and receipt.get("profile") != "generic":
+                if (
+                    expected_profile == "generic"
+                    and receipt.get("profile") != "generic"
+                ):
                     violations.append(
                         {
                             "code": "profile_mismatch",
@@ -749,9 +919,7 @@ class CompatibilityBuilderExecutor:
                         expected_manifest_digest=str(
                             ownership.get("project_manifest_digest") or ""
                         ),
-                        expected_primary_ref=str(
-                            ownership.get("primary_ref") or ""
-                        ),
+                        expected_primary_ref=str(ownership.get("primary_ref") or ""),
                     )
                 except Exception as exc:
                     project_result = {
@@ -1107,8 +1275,7 @@ class BuilderE2ERunner:
             "bundle_dir": str(self.bundle_dir),
             "webspace_id": case_webspace_id,
             "domain_packs": list(
-                dict(self.loaded.suite.get("defaults") or {}).get("domain_packs")
-                or []
+                dict(self.loaded.suite.get("defaults") or {}).get("domain_packs") or []
             ),
             "outputs": {},
             "owned_artifacts": [],
@@ -1167,7 +1334,9 @@ class BuilderE2ERunner:
             max_attempts = int(retry_policy.get("max_attempts") or 1)
             retry_on = set(retry_policy.get("on") or [])
             backoff_seconds = float(retry_policy.get("backoff_seconds") or 0)
-            first_attempt = interrupted_attempt + 1 if step_index == next_step_index else 1
+            first_attempt = (
+                interrupted_attempt + 1 if step_index == next_step_index else 1
+            )
             max_attempts = max(max_attempts, first_attempt)
             resolved_input: dict[str, Any] = {}
             attempt_results: list[dict[str, Any]] = []
@@ -1221,8 +1390,26 @@ class BuilderE2ERunner:
                         resolved_input["timeout_seconds"] = declaration[
                             "timeout_seconds"
                         ]
-                    if declaration["type"] in {"builder.chat", "builder.session"}:
+                    if declaration["type"] in {
+                        "builder.chat",
+                        "builder.session",
+                        "builder.wait",
+                    }:
                         resolved_input.setdefault("webspace_id", context["webspace_id"])
+                    if declaration["type"] == "builder.wait":
+                        artifact_root = next(
+                            (
+                                str(value.get("artifact_root") or "").strip()
+                                for value in reversed(
+                                    list(dict(context.get("outputs") or {}).values())
+                                )
+                                if isinstance(value, Mapping)
+                                and str(value.get("artifact_root") or "").strip()
+                            ),
+                            "",
+                        )
+                        if artifact_root:
+                            resolved_input.setdefault("artifact_root", artifact_root)
                     output = dict(
                         self.executor.execute(
                             str(declaration["type"]), resolved_input, context
@@ -1282,7 +1469,8 @@ class BuilderE2ERunner:
                             for item in dict(project.get("components") or {}).get(
                                 "owned", []
                             )
-                            if isinstance(item, Mapping) and item.get("role") == "primary"
+                            if isinstance(item, Mapping)
+                            and item.get("role") == "primary"
                         ),
                         {},
                     )
@@ -1294,7 +1482,9 @@ class BuilderE2ERunner:
                         "project_manifest_digest": str(
                             project.get("manifest_digest") or ""
                         ),
-                        "primary_ref": str(primary.get("ref") or ""),
+                        "primary_ref": str(
+                            primary.get("ref") or project.get("primary_ref") or ""
+                        ),
                     }
                     if ownership not in context["owned_artifacts"]:
                         context["owned_artifacts"].append(ownership)
@@ -1316,9 +1506,7 @@ class BuilderE2ERunner:
                 "type": declaration["type"],
                 "required": required,
                 "status": status,
-                "duration_ms": round(
-                    (time.perf_counter() - step_started) * 1000.0, 3
-                ),
+                "duration_ms": round((time.perf_counter() - step_started) * 1000.0, 3),
                 "attempts": attempt_results,
                 "input": redact_value(resolved_input),
                 "output": persisted_output,
@@ -1429,7 +1617,11 @@ class BuilderE2ERunner:
                     "error": type(exc).__name__,
                     "detail": str(exc),
                 }
-            if cleanup is not None and cleanup.get("status") == "failed" and status == "passed":
+            if (
+                cleanup is not None
+                and cleanup.get("status") == "failed"
+                and status == "passed"
+            ):
                 status = "inconclusive"
                 failure = {
                     "step_id": "cleanup",
@@ -1438,6 +1630,10 @@ class BuilderE2ERunner:
                 }
 
         usage = _collect_usage(full_outputs)
+        usage["model_calls"] = max(
+            usage["model_calls"],
+            int(input_attribution.get("unique_receipt_count") or 0),
+        )
         stage_duration_ms: dict[str, float] = {}
         for step in steps:
             key = str(step.get("type") or "unknown")
@@ -1446,9 +1642,9 @@ class BuilderE2ERunner:
                 3,
             )
         step_attempts = sum(len(step.get("attempts") or []) for step in steps)
-        elapsed_ms = elapsed_before_ms + (
-            time.perf_counter() - invocation_started
-        ) * 1000.0
+        elapsed_ms = (
+            elapsed_before_ms + (time.perf_counter() - invocation_started) * 1000.0
+        )
         result = validate_builder_e2e_record(
             CASE_RESULT_SCHEMA,
             {
