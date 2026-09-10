@@ -355,6 +355,53 @@ def create(value: Mapping[str, Any]) -> dict[str, Any]:
     return get(str(payload["id"]))
 
 
+def delete(
+    project_id: str,
+    *,
+    expected_manifest_digest: str,
+    expected_primary_ref: str,
+) -> dict[str, Any]:
+    """Delete one exact mutable DEV Project aggregate.
+
+    Both optimistic-concurrency and ownership checks are mandatory so cleanup
+    callers cannot remove a Project that changed after they created it.
+    Component source is intentionally outside this operation's ownership.
+    """
+
+    token = _project_id(project_id)
+    current = get(token)
+    expected_digest = str(expected_manifest_digest or "").strip().lower()
+    if expected_digest != str(current["manifest_digest"]):
+        raise ProjectCompositionError(
+            "project manifest changed since it was read; refusing deletion"
+        )
+    primary = next(
+        (
+            item
+            for item in current["components"]["owned"]
+            if item.get("role") == "primary"
+        ),
+        None,
+    )
+    primary_ref = str((primary or {}).get("ref") or "")
+    if primary_ref != str(expected_primary_ref or "").strip():
+        raise ProjectCompositionError(
+            "project primary component does not match cleanup ownership"
+        )
+    root = resolve_root(token)
+    parent = _root_parent()
+    if root.parent != parent or root == parent:
+        raise ProjectCompositionError("refusing to remove Project outside DEV root")
+    shutil.rmtree(root)
+    return {
+        "ok": True,
+        "project_id": token,
+        "project_ref": f"project:{token}",
+        "primary_ref": primary_ref,
+        "local_removed": True,
+    }
+
+
 def replace(
     project_id: str,
     value: Mapping[str, Any],
@@ -973,6 +1020,7 @@ __all__ = [
     "ProjectCompositionNotFound",
     "advance_version",
     "create",
+    "delete",
     "replace",
     "create_with_primary_component",
     "create_for_existing_component",

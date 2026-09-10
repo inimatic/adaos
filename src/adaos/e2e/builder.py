@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import gzip
 import hashlib
 import json
 import os
@@ -30,6 +31,7 @@ CASE_RESULT_SCHEMA = "adaos.builder.e2e_case_result.v1"
 REPORT_SCHEMA = "adaos.builder.e2e_report.v1"
 BASELINE_SCHEMA = "adaos.builder.e2e_baseline.v1"
 RUNNER_VERSION = "0.1.0"
+_INLINE_STEP_OUTPUT_BYTES = 16_384
 _RESULTS = {"passed", "failed", "inconclusive", "skipped"}
 _LOWER_IS_BETTER = {
     "duration_ms_p50",
@@ -43,6 +45,25 @@ _LOWER_IS_BETTER = {
     "failed",
     "inconclusive",
 }
+
+
+class _Yaml12SafeLoader(yaml.SafeLoader):
+    pass
+
+
+_Yaml12SafeLoader.yaml_implicit_resolvers = {
+    key: [
+        resolver
+        for resolver in resolvers
+        if resolver[0] != "tag:yaml.org,2002:bool"
+    ]
+    for key, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+_Yaml12SafeLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    re.compile(r"^(?:true|false)$", re.IGNORECASE),
+    list("tTfF"),
+)
 
 
 class BuilderE2EError(ValueError):
@@ -70,7 +91,9 @@ def _safe_token(value: str, *, fallback: str) -> str:
 def _load_document(path: Path) -> dict[str, Any]:
     try:
         if path.suffix.lower() in {".yaml", ".yml"}:
-            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            payload = yaml.load(
+                path.read_text(encoding="utf-8"), Loader=_Yaml12SafeLoader
+            )
         else:
             payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
@@ -111,6 +134,68 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(
         json.dumps(value, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
+    )
+
+
+def _compact_step_output(
+    output: Mapping[str, Any],
+    *,
+    bundle_dir: Path,
+    case_id: str,
+    repetition: int,
+    step_id: str,
+) -> tuple[dict[str, Any], str | None]:
+    redacted = redact_value(dict(output))
+    raw = json.dumps(
+        redacted, ensure_ascii=True, indent=2, sort_keys=True
+    ).encode("utf-8") + b"\n"
+    if len(raw) <= _INLINE_STEP_OUTPUT_BYTES:
+        return dict(redacted), None
+
+    relative = Path("evidence") / "steps" / (
+        f"{_safe_token(case_id, fallback='case')}-attempt-{repetition:02d}-"
+        f"{_safe_token(step_id, fallback='step')}.json.gz"
+    )
+    target = bundle_dir / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    compressed = gzip.compress(raw, compresslevel=9, mtime=0)
+    target.write_bytes(compressed)
+
+    summary_keys = {
+        "ok",
+        "status",
+        "error",
+        "detail",
+        "message",
+        "draft_id",
+        "scenario_id",
+        "project_id",
+        "project_ref",
+        "project_status",
+        "session_id",
+        "artifact_root",
+        "usage",
+        "telemetry",
+        "input_attribution",
+    }
+    summary: dict[str, Any] = {}
+    for key in summary_keys:
+        if key not in redacted:
+            continue
+        value = redacted[key]
+        encoded = json.dumps(value, ensure_ascii=True, sort_keys=True).encode("utf-8")
+        if len(encoded) <= 4_096:
+            summary[key] = value
+    digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+    return (
+        {
+            "evidence_ref": relative.as_posix(),
+            "content_digest": digest,
+            "content_bytes": len(raw),
+            "compressed_bytes": len(compressed),
+            "summary": summary,
+        },
+        relative.as_posix(),
     )
 
 
@@ -536,20 +621,54 @@ class CompatibilityBuilderExecutor:
 
     def cleanup(self, context: Mapping[str, Any]) -> Mapping[str, Any]:
         owned = [
-            str(item) for item in context.get("owned_draft_ids") or [] if str(item)
+            dict(item)
+            for item in context.get("owned_artifacts") or []
+            if isinstance(item, Mapping)
         ]
         if not owned:
             return {"status": "skipped", "reason": "case declared no owned drafts"}
+        from adaos.sdk.developer import compositions
         from adaos.services.builder import BuilderWorkbenchService
 
         service = BuilderWorkbenchService.from_context()
-        results = [
-            service.delete_development_skill(
-                draft_id, str(context.get("webspace_id") or "")
+        results: list[dict[str, Any]] = []
+        for ownership in owned:
+            draft_result = service.delete_development_skill(
+                str(ownership.get("draft_id") or ""),
+                str(context.get("webspace_id") or ""),
             )
-            for draft_id in owned
-        ]
-        return {"status": "passed", "results": results}
+            project_result: dict[str, Any] | None = None
+            if draft_result.get("ok") is True:
+                try:
+                    project_result = compositions.delete(
+                        str(ownership.get("project_id") or ""),
+                        expected_manifest_digest=str(
+                            ownership.get("project_manifest_digest") or ""
+                        ),
+                        expected_primary_ref=str(
+                            ownership.get("primary_ref") or ""
+                        ),
+                    )
+                except Exception as exc:
+                    project_result = {
+                        "ok": False,
+                        "error": type(exc).__name__,
+                        "detail": str(exc),
+                    }
+            results.append(
+                {
+                    "ownership": ownership,
+                    "draft": draft_result,
+                    "project": project_result,
+                    "ok": draft_result.get("ok") is True
+                    and isinstance(project_result, Mapping)
+                    and project_result.get("ok") is True,
+                }
+            )
+        return {
+            "status": "passed" if all(item["ok"] for item in results) else "failed",
+            "results": results,
+        }
 
 
 @dataclass(frozen=True)
@@ -796,13 +915,14 @@ class BuilderE2ERunner:
             "browser": self.browser,
             "bundle_dir": self.bundle_dir,
             "outputs": {},
-            "owned_draft_ids": [],
+            "owned_artifacts": [],
             "timeout_seconds": float(
                 dict(self.loaded.suite.get("defaults") or {}).get("timeout_seconds")
                 or 300
             ),
         }
         steps: list[dict[str, Any]] = []
+        full_outputs: list[Mapping[str, Any]] = []
         evidence_refs: list[str] = []
         failure: dict[str, Any] | None = None
         for declaration in case["steps"]:
@@ -834,7 +954,36 @@ class BuilderE2ERunner:
                 if resolved_input.get("owns_created_draft") is True:
                     draft_id = str(output.get("draft_id") or "").strip()
                     if draft_id:
-                        context["owned_draft_ids"].append(draft_id)
+                        project = (
+                            dict(output.get("project"))
+                            if isinstance(output.get("project"), Mapping)
+                            else {}
+                        )
+                        primary = next(
+                            (
+                                item
+                                for item in dict(project.get("components") or {}).get(
+                                    "owned", []
+                                )
+                                if isinstance(item, Mapping)
+                                and item.get("role") == "primary"
+                            ),
+                            {},
+                        )
+                        context["owned_artifacts"].append(
+                            {
+                                "draft_id": draft_id,
+                                "project_id": str(
+                                    output.get("project_id")
+                                    or project.get("id")
+                                    or ""
+                                ),
+                                "project_manifest_digest": str(
+                                    project.get("manifest_digest") or ""
+                                ),
+                                "primary_ref": str(primary.get("ref") or ""),
+                            }
+                        )
                 evidence = str(output.get("evidence_ref") or "").strip()
                 if evidence:
                     evidence_refs.append(evidence)
@@ -846,6 +995,16 @@ class BuilderE2ERunner:
                 output = {"error": type(exc).__name__, "detail": str(exc)}
                 findings = [{"code": "step_exception", "detail": str(exc)}]
                 status = "failed"
+            full_outputs.append(copy.deepcopy(output))
+            persisted_output, persisted_evidence = _compact_step_output(
+                output,
+                bundle_dir=Path(context["bundle_dir"]),
+                case_id=str(case["case_id"]),
+                repetition=repetition,
+                step_id=str(declaration["id"]),
+            )
+            if persisted_evidence:
+                evidence_refs.append(persisted_evidence)
             step_result = {
                 "id": declaration["id"],
                 "type": declaration["type"],
@@ -853,7 +1012,7 @@ class BuilderE2ERunner:
                 "status": status,
                 "duration_ms": round((time.perf_counter() - step_started) * 1000.0, 3),
                 "input": redact_value(resolved_input),
-                "output": redact_value(output),
+                "output": persisted_output,
                 "findings": redact_value(findings),
             }
             steps.append(step_result)
@@ -892,7 +1051,15 @@ class BuilderE2ERunner:
                         "status": "inconclusive",
                         "findings": [cleanup],
                     }
-        usage = _collect_usage([step.get("output") for step in steps])
+            if cleanup is not None and cleanup.get("status") == "failed":
+                if status == "passed":
+                    status = "inconclusive"
+                    failure = {
+                        "step_id": "cleanup",
+                        "status": "inconclusive",
+                        "findings": [cleanup],
+                    }
+        usage = _collect_usage(full_outputs)
         result = validate_builder_e2e_record(
             CASE_RESULT_SCHEMA,
             {

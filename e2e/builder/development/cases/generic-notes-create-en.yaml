@@ -1,0 +1,51 @@
+schema: adaos.builder.e2e_case.v1
+case_id: generic-notes-create-en
+title: Create a simple notes scenario from an ordinary English request
+description: Exercises generic Builder project bootstrap without a domain pack or subject template.
+locale: en
+tags:
+  - smoke
+  - generic
+  - create
+requirements:
+  project_kind: scenario
+  lifecycle_state: prototype
+prohibited_assumptions:
+  - subject-specific recipes are available
+  - the project is accepted, automated, trialed, or published
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Create a new desktop scenario named "E2E Notes ${run_id}" for keeping short personal notes. Keep it in Prototype and do not publish it.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values:
+        ok: true
+        project_status: ready
+      paths_present:
+        - session_id
+        - scenario_id
+        - project_ref
+        - artifact_root
+        - draft_id
+  - id: session
+    type: builder.session
+    input:
+      session_id: $steps.create.session_id
+    expect:
+      values:
+        ok: true
+      paths_present:
+        - session
+  - id: validate
+    type: scenario.validate
+    input:
+      scenario_id: $steps.create.scenario_id
+    expect:
+      values:
+        ok: true
+cleanup:
+  policy: always
+  retain_on_failure: true

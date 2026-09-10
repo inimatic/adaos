@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gzip
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -22,8 +23,14 @@ from adaos.e2e.builder import (
 class FixtureExecutor:
     adapter_id = "fixture.v1"
 
-    def __init__(self, outputs: Mapping[str, Mapping[str, Any]]) -> None:
+    def __init__(
+        self,
+        outputs: Mapping[str, Mapping[str, Any]],
+        *,
+        cleanup_result: Mapping[str, Any] | None = None,
+    ) -> None:
         self.outputs = outputs
+        self.cleanup_result = dict(cleanup_result or {"status": "passed"})
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.cleanup_calls: list[dict[str, Any]] = []
 
@@ -37,7 +44,7 @@ class FixtureExecutor:
 
     def cleanup(self, context: Mapping[str, Any]) -> Mapping[str, Any]:
         self.cleanup_calls.append(dict(context))
-        return {"status": "passed"}
+        return copy.deepcopy(self.cleanup_result)
 
 
 def _write_suite(
@@ -177,6 +184,78 @@ def test_required_failure_stops_case_but_optional_failure_does_not(
     assert [step["status"] for step in result["steps"]] == ["failed", "passed"]
 
 
+def test_cleanup_failure_makes_successful_case_inconclusive(tmp_path: Path) -> None:
+    case = _case()
+    case["steps"] = case["steps"][:1]
+    suite = _write_suite(tmp_path / "definitions", cases=[case])
+    executor = FixtureExecutor(
+        {"first": {"ok": True, "result": {"id": "scenario-created"}}},
+        cleanup_result={"status": "failed", "results": [{"ok": False}]},
+    )
+
+    report = BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="cleanup-failed-run",
+        executor=executor,
+    ).run()
+
+    assert report["status"] == "inconclusive"
+    result = json.loads(
+        (
+            Path(report["bundle_dir"])
+            / "cases"
+            / "case-en"
+            / "attempt-01.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert result["failure"]["step_id"] == "cleanup"
+
+
+def test_large_step_output_is_compressed_without_breaking_refs_or_usage(
+    tmp_path: Path,
+) -> None:
+    case = _case()
+    suite = _write_suite(tmp_path / "definitions", cases=[case])
+    executor = FixtureExecutor(
+        {
+            "first": {
+                "ok": True,
+                "result": {"id": "scenario-created"},
+                "payload": "x" * 20_000,
+                "usage": {"input_tokens": 100, "output_tokens": 20},
+            },
+            "second": {"ok": True},
+        }
+    )
+
+    report = BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="compact-output-run",
+        executor=executor,
+    ).run()
+
+    result = json.loads(
+        (
+            Path(report["bundle_dir"])
+            / "cases"
+            / "case-en"
+            / "attempt-01.json"
+        ).read_text(encoding="utf-8")
+    )
+    compact = result["steps"][0]["output"]
+    assert compact["content_bytes"] > 20_000
+    assert compact["compressed_bytes"] < compact["content_bytes"]
+    assert result["metrics"]["fresh_input_tokens"] == 100
+    assert executor.calls[1][1]["scenario_id"] == "scenario-created"
+    evidence_path = Path(report["bundle_dir"]) / compact["evidence_ref"]
+    retained = json.loads(gzip.decompress(evidence_path.read_bytes()))
+    assert retained["payload"] == "x" * 20_000
+
+
 def test_suite_loader_rejects_case_path_escape(tmp_path: Path) -> None:
     outside = tmp_path / "outside.yaml"
     outside.write_text(yaml.safe_dump(_case()), encoding="utf-8")
@@ -194,6 +273,16 @@ def test_suite_loader_rejects_case_path_escape(tmp_path: Path) -> None:
 
     with pytest.raises(BuilderE2EError, match="escapes suite directory"):
         load_builder_e2e_suite(path)
+
+
+def test_suite_loader_uses_yaml_12_boolean_rules(tmp_path: Path) -> None:
+    suite = _write_suite(tmp_path / "definitions", cases=[_case()])
+    text = suite.read_text(encoding="utf-8").replace("browser: 'off'", "browser: off")
+    suite.write_text(text, encoding="utf-8")
+
+    loaded = load_builder_e2e_suite(suite)
+
+    assert loaded.suite["defaults"]["browser"] == "off"
 
 
 def test_baseline_remains_comparable_across_implementation_commits(

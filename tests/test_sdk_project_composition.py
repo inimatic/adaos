@@ -145,6 +145,36 @@ def test_project_manifest_lists_by_profile_and_resolves_entrypoint(
     }
 
 
+def test_project_delete_requires_exact_snapshot_and_primary_ownership(
+    project_space,
+) -> None:
+    _skill(project_space["skills"], "tlp_direction")
+    created = compositions.create(_project("tlp_research", "tlp_direction"))
+
+    with pytest.raises(compositions.ProjectCompositionError, match="changed"):
+        compositions.delete(
+            "tlp_research",
+            expected_manifest_digest="sha256:stale",
+            expected_primary_ref="skill:tlp_direction",
+        )
+    with pytest.raises(compositions.ProjectCompositionError, match="ownership"):
+        compositions.delete(
+            "tlp_research",
+            expected_manifest_digest=created["manifest_digest"],
+            expected_primary_ref="skill:someone_else",
+        )
+
+    deleted = compositions.delete(
+        "tlp_research",
+        expected_manifest_digest=created["manifest_digest"],
+        expected_primary_ref="skill:tlp_direction",
+    )
+
+    assert deleted["ok"] is True
+    assert not (project_space["projects"] / "tlp_research").exists()
+    assert (project_space["skills"] / "tlp_direction").is_dir()
+
+
 def test_project_requires_one_primary_component(project_space) -> None:
     value = _project("invalid", "one")
     value["components"]["owned"].append({"ref": "skill:two", "role": "primary"})

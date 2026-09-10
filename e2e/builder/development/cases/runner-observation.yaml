@@ -1,0 +1,31 @@
+schema: adaos.builder.e2e_case.v1
+case_id: runner-observation
+title: Observe clean generic Builder inputs
+description: Model-free runner and source-boundary smoke case.
+locale: en
+tags:
+  - smoke
+  - model-free
+steps:
+  - id: generic-catalog
+    type: observe.path
+    input:
+      path: src/adaos/abi/ui.capability_catalog.v1.json
+    expect:
+      values:
+        ok: true
+        kind: file
+      paths_present:
+        - digest
+        - size
+  - id: domain-pack-schema
+    type: observe.path
+    input:
+      path: src/adaos/abi/builder.domain_pack.v1.schema.json
+    expect:
+      values:
+        ok: true
+        kind: file
+cleanup:
+  policy: always
+

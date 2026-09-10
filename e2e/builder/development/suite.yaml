@@ -1,0 +1,19 @@
+schema: adaos.builder.e2e_suite.v1
+suite_id: builder-development-smoke
+version: "1"
+title: Builder development smoke
+description: Visible engineering cases for the Builder E2E harness and generic project bootstrap.
+cohort: development
+case_refs:
+  - cases/runner-observation.yaml
+  - cases/generic-notes-create-en.yaml
+defaults:
+  adapter: legacy_dev_chat.v1
+  profile: generic
+  repetitions: 1
+  timeout_seconds: 300
+  browser: "off"
+  domain_packs: []
+tags:
+  - visible
+  - smoke

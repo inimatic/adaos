@@ -128,7 +128,17 @@ resolves the sequencing dependency without weakening the clean-baseline gate:
 legacy-adapter runs are characterization evidence only, and the unchanged
 cases must later execute through `sdk.v1`.
 
-- [ ] `[must]` Publish and validate the declarative E2E suite, case, resolved
+The first live generic creation case now validates a scenario and proves
+bounded cleanup of the exact Builder draft, DEV component, and Project
+aggregate. Cleanup is fail-closed: a negative receipt makes an otherwise
+successful case inconclusive. Large redacted step outputs are retained as
+compressed digest-bearing evidence instead of being embedded in the case
+result. The measured run remained compatibility evidence: it made no model
+call and took about 14 seconds, dominated by Builder chat and session reads.
+This identifies process/tool startup and missing internal stage spans as
+development measurements, not as acceptable target latency.
+
+- [x] `[must]` Publish and validate the declarative E2E suite, case, resolved
   run, case-result, report, and immutable baseline contracts defined by the
   [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md). Reuse
   existing Builder evaluation evidence and workflow metrics as referenced

@@ -691,10 +691,19 @@ class BuilderWorkbenchService:
     webspace_service: Any | None = None
     relationship_registry: WebspaceRelationshipRegistry | None = None
     preview_reconciler: BuilderPreviewReconciler | None = None
+    dev_skills_root: Path | None = None
+    dev_scenarios_root: Path | None = None
 
     @classmethod
     def from_context(cls) -> "BuilderWorkbenchService":
-        return cls(state_dir=current_state_dir())
+        from adaos.services.builder.workspace import BuilderWorkspaceService
+
+        workspace = BuilderWorkspaceService.from_context()
+        return cls(
+            state_dir=current_state_dir(),
+            dev_skills_root=workspace.dev_skills_root,
+            dev_scenarios_root=workspace.dev_scenarios_root,
+        )
 
     @property
     def root(self) -> Path:
@@ -1795,16 +1804,52 @@ class BuilderWorkbenchService:
         if not raw_artifact_root:
             return {"ok": False, "error": "artifact_root_missing", "draft_id": token}
 
-        candidate = Path(raw_artifact_root).expanduser()
-        artifact_root = (candidate if candidate.is_absolute() else draft_dir / candidate).resolve()
         artifact_id = str(artifact.get("id") or "").strip()
         artifact_kind = str(artifact.get("kind") or "").strip()
-        expected_parent = {"scenario": "scenarios", "skill": "skills"}.get(artifact_kind)
+        expected_root_value = {
+            "scenario": self.dev_scenarios_root,
+            "skill": self.dev_skills_root,
+        }.get(artifact_kind)
+        if expected_root_value is None:
+            return {
+                "ok": False,
+                "error": "development_root_unavailable",
+                "draft_id": token,
+                "artifact_kind": artifact_kind,
+            }
+        expected_root = Path(expected_root_value).expanduser().resolve()
+        portable_match = re.fullmatch(
+            r"\$\{(ADAOS_DEV_SKILLS_DIR|ADAOS_DEV_SCENARIOS_DIR)\}(?:[/\\](.*))?",
+            raw_artifact_root,
+        )
+        if portable_match is not None:
+            variable, suffix = portable_match.groups()
+            expected_variable = {
+                "scenario": "ADAOS_DEV_SCENARIOS_DIR",
+                "skill": "ADAOS_DEV_SKILLS_DIR",
+            }.get(artifact_kind)
+            relative = Path(str(suffix or "").replace("\\", "/"))
+            if (
+                variable != expected_variable
+                or relative.is_absolute()
+                or any(part == ".." for part in relative.parts)
+            ):
+                return {
+                    "ok": False,
+                    "error": "unsafe_artifact_root",
+                    "draft_id": token,
+                    "artifact_root": raw_artifact_root,
+                }
+            artifact_root = (expected_root / relative).resolve()
+        else:
+            candidate = Path(raw_artifact_root).expanduser()
+            artifact_root = (
+                candidate if candidate.is_absolute() else draft_dir / candidate
+            ).resolve()
         if (
             not artifact_id
-            or expected_parent is None
             or artifact_root.name != artifact_id
-            or artifact_root.parent.name != expected_parent
+            or artifact_root.parent != expected_root
             or artifact_root == root
             or root in artifact_root.parents
             or artifact_root in root.parents

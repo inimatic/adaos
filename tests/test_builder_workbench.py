@@ -330,7 +330,10 @@ def test_workbench_lists_sets_and_deletes_development_drafts(tmp_path: Path) -> 
     }
     (draft_dir / "builder.draft.json").write_text(json.dumps(draft), encoding="utf-8")
 
-    service = BuilderWorkbenchService(state_dir=state_dir)
+    service = BuilderWorkbenchService(
+        state_dir=state_dir,
+        dev_scenarios_root=artifact_root.parent,
+    )
     binding = service.set_active_draft(source_webspace_id="desktop", active_draft_id="draft.shopping")
     assert binding["active_draft_id"] == "draft.shopping"
 
@@ -376,7 +379,10 @@ def test_workbench_delete_rejects_missing_artifact_root_without_touching_repo(tm
     sentinel = tmp_path / "sentinel.txt"
     sentinel.write_text("keep", encoding="utf-8")
 
-    result = BuilderWorkbenchService(state_dir=state_dir).delete_development_skill("draft.shopping", "desktop")
+    result = BuilderWorkbenchService(
+        state_dir=state_dir,
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    ).delete_development_skill("draft.shopping", "desktop")
 
     assert result["ok"] is False
     assert result["error"] == "artifact_root_missing"
@@ -405,10 +411,14 @@ def test_workbench_delete_uses_draft_root_manifest_field(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    listed = BuilderWorkbenchService(state_dir=state_dir).list_development_skills("desktop")
+    service = BuilderWorkbenchService(
+        state_dir=state_dir,
+        dev_scenarios_root=artifact_root.parent,
+    )
+    listed = service.list_development_skills("desktop")
     assert listed["items"][0]["root"] == str(artifact_root)
 
-    result = BuilderWorkbenchService(state_dir=state_dir).delete_development_skill("draft.shopping", "desktop")
+    result = service.delete_development_skill("draft.shopping", "desktop")
 
     assert result["ok"] is True
     assert not artifact_root.exists()
@@ -435,12 +445,46 @@ def test_workbench_delete_rejects_artifact_outside_kind_root(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    result = BuilderWorkbenchService(state_dir=state_dir).delete_development_skill("draft.shopping", "desktop")
+    result = BuilderWorkbenchService(
+        state_dir=state_dir,
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    ).delete_development_skill("draft.shopping", "desktop")
 
     assert result["ok"] is False
     assert result["error"] == "unsafe_artifact_root"
     assert unsafe_root.exists()
     assert draft_dir.exists()
+
+
+def test_workbench_delete_resolves_portable_dev_artifact_root(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    scenarios_root = tmp_path / "dev" / "scenarios"
+    artifact_root = scenarios_root / "shopping"
+    artifact_root.mkdir(parents=True)
+    draft_dir = state_dir / "builder" / "drafts" / "draft.shopping"
+    draft_dir.mkdir(parents=True)
+    (draft_dir / "builder.draft.json").write_text(
+        json.dumps(
+            {
+                "draft_id": "draft.shopping",
+                "artifact": {
+                    "kind": "scenario",
+                    "id": "shopping",
+                    "draft_root": "${ADAOS_DEV_SCENARIOS_DIR}/shopping",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = BuilderWorkbenchService(
+        state_dir=state_dir,
+        dev_scenarios_root=scenarios_root,
+    ).delete_development_skill("draft.shopping", "desktop")
+
+    assert result["ok"] is True
+    assert not artifact_root.exists()
+    assert not draft_dir.exists()
 
 
 def test_set_active_draft_skips_unchanged_deferred_binding_write(monkeypatch, tmp_path: Path) -> None:

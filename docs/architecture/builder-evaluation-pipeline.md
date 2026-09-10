@@ -292,7 +292,12 @@ case-result, report, and baseline ABIs; deterministic case/tag selection;
 repetition accounting; required-step failure handling; redacted evidence
 bundles; token and latency aggregation; matched baseline comparison; cleanup
 hooks; and one `adaos builder e2e` entry point. Model-free self-tests cover
-these foundations.
+these foundations. Cleanup now binds each owned draft to the exact Project
+manifest digest and primary component ref, removes both component and Project,
+and makes a cleanup refusal render the case inconclusive. Large redacted step
+outputs are gzip-compressed behind a digest-bearing evidence ref while the
+case result remains compact; in-memory full outputs still drive typed step
+references and usage accounting.
 
 The current adapter is explicitly `legacy_dev_chat.v1`. Isolation
 provisioning, interruption/resume checkpoints, full stage telemetry, browser
