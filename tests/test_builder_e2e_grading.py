@@ -33,7 +33,6 @@ def _model_result(*, evidence: str = "/ui") -> str:
                     "reason": "The unsafe behavior is not present.",
                 }
             ],
-            "summary": "The main action exists, but the state coverage is incomplete.",
         }
     )
 
@@ -44,6 +43,11 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
     def submit(messages, **kwargs):
         assert recorded
         assert kwargs["text"]["format"]["type"] == "json_schema"
+        pointer_schema = kwargs["text"]["format"]["schema"]["$defs"]["evidence"]
+        assert pointer_schema["properties"]["pointer"]["enum"] == [
+            "/ui",
+            "/ui/control",
+        ]
         assert kwargs["model"] == "gpt-4.1"
         return {"job_id": "job-1", "_client": {"base_url": "https://root"}}
 
@@ -89,6 +93,10 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
     assert grade["dimensions"]["primary_jobs"]["checks"][0]["evidence"] == [
         "/ui"
     ]
+    assert grade["summary"] == (
+        "Primary jobs supported: 1/1; representative states supported: 0/1; "
+        "prohibited assumptions absent: 1/1."
+    )
     assert grade["grader_metrics"] == {
         "input_fresh_tokens": 500,
         "input_cached_tokens": 400,
@@ -226,7 +234,7 @@ def test_prototype_grader_accepts_revision_bound_record_evidence() -> None:
     def wait(_job_id, **_kwargs):
         result = json.loads(_model_result())
         result["primary_jobs"][0]["evidence"] = [
-            {"pointer": "/prototype_resources/0/records/0/status"}
+            {"pointer": "/prototype_resources/0/records/0"}
         ]
         return {"status": "succeeded", "output_text": json.dumps(result)}
 
@@ -241,6 +249,6 @@ def test_prototype_grader_accepts_revision_bound_record_evidence() -> None:
     )
 
     assert grade["dimensions"]["primary_jobs"]["checks"][0]["evidence"] == [
-        "/prototype_resources/0/records/0/status"
+        "/prototype_resources/0/records/0"
     ]
     assert '"prototype_resources"' in request["messages"][1]["content"]

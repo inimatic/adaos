@@ -83,6 +83,12 @@ class BuilderE2EUnavailable(RuntimeError):
     """Raised when evaluation infrastructure is unavailable, not when a case fails."""
 
 
+def _prototype_grader_version() -> str:
+    from adaos.e2e.builder_grading import PROTOTYPE_GRADER_VERSION
+
+    return PROTOTYPE_GRADER_VERSION
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -2303,7 +2309,7 @@ class BuilderE2ERunner:
                     "prototype_grader": {
                         "kind": "model",
                         "model": self.grader_model,
-                        "version": "2",
+                        "version": _prototype_grader_version(),
                     }
                 },
                 "cases": [

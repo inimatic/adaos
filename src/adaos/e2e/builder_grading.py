@@ -6,6 +6,7 @@ not Builder context, and therefore cannot steer the candidate being graded.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
+PROTOTYPE_GRADER_VERSION = "3"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -23,7 +25,6 @@ _MODEL_RESULT_SCHEMA: dict[str, Any] = {
         "primary_jobs",
         "representative_states",
         "prohibited_assumptions",
-        "summary",
     ],
     "properties": {
         "primary_jobs": {"$ref": "#/$defs/checks"},
@@ -48,7 +49,6 @@ _MODEL_RESULT_SCHEMA: dict[str, Any] = {
                 },
             },
         },
-        "summary": {"type": "string", "maxLength": 1200},
     },
     "$defs": {
         "evidence": {
@@ -103,15 +103,68 @@ declares. They do not prove row editing, filtering, selection, navigation, file
 attachment, validation, or lifecycle transitions. Mutating jobs need both an
 available control and an executable action or binding that consumes its value.
 Every supported or partial verdict must cite one or more existing RFC 6901 JSON
-pointers in the evaluation artifact. Put the exact pointer alone in evidence.pointer;
-never append a label, explanation, or parenthetical note to it. Be conservative: use
-unclear when evidence is insufficient. Return only the requested JSON object.
+pointers selected exactly from the evidence.pointer enum in the output schema. Never
+construct or edit an array index, and never append a label, explanation, or
+parenthetical note to evidence.pointer. Each cited object must itself contain the fact
+described in the reason; a sibling or nearby object is not evidence. Cite the nearest
+containing object when a more specific property is not available in the enum.
+An absent prohibited assumption needs no positive evidence. Mark an assumption present
+when an executable path explicitly implements it or necessarily relies on it. In
+particular, a direct mutation with no explicit confirmation control or policy implements
+an action without confirmation; silence must not be interpreted as hidden confirmation.
+Be conservative: use unclear when evidence is insufficient. Return only the requested
+JSON object.
 """
 
 
 def _digest(value: Any) -> str:
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _pointer_token(value: Any) -> str:
+    return str(value).replace("~", "~0").replace("/", "~1")
+
+
+def _evidence_pointers(artifact: Mapping[str, Any]) -> list[str]:
+    """Index meaningful object pointers for schema-constrained grader evidence."""
+
+    entries: list[str] = []
+    identity_keys = {"id", "type", "kind", "on", "resource_type", "status"}
+
+    def visit(value: Any, pointer: str) -> None:
+        if isinstance(value, Mapping):
+            if pointer and (
+                pointer.count("/") <= 5
+                or identity_keys.intersection(value)
+                or (
+                    "/prototype_resources/" in pointer
+                    and "/records/" in pointer
+                )
+            ):
+                entries.append(pointer)
+            for key, nested in value.items():
+                visit(nested, f"{pointer}/{_pointer_token(key)}")
+            return
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            for index, nested in enumerate(value):
+                visit(nested, f"{pointer}/{index}")
+
+    visit(artifact, "")
+    return entries
+
+
+def _model_result_schema(evidence_pointers: Sequence[str]) -> dict[str, Any]:
+    schema = copy.deepcopy(_MODEL_RESULT_SCHEMA)
+    pointers = list(dict.fromkeys(str(item) for item in evidence_pointers if item))
+    if pointers:
+        schema["$defs"]["evidence"]["properties"]["pointer"] = {
+            "type": "string",
+            "enum": pointers,
+        }
+    return schema
 
 
 def _json_pointer_exists(document: Any, pointer: str) -> bool:
@@ -287,6 +340,7 @@ def grade_builder_prototype(
     jobs = [str(item) for item in requirements.get("primary_jobs") or []]
     states = [str(item) for item in requirements.get("representative_states") or []]
     assumptions = [str(item) for item in prohibited_assumptions]
+    evidence_pointers = _evidence_pointers(artifact)
     payload = {
         "schema": "adaos.builder.prototype_grade_request.v1",
         "locale": str(locale or "en"),
@@ -336,11 +390,11 @@ def grade_builder_prototype(
                     "type": "json_schema",
                     "name": "adaos_builder_prototype_grade",
                     "strict": True,
-                    "schema": _MODEL_RESULT_SCHEMA,
+                    "schema": _model_result_schema(evidence_pointers),
                 }
             },
             request_id=request_id,
-            prompt_cache_key="adaos-builder-e2e-prototype-grader-v2",
+            prompt_cache_key="adaos-builder-e2e-prototype-grader-v3",
             timeout=min(15.0, timeout_seconds),
         )
     )
@@ -407,6 +461,21 @@ def grade_builder_prototype(
         for item in checks
         if item["verdict"] != accepted
     ]
+    supported_jobs = sum(
+        item["verdict"] == "supported" for item in job_checks
+    )
+    supported_states = sum(
+        item["verdict"] == "supported" for item in state_checks
+    )
+    absent_assumptions = sum(
+        item["verdict"] == "absent" for item in assumption_checks
+    )
+    summary = (
+        f"Primary jobs supported: {supported_jobs}/{len(job_checks)}; "
+        f"representative states supported: {supported_states}/{len(state_checks)}; "
+        "prohibited assumptions absent: "
+        f"{absent_assumptions}/{len(assumption_checks)}."
+    )
     return (
         {
             "schema": PROTOTYPE_GRADE_SCHEMA,
@@ -435,10 +504,10 @@ def grade_builder_prototype(
                 },
             },
             "findings": findings,
-            "summary": str(parsed.get("summary") or "").strip()[:1200],
+            "summary": summary,
             "grader": {
                 "kind": "model",
-                "version": "2",
+                "version": PROTOTYPE_GRADER_VERSION,
                 "model": response.get("model"),
                 "response_id": response.get("id")
                 or dict(response.get("response") or {}).get("id"),
@@ -456,4 +525,8 @@ def grade_builder_prototype(
     )
 
 
-__all__ = ["PROTOTYPE_GRADE_SCHEMA", "grade_builder_prototype"]
+__all__ = [
+    "PROTOTYPE_GRADE_SCHEMA",
+    "PROTOTYPE_GRADER_VERSION",
+    "grade_builder_prototype",
+]
