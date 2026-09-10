@@ -87,6 +87,15 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("delete", re.compile(r"\b(?:delete|remove|удал)\w*\b", re.IGNORECASE)),
 )
 _READ_OPERATIONS = {"list", "inspect", "search", "filter", "sort"}
+_CAPTURE_ATTACHMENT_PATTERN = re.compile(
+    r"\b(?:(?:attach|upload|add|capture)\w*.{0,80}(?:photos?|images?|pictures?|files?|attachments?|documents?)|"
+    r"(?:photos?|images?|pictures?|files?|attachments?|documents?).{0,40}(?:attach|upload)\w*|"
+    r"(?:\u043f\u0440\u0438\u043b\u043e\u0436|\u0437\u0430\u0433\u0440\u0443\u0437|\u0434\u043e\u0431\u0430\u0432)\w*.{0,80}"
+    r"(?:\u0444\u043e\u0442\u043e|\u0438\u0437\u043e\u0431\u0440\u0430\u0436|\u0441\u043d\u0438\u043c\u043e\u043a|\u0444\u0430\u0439\u043b|\u0432\u043b\u043e\u0436\u0435\u043d|\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442)\w*|"
+    r"(?:\u0444\u043e\u0442\u043e|\u0438\u0437\u043e\u0431\u0440\u0430\u0436|\u0441\u043d\u0438\u043c\u043e\u043a|\u0444\u0430\u0439\u043b|\u0432\u043b\u043e\u0436\u0435\u043d|\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442)\w*.{0,40}"
+    r"(?:\u043f\u0440\u0438\u043b\u043e\u0436|\u0437\u0430\u0433\u0440\u0443\u0437)\w*)\b",
+    re.IGNORECASE,
+)
 _RESPONSIVE_PATTERN = re.compile(
     r"\b(?:mobile|compact|phone|tablet|desktop|wide|responsive|мобильн|компактн|телефон|планшет|десктоп|адаптив)\w*\b",
     re.IGNORECASE,
@@ -235,6 +244,22 @@ def _extract_operations(statement: str) -> tuple[list[dict[str, Any]], list[str]
     return operations, jobs
 
 
+def _extract_information_requirements(statement: str) -> list[dict[str, Any]]:
+    requirements: list[dict[str, Any]] = []
+    for match in _CAPTURE_ATTACHMENT_PATTERN.finditer(statement):
+        requirements.append(
+            {
+                "id": f"information:{len(requirements) + 1:02d}",
+                "kind": "attachment",
+                "interaction": "capture",
+                "statement": match.group(0).strip(),
+                "evidence": [f"intent.statement#char={match.start()}:{match.end()}"],
+                "confidence": 1.0,
+            }
+        )
+    return requirements[:12]
+
+
 def _extract_representative_states(statement: str) -> dict[str, Any]:
     for pattern in _WORKFLOW_STATES_PATTERNS:
         match = pattern.search(statement)
@@ -325,6 +350,7 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
     _validate("builder.intent.v1.schema.json", captured)
     statement = str(captured["statement"])
     operations, job_statements = _extract_operations(statement)
+    information_requirements = _extract_information_requirements(statement)
     jobs = [
         {
             "id": f"job:{index:02d}",
@@ -372,6 +398,7 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
         "actors": _knowledge("unknown"),
         "principal_jobs": jobs,
         "entities": _knowledge("unknown"),
+        "information_requirements": information_requirements,
         "operations": operations,
         "representative_states": _extract_representative_states(statement),
         "boundaries": {

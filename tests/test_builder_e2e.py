@@ -215,10 +215,7 @@ def test_step_exception_retains_bounded_traceback(tmp_path: Path) -> None:
     assert report["status"] == "failed"
     result = json.loads(
         (
-            Path(report["bundle_dir"])
-            / "cases"
-            / "case-en"
-            / "attempt-01.json"
+            Path(report["bundle_dir"]) / "cases" / "case-en" / "attempt-01.json"
         ).read_text(encoding="utf-8")
     )
     diagnostic = result["steps"][0]["output"]
@@ -778,13 +775,42 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
                 "related_ids": ["local-job", "root-job"],
                 "status": "succeeded",
                 "diagnostic": {
+                    "repair_attempted": True,
+                    "result": {
+                        "attempts": [
+                            {
+                                "attempt": 1,
+                                "ok": False,
+                                "request_id": "request-1",
+                                "validation": {
+                                    "error": "component_contract_invalid",
+                                    "request_evaluation": {
+                                        "qualification": {
+                                            "prototype_brief": {"problem": "secret"}
+                                        },
+                                        "postconditions": [
+                                            {
+                                                "id": "ui.information_capture",
+                                                "ok": False,
+                                                "expected": ["attachment"],
+                                                "actual": [],
+                                            }
+                                        ],
+                                    },
+                                },
+                            }
+                        ],
+                        "candidate_artifacts": [
+                            {"stage": "primary", "path": "candidate.primary.json"}
+                        ],
+                    },
                     "telemetry": {
                         "usage": {
                             "input_tokens": 120,
                             "cached_input_tokens": 80,
                             "output_tokens": 15,
                         }
-                    }
+                    },
                 },
             }
         ),
@@ -800,13 +826,35 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
             "webspace_id": "e2e-space",
             "artifact_root": str(artifact_root),
         },
-        {"run_id": "run", "timeout_seconds": 5},
+        {
+            "run_id": "run",
+            "case_id": "equipment",
+            "repetition": 1,
+            "bundle_dir": str(tmp_path / "bundle"),
+            "timeout_seconds": 5,
+        },
     )
 
     assert result["ok"] is True
     assert result["status"] == "succeeded"
     assert result["telemetry"]["usage"]["cached_input_tokens"] == 80
     assert result["terminal_artifact"].endswith("root-job.json")
+    assert result["generation_diagnostic"]["repair_attempted"] is True
+    assert result["generation_diagnostic"]["attempts"][0]["validation"][
+        "postconditions"
+    ] == [
+        {
+            "id": "ui.information_capture",
+            "ok": False,
+            "expected": ["attachment"],
+            "actual": [],
+        }
+    ]
+    assert "qualification" not in json.dumps(result["generation_diagnostic"])
+    evidence_path = tmp_path / "bundle" / result["evidence_ref"]
+    assert json.loads(evidence_path.read_text(encoding="utf-8"))[
+        "candidate_artifacts"
+    ] == [{"path": "candidate.primary.json", "stage": "primary"}]
 
 
 def test_runner_injects_case_webspace_into_builder_wait(tmp_path: Path) -> None:

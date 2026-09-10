@@ -574,6 +574,15 @@ def qualify_ui_request(
         for item in prototype_brief.get("operations") or []
         if isinstance(item, Mapping) and str(item.get("kind") or "")
     ]
+    brief_information_kinds = sorted(
+        {
+            str(item.get("kind") or "").strip()
+            for item in prototype_brief.get("information_requirements") or []
+            if isinstance(item, Mapping)
+            and str(item.get("interaction") or "") == "capture"
+            and str(item.get("kind") or "").strip()
+        }
+    )
     brief_operations = set(brief_operation_kinds)
     prototype_resource_required = bool(
         brief_operations
@@ -645,6 +654,7 @@ def qualify_ui_request(
         requirements["prototype_iteration"] = prototype_iteration
     requirements["prototype_brief_ref"] = prototype_brief["brief_id"]
     requirements["brief_operation_kinds"] = brief_operation_kinds
+    requirements["brief_information_kinds"] = brief_information_kinds
     requirements["prototype_resource"] = prototype_resource_required
     gaps: list[dict[str, Any]] = []
     return {
@@ -724,6 +734,11 @@ def selected_ui_capabilities(
         selected_ids.append("recipe.master_detail")
     if "create" in brief_operation_kinds and "recipe.data_entry" not in selected_ids:
         selected_ids.append("recipe.data_entry")
+    if (
+        requirements.get("brief_information_kinds")
+        and "recipe.data_entry" not in selected_ids
+    ):
+        selected_ids.append("recipe.data_entry")
     if brief_operation_kinds & {"search", "filter"}:
         for component_id in ("input.text", "input.selector"):
             if component_id not in selected_ids:
@@ -800,6 +815,9 @@ def selected_ui_capabilities(
                 ],
                 "resource.prototype_records": [
                     "Return a bounded array of direct representative records for the same single prototype resource; each array item is one record, never a {resourceType, records} transport envelope. AdaOS derives the resource type, schema, and provider."
+                ],
+                "ui.information_capture": [
+                    "Represent every expected semantic information kind as an editable ui.form field. For attachment capture use a fileUpload field rather than static explanatory text."
                 ],
             },
         },
@@ -917,9 +935,7 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 else {}
             )
             actions = (
-                widget.get("actions")
-                if isinstance(widget.get("actions"), list)
-                else []
+                widget.get("actions") if isinstance(widget.get("actions"), list) else []
             )
             for action_index, action in enumerate(actions):
                 if (
@@ -932,9 +948,10 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     if isinstance(action.get("params"), Mapping)
                     else {}
                 )
-                if not str(action.get("target") or "").strip() or not str(
-                    params.get("operation_id") or ""
-                ).strip():
+                if (
+                    not str(action.get("target") or "").strip()
+                    or not str(params.get("operation_id") or "").strip()
+                ):
                     findings.append(
                         {
                             "code": "ui.resource_operation.identity_missing",
@@ -1208,6 +1225,52 @@ def evaluate_ui_request(
                     "sourceCount": source_count,
                     "targetCount": target_count,
                 },
+            }
+        )
+    expected_information_kinds = {
+        str(item or "").strip()
+        for item in requirements.get("brief_information_kinds") or []
+        if str(item or "").strip()
+    }
+    if expected_information_kinds:
+        field_kind_map = {
+            "attachment": {"fileupload", "file_upload", "file"},
+            "text": {"text", "shorttext", "longtext", "textarea"},
+            "number": {"number", "numeric", "slider", "rating", "linearscale"},
+            "choice": {
+                "select",
+                "dropdown",
+                "combobox",
+                "singlechoice",
+                "multichoice",
+                "checkboxes",
+                "radio",
+            },
+            "boolean": {"boolean", "toggle", "switch"},
+            "date": {"date", "daterange", "date_range"},
+            "time": {"time", "timerange", "time_range"},
+        }
+        actual_field_types = {
+            str(field.get("type") or "").strip().lower()
+            for _, page in _page_schemas(webui)
+            for widget in page.get("widgets") or []
+            if isinstance(widget, Mapping)
+            and str(widget.get("type") or "") == "ui.form"
+            and isinstance(widget.get("inputs"), Mapping)
+            for field in widget.get("inputs", {}).get("fields") or []
+            if isinstance(field, Mapping) and str(field.get("type") or "").strip()
+        }
+        actual_information_kinds = {
+            kind
+            for kind, field_types in field_kind_map.items()
+            if actual_field_types & field_types
+        }
+        postconditions.append(
+            {
+                "id": "ui.information_capture",
+                "ok": expected_information_kinds.issubset(actual_information_kinds),
+                "expected": sorted(expected_information_kinds),
+                "actual": sorted(actual_information_kinds),
             }
         )
     if requirements.get("prototype_resource") is True:

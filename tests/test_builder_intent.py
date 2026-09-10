@@ -81,9 +81,7 @@ def test_brief_preserves_ru_operations_after_authoring_prefix_in_same_clause() -
     ]
     assert "operations" not in brief["interpretation"]["unresolved_fields"]
     for operation in brief["operations"]:
-        offsets = operation["evidence"][0].removeprefix(
-            "intent.statement#char="
-        )
+        offsets = operation["evidence"][0].removeprefix("intent.statement#char=")
         start, end = (int(value) for value in offsets.split(":"))
         assert statement[start:end] == operation["statement"]
 
@@ -136,7 +134,29 @@ def test_brief_preserves_implicit_lifecycle_and_exception_states() -> None:
     }
 
 
-def test_brief_preserves_ru_lifecycle_and_exception_states_without_domain_terms() -> None:
+def test_brief_preserves_explicit_attachment_capture_in_en_and_ru() -> None:
+    statements = (
+        "A technician adds a measurement and uploads a defect photo.",
+        "\u0422\u0435\u0445\u043d\u0438\u043a \u0434\u043e\u0431\u0430\u0432\u043b\u044f\u0435\u0442 \u0438\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u0435, \u043a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440\u0438\u0439 \u0438 \u0444\u043e\u0442\u043e\u0433\u0440\u0430\u0444\u0438\u044e \u0434\u0435\u0444\u0435\u043a\u0442\u0430.",
+    )
+
+    for statement in statements:
+        brief = compile_prototype_brief(statement)
+        requirement = brief["information_requirements"][0]
+        assert requirement["kind"] == "attachment"
+        assert requirement["interaction"] == "capture"
+        start, end = (
+            int(value)
+            for value in requirement["evidence"][0]
+            .removeprefix("intent.statement#char=")
+            .split(":")
+        )
+        assert statement[start:end] == requirement["statement"]
+
+
+def test_brief_preserves_ru_lifecycle_and_exception_states_without_domain_terms() -> (
+    None
+):
     brief = compile_prototype_brief(
         "Пользователь сохраняет незавершенную запись, а затем завершает ее. "
         "Покажи пустой список и запрети завершение без комментария."

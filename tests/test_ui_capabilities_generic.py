@@ -67,6 +67,14 @@ def test_flow_layout_contract_exposes_required_single_area_shape() -> None:
     }
 
 
+def test_form_contract_distinguishes_field_layout_from_page_layout() -> None:
+    catalog = ui_capability_catalog()
+    form = next(item for item in catalog["components"] if item["id"] == "ui.form")
+
+    assert "optional string enum" in form["manifest"]["layout_property"]
+    assert "not a page layout object" in form["manifest"]["layout_property"]
+
+
 def test_resource_board_contract_exposes_exact_query_and_button_shapes() -> None:
     catalog = ui_capability_catalog()
     board = next(
@@ -241,6 +249,52 @@ def test_generic_mutation_requires_executable_prototype_resource() -> None:
     rejected = evaluate_ui_request(request, webui, prototype_records=records)
     failed = {item["id"] for item in rejected["postconditions"] if not item["ok"]}
     assert {"resource.prototype_source", "resource.persistence_operations"} <= failed
+
+
+def test_generic_attachment_capture_requires_editable_form_field() -> None:
+    request = "A technician uploads a defect photo."
+    webui = _empty_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page["widgets"] = [
+        {
+            "id": "inspection",
+            "type": "ui.form",
+            "area": "main",
+            "inputs": {
+                "fields": [
+                    {
+                        "id": "photo-note",
+                        "type": "staticContent",
+                        "markdown": "Attach later",
+                    }
+                ]
+            },
+        }
+    ]
+
+    missing = evaluate_ui_request(request, webui)
+    check = next(
+        item
+        for item in missing["postconditions"]
+        if item["id"] == "ui.information_capture"
+    )
+    assert check == {
+        "id": "ui.information_capture",
+        "ok": False,
+        "expected": ["attachment"],
+        "actual": [],
+    }
+
+    page["widgets"][0]["inputs"]["fields"].append(
+        {"id": "defect-photo", "type": "fileUpload"}
+    )
+    present = evaluate_ui_request(request, webui)
+    check = next(
+        item
+        for item in present["postconditions"]
+        if item["id"] == "ui.information_capture"
+    )
+    assert check["ok"] is True
 
 
 def test_resource_move_diagnostic_exposes_the_inconsistent_source_and_action() -> None:

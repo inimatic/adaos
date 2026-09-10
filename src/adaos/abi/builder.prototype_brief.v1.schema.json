@@ -38,6 +38,10 @@
       "items": { "$ref": "#/$defs/evidencedStatement" }
     },
     "entities": { "$ref": "#/$defs/knowledgeField" },
+    "information_requirements": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/informationRequirement" }
+    },
     "operations": {
       "type": "array",
       "items": {
@@ -111,6 +115,19 @@
       "required": ["id", "statement", "evidence", "confidence"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
+        "statement": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "informationRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "interaction", "statement", "evidence", "confidence"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["attachment", "text", "number", "choice", "boolean", "date", "time", "other"] },
+        "interaction": { "enum": ["capture", "present"] },
         "statement": { "type": "string", "minLength": 1 },
         "evidence": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 }

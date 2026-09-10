@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "2.1.0",
+  "catalog_version": "2.1.1",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -169,6 +169,7 @@
       "aliases": { "en": ["form", "input", "questionnaire"], "ru": ["форма", "ввод", "анкета"] },
       "manifest": {
         "widget_type": "ui.form",
+        "layout_property": "inputs.layout is an optional string enum: stack, responsiveGrid, responsive-grid, grid, or auto-grid. It is not a page layout object.",
         "field_type_property": "inputs.fields[*].type",
         "representative_field_types": ["shortText", "longText", "number", "date", "boolean", "toggle", "singleChoice", "checkboxes", "dropdown", "combobox", "fileUpload"],
         "single_boolean_field_types": ["boolean", "toggle", "switch"],

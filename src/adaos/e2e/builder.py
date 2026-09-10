@@ -211,6 +211,93 @@ def _compact_step_output(
     )
 
 
+def _compact_generation_diagnostic(journal: Mapping[str, Any]) -> dict[str, Any]:
+    diagnostic = (
+        journal.get("diagnostic")
+        if isinstance(journal.get("diagnostic"), Mapping)
+        else {}
+    )
+    result = (
+        diagnostic.get("result")
+        if isinstance(diagnostic.get("result"), Mapping)
+        else {}
+    )
+
+    def validation_summary(value: Any) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            return {}
+        summary = {
+            key: copy.deepcopy(value.get(key))
+            for key in ("ok", "error", "detail", "findings")
+            if value.get(key) not in (None, "", [], {})
+        }
+        postconditions: list[dict[str, Any]] = []
+
+        def visit(node: Any) -> None:
+            if isinstance(node, Mapping):
+                for item in node.get("postconditions") or []:
+                    if not isinstance(item, Mapping):
+                        continue
+                    compact = {
+                        key: copy.deepcopy(item.get(key))
+                        for key in ("id", "ok", "required", "expected", "actual")
+                        if item.get(key) is not None
+                    }
+                    if compact and compact not in postconditions:
+                        postconditions.append(compact)
+                for key, child in node.items():
+                    if key not in {"qualification", "prototype_brief", "intent"}:
+                        visit(child)
+            elif isinstance(node, (list, tuple)):
+                for child in node:
+                    visit(child)
+
+        visit(value)
+        if postconditions:
+            summary["postconditions"] = postconditions[:32]
+        return summary
+
+    attempts = [
+        {
+            key: copy.deepcopy(item.get(key))
+            for key in ("attempt", "ok", "request_id", "job_id", "output_mode")
+            if item.get(key) is not None
+        }
+        | {"validation": validation_summary(item.get("validation"))}
+        for item in result.get("attempts") or []
+        if isinstance(item, Mapping)
+    ]
+    candidates = [
+        {
+            key: copy.deepcopy(item.get(key))
+            for key in ("stage", "path", "sha256", "webui_digest")
+            if item.get(key) not in (None, "")
+        }
+        for item in result.get("candidate_artifacts") or []
+        if isinstance(item, Mapping)
+    ]
+    telemetry = (
+        diagnostic.get("telemetry")
+        if isinstance(diagnostic.get("telemetry"), Mapping)
+        else {}
+    )
+    return {
+        "schema": "adaos.builder.e2e_generation_diagnostic.v1",
+        "job_id": str(journal.get("job_id") or ""),
+        "status": str(journal.get("status") or ""),
+        "repair_attempted": bool(diagnostic.get("repair_attempted")),
+        "attempts": attempts,
+        "candidate_artifacts": candidates,
+        "result_validation": validation_summary(result.get("validation")),
+        "normalizations": copy.deepcopy(result.get("normalizations") or [])[:64],
+        "telemetry": {
+            key: copy.deepcopy(telemetry.get(key))
+            for key in ("timing", "usage", "usage_breakdown", "repair")
+            if telemetry.get(key) not in (None, "", [], {})
+        },
+    }
+
+
 def _run_command(args: Sequence[str], cwd: Path, *, timeout: float = 5.0) -> str | None:
     try:
         completed = subprocess.run(
@@ -758,15 +845,33 @@ class CompatibilityBuilderExecutor:
                         )
                         if telemetry.get(key) not in (None, "", [], {})
                     }
-                    return {
+                    generation_diagnostic = _compact_generation_diagnostic(journal)
+                    response = {
                         "ok": status == "succeeded",
                         "status": "failed" if status != "succeeded" else status,
                         "job_id": job_id,
                         "terminal_artifact": str(terminal_path),
                         "telemetry": telemetry_summary,
+                        "generation_diagnostic": generation_diagnostic,
                         "poll_count": polls,
                         "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
                     }
+                    bundle_dir = str(context.get("bundle_dir") or "").strip()
+                    if bundle_dir:
+                        relative = (
+                            Path("evidence")
+                            / "generation"
+                            / (
+                                f"{_safe_token(str(context.get('case_id') or 'case'), fallback='case')}"
+                                f"-attempt-{int(context.get('repetition') or 1):02d}.json"
+                            )
+                        )
+                        _write_json(
+                            Path(bundle_dir) / relative,
+                            redact_value(generation_diagnostic),
+                        )
+                        response["evidence_ref"] = relative.as_posix()
+                    return response
             if terminal_path is None:
                 response = self._session(
                     {
@@ -1247,8 +1352,7 @@ def load_builder_e2e_suite(path: Path) -> LoadedBuilderE2ESuite:
         ]
         if missing_grades:
             raise BuilderE2EError(
-                "suite requires prototype.grade for cases: "
-                + ", ".join(missing_grades)
+                "suite requires prototype.grade for cases: " + ", ".join(missing_grades)
             )
     return LoadedBuilderE2ESuite(
         path=suite_path,
@@ -1349,12 +1453,10 @@ def compare_builder_e2e_baseline(
         "browser": run_manifest.get("browser"),
         "repetitions": run_manifest.get("repetitions"),
         "grader_model": dict(
-            dict(run_manifest.get("evaluation") or {}).get("prototype_grader")
-            or {}
+            dict(run_manifest.get("evaluation") or {}).get("prototype_grader") or {}
         ).get("model"),
         "grader_version": dict(
-            dict(run_manifest.get("evaluation") or {}).get("prototype_grader")
-            or {}
+            dict(run_manifest.get("evaluation") or {}).get("prototype_grader") or {}
         ).get("version"),
     }
     for key, expected in dict(checked.get("cohort") or {}).items():
@@ -1440,7 +1542,9 @@ class BuilderE2ERunner:
             or os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL")
             or "gpt-4.1"
         ).strip()
-        self.require_client_profile = bool(defaults.get("require_client_profile", False))
+        self.require_client_profile = bool(
+            defaults.get("require_client_profile", False)
+        )
         if self.repetitions < 1 or self.repetitions > 20:
             raise BuilderE2EError("repetitions must be between 1 and 20")
         if self.browser not in {"auto", "on", "off"}:
@@ -1712,7 +1816,8 @@ class BuilderE2ERunner:
                     if declaration["type"] == "prototype.grade":
                         resolved_input.setdefault("model", self.grader_model)
                         resolved_input.setdefault(
-                            "requirements", copy.deepcopy(case.get("requirements") or {})
+                            "requirements",
+                            copy.deepcopy(case.get("requirements") or {}),
                         )
                         resolved_input.setdefault(
                             "prohibited_assumptions",
@@ -1723,7 +1828,8 @@ class BuilderE2ERunner:
                             [
                                 str(
                                     _resolve_value(
-                                        dict(prior.get("input") or {}).get("text") or "",
+                                        dict(prior.get("input") or {}).get("text")
+                                        or "",
                                         context,
                                     )
                                 )
@@ -2250,15 +2356,11 @@ def create_builder_e2e_baseline(
                 "browser": run_checked["browser"],
                 "repetitions": run_checked["repetitions"],
                 "grader_model": dict(
-                    dict(run_checked.get("evaluation") or {}).get(
-                        "prototype_grader"
-                    )
+                    dict(run_checked.get("evaluation") or {}).get("prototype_grader")
                     or {}
                 ).get("model"),
                 "grader_version": dict(
-                    dict(run_checked.get("evaluation") or {}).get(
-                        "prototype_grader"
-                    )
+                    dict(run_checked.get("evaluation") or {}).get("prototype_grader")
                     or {}
                 ).get("version"),
             },

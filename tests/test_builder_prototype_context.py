@@ -34,3 +34,21 @@ def test_model_context_rejects_an_untyped_mapping() -> None:
         assert "Prototype Brief" in str(exc)
     else:
         raise AssertionError("untyped context must be rejected")
+
+
+def test_model_context_keeps_attachment_capture_without_renderer_terms() -> None:
+    brief = intent.compile_brief(
+        "A field worker uploads a photo before completing the report."
+    )
+
+    context = prototype.model_context(brief)
+
+    assert context["information_requirements"] == [
+        {
+            "id": "information:01",
+            "kind": "attachment",
+            "interaction": "capture",
+            "statement": "uploads a photo",
+        }
+    ]
+    assert "fileUpload" not in json.dumps(context)
