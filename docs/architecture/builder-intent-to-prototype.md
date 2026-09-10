@@ -236,6 +236,16 @@ brief, plan, selected component contracts, semantic input, compiler version,
 validation, rendered evidence, model usage, and the resulting immutable
 Prototype revision.
 
+Runtime sidecars are not members of the WebUI document. In compatibility
+JSONL mode, patches address only the WebUI candidate and the terminal
+`complete` record carries locale assets, direct representative resource
+records, and other declared sidecars in separate typed members. A repair may
+replace the WebUI candidate without discarding already valid sidecars. Parsers
+may recognize an unambiguous legacy sidecar path for migration, but must remove
+it from the WebUI document, record the normalization, and validate the sidecar
+against its own schema. This boundary prevents transport envelopes and fixture
+payloads from becoming accidental renderer nodes.
+
 ## Responsibility Boundaries
 
 | Owner | Responsibilities | Must not own |

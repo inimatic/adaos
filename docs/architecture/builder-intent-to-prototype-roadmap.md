@@ -206,6 +206,24 @@ brief that omitted explicit states and capability gaps. The failed candidate
 is retained unchanged and these are architecture inputs, not case-specific
 prompt tuning.
 
+Later equipment-inspection runs removed those contaminating inputs and exposed
+two distinct contract defects. First, the phrase `complete.prototype_records`
+was interpreted as a WebUI JSON Pointer, so representative records entered the
+renderer patch and one response wrapped them in a transport envelope. The
+compatibility contract now states that patches address only WebUI and direct
+records belong to a terminal JSONL sidecar; validation rejects envelope-shaped
+records, and repair preserves already valid sidecars independently of the
+candidate document. The fresh
+`generic-equipment-terminal-sidecar-20260910-01` run then reached schema and
+postcondition validation, materialized four direct records and EN/RU assets,
+and received an independent score of `0.89375`. It still failed the hard task
+gate: checklist rows were read-only and no explicit per-inspection defect state
+could be edited. The run took 77.3 seconds and four Builder model calls (15,772
+fresh input, 5,632 cached input, and 4,467 output tokens), plus one 9.2-second
+grader call. This is valid capability-gap evidence, not a pass. It also shows
+that repeated repair context can grow to about 96 KB and that malformed JSON
+Pointer repair remains a material legacy-path cost.
+
 - [x] `[must]` Publish and validate the declarative E2E suite, case, resolved
   run, case-result, report, and immutable baseline contracts defined by the
   [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md). Reuse
@@ -346,6 +364,14 @@ aliases. This is evidence for the single-source component contract below, not
 its completion: the same facts still exist separately in schema, Client,
 catalog, parser, and tests.
 
+The clean RU equipment development case adds a typed Client capability gap:
+the current generic form can display an array as read-only long text, but it
+cannot truthfully edit a bounded repeated field group with per-item values and
+validation. A repeatable editable collection is therefore a C2/C4 candidate.
+This single inspected archetype is not sufficient for admission; a second
+unrelated development archetype must demonstrate the same semantic need before
+the primitive is added to the cross-domain tranche.
+
 - [ ] `[must]` Publish the next component-contract/catalog schema as one source
   for semantic role, properties, events, actions, state, i18n, accessibility,
   responsive behavior, loading class, compiler mapping, compatibility, and
@@ -410,8 +436,11 @@ the dynamic suffix. A characterization test proves that two different prompts
 which resolve to the same capability bundle produce byte-identical stable
 prompts. Root LLM job polling now reuses one explicitly scoped HTTP connection
 pool and still reports provider execution separately from orchestration time.
-The complete-WebUI/project-memory reductions and content-addressed retrieval
-path remain open.
+The terminal-sidecar experiment reported 5,632 cached input tokens, proving
+partial reuse of that prefix, but repair requests still accumulated roughly
+96 KB of dynamic context. Repairs now retain candidate sidecars explicitly;
+the complete-WebUI/project-memory reductions, stage-specific repair packets,
+provider-native typed output, and content-addressed retrieval path remain open.
 
 - [ ] `[must]` Replace complete WebUI/project-memory/history inclusion with
   brief deltas, semantic slices, accepted constraints, findings, and retrievable

@@ -470,3 +470,28 @@ repair calls: the final repair was invalid JSON. It took 61.8 seconds and
 confirms that the legacy design-model-owned patch path is both unstable and
 too expensive. The failure remains retained for the typed compiler work; it
 must not be hidden by raising retry or output budgets.
+
+The following diagnostic run proved that `complete.prototype_records` was an
+ambiguous output instruction rather than a missing transport feature: the
+model patched that literal path into WebUI and emitted envelope-shaped fixture
+data. The compatibility protocol now says that JSONL patch paths modify only
+the WebUI document and that direct representative records are a separate
+member of the terminal `complete` line. Repairs preserve candidate sidecars,
+and a bounded parser migration extracts the old unambiguous path while
+recording normalization.
+
+Fresh run `generic-equipment-terminal-sidecar-20260910-01` then passed Project
+creation, terminal synchronization, schema validation, request postconditions,
+resource materialization with four direct records, locale materialization, and
+independent grading. Its score was `0.89375`, above the weighted `0.85`
+threshold, but the result remained failed because hard task dimensions are not
+averaged away: checklist entries were only displayed, not editable per item,
+and a defect was represented by file upload rather than an explicit state or
+field. The Builder used four model calls (15,772 fresh input, 5,632 cached
+input, and 4,467 output tokens); generation took 77.3 seconds and the separate
+grader 9.2 seconds. Provider execution, not Root connection or disk pressure,
+dominated the observed calls. One qualification repair emitted an invalid
+prefixed JSON Pointer, and a later repair request approached 96 KB. The result
+therefore validates the failure taxonomy and sidecar boundary, while exposing
+a repeatable-field Client ABI candidate and the need for stage-specific compact
+repair context plus provider-native structured output.
