@@ -3,7 +3,70 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
+
+_COMPATIBILITY_PORT: Any = None
+
+
+def _compatibility_execution_port():
+    global _COMPATIBILITY_PORT
+    from adaos.adapters.builder.legacy_dev_skill import (
+        LegacyDevSkillPrototypeExecution,
+    )
+
+    if _COMPATIBILITY_PORT is None:
+        _COMPATIBILITY_PORT = LegacyDevSkillPrototypeExecution()
+    return _COMPATIBILITY_PORT
+
+
+def submit_request(
+    statement: str,
+    *,
+    webspace_id: str,
+    locale: str = "en",
+    conversation_context: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    source_kind: Literal["chat", "api", "e2e", "unknown"] = "api",
+    auto_apply: bool = True,
+    timeout_seconds: float = 300.0,
+) -> dict[str, Any]:
+    """Submit one Prototype turn through the public SDK contract.
+
+    The current execution port is named in the receipt and remains a
+    compatibility backend until generation ownership moves fully into Core.
+    """
+
+    from adaos.services.builder.prototype_requests import submit_request as submit
+
+    return submit(
+        _compatibility_execution_port(),
+        statement,
+        webspace_id=webspace_id,
+        locale=locale,
+        conversation_context=conversation_context,
+        metadata=metadata,
+        source_kind=source_kind,
+        auto_apply=auto_apply,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def candidate_status(
+    session_id: str,
+    *,
+    webspace_id: str,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Read one Prototype candidate through the public SDK contract."""
+
+    from adaos.services.builder.prototype_requests import candidate_status as status
+
+    return status(
+        _compatibility_execution_port(),
+        session_id,
+        webspace_id=webspace_id,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def start_data_runtime(definition: Mapping[str, Any]):
@@ -58,9 +121,11 @@ def automation_handoff(**kwargs: Any) -> dict[str, Any]:
 
 
 __all__ = [
+    "candidate_status",
     "check_spatial_constraint",
     "composition_slice",
     "automation_handoff",
     "start_data_runtime",
+    "submit_request",
     "validate_workflow_slice",
 ]

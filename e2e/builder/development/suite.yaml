@@ -8,7 +8,7 @@ case_refs:
   - cases/runner-observation.yaml
   - cases/generic-notes-create-en.yaml
 defaults:
-  adapter: legacy_dev_chat.v1
+  adapter: sdk.v1
   profile: generic
   repetitions: 1
   timeout_seconds: 300

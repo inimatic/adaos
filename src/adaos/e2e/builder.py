@@ -767,11 +767,13 @@ class CompatibilityBuilderExecutor:
                         "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
                     }
             if terminal_path is None:
-                response = self._manager().run_dev_tool(
-                    "builder_skill",
-                    "get_session",
-                    {"session_id": session_id, "webspace_id": webspace_id},
-                    timeout=min(max(timeout, 1.0), 30.0),
+                response = self._session(
+                    {
+                        "session_id": session_id,
+                        "webspace_id": webspace_id,
+                        "timeout_seconds": min(max(timeout, 1.0), 30.0),
+                    },
+                    context,
                 )
                 last_session = (
                     dict(response.get("session") or {})
@@ -1127,6 +1129,77 @@ class CompatibilityBuilderExecutor:
         }
 
 
+class SdkBuilderExecutor(CompatibilityBuilderExecutor):
+    """E2E adapter that uses the public Builder Prototype SDK surface."""
+
+    adapter_id = "sdk.v1"
+
+    def _chat(
+        self, inputs: Mapping[str, Any], context: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        from adaos.sdk.builder import prototype
+
+        statement = str(inputs.get("text") or "").strip()
+        if not statement:
+            raise BuilderE2EError("builder.chat requires input.text")
+        webspace_id = str(
+            inputs.get("webspace_id") or f"e2e-{context['run_id']}"
+        ).strip()
+        conversation_id = str(
+            inputs.get("conversation_id")
+            or f"conversation:e2e:{context['run_id']}:{context['case_id']}:{context['repetition']}"
+        )
+        timeout = float(
+            inputs.get("timeout_seconds") or context.get("timeout_seconds") or 300
+        )
+        return prototype.submit_request(
+            statement,
+            webspace_id=webspace_id,
+            locale=str(context["locale"]),
+            auto_apply=bool(inputs.get("auto_apply", True)),
+            timeout_seconds=timeout,
+            conversation_context={
+                "schema": "adaos.context.packet.v1",
+                "conversation_id": conversation_id,
+                "thread_id": conversation_id,
+                "topic_id": conversation_id,
+                "locale": context["locale"],
+                "messages": [],
+                "segments": [],
+                "memory": [],
+                "diagnostics": {"fallbacks": [f"builder_e2e:{context['run_id']}"]},
+            },
+            metadata={
+                "action_source": "builder_e2e",
+                "request_origin_id": "builder_e2e",
+                "message_id": f"m.e2e.{context['run_id']}.{context['case_id']}.{context['repetition']}",
+                "conversation_id": conversation_id,
+                "thread_id": conversation_id,
+                "topic_id": conversation_id,
+                "builder_e2e_run_id": context["run_id"],
+                "builder_e2e_case_id": context["case_id"],
+            },
+            source_kind="e2e",
+        )
+
+    def _session(
+        self, inputs: Mapping[str, Any], context: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        from adaos.sdk.builder import prototype
+
+        session_id = str(inputs.get("session_id") or "").strip()
+        if not session_id:
+            raise BuilderE2EError("builder.session requires input.session_id")
+        webspace_id = str(
+            inputs.get("webspace_id") or f"e2e-{context['run_id']}"
+        ).strip()
+        return prototype.candidate_status(
+            session_id,
+            webspace_id=webspace_id,
+            timeout_seconds=float(inputs.get("timeout_seconds") or 30),
+        )
+
+
 @dataclass(frozen=True)
 class LoadedBuilderE2ESuite:
     path: Path
@@ -1381,13 +1454,18 @@ class BuilderE2ERunner:
             validate_builder_e2e_record(BASELINE_SCHEMA, self.baseline)
         configured_adapter = str(defaults.get("adapter") or "legacy_dev_chat.v1")
         if executor is None:
-            if configured_adapter != "legacy_dev_chat.v1":
+            if configured_adapter == "legacy_dev_chat.v1":
+                executor = CompatibilityBuilderExecutor(
+                    repo_root=self.repo_root, browser_mode=self.browser
+                )
+            elif configured_adapter == "sdk.v1":
+                executor = SdkBuilderExecutor(
+                    repo_root=self.repo_root, browser_mode=self.browser
+                )
+            else:
                 raise BuilderE2EError(
                     f"Builder E2E adapter is not available: {configured_adapter}"
                 )
-            executor = CompatibilityBuilderExecutor(
-                repo_root=self.repo_root, browser_mode=self.browser
-            )
         elif configured_adapter != executor.adapter_id:
             raise BuilderE2EError(
                 "suite adapter does not match the injected executor: "
@@ -2202,6 +2280,7 @@ __all__ = [
     "BuilderE2ERunner",
     "BuilderE2EStepExecutor",
     "CompatibilityBuilderExecutor",
+    "SdkBuilderExecutor",
     "compare_builder_e2e_baseline",
     "create_builder_e2e_baseline",
     "load_builder_e2e_suite",

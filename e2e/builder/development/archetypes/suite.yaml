@@ -14,7 +14,7 @@ case_refs:
   - cases/volunteer-roster-en.yaml
   - cases/inventory-procurement-ru.yaml
 defaults:
-  adapter: legacy_dev_chat.v1
+  adapter: sdk.v1
   profile: generic
   repetitions: 1
   timeout_seconds: 420

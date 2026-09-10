@@ -15,6 +15,7 @@ from adaos.e2e.builder import (
     BuilderE2EError,
     BuilderE2ERunner,
     BuilderE2EUnavailable,
+    SdkBuilderExecutor,
     compare_builder_e2e_baseline,
     create_builder_e2e_baseline,
     load_builder_e2e_suite,
@@ -360,6 +361,21 @@ def test_builder_e2e_cli_is_registered() -> None:
     assert "--repetitions" in result.stdout
     assert "--resume" in result.stdout
     assert "--run-id" in result.stdout
+
+
+def test_runner_constructs_public_sdk_adapter(tmp_path: Path) -> None:
+    suite = _write_suite(tmp_path / "definitions", cases=[_case()])
+    payload = yaml.safe_load(suite.read_text(encoding="utf-8"))
+    payload["defaults"]["adapter"] = "sdk.v1"
+    suite.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    runner = BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+    )
+
+    assert isinstance(runner.executor, SdkBuilderExecutor)
 
 
 def test_case_repetitions_use_distinct_webspaces(tmp_path: Path) -> None:
