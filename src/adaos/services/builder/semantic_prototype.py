@@ -265,8 +265,11 @@ def validate_semantic_prototype(
                         f"query control {query_id!r} references unknown field "
                         f"{field_ref!r}"
                     )
-                if fields[field_ref]["value_type"] != "choice":
-                    _fail(f"filter query control {query_id!r} requires a choice field")
+                if fields[field_ref]["value_type"] not in {"choice", "date"}:
+                    _fail(
+                        f"filter query control {query_id!r} requires a choice or "
+                        "date field"
+                    )
 
     for command in commands.values():
         if command["view_ref"] not in views:
@@ -522,7 +525,7 @@ def compile_semantic_prototype(
                     }
                 )
                 widget["dataSource"]["query"]["search"] = f"$state.{state_ref}"
-            else:
+            elif fields[str(control["field_ref"])]["value_type"] == "choice":
                 field = fields[str(control["field_ref"])]
                 all_label, all_label_i18n = _localized(
                     {
@@ -561,6 +564,22 @@ def compile_semantic_prototype(
                             "optionValuePath": "value",
                             "optionLabelPath": "label",
                             "searchable": len(options) > 8,
+                        },
+                    }
+                )
+                widget["dataSource"]["query"].setdefault("filters", {})[
+                    str(control["field_ref"])
+                ] = f"$state.{state_ref}"
+            else:
+                query_widget.update(
+                    {
+                        "type": "input.text",
+                        "inputs": {
+                            "label": query_label,
+                            "label_i18n": query_label_i18n,
+                            "inputType": "date",
+                            "initialValue": "",
+                            "clearable": True,
                         },
                     }
                 )

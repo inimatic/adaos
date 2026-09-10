@@ -356,13 +356,46 @@ def test_query_controls_reject_duplicate_and_non_collection_ownership() -> None:
         validate_semantic_prototype(semantic, brief=brief)
 
 
-def test_filter_query_control_requires_choice_field() -> None:
+def test_filter_query_control_requires_supported_field_type() -> None:
     brief, semantic = _fixture()
     _add_query_controls(semantic)
     semantic["views"][0]["query_controls"][1]["field_ref"] = "title"
 
-    with pytest.raises(BuilderWorkflowError, match="requires a choice field"):
+    with pytest.raises(BuilderWorkflowError, match="requires a choice or date field"):
         validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_date_filter_compiles_to_native_date_input() -> None:
+    brief, semantic = _fixture()
+    semantic["resource"]["fields"].append(
+        {
+            "id": "scheduled_on",
+            "label": _text("work.field.date", "Date", "Дата"),
+            "value_type": "date",
+            "required": True,
+            "editable": False,
+        }
+    )
+    semantic["resource"]["records"][0]["scheduled_on"] = "2026-09-10"
+    semantic["resource"]["records"][1]["scheduled_on"] = "2026-09-11"
+    semantic["views"][0]["query_controls"] = [
+        {
+            "id": "date-filter",
+            "kind": "filter",
+            "label": _text("work.filter.date", "Date", "Дата"),
+            "field_ref": "scheduled_on",
+        }
+    ]
+
+    result = compile_semantic_prototype(semantic, brief=brief)
+
+    page = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    control = page["widgets"][0]
+    assert control["type"] == "input.text"
+    assert control["inputs"]["inputType"] == "date"
+    assert page["widgets"][1]["dataSource"]["query"]["filters"] == {
+        "scheduled_on": "$state.query_date_filter"
+    }
 
 
 def test_semantic_prototype_rejects_unbound_accepted_requirement() -> None:
