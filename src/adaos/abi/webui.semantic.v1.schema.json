@@ -27,23 +27,9 @@
     "layout": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pattern", "regions"],
+      "required": ["pattern"],
       "properties": {
-        "pattern": { "enum": ["flow", "split", "grid", "focus_detail"] },
-        "regions": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 6,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["id", "role"],
-            "properties": {
-              "id": { "$ref": "#/$defs/id" },
-              "role": { "enum": ["primary", "supporting", "actions"] }
-            }
-          }
-        }
+        "pattern": { "enum": ["flow", "split", "grid", "focus_detail"] }
       }
     },
     "resource": {
@@ -207,11 +193,11 @@
     "view": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "role", "region_ref", "title", "field_refs"],
+      "required": ["id", "role", "region_role", "title", "field_refs"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "role": { "enum": ["collection", "details", "editor"] },
-        "region_ref": { "$ref": "#/$defs/id" },
+        "region_role": { "enum": ["primary", "supporting", "actions"] },
         "title": { "$ref": "#/$defs/localizedText" },
         "field_refs": {
           "type": "array",

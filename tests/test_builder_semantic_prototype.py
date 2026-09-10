@@ -30,10 +30,6 @@ def _fixture() -> tuple[dict, dict]:
         "title": _text("work.title", "Work review", "Проверка работ"),
         "layout": {
             "pattern": "split",
-            "regions": [
-                {"id": "primary", "role": "primary"},
-                {"id": "supporting", "role": "supporting"},
-            ],
         },
         "resource": {
             "id": "work_items",
@@ -117,7 +113,7 @@ def _fixture() -> tuple[dict, dict]:
             {
                 "id": "work-list",
                 "role": "collection",
-                "region_ref": "primary",
+                "region_role": "primary",
                 "title": _text("work.list", "Items", "Пункты"),
                 "field_refs": ["title", "result", "status"],
                 "empty_state": {
@@ -127,14 +123,14 @@ def _fixture() -> tuple[dict, dict]:
             {
                 "id": "work-details",
                 "role": "details",
-                "region_ref": "supporting",
+                "region_role": "supporting",
                 "title": _text("work.details", "Selected item", "Выбранный пункт"),
                 "field_refs": ["title", "result", "status"],
             },
             {
                 "id": "work-editor",
                 "role": "editor",
-                "region_ref": "supporting",
+                "region_role": "supporting",
                 "title": _text("work.editor", "Record result", "Заполнить результат"),
                 "field_refs": ["result", "comment", "evidence"],
             },
@@ -572,3 +568,13 @@ def test_semantic_layout_maps_to_runtime_abi(
     layout = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]["layout"]
     assert layout["type"] == runtime_type
     assert layout["pattern"] == runtime_pattern
+    assert [area["id"] for area in layout["areas"]] == ["primary", "supporting"]
+
+
+def test_semantic_prototype_requires_a_primary_view_region() -> None:
+    brief, semantic = _fixture()
+    for view in semantic["views"]:
+        view["region_role"] = "supporting"
+
+    with pytest.raises(BuilderWorkflowError, match="view in the primary region"):
+        validate_semantic_prototype(semantic, brief=brief)

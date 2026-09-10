@@ -156,7 +156,9 @@ def validate_semantic_prototype(
             query_controls[identifier] = dict(control)
     commands = _unique(document["commands"], "command")
     states = _unique(document["representative_states"], "state")
-    regions = _unique(document["layout"]["regions"], "region")
+    region_roles = {str(view["region_role"]) for view in views.values()}
+    if "primary" not in region_roles:
+        _fail("semantic Prototype requires at least one view in the primary region")
 
     for field in fields.values():
         options = field.get("options")
@@ -236,10 +238,6 @@ def validate_semantic_prototype(
                 )
 
     for view in views.values():
-        if view["region_ref"] not in regions:
-            _fail(
-                f"view {view['id']!r} references unknown region {view['region_ref']!r}"
-            )
         unknown_fields = sorted(set(view["field_refs"]) - set(fields))
         if unknown_fields:
             _fail(f"view {view['id']!r} references unknown fields {unknown_fields}")
@@ -451,6 +449,7 @@ def compile_semantic_prototype(
     resource = dict(document["resource"])
     fields = {str(item["id"]): dict(item) for item in resource["fields"]}
     commands = {str(item["id"]): dict(item) for item in document["commands"]}
+    region_roles = {str(view["region_role"]) for view in document["views"]}
     resource_type = _runtime_resource_type(str(resource["id"]), project_ref)
     selection_ref = f"selected_{resource['id']}_id"
     initial_state: dict[str, Any] = {selection_ref: ""}
@@ -479,7 +478,7 @@ def compile_semantic_prototype(
         view_title, view_title_i18n = _localized(view["title"], dictionaries)
         widget: dict[str, Any] = {
             "id": view_id,
-            "area": str(view["region_ref"]),
+            "area": str(view["region_role"]),
             "title": view_title,
             "title_i18n": view_title_i18n,
             "dataSource": {
@@ -497,7 +496,7 @@ def compile_semantic_prototype(
             )
             query_widget: dict[str, Any] = {
                 "id": f"query-{query_id}",
-                "area": str(view["region_ref"]),
+                "area": str(view["region_role"]),
                 "title": query_label,
                 "title_i18n": query_label_i18n,
                 "actions": [
@@ -748,10 +747,11 @@ def compile_semantic_prototype(
             "pattern": layout_pattern,
             "areas": [
                 {
-                    "id": str(region["id"]),
-                    "role": "main" if region["role"] == "primary" else "auxiliary",
+                    "id": region_role,
+                    "role": "main" if region_role == "primary" else "auxiliary",
                 }
-                for region in document["layout"]["regions"]
+                for region_role in ("primary", "supporting", "actions")
+                if region_role in region_roles
             ],
         },
         "widgets": widgets,
