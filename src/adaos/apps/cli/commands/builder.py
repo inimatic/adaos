@@ -8,10 +8,18 @@ from typing import Any
 
 import typer
 
-from adaos.apps.cli.commands.dev import _resolve_dev_scenario_file, _scenario_validation_roots
+from adaos.apps.cli.commands.dev import (
+    _resolve_dev_scenario_file,
+    _scenario_validation_roots,
+)
 from adaos.apps.cli.commands.skill import _mgr
+from adaos.e2e.builder import BuilderE2EError, BuilderE2ERunner
 from adaos.services.agent_context import get_ctx
-from adaos.services.builder import BuilderProjectSourceService, BuilderWorkbenchService, BuilderWorkspaceService
+from adaos.services.builder import (
+    BuilderProjectSourceService,
+    BuilderWorkbenchService,
+    BuilderWorkspaceService,
+)
 from adaos.services.node_config import displayable_path
 from adaos.services.scenario.validation import validate_scenario_path
 from adaos.services.root.service import (
@@ -92,7 +100,10 @@ def _echo_create_result(result: ArtifactCreateResult, json_output: bool) -> None
     if json_output:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
-    typer.secho(f"{result.kind.title()} '{result.name}' created in Builder dev workspace.", fg=typer.colors.GREEN)
+    typer.secho(
+        f"{result.kind.title()} '{result.name}' created in Builder dev workspace.",
+        fg=typer.colors.GREEN,
+    )
     typer.echo(f"Location: {_display_path(result.path)}")
     if result.version:
         typer.echo(f"Version: {result.version}")
@@ -103,7 +114,10 @@ def _echo_push_result(result: ArtifactPushResult, json_output: bool) -> None:
     if json_output:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
-    typer.secho(f"{result.kind.title()} '{result.name}' uploaded to Forge.", fg=typer.colors.GREEN)
+    typer.secho(
+        f"{result.kind.title()} '{result.name}' uploaded to Forge.",
+        fg=typer.colors.GREEN,
+    )
     typer.echo(f"Stored path: {result.stored_path}")
     typer.echo(f"SHA256: {result.sha256}")
     typer.echo(f"Bytes uploaded: {result.bytes_uploaded}")
@@ -129,7 +143,9 @@ def _echo_list_result(items: list[ArtifactListItem], json_output: bool) -> None:
         ]
         for item in items
     ]
-    widths = [max(len(str(row[i])) for row in [headers] + rows) for i in range(len(headers))]
+    widths = [
+        max(len(str(row[i])) for row in [headers] + rows) for i in range(len(headers))
+    ]
     typer.echo("  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
     typer.echo("  ".join("-" * widths[i] for i in range(len(headers))))
     for row in rows:
@@ -138,7 +154,9 @@ def _echo_list_result(items: list[ArtifactListItem], json_output: bool) -> None:
 
 def _echo_approval_profiles(profiles: list[dict[str, Any]], json_output: bool) -> None:
     if json_output:
-        typer.echo(json.dumps({"ok": True, "profiles": profiles}, ensure_ascii=False, indent=2))
+        typer.echo(
+            json.dumps({"ok": True, "profiles": profiles}, ensure_ascii=False, indent=2)
+        )
         return
     headers = ["Profile", "Auto draft", "Auto apply", "Review", "Summary"]
     rows = [
@@ -151,7 +169,9 @@ def _echo_approval_profiles(profiles: list[dict[str, Any]], json_output: bool) -
         ]
         for item in profiles
     ]
-    widths = [max(len(str(row[i])) for row in [headers] + rows) for i in range(len(headers))]
+    widths = [
+        max(len(str(row[i])) for row in [headers] + rows) for i in range(len(headers))
+    ]
     typer.echo("  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
     typer.echo("  ".join("-" * widths[i] for i in range(len(headers))))
     for row in rows:
@@ -184,7 +204,9 @@ def _resolve_dev_artifact_path(kind: str, artifact_id: str) -> Path | None:
 
 @app.command("create")
 def create(
-    artifact_id: str = typer.Argument(..., help="Skill or scenario id in the Builder/dev workspace."),
+    artifact_id: str = typer.Argument(
+        ..., help="Skill or scenario id in the Builder/dev workspace."
+    ),
     kind: str = typer.Option("skill", "--kind", help="skill | scenario"),
     template: str | None = typer.Option(
         None,
@@ -221,7 +243,11 @@ def list_cmd(
     artifact_kind = _normalize_artifact_kind(kind)
     service = _service()
     try:
-        items = service.list_skills() if artifact_kind == "skill" else service.list_scenarios()
+        items = (
+            service.list_skills()
+            if artifact_kind == "skill"
+            else service.list_scenarios()
+        )
     except RootServiceError as exc:
         typer.secho(str(exc), fg=typer.colors.RED)
         raise typer.Exit(1)
@@ -240,14 +266,27 @@ def approval_profiles(
 @app.command("source-add")
 def source_add(
     artifact_id: str = typer.Argument(..., help="Builder project id."),
-    path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True, resolve_path=True),
+    path: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
     kind: str = typer.Option("skill", "--kind", help="skill | scenario"),
-    role: str = typer.Option("source", "--role", help="Source role such as notebook, review, paper, or source."),
+    role: str = typer.Option(
+        "source",
+        "--role",
+        help="Source role such as notebook, review, paper, or source.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
 ) -> None:
     """Attach one immutable source to an existing Builder project."""
     service = BuilderProjectSourceService.from_context()
-    result = service.add_path(path, kind=_normalize_artifact_kind(kind), project_id=artifact_id, role=role)
+    result = service.add_path(
+        path, kind=_normalize_artifact_kind(kind), project_id=artifact_id, role=role
+    )
     _echo_payload(result, json_output)
 
 
@@ -259,58 +298,85 @@ def source_list(
 ) -> None:
     """Show the current immutable SourceBundle for a Builder project."""
     service = BuilderProjectSourceService.from_context()
-    result = {"ok": True, "bundle": service.current_bundle(_normalize_artifact_kind(kind), artifact_id)}
+    result = {
+        "ok": True,
+        "bundle": service.current_bundle(_normalize_artifact_kind(kind), artifact_id),
+    }
     _echo_payload(result, json_output)
 
 
 @app.command("workbench-ensure")
 def workbench_ensure(
-    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
-    active_draft_id: str | None = typer.Option(None, "--active-draft", help="Draft id to select in Prompt IDE."),
+    webspace_id: str | None = typer.Option(
+        None, "--webspace", help="Source webspace id."
+    ),
+    active_draft_id: str | None = typer.Option(
+        None, "--active-draft", help="Draft id to select in Prompt IDE."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
 ) -> None:
     """Create or reuse the paired Prompt IDE dev webspace."""
     service = BuilderWorkbenchService.from_context()
-    result = asyncio.run(service.ensure_dev_webspace(webspace_id, active_draft_id=active_draft_id))
+    result = asyncio.run(
+        service.ensure_dev_webspace(webspace_id, active_draft_id=active_draft_id)
+    )
     _echo_payload({"ok": True, "binding": result}, json_output)
 
 
 @app.command("workbench-binding")
 def workbench_binding(
-    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
+    webspace_id: str | None = typer.Option(
+        None, "--webspace", help="Source webspace id."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
 ) -> None:
     """Return Builder source/dev webspace binding."""
     service = BuilderWorkbenchService.from_context()
-    _echo_payload({"ok": True, "binding": service.get_workspace_binding(webspace_id)}, json_output)
+    _echo_payload(
+        {"ok": True, "binding": service.get_workspace_binding(webspace_id)}, json_output
+    )
 
 
 @app.command("workbench-open")
 def workbench_open(
-    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Browser base URL, for example http://localhost:8100."),
+    webspace_id: str | None = typer.Option(
+        None, "--webspace", help="Source webspace id."
+    ),
+    base_url: str | None = typer.Option(
+        None, "--base-url", help="Browser base URL, for example http://localhost:8100."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
 ) -> None:
     """Return URL for the paired Prompt IDE dev webspace."""
     service = BuilderWorkbenchService.from_context()
-    _echo_payload(service.open_dev_webspace(webspace_id, base_url=base_url), json_output)
+    _echo_payload(
+        service.open_dev_webspace(webspace_id, base_url=base_url), json_output
+    )
 
 
 @app.command("workbench-set-active")
 def workbench_set_active(
-    draft_id: str | None = typer.Argument(None, help="Draft id to select; omit to clear."),
-    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
+    draft_id: str | None = typer.Argument(
+        None, help="Draft id to select; omit to clear."
+    ),
+    webspace_id: str | None = typer.Option(
+        None, "--webspace", help="Source webspace id."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
 ) -> None:
     """Switch the active Builder development draft."""
     service = BuilderWorkbenchService.from_context()
-    binding = asyncio.run(service.ensure_dev_webspace(webspace_id, active_draft_id=draft_id))
+    binding = asyncio.run(
+        service.ensure_dev_webspace(webspace_id, active_draft_id=draft_id)
+    )
     _echo_payload({"ok": True, "binding": binding}, json_output)
 
 
 @app.command("workbench-list")
 def workbench_list(
-    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
+    webspace_id: str | None = typer.Option(
+        None, "--webspace", help="Source webspace id."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
 ) -> None:
     """List Builder drafts and development skills/scenarios for Prompt IDE."""
@@ -325,13 +391,17 @@ def workbench_list(
         return
     for item in items:
         active = "*" if item.get("active") else " "
-        typer.echo(f"{active} {item.get('draft_id')}  {item.get('kind')}:{item.get('id')}  {item.get('root')}")
+        typer.echo(
+            f"{active} {item.get('draft_id')}  {item.get('kind')}:{item.get('id')}  {item.get('root')}"
+        )
 
 
 @app.command("workbench-delete")
 def workbench_delete(
     draft_id: str = typer.Argument(..., help="Builder draft id to delete."),
-    webspace_id: str | None = typer.Option(None, "--webspace", help="Source webspace id."),
+    webspace_id: str | None = typer.Option(
+        None, "--webspace", help="Source webspace id."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
 ) -> None:
     """Delete a Builder development draft."""
@@ -344,9 +414,13 @@ def workbench_delete(
 
 @app.command("push")
 def push(
-    artifact_id: str = typer.Argument(..., help="Skill or scenario id in the Builder/dev workspace."),
+    artifact_id: str = typer.Argument(
+        ..., help="Skill or scenario id in the Builder/dev workspace."
+    ),
     kind: str = typer.Option("skill", "--kind", help="skill | scenario"),
-    message: str | None = typer.Option(None, "--message", "-m", help="Forge commit message."),
+    message: str | None = typer.Option(
+        None, "--message", "-m", help="Forge commit message."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
 ) -> None:
     """Upload a Builder/dev artifact through the existing Forge dev push flow."""
@@ -366,18 +440,30 @@ def push(
 
 @app.command("validate")
 def validate(
-    artifact_id: str = typer.Argument(..., help="Skill or scenario id in the Builder/dev workspace."),
+    artifact_id: str = typer.Argument(
+        ..., help="Skill or scenario id in the Builder/dev workspace."
+    ),
     kind: str = typer.Option("skill", "--kind", help="skill | scenario"),
-    path: Path | None = typer.Option(None, "--path", help="Explicit artifact directory or scenario file."),
+    path: Path | None = typer.Option(
+        None, "--path", help="Explicit artifact directory or scenario file."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
-    strict: bool = typer.Option(True, "--strict/--no-strict", help="Treat skill warnings as errors."),
-    probe_tools: bool = typer.Option(False, "--probe-tools", help="Import skill handlers to verify tool exports."),
+    strict: bool = typer.Option(
+        True, "--strict/--no-strict", help="Treat skill warnings as errors."
+    ),
+    probe_tools: bool = typer.Option(
+        False, "--probe-tools", help="Import skill handlers to verify tool exports."
+    ),
 ) -> None:
     """Validate a Builder/dev artifact using the existing dev validators."""
     artifact_kind = _normalize_artifact_kind(kind)
     if artifact_kind == "skill":
         mgr = _mgr()
-        resolved_path = path if path is not None else _resolve_dev_artifact_path("skill", artifact_id)
+        resolved_path = (
+            path
+            if path is not None
+            else _resolve_dev_artifact_path("skill", artifact_id)
+        )
         try:
             report = mgr.validate_skill(
                 artifact_id,
@@ -393,7 +479,12 @@ def validate(
         if json_output:
             typer.echo(
                 json.dumps(
-                    {"ok": report.ok, "kind": "skill", "name": artifact_id, "issues": issues},
+                    {
+                        "ok": report.ok,
+                        "kind": "skill",
+                        "name": artifact_id,
+                        "issues": issues,
+                    },
                     ensure_ascii=False,
                     indent=2,
                 )
@@ -408,8 +499,16 @@ def validate(
         raise typer.Exit(1)
 
     ctx = get_ctx()
-    resolved_path = path if path is not None else _resolve_dev_artifact_path("scenario", artifact_id)
-    base = Path(resolved_path).expanduser().resolve() if resolved_path is not None else ctx.paths.dev_scenarios_dir()
+    resolved_path = (
+        path
+        if path is not None
+        else _resolve_dev_artifact_path("scenario", artifact_id)
+    )
+    base = (
+        Path(resolved_path).expanduser().resolve()
+        if resolved_path is not None
+        else ctx.paths.dev_scenarios_dir()
+    )
     scenario_file = _resolve_dev_scenario_file(artifact_id, base)
     if scenario_file is None or not scenario_file.exists():
         target = path or artifact_id
@@ -459,7 +558,9 @@ def _read_json_arg(value: str | None) -> dict[str, Any] | None:
 def _read_idea_arg(value: str | None, extra: list[str]) -> str:
     unexpected_options = [part for part in extra if str(part).startswith("-")]
     if unexpected_options:
-        raise typer.BadParameter(f"unexpected option(s): {' '.join(unexpected_options)}")
+        raise typer.BadParameter(
+            f"unexpected option(s): {' '.join(unexpected_options)}"
+        )
     parts = [str(value).strip()] if value and str(value).strip() else []
     parts.extend(str(part).strip() for part in extra if str(part).strip())
     idea = " ".join(parts).strip()
@@ -468,17 +569,38 @@ def _read_idea_arg(value: str | None, extra: list[str]) -> str:
     return idea
 
 
-@app.command("draft", context_settings={"allow_extra_args": True, "ignore_unknown_options": False})
+@app.command(
+    "draft",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": False},
+)
 def draft(
     ctx: typer.Context,
-    artifact_id: str = typer.Argument(..., help="Target skill/scenario id or descriptor-fix target id."),
-    idea: str | None = typer.Option(None, "--idea", "-i", help="Human-readable source idea or requested behavior."),
-    kind: str = typer.Option("skill", "--kind", help="skill | scenario | descriptor_fix"),
-    task_id: str | None = typer.Option(None, "--task-id", help="Existing Builder task id."),
-    template_id: str | None = typer.Option(None, "--template", help="Template id for skill/scenario drafts."),
-    target_kind: str | None = typer.Option(None, "--target-kind", help="descriptor_fix target kind: skill | scenario."),
-    target_root: str | None = typer.Option(None, "--target-root", help="Explicit target root for descriptor_fix drafts."),
-    descriptor_changes: str | None = typer.Option(None, "--descriptor-changes", help="JSON object or @path for descriptor_fix materialization."),
+    artifact_id: str = typer.Argument(
+        ..., help="Target skill/scenario id or descriptor-fix target id."
+    ),
+    idea: str | None = typer.Option(
+        None, "--idea", "-i", help="Human-readable source idea or requested behavior."
+    ),
+    kind: str = typer.Option(
+        "skill", "--kind", help="skill | scenario | descriptor_fix"
+    ),
+    task_id: str | None = typer.Option(
+        None, "--task-id", help="Existing Builder task id."
+    ),
+    template_id: str | None = typer.Option(
+        None, "--template", help="Template id for skill/scenario drafts."
+    ),
+    target_kind: str | None = typer.Option(
+        None, "--target-kind", help="descriptor_fix target kind: skill | scenario."
+    ),
+    target_root: str | None = typer.Option(
+        None, "--target-root", help="Explicit target root for descriptor_fix drafts."
+    ),
+    descriptor_changes: str | None = typer.Option(
+        None,
+        "--descriptor-changes",
+        help="JSON object or @path for descriptor_fix materialization.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print full JSON response."),
 ) -> None:
     source_idea = _read_idea_arg(idea, list(ctx.args))
@@ -498,7 +620,9 @@ def draft(
         return
     draft_payload = result["draft"]
     typer.echo(f"draft_id: {draft_payload['draft_id']}")
-    typer.echo(f"artifact: {draft_payload['artifact']['kind']}:{draft_payload['artifact']['id']}")
+    typer.echo(
+        f"artifact: {draft_payload['artifact']['kind']}:{draft_payload['artifact']['id']}"
+    )
     typer.echo(f"root: {result['artifact_root']}")
 
 
@@ -526,3 +650,84 @@ def preview(
     typer.echo(f"approval_profile: {summary.get('approval_profile')}")
     typer.echo(f"review_decision: {summary.get('review_decision')}")
     typer.echo(f"human_review_required: {summary.get('human_review_required')}")
+
+
+@app.command("e2e")
+def e2e(
+    suite: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    case_ids: list[str] | None = typer.Option(
+        None, "--case", help="Run only this case id; repeat for multiple cases."
+    ),
+    tags: list[str] | None = typer.Option(
+        None, "--tag", help="Require this case tag; repeat to intersect tags."
+    ),
+    profile: str | None = typer.Option(
+        None, "--profile", help="Override the suite execution profile."
+    ),
+    repetitions: int | None = typer.Option(None, "--repetitions", min=1, max=20),
+    baseline: Path | None = typer.Option(
+        None,
+        "--baseline",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    browser: str | None = typer.Option(None, "--browser", help="auto | on | off"),
+    output: Path = typer.Option(
+        Path("e2e/artifacts/builder"), "--output", file_okay=False, dir_okay=True
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print the complete E2E report."
+    ),
+) -> None:
+    """Run a declarative Builder E2E suite or selected cases."""
+    try:
+        report = BuilderE2ERunner(
+            suite,
+            output_root=output,
+            case_ids=case_ids or (),
+            tags=tags or (),
+            profile=profile,
+            repetitions=repetitions,
+            browser=browser,
+            baseline_path=baseline,
+        ).run()
+    except BuilderE2EError as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {"status": "inconclusive", "error": str(exc)},
+                    ensure_ascii=True,
+                    indent=2,
+                )
+            )
+        else:
+            typer.secho(f"Builder E2E configuration failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+    if json_output:
+        typer.echo(json.dumps(report, ensure_ascii=True, indent=2))
+    else:
+        summary = report["summary"]
+        typer.echo(f"run_id: {report['run_id']}")
+        typer.echo(f"status: {report['status']}")
+        typer.echo(
+            "cases: "
+            f"{summary['passed']} passed, {summary['failed']} failed, "
+            f"{summary['inconclusive']} inconclusive"
+        )
+        typer.echo(f"bundle: {report['bundle_dir']}")
+        if report.get("comparison"):
+            typer.echo(f"baseline: {report['comparison']['status']}")
+    if report["status"] == "failed":
+        raise typer.Exit(1)
+    if report["status"] == "inconclusive":
+        raise typer.Exit(2)

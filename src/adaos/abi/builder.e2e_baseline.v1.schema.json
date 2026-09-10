@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.e2e_baseline.v1",
+  "title": "AdaOS Builder E2E Baseline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "baseline_id", "accepted_at", "accepted_by", "suite", "cohort", "reference", "environment_match", "metrics", "source_report_ref", "source_report_digest"],
+  "properties": {
+    "schema": {"const": "adaos.builder.e2e_baseline.v1"},
+    "baseline_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$", "maxLength": 160},
+    "accepted_at": {"type": "string", "format": "date-time"},
+    "accepted_by": {"type": "string", "minLength": 1},
+    "suite": {"type": "object", "required": ["suite_id", "version", "digest"]},
+    "cohort": {"type": "object"},
+    "reference": {"type": "object"},
+    "environment_match": {"type": "object"},
+    "metrics": {"type": "object"},
+    "source_report_ref": {"type": "string", "minLength": 1},
+    "source_report_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "notes": {"type": "string"}
+  }
+}

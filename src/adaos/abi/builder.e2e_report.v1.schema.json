@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.e2e_report.v1",
+  "title": "AdaOS Builder E2E Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "run_id", "status", "run_manifest_ref", "case_results", "summary", "metrics", "comparison", "ended_at"],
+  "properties": {
+    "schema": {"const": "adaos.builder.e2e_report.v1"},
+    "run_id": {"type": "string"},
+    "status": {"enum": ["passed", "failed", "inconclusive"]},
+    "run_manifest_ref": {"type": "string"},
+    "case_results": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "summary": {"type": "object", "required": ["passed", "failed", "inconclusive", "total"]},
+    "metrics": {"type": "object"},
+    "comparison": {"type": ["object", "null"]},
+    "ended_at": {"type": "string", "format": "date-time"}
+  }
+}

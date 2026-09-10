@@ -49,6 +49,15 @@ The CLI is a thin adapter over the same evaluation service used by local
 development and CI. It must not reimplement Builder workflow transitions or
 invoke private skill helpers.
 
+The bootstrap implementation may use the typed
+`legacy_dev_chat.v1` compatibility adapter until the R3 public Builder SDK
+operations exist. Every resolved run records that adapter and its input
+attribution. The same unchanged case digests must then be run through
+`sdk.v1`; adapter and implementation revisions are reference metadata, not
+cohort equality dimensions. Results produced through the compatibility
+adapter can characterize and protect legacy behavior, but cannot establish a
+clean generic or prompt-autonomy baseline.
+
 Visible suite and grader sources live under `e2e/builder/`; accepted baseline
 manifests live under `e2e/builder/baselines/` and reference immutable result
 artifacts by digest. Run artifacts live under `e2e/artifacts/builder/<run_id>/`
@@ -275,3 +284,18 @@ The first clean baseline may start only when:
 New cross-domain Client primitives are deliberately not an admission gate.
 They are justified by the clean baseline's capability gaps and evaluated by a
 matched rerun.
+
+## Implementation Status
+
+As of 2026-09-10, the bootstrap runner includes validated suite, case, run,
+case-result, report, and baseline ABIs; deterministic case/tag selection;
+repetition accounting; required-step failure handling; redacted evidence
+bundles; token and latency aggregation; matched baseline comparison; cleanup
+hooks; and one `adaos builder e2e` entry point. Model-free self-tests cover
+these foundations.
+
+The current adapter is explicitly `legacy_dev_chat.v1`. Isolation
+provisioning, interruption/resume checkpoints, full stage telemetry, browser
+task assertions, graders, sealed datasets, and the target `sdk.v1` adapter
+remain open. Therefore this implementation is an evaluation bootstrap, not
+the R2 clean-baseline exit proof.

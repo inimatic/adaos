@@ -102,6 +102,13 @@ component-growth phases do not block it.
 
 ## R2. Clean Generic Baseline
 
+Implementation note (2026-09-10): the first ABI/runner slice and model-free
+self-tests exist. It deliberately uses a recorded `legacy_dev_chat.v1`
+compatibility adapter because the R3 public SDK seam does not yet exist. This
+resolves the sequencing dependency without weakening the clean-baseline gate:
+legacy-adapter runs are characterization evidence only, and the unchanged
+cases must later execute through `sdk.v1`.
+
 - [ ] `[must]` Publish and validate the declarative E2E suite, case, resolved
   run, case-result, report, and immutable baseline contracts defined by the
   [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md). Reuse

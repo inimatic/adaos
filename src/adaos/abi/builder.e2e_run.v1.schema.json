@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.e2e_run.v1",
+  "title": "AdaOS Builder E2E Resolved Run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "run_id", "suite", "adapter", "profile", "cases", "environment", "input_attribution", "started_at"],
+  "properties": {
+    "schema": {"const": "adaos.builder.e2e_run.v1"},
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "suite": {"type": "object", "required": ["suite_id", "version", "digest", "cohort"]},
+    "adapter": {"type": "string", "minLength": 1},
+    "profile": {"type": "string", "minLength": 1},
+    "repetitions": {"type": "integer", "minimum": 1},
+    "browser": {"enum": ["auto", "on", "off"]},
+    "cases": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["case_id", "digest", "locale"]}},
+    "selection": {"type": "object"},
+    "environment": {"type": "object"},
+    "input_attribution": {"type": "object", "required": ["domain_packs", "case_digests"]},
+    "baseline": {"type": ["object", "null"]},
+    "started_at": {"type": "string", "format": "date-time"}
+  }
+}
