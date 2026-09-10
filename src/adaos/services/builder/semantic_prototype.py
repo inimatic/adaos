@@ -174,9 +174,6 @@ def validate_semantic_prototype(
         unknown_fields = sorted(set(view["field_refs"]) - set(fields))
         if unknown_fields:
             _fail(f"view {view['id']!r} references unknown fields {unknown_fields}")
-        unknown_commands = sorted(set(view["command_refs"]) - set(commands))
-        if unknown_commands:
-            _fail(f"view {view['id']!r} references unknown commands {unknown_commands}")
         filter_value = view.get("filter")
         if (
             isinstance(filter_value, Mapping)
@@ -198,10 +195,8 @@ def validate_semantic_prototype(
             _fail(
                 f"command {command['id']!r} references unknown view {command['view_ref']!r}"
             )
-        if command["id"] not in views[command["view_ref"]]["command_refs"]:
-            _fail(
-                f"command {command['id']!r} is not owned by view {command['view_ref']!r}"
-            )
+        if views[command["view_ref"]]["role"] != "editor":
+            _fail(f"command {command['id']!r} must be owned by an editor view")
         unknown_fields = sorted(set(command["input_field_refs"]) - set(fields))
         if unknown_fields:
             _fail(
@@ -514,8 +509,9 @@ def compile_semantic_prototype(
                 )
 
             actions: list[dict[str, Any]] = []
-            for command_id in view["command_refs"]:
-                command = commands[command_id]
+            for command_id, command in commands.items():
+                if command["view_ref"] != view_id:
+                    continue
                 label, label_i18n = _localized(command["label"], dictionaries)
                 button: dict[str, Any] = {
                     "id": command_id,
@@ -562,7 +558,9 @@ def compile_semantic_prototype(
         source_map[f"view:{view_id}"] = [
             f"ui.application.desktop.pageSchema.widgets.@{view_id}"
         ]
-        for command_id in view["command_refs"]:
+        for command_id, command in commands.items():
+            if command["view_ref"] != view_id:
+                continue
             source_map[f"command:{command_id}"] = [
                 f"ui.application.desktop.pageSchema.widgets.@{view_id}.actions.@{command_id}"
             ]

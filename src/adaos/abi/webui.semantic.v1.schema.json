@@ -193,18 +193,13 @@
     "view": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "role", "region_ref", "title", "field_refs", "command_refs"],
+      "required": ["id", "role", "region_ref", "title", "field_refs"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "role": { "enum": ["collection", "details", "editor"] },
         "region_ref": { "$ref": "#/$defs/id" },
         "title": { "$ref": "#/$defs/localizedText" },
         "field_refs": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": { "$ref": "#/$defs/id" }
-        },
-        "command_refs": {
           "type": "array",
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/id" }
@@ -229,7 +224,10 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "kind": { "enum": ["create", "update", "transition", "delete"] },
-        "view_ref": { "$ref": "#/$defs/id" },
+        "view_ref": {
+          "$ref": "#/$defs/id",
+          "description": "The single editor view that owns and renders this command."
+        },
         "label": { "$ref": "#/$defs/localizedText" },
         "input_field_refs": {
           "type": "array",

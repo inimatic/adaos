@@ -119,7 +119,6 @@ def _fixture() -> tuple[dict, dict]:
                 "region_ref": "primary",
                 "title": _text("work.list", "Items", "Пункты"),
                 "field_refs": ["title", "result", "status"],
-                "command_refs": [],
                 "selection_state_ref": "selectedWorkItemId",
                 "empty_state": {
                     "title": _text("work.empty", "No work items", "Нет пунктов")
@@ -131,7 +130,6 @@ def _fixture() -> tuple[dict, dict]:
                 "region_ref": "supporting",
                 "title": _text("work.details", "Selected item", "Выбранный пункт"),
                 "field_refs": ["title", "result", "status"],
-                "command_refs": [],
                 "selection_state_ref": "selectedWorkItemId",
             },
             {
@@ -140,7 +138,6 @@ def _fixture() -> tuple[dict, dict]:
                 "region_ref": "supporting",
                 "title": _text("work.editor", "Record result", "Заполнить результат"),
                 "field_refs": ["result", "comment", "evidence"],
-                "command_refs": ["save", "complete"],
                 "selection_state_ref": "selectedWorkItemId",
             },
         ],
@@ -303,6 +300,14 @@ def test_semantic_prototype_rejects_dangling_refs_before_compilation() -> None:
 
     with pytest.raises(BuilderWorkflowError, match="unknown fields"):
         validate_semantic_prototype(invalid, brief=brief)
+
+
+def test_semantic_command_has_one_editor_owner() -> None:
+    brief, semantic = _fixture()
+    semantic["commands"][0]["view_ref"] = "work-list"
+
+    with pytest.raises(BuilderWorkflowError, match="owned by an editor view"):
+        validate_semantic_prototype(semantic, brief=brief)
 
 
 def test_semantic_prototype_rejects_invalid_representative_record() -> None:
