@@ -81,9 +81,12 @@ retained behind an explicit adapter. DEV Projects may bind packs through
 `development.domain_packs`, and historical recipe receipts resolve through the
 pack registry. Product wording and IDs no longer activate a pack. The
 Applications DEV experiments were migrated explicitly. Generic boundary tests
-and the retained legacy characterization suite pass. End-to-end attribution
-for every Builder model route remains open, so R1 is not yet an exit-gate
-claim.
+and the retained legacy characterization suite pass. Every current DEV Builder
+provider route now writes the exact local request journal plus a compact
+`adaos.builder.llm_input_attribution.v1` receipt before network submission.
+The receipt content-addresses every message, stable and dynamic segments,
+selected contracts/patterns/examples, domain packs, and sanitized generation
+options. A new provider route without this receipt reopens R1.
 
 - [x] `[must]` Add characterization tests around the legacy Applications and
   other subject-guided paths before moving them.
@@ -101,7 +104,7 @@ claim.
 - [x] `[must]` Add a generic-profile policy that supplies no domain packs and
   rejects hidden selection by subject ID, project name, prompt wording, or
   postcondition prefix.
-- [ ] `[must]` Persist an input-attribution receipt proving which component
+- [x] `[must]` Persist an input-attribution receipt proving which component
   contracts, generic patterns, examples, and domain packs were available to
   every model run.
 - [x] `[must]` Preserve current user-visible behavior behind one explicit

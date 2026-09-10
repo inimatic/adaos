@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.llm_input_attribution.v1",
+  "title": "AdaOS Builder LLM input attribution",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "request_id",
+    "route",
+    "stage",
+    "attempt",
+    "profile",
+    "messages",
+    "totals",
+    "stable_prefix",
+    "dynamic_suffix",
+    "capabilities",
+    "generation",
+    "created_at"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.builder.llm_input_attribution.v1"},
+    "request_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "route": {"type": "string", "minLength": 1, "maxLength": 120},
+    "stage": {"type": "string", "minLength": 1, "maxLength": 120},
+    "attempt": {"type": "integer", "minimum": 1},
+    "profile": {"enum": ["generic", "domain_pack"]},
+    "model": {"type": ["string", "null"]},
+    "messages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "role", "purpose", "bytes", "estimated_tokens", "sha256"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "role": {"type": "string", "minLength": 1},
+          "purpose": {"type": "string", "minLength": 1},
+          "bytes": {"type": "integer", "minimum": 0},
+          "estimated_tokens": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["messages", "bytes", "estimated_tokens", "estimation"],
+      "properties": {
+        "messages": {"type": "integer", "minimum": 1},
+        "bytes": {"type": "integer", "minimum": 0},
+        "estimated_tokens": {"type": "integer", "minimum": 0},
+        "estimation": {"const": "utf8_bytes_div_4_ceil"}
+      }
+    },
+    "stable_prefix": {"$ref": "#/$defs/segment"},
+    "dynamic_suffix": {"$ref": "#/$defs/segment"},
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selection_sha256", "catalog_digest", "component_contracts", "generic_patterns", "examples", "domain_packs"],
+      "properties": {
+        "selection_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "catalog_digest": {"type": ["string", "null"]},
+        "component_contracts": {"$ref": "#/$defs/contentRefs"},
+        "generic_patterns": {"$ref": "#/$defs/contentRefs"},
+        "examples": {"$ref": "#/$defs/contentRefs"},
+        "domain_packs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pack_id", "version", "classification", "digest"],
+            "properties": {
+              "pack_id": {"type": "string", "minLength": 1},
+              "version": {"type": "string", "minLength": 1},
+              "classification": {"type": "string", "minLength": 1},
+              "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+            }
+          }
+        }
+      }
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["options_sha256", "options"],
+      "properties": {
+        "options_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "options": {"type": "object"}
+      }
+    },
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_indexes", "bytes", "estimated_tokens", "sha256"],
+      "properties": {
+        "message_indexes": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+        "bytes": {"type": "integer", "minimum": 0},
+        "estimated_tokens": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "contentRefs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "sha256"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "kind": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        }
+      }
+    }
+  }
+}

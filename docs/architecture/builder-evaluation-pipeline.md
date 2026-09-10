@@ -167,6 +167,17 @@ The runner resumes only from a validated stage checkpoint with the same run
 manifest digest. A retry is measured as a retry; it never overwrites the first
 attempt.
 
+The executable model-input receipt is
+`adaos.builder.llm_input_attribution.v1`. Exact messages remain local in the
+scenario-owned `llm_jobs/*.request.json` journal. Reports consume the compact
+receipt: per-message digests and byte/token estimates, stable-prefix and
+dynamic-suffix digests, selected component/pattern/example refs, domain-pack
+receipts, and sanitized generation options. The journal is written before
+provider submission so a timeout cannot erase the evaluated input. Provider
+usage returned after inference remains authoritative for billing; the
+receipt's `utf8_bytes_div_4_ceil` value is only a provider-independent
+preflight estimate.
+
 ## Metric Model
 
 ### Outcome and truthfulness
