@@ -123,6 +123,10 @@ def validate_semantic_prototype(
             _fail(f"choice field {field['id']!r} requires options")
         if field["value_type"] != "choice" and options:
             _fail(f"non-choice field {field['id']!r} cannot declare options")
+        if field.get("multiple") and field["value_type"] != "attachment":
+            _fail(f"non-attachment field {field['id']!r} cannot be multiple")
+        if field.get("max_items") is not None and not field.get("multiple"):
+            _fail(f"field {field['id']!r} requires multiple=true with max_items")
         condition = field.get("visible_when")
         if isinstance(condition, Mapping):
             if condition["field_ref"] not in fields:
@@ -164,19 +168,26 @@ def validate_semantic_prototype(
                 continue
             field_value = record[field_id]
             kind = str(field["value_type"])
-            valid = (
-                isinstance(field_value, str)
-                if kind in {"short_text", "long_text", "date", "attachment"}
-                else isinstance(field_value, bool)
-                if kind == "boolean"
-                else isinstance(field_value, (int, float))
-                and not isinstance(field_value, bool)
-                if kind == "number"
-                else any(
-                    option["value"] == field_value
-                    for option in field.get("options") or []
+            if kind == "attachment" and field.get("multiple"):
+                valid = isinstance(field_value, list) and all(
+                    isinstance(item, str) for item in field_value
                 )
-            )
+                if valid and field.get("max_items") is not None:
+                    valid = len(field_value) <= int(field["max_items"])
+            else:
+                valid = (
+                    isinstance(field_value, str)
+                    if kind in {"short_text", "long_text", "date", "attachment"}
+                    else isinstance(field_value, bool)
+                    if kind == "boolean"
+                    else isinstance(field_value, (int, float))
+                    and not isinstance(field_value, bool)
+                    if kind == "number"
+                    else any(
+                        option["value"] == field_value
+                        for option in field.get("options") or []
+                    )
+                )
             if not valid:
                 _fail(
                     f"resource record {record_id!r} has invalid {kind} value for "
@@ -482,6 +493,10 @@ def compile_semantic_prototype(
                     "type": _FIELD_TYPES[str(field["value_type"])],
                     "required": bool(field["required"]),
                 }
+                if field.get("multiple"):
+                    rendered_field["multiple"] = True
+                    if field.get("max_items") is not None:
+                        rendered_field["maxFiles"] = int(field["max_items"])
                 if field.get("options"):
                     rendered_field["options"] = []
                     for option in field["options"]:

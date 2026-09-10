@@ -347,6 +347,53 @@ def test_semantic_prototype_rejects_invalid_representative_record() -> None:
         validate_semantic_prototype(semantic, brief=brief)
 
 
+def test_multiple_attachments_compile_to_file_upload_cardinality() -> None:
+    brief, semantic = _fixture()
+    evidence = next(
+        field for field in semantic["resource"]["fields"] if field["id"] == "evidence"
+    )
+    evidence["multiple"] = True
+    evidence["max_items"] = 3
+    semantic["resource"]["records"][0]["evidence"] = [
+        "fixture://pressure.jpg",
+        "fixture://gauge.jpg",
+    ]
+    semantic["resource"]["records"][1]["evidence"] = []
+
+    result = compile_semantic_prototype(semantic, brief=brief)
+
+    fields = result["webui"]["ui"]["application"]["desktop"]["pageSchema"][
+        "widgets"
+    ][2]["inputs"]["fields"]
+    rendered = next(field for field in fields if field["id"] == "evidence")
+    assert rendered["multiple"] is True
+    assert rendered["maxFiles"] == 3
+
+
+def test_non_attachment_field_cannot_be_multiple() -> None:
+    brief, semantic = _fixture()
+    title = next(
+        field for field in semantic["resource"]["fields"] if field["id"] == "title"
+    )
+    title["multiple"] = True
+
+    with pytest.raises(BuilderWorkflowError, match="cannot be multiple"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_multiple_attachment_record_respects_max_items() -> None:
+    brief, semantic = _fixture()
+    evidence = next(
+        field for field in semantic["resource"]["fields"] if field["id"] == "evidence"
+    )
+    evidence["multiple"] = True
+    evidence["max_items"] = 1
+    semantic["resource"]["records"][0]["evidence"] = ["first", "second"]
+
+    with pytest.raises(BuilderWorkflowError, match="invalid attachment value"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
 def test_semantic_composite_identity_compiles_to_runtime_id() -> None:
     brief, semantic = _fixture()
     semantic["resource"]["identity_field_refs"] = ["status", "title"]
