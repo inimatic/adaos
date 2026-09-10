@@ -117,7 +117,7 @@
             "uniqueItems": true,
             "items": {
               "type": "string",
-              "pattern": "^(resource|field|view|command|state):[A-Za-z0-9_.:-]+$"
+              "pattern": "^(resource|field|view|query|command|state):[A-Za-z0-9_.:-]+$"
             }
           }
         }
@@ -227,8 +227,41 @@
             "state_ref": { "$ref": "#/$defs/id" }
           }
         },
+        "query_controls": {
+          "type": "array",
+          "maxItems": 6,
+          "items": { "$ref": "#/$defs/queryControl" }
+        },
         "empty_state": { "$ref": "#/$defs/emptyState" }
       }
+    },
+    "queryControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["search", "filter"] },
+        "label": { "$ref": "#/$defs/localizedText" },
+        "field_ref": { "$ref": "#/$defs/id" },
+        "field_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "filter" } } },
+          "then": { "required": ["field_ref"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "search" } } },
+          "then": { "required": ["field_refs"] }
+        }
+      ]
     },
     "command": {
       "type": "object",

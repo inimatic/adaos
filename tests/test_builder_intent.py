@@ -220,3 +220,19 @@ def test_public_builder_sdk_exposes_brief_compilation() -> None:
 
     assert [item["kind"] for item in brief["operations"]] == ["filter", "list"]
     assert brief["constraints"]["locale"]["value"] == "en"
+
+
+def test_brief_recognizes_generic_russian_search_and_update_inflections() -> None:
+    brief = compile_prototype_brief(
+        "Пользователь находит нужный элемент и переносит его на другую дату."
+    )
+
+    assert [item["kind"] for item in brief["operations"]] == ["search", "update"]
+
+
+def test_brief_does_not_treat_russian_record_noun_as_create_operation() -> None:
+    brief = compile_prototype_brief(
+        "Пользователь находит нужную запись и просматривает ее содержание."
+    )
+
+    assert [item["kind"] for item in brief["operations"]] == ["search", "inspect"]

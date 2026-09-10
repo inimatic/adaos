@@ -101,6 +101,7 @@ def _semantic_refs(
     resource_id: str,
     fields: Mapping[str, Any],
     views: Mapping[str, Any],
+    queries: Mapping[str, Any],
     commands: Mapping[str, Any],
     states: Mapping[str, Any],
 ) -> set[str]:
@@ -108,6 +109,7 @@ def _semantic_refs(
         f"resource:{resource_id}",
         *(f"field:{identifier}" for identifier in fields),
         *(f"view:{identifier}" for identifier in views),
+        *(f"query:{identifier}" for identifier in queries),
         *(f"command:{identifier}" for identifier in commands),
         *(f"state:{identifier}" for identifier in states),
     }
@@ -129,6 +131,13 @@ def validate_semantic_prototype(
     resource = dict(document["resource"])
     fields = _unique(resource["fields"], "field")
     views = _unique(document["views"], "view")
+    query_controls: dict[str, dict[str, Any]] = {}
+    for view in views.values():
+        for control in view.get("query_controls") or []:
+            identifier = str(control.get("id") or "")
+            if identifier in query_controls:
+                _fail(f"duplicate query control id {identifier!r}")
+            query_controls[identifier] = dict(control)
     commands = _unique(document["commands"], "command")
     states = _unique(document["representative_states"], "state")
     regions = _unique(document["layout"]["regions"], "region")
@@ -231,6 +240,31 @@ def validate_semantic_prototype(
             fields[field_id]["editable"] for field_id in view["field_refs"]
         ):
             _fail(f"editor view {view['id']!r} has no editable fields")
+        for control in view.get("query_controls") or []:
+            query_id = str(control["id"])
+            if view["role"] != "collection":
+                _fail(f"query control {query_id!r} must belong to a collection view")
+            field_refs = (
+                [str(control["field_ref"])]
+                if control["kind"] == "filter"
+                else [str(item) for item in control.get("field_refs") or []]
+            )
+            unknown_query_fields = sorted(set(field_refs) - set(fields))
+            if unknown_query_fields:
+                _fail(
+                    f"query control {query_id!r} references unknown fields "
+                    f"{unknown_query_fields}"
+                )
+            hidden_query_fields = sorted(set(field_refs) - set(view["field_refs"]))
+            if hidden_query_fields:
+                _fail(
+                    f"query control {query_id!r} references fields outside its view "
+                    f"{hidden_query_fields}"
+                )
+            if control["kind"] == "filter" and fields[field_refs[0]][
+                "value_type"
+            ] != "choice":
+                _fail(f"filter query control {query_id!r} requires a choice field")
 
     for command in commands.values():
         if command["view_ref"] not in views:
@@ -273,6 +307,7 @@ def validate_semantic_prototype(
         resource_id=str(resource["id"]),
         fields=fields,
         views=views,
+        queries=query_controls,
         commands=commands,
         states=states,
     )
@@ -303,6 +338,23 @@ def validate_semantic_prototype(
             _fail(f"accepted requirements have no semantic binding or gap: {missing}")
         if unexpected:
             _fail(f"semantic document references unknown requirements: {unexpected}")
+        for operation in brief.get("operations") or []:
+            if not isinstance(operation, Mapping):
+                continue
+            operation_id = str(operation.get("id") or "")
+            operation_kind = str(operation.get("kind") or "")
+            if operation_kind not in {"search", "filter"} or operation_id in gaps:
+                continue
+            matching_queries = {
+                f"query:{query_id}"
+                for query_id, control in query_controls.items()
+                if control["kind"] == operation_kind
+            }
+            if not bindings.get(operation_id, set()) & matching_queries:
+                _fail(
+                    f"{operation_kind} requirement {operation_id!r} must bind a "
+                    f"{operation_kind} query control"
+                )
         collection_requirements = {
             str(item["id"]): dict(item)
             for item in brief.get("collection_requirements") or []
@@ -432,6 +484,90 @@ def compile_semantic_prototype(
                 "query": {},
             },
         }
+        for control in view.get("query_controls") or []:
+            query_id = str(control["id"])
+            state_ref = "query_" + re.sub(r"[^A-Za-z0-9_]+", "_", query_id)
+            initial_state.setdefault(state_ref, "")
+            query_label, query_label_i18n = _localized(
+                control["label"], dictionaries
+            )
+            query_widget: dict[str, Any] = {
+                "id": f"query-{query_id}",
+                "area": str(view["region_ref"]),
+                "title": query_label,
+                "title_i18n": query_label_i18n,
+                "actions": [
+                    {
+                        "id": f"set-{query_id}",
+                        "on": "change",
+                        "type": "updateState",
+                        "params": {state_ref: "$event.value"},
+                    }
+                ],
+            }
+            if control["kind"] == "search":
+                query_widget.update(
+                    {
+                        "type": "input.text",
+                        "inputs": {
+                            "label": query_label,
+                            "label_i18n": query_label_i18n,
+                            "inputType": "search",
+                            "initialValue": "",
+                            "clearable": True,
+                        },
+                    }
+                )
+                widget["dataSource"]["query"]["search"] = f"$state.{state_ref}"
+            else:
+                field = fields[str(control["field_ref"])]
+                all_label, all_label_i18n = _localized(
+                    {
+                        "key": f"{control['label']['key']}.all",
+                        "en": "All",
+                        "ru": "Все",
+                    },
+                    dictionaries,
+                )
+                options = [
+                    {
+                        "value": "",
+                        "label": all_label,
+                        "label_i18n": all_label_i18n,
+                    }
+                ]
+                for option in field.get("options") or []:
+                    option_label, option_label_i18n = _localized(
+                        option["label"], dictionaries
+                    )
+                    options.append(
+                        {
+                            "value": option["value"],
+                            "label": option_label,
+                            "label_i18n": option_label_i18n,
+                        }
+                    )
+                query_widget.update(
+                    {
+                        "type": "input.selector",
+                        "inputs": {
+                            "label": query_label,
+                            "label_i18n": query_label_i18n,
+                            "defaultValue": f"$state.{state_ref}",
+                            "options": options,
+                            "optionValuePath": "value",
+                            "optionLabelPath": "label",
+                            "searchable": len(options) > 8,
+                        },
+                    }
+                )
+                widget["dataSource"]["query"][str(control["field_ref"])] = (
+                    f"$state.{state_ref}"
+                )
+            widgets.append(query_widget)
+            source_map[f"query:{query_id}"] = [
+                f"ui.application.desktop.pageSchema.widgets.@query-{query_id}"
+            ]
         filter_value = view.get("filter")
         if isinstance(filter_value, Mapping):
             state_ref = str(filter_value["state_ref"])
@@ -643,6 +779,12 @@ def compile_semantic_prototype(
         )
 
     views_by_ref = {f"view:{view['id']}": view for view in document["views"]}
+    queries_by_view = {
+        str(view["id"]): [
+            f"query:{control['id']}" for control in view.get("query_controls") or []
+        ]
+        for view in document["views"]
+    }
     binding_expansions: dict[str, list[str]] = {}
     requirement_map: dict[str, list[str]] = {}
     for item in document["requirement_bindings"]:
@@ -654,6 +796,7 @@ def compile_semantic_prototype(
             if view is None:
                 continue
             expanded_refs.update(f"field:{field_id}" for field_id in view["field_refs"])
+            expanded_refs.update(queries_by_view.get(str(view["id"]), []))
             expanded_refs.update(
                 f"command:{command_id}"
                 for command_id, command in commands.items()

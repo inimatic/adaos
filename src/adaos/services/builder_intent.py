@@ -40,14 +40,17 @@ _AUTHORING_PATTERNS = (
 _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "search",
-        re.compile(r"\b(?:search|find|lookup|искать|найти|поиск)\w*\b", re.IGNORECASE),
+        re.compile(
+            r"\b(?:search|find|lookup|искать|найти|поиск|наход)\w*\b",
+            re.IGNORECASE,
+        ),
     ),
     ("filter", re.compile(r"\b(?:filter|фильтр|фильтрац)\w*\b", re.IGNORECASE)),
     ("sort", re.compile(r"\b(?:sort|order by|сортир|упорядоч)\w*\b", re.IGNORECASE)),
     (
         "inspect",
         re.compile(
-            r"\b(?:inspect|open|view|review|scan|browse|откр|просмотр|изуч)\w*\b|"
+            r"\b(?:inspect|open|view|review|scan|browse|откр|просмотр|просматр|изуч)\w*\b|"
             r"\bпровер(?:ить|ять|яет|яют|ял|яла|яли|ь|ьте)\b",
             re.IGNORECASE,
         ),
@@ -61,7 +64,8 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "create",
         re.compile(
-            r"\b(?:add|create|capture|record|добав|созда|запис)\w*\b", re.IGNORECASE
+            r"\b(?:add|create|capture|record|добав|созда|запис(?:а|ы)|запиш)\w*\b",
+            re.IGNORECASE,
         ),
     ),
     (
@@ -86,7 +90,7 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"\b(?:(?:edit(?:s|ed|ing)?|updat(?:e|es|ed|ing)|"
             r"chang(?:e|es|ed|ing)|mark(?:s|ed|ing)?)\b|"
-            r"(?:редакт|измен|отмет)\w*\b)",
+            r"(?:редакт|измен|отмет|перенос)\w*\b)",
             re.IGNORECASE,
         ),
     ),

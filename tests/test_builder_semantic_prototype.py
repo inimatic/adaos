@@ -251,6 +251,123 @@ def test_semantic_prototype_compiles_to_valid_webui_with_source_maps() -> None:
     assert result["requirement_runtime_map"]["collection:01"]
 
 
+def _add_query_controls(semantic: dict) -> None:
+    semantic["views"][0]["query_controls"] = [
+        {
+            "id": "item-search",
+            "kind": "search",
+            "label": _text("work.search", "Search", "Поиск"),
+            "field_refs": ["title", "result"],
+        },
+        {
+            "id": "result-filter",
+            "kind": "filter",
+            "label": _text("work.filter.result", "Result", "Результат"),
+            "field_ref": "result",
+        },
+    ]
+
+
+def test_semantic_query_controls_compile_to_typed_runtime_wiring() -> None:
+    brief, semantic = _fixture()
+    _add_query_controls(semantic)
+
+    result = compile_semantic_prototype(semantic, brief=brief)
+
+    page = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    assert [widget["type"] for widget in page["widgets"][:3]] == [
+        "input.text",
+        "input.selector",
+        "ui.list",
+    ]
+    collection = page["widgets"][2]
+    assert collection["dataSource"]["query"] == {
+        "search": "$state.query_item_search",
+        "result": "$state.query_result_filter",
+    }
+    assert page["initialState"]["query_item_search"] == ""
+    assert page["initialState"]["query_result_filter"] == ""
+    assert result["source_map"]["query:item-search"] == [
+        "ui.application.desktop.pageSchema.widgets.@query-item-search"
+    ]
+
+
+def test_search_and_filter_require_matching_query_bindings() -> None:
+    brief, semantic = _fixture()
+    brief = compile_prototype_brief(
+        "Show a repeatable list of work items, search items by title, filter "
+        "items by result, and update the selected item."
+    )
+    semantic["brief_ref"] = brief["brief_id"]
+    semantic["brief_digest"] = brief["digest"]
+    _add_query_controls(semantic)
+    semantic["requirement_bindings"] = [
+        {
+            "requirement_ref": brief["principal_jobs"][0]["id"],
+            "semantic_refs": ["resource:work_items", "view:work-list"],
+        },
+        {
+            "requirement_ref": brief["collection_requirements"][0]["id"],
+            "semantic_refs": [
+                "resource:work_items",
+                "view:work-list",
+                "view:work-editor",
+            ],
+        },
+    ]
+    operation_refs = {
+        "search": "query:item-search",
+        "filter": "query:result-filter",
+        "list": "view:work-list",
+        "update": "command:save",
+    }
+    semantic["requirement_bindings"].extend(
+        {
+            "requirement_ref": operation["id"],
+            "semantic_refs": [operation_refs[operation["kind"]]],
+        }
+        for operation in brief["operations"]
+    )
+
+    result = compile_semantic_prototype(semantic, brief=brief)
+
+    assert result["requirement_runtime_map"]["operation:search"] == [
+        "ui.application.desktop.pageSchema.widgets.@query-item-search"
+    ]
+    search_binding = next(
+        item
+        for item in semantic["requirement_bindings"]
+        if item["requirement_ref"] == "operation:search"
+    )
+    search_binding["semantic_refs"] = ["view:work-list"]
+    with pytest.raises(BuilderWorkflowError, match="must bind a search query control"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_query_controls_reject_duplicate_and_invalid_field_ownership() -> None:
+    brief, semantic = _fixture()
+    _add_query_controls(semantic)
+    semantic["views"][1]["query_controls"] = [
+        copy.deepcopy(semantic["views"][0]["query_controls"][0])
+    ]
+    with pytest.raises(BuilderWorkflowError, match="duplicate query control id"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+    del semantic["views"][1]["query_controls"]
+    semantic["views"][0]["query_controls"][0]["field_refs"] = ["comment"]
+    with pytest.raises(BuilderWorkflowError, match="outside its view"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_filter_query_control_requires_choice_field() -> None:
+    brief, semantic = _fixture()
+    _add_query_controls(semantic)
+    semantic["views"][0]["query_controls"][1]["field_ref"] = "title"
+
+    with pytest.raises(BuilderWorkflowError, match="requires a choice field"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
 def test_semantic_prototype_rejects_unbound_accepted_requirement() -> None:
     brief, semantic = _fixture()
     semantic["requirement_bindings"] = semantic["requirement_bindings"][1:]
