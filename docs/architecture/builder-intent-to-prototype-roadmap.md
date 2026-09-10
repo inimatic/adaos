@@ -289,6 +289,14 @@ clarification precision, and no renderer vocabulary in the model output.
 
 ## R5. Component Contract And Capability Resolution
 
+Progress note (2026-09-10): retained live runs proved that summaries and broad
+recipes are insufficient for small but fatal ABI details. Catalog 2.0.2 now
+exposes the exact `collection.board` resource-query and button shapes, while
+the legacy parser records bounded canonicalization of common representational
+aliases. This is evidence for the single-source component contract below, not
+its completion: the same facts still exist separately in schema, Client,
+catalog, parser, and tests.
+
 - [ ] `[must]` Publish the next component-contract/catalog schema as one source
   for semantic role, properties, events, actions, state, i18n, accessibility,
   responsive behavior, loading class, compiler mapping, compatibility, and

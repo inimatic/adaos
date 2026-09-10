@@ -377,3 +377,23 @@ candidate pass every generic request postcondition. The generic flow-layout
 contract now exposes this exact shape and the parser records this bounded
 normalization instead of spending another model call. The run remains failed
 evidence; only a fresh run may establish the correction.
+
+The fresh `operations-typed-normalized-20260910` run then passed creation,
+generation, durable completion, schema validation, every request postcondition,
+and input attribution with one model call. It took 46.4 seconds, used 7,146
+fresh input tokens and 2,289 output tokens, and required no model repair. The
+case was correctly reported as inconclusive rather than passed because the
+compact Builder creation receipt omitted the Project primary component ref and
+fail-closed cleanup refused to guess ownership. The DEV Builder receipt now
+derives that ref from the Project aggregate's owned primary component.
+
+The next retained run, `operations-typed-cleanup-20260910`, exposed two more
+representational aliases in an otherwise relevant board candidate: the model
+placed `resourceType` inside the resource query object and used `ghost` as a
+button kind. One repair corrected only the first issue and the run failed in
+43.8 seconds after two model calls (7,858 fresh, 9,088 cached input tokens and
+2,144 output tokens). Catalog version 2.0.2 now gives the selected board
+contract the exact resource-query and button shapes. The compatibility parser
+also deterministically canonicalizes these unambiguous aliases and records the
+normalization; this remains a bridge to the typed compiler, not permission to
+silently approximate unsupported semantics.

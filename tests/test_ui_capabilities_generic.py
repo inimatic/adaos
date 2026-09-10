@@ -67,6 +67,24 @@ def test_flow_layout_contract_exposes_required_single_area_shape() -> None:
     }
 
 
+def test_resource_board_contract_exposes_exact_query_and_button_shapes() -> None:
+    catalog = ui_capability_catalog()
+    board = next(
+        item for item in catalog["components"] if item["id"] == "collection.board"
+    )
+
+    assert board["manifest"]["resource_query_shape"] == {
+        "kind": "resourceQuery",
+        "resourceType": "prototype.<resource_name>",
+        "query": {},
+    }
+    assert board["manifest"]["button_shape"] == {
+        "required": ["id"],
+        "kind": ["primary", "secondary", "danger"],
+        "fill": ["solid", "outline", "clear"],
+    }
+
+
 def test_generic_request_cannot_select_subject_pack_by_wording_or_id() -> None:
     for request in (
         "Create an Applications marketplace with stable and prerelease versions",
