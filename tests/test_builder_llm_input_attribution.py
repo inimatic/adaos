@@ -92,3 +92,27 @@ def test_llm_input_attribution_changes_only_dynamic_digest_for_user_delta() -> N
 
     assert first["stable_prefix"]["sha256"] == second["stable_prefix"]["sha256"]
     assert first["dynamic_suffix"]["sha256"] != second["dynamic_suffix"]["sha256"]
+
+
+def test_capability_context_is_part_of_the_cacheable_prefix() -> None:
+    receipt = build_llm_input_attribution(
+        request_id="request-capabilities",
+        route="prototype.transform",
+        stage="generate",
+        attempt=1,
+        messages=[
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": "contract"},
+            {"role": "user", "content": "capabilities"},
+            {"role": "user", "content": "task"},
+        ],
+        message_purposes=(
+            "system_policy",
+            "stable_context",
+            "capability_context",
+            "user_delta",
+        ),
+    )
+
+    assert receipt["stable_prefix"]["message_indexes"] == [0, 1, 2]
+    assert receipt["dynamic_suffix"]["message_indexes"] == [3]

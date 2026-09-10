@@ -109,13 +109,44 @@ def test_brief_drives_generic_capabilities_without_internal_prompt_terms() -> No
         "transition",
     ]
     assert {
-        "recipe.resource_board_workbench",
+        "recipe.resource_collection_workbench",
         "recipe.master_detail",
         "recipe.data_entry",
     } <= set(selection["root_item_ids"])
+    assert "recipe.resource_board_workbench" not in selection["root_item_ids"]
     assert selection["qualification"]["prototype_brief"]["intent_ref"].startswith(
         "intent:"
     )
+
+
+def test_brief_preserves_implicit_lifecycle_and_exception_states() -> None:
+    brief = compile_prototype_brief(
+        "A coordinator saves an unfinished request and then completes it. "
+        "Show an empty queue and prevent completion without an owner."
+    )
+
+    assert brief["representative_states"] == {
+        "state": "known",
+        "value": [
+            "A coordinator saves an unfinished request and then completes it",
+            "Show an empty queue and prevent completion without an owner",
+        ],
+        "evidence": ["intent.statement"],
+        "confidence": 0.8,
+    }
+
+
+def test_brief_preserves_ru_lifecycle_and_exception_states_without_domain_terms() -> None:
+    brief = compile_prototype_brief(
+        "Пользователь сохраняет незавершенную запись, а затем завершает ее. "
+        "Покажи пустой список и запрети завершение без комментария."
+    )
+
+    assert brief["representative_states"]["state"] == "known"
+    assert brief["representative_states"]["value"] == [
+        "Пользователь сохраняет незавершенную запись, а затем завершает ее",
+        "Покажи пустой список и запрети завершение без комментария",
+    ]
 
 
 def test_public_builder_sdk_exposes_brief_compilation() -> None:

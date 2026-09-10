@@ -99,6 +99,14 @@ _WORKFLOW_STATES_PATTERNS = (
     re.compile(r"\bthrough\s+(?P<states>[^.!?]+)", re.IGNORECASE),
     re.compile(r"\b(?:через|по статусам)\s+(?P<states>[^.!?]+)", re.IGNORECASE),
 )
+_REPRESENTATIVE_STATE_SIGNAL_PATTERN = re.compile(
+    r"\b(?:empty|no|none|without|unassigned|unfinished|incomplete|draft|completed?|"
+    r"blocked|disabled|loading|offline|error|failed?|forbid|prevent|"
+    r"пуст\w*|нет|без|неназнач\w*|не\s+назнач\w*|незаверш\w*|чернов\w*|"
+    r"заверш\w*|заблокир\w*|недоступ\w*|загруз\w*|офлайн\w*|ошиб\w*|"
+    r"неуспеш\w*|запрет\w*|нельзя)\b",
+    re.IGNORECASE,
+)
 
 
 def _digest(value: Any) -> str:
@@ -242,6 +250,18 @@ def _extract_representative_states(statement: str) -> dict[str, Any]:
             return _knowledge(
                 "known", values[:12], evidence=["intent.statement"], confidence=0.9
             )
+    state_clauses = []
+    for clause, _start, _end in _clauses(statement):
+        value = _without_spans(clause, _authoring_spans(clause))
+        if value and _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value):
+            state_clauses.append(value)
+    if state_clauses:
+        return _knowledge(
+            "known",
+            list(dict.fromkeys(state_clauses))[:12],
+            evidence=["intent.statement"],
+            confidence=0.8,
+        )
     return _knowledge("unknown")
 
 

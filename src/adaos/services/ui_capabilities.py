@@ -695,10 +695,6 @@ def selected_ui_capabilities(
         for value in requirements.get("brief_operation_kinds") or []
         if str(value or "").strip()
     }
-    representative_states = dict(
-        dict(qualification.get("prototype_brief") or {}).get("representative_states")
-        or {}
-    )
     for key in ("recipe_id", "component_type", "layout_id"):
         value = str(requirements.get(key) or "").strip()
         if value and value not in selected_ids:
@@ -719,12 +715,6 @@ def selected_ui_capabilities(
         and "recipe.resource_collection_workbench" not in selected_ids
     ):
         selected_ids.append("recipe.resource_collection_workbench")
-    if (
-        "transition" in brief_operation_kinds
-        and representative_states.get("state") == "known"
-        and "recipe.resource_board_workbench" not in selected_ids
-    ):
-        selected_ids.append("recipe.resource_board_workbench")
     if (
         brief_operation_kinds & {"inspect", "list"}
         and brief_operation_kinds

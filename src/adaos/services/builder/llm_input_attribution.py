@@ -105,7 +105,8 @@ def build_llm_input_attribution(
         stable_indexes = [
             index
             for index, purpose in enumerate(message_purposes)
-            if purpose in {"system_policy", "stable_context"}
+            if purpose
+            in {"system_policy", "stable_context", "capability_context"}
         ]
     if dynamic_message_indexes is None:
         dynamic_indexes = [

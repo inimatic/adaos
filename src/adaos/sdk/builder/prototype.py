@@ -69,6 +69,16 @@ def candidate_status(
     )
 
 
+def model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the bounded generation-stage view of a full Prototype Brief."""
+
+    from adaos.services.builder.prototype_context import (
+        compile_prototype_model_context,
+    )
+
+    return compile_prototype_model_context(brief)
+
+
 def start_data_runtime(definition: Mapping[str, Any]):
     from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
 
@@ -125,6 +135,7 @@ __all__ = [
     "check_spatial_constraint",
     "composition_slice",
     "automation_handoff",
+    "model_context",
     "start_data_runtime",
     "submit_request",
     "validate_workflow_slice",
