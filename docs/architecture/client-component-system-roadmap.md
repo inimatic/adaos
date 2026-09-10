@@ -56,6 +56,18 @@ claim to the explicit compatibility profile in which it was produced.
 
 ## C0. Inventory And Compatibility Freeze
 
+Progress note (2026-09-10): Client commit `4e0639f` adds a deterministic,
+TypeScript-AST-derived capability inventory at
+`architecture/evidence/client-capability-inventory.v1.json` in the Client
+repository. Its first snapshot records 40 widgets, 16 page action types, nine
+data-source kinds, five static modals, semantic advertised/lowered sets, three
+product action extensions, source digests, loading class, and ownership. The
+inventory check rejects Widget ABI/runtime registry disagreement and declared
+page actions without a dispatcher branch. It is a bounded C0 artifact, not yet
+the exhaustive inventory required by the exit gate: aliases, all endpoint
+assumptions, modal/data compatibility branches, runtime reachability, retained
+browser traces, and bundle attribution remain open.
+
 - [ ] `[must]` Inventory every registered widget, modal, page-data provider,
   page action, semantic mapping, alias, load class, and owning product.
 - [ ] `[must]` Classify each entry as shell, generic component, generic
@@ -72,6 +84,26 @@ Exit gate: every current behavior has an owner and a retained compatibility
 fixture; no branch is moved based only on a filename or component title.
 
 ## C1. Baseline Integrity Gate
+
+Progress note (2026-09-10): Client commits `55fcc6b` and `4e0639f` establish
+typed semantic adaptation diagnostics and the first product-extension seam.
+Builder workbench address adaptation, Infrastate/Infra Access host routing and
+recovery, and NLU Teacher actions no longer live in the generic
+`PageActionService`; they are independently registered through the
+`PAGE_ACTION_EXTENSIONS` multi-provider. The static boundary gate now includes
+that dispatcher. Focused evidence is 73/73 action tests, the inventory and
+boundary checks, TypeScript compilation, and a successful development build.
+On this machine, test execution took 0.79 seconds after a 52.0-second test
+bundle build, while the application bundle took 90.5 seconds. Build-graph
+latency is therefore tracked separately from runtime behavior.
+
+The gate remains open. The generated inventory makes the next failures
+explicit: the semantic contract advertises action kinds `apply_review_change`,
+`emit`, `navigate`, and `patch_y`, and binding kinds `projection` and `view`,
+without corresponding lowering. Product-specific compatibility still exists
+in `PageModalService`, `PageDataService`, generic chat/command/file widgets,
+and selected desktop compatibility widgets. Those branches require typed
+ports or explicitly registered owners before a clean Builder baseline.
 
 - [ ] `[must]` Extract Builder, Applications/Marketplace, Infrastate, Voice,
   and Media Center behavior from generic widgets and runtime services into
@@ -169,4 +201,3 @@ domain branches or regressing Client conformance, bundle, or latency gates.
 - [ ] `[deferred]` Build a general visual component editor or multi-user
   semantic layout editor.
 - [ ] `[deferred]` Tune components directly against the sealed held-out suite.
-

@@ -122,6 +122,13 @@ The clean baseline also requires Client roadmap C1 and the truthful C2
 contract subset for every component reachable by baseline cases. The broader
 component-growth phases do not block it.
 
+Client prerequisite progress (2026-09-10): the Client now emits a
+content-addressed capability inventory and has extracted the first Builder,
+Infrastate, and NLU action branches into explicit multi-provider extensions.
+This narrows contamination but does not satisfy the prerequisite: modal/data
+recovery and generic-widget domain branches remain, and the inventory exposes
+six advertised semantic kinds without a lowering implementation.
+
 ## R2. Clean Generic Baseline
 
 Implementation note (2026-09-10): the first ABI/runner slice and model-free
