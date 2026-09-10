@@ -283,15 +283,6 @@ def validate_semantic_prototype(
         editor_views = {
             f"view:{view['id']}" for view in views.values() if view["role"] == "editor"
         }
-        editable_fields_by_view = {
-            f"view:{view['id']}": {
-                f"field:{field_id}"
-                for field_id in view["field_refs"]
-                if fields[field_id]["editable"]
-            }
-            for view in views.values()
-            if view["role"] == "editor"
-        }
         resource_ref = f"resource:{resource['id']}"
         for requirement_id, requirement in collection_requirements.items():
             if requirement_id in gaps:
@@ -307,14 +298,6 @@ def validate_semantic_prototype(
                 if not bound_editors:
                     _fail(
                         f"capture_each requirement {requirement_id!r} must bind an editor view"
-                    )
-                if not any(
-                    bound & editable_fields_by_view[editor_ref]
-                    for editor_ref in bound_editors
-                ):
-                    _fail(
-                        f"capture_each requirement {requirement_id!r} must bind an "
-                        "editable item field exposed by its editor"
                     )
 
     return document
@@ -619,14 +602,33 @@ def compile_semantic_prototype(
             + json.dumps(validation.get("findings") or [], ensure_ascii=False)
         )
 
-    requirement_map = {
-        str(item["requirement_ref"]): [
-            runtime_ref
-            for semantic_ref in item["semantic_refs"]
-            for runtime_ref in source_map.get(str(semantic_ref), [])
-        ]
-        for item in document["requirement_bindings"]
-    }
+    views_by_ref = {f"view:{view['id']}": view for view in document["views"]}
+    binding_expansions: dict[str, list[str]] = {}
+    requirement_map: dict[str, list[str]] = {}
+    for item in document["requirement_bindings"]:
+        requirement_ref = str(item["requirement_ref"])
+        explicit_refs = {str(ref) for ref in item["semantic_refs"]}
+        expanded_refs = set(explicit_refs)
+        for semantic_ref in explicit_refs:
+            view = views_by_ref.get(semantic_ref)
+            if view is None:
+                continue
+            expanded_refs.update(f"field:{field_id}" for field_id in view["field_refs"])
+            expanded_refs.update(
+                f"command:{command_id}"
+                for command_id, command in commands.items()
+                if command["view_ref"] == view["id"]
+            )
+        derived_refs = sorted(expanded_refs - explicit_refs)
+        if derived_refs:
+            binding_expansions[requirement_ref] = derived_refs
+        requirement_map[requirement_ref] = sorted(
+            {
+                runtime_ref
+                for semantic_ref in expanded_refs
+                for runtime_ref in source_map.get(semantic_ref, [])
+            }
+        )
     unresolved_runtime = sorted(
         requirement_ref
         for requirement_ref, runtime_refs in requirement_map.items()
@@ -643,6 +645,7 @@ def compile_semantic_prototype(
         "prototype_records": prototype_records,
         "source_map": source_map,
         "requirement_runtime_map": requirement_map,
+        "binding_expansions": binding_expansions,
         "capability_gaps": copy.deepcopy(document["capability_gaps"]),
         "validation": validation,
     }

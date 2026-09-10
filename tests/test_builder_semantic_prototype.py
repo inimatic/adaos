@@ -272,7 +272,7 @@ def test_capture_each_requires_collection_and_editor_bindings() -> None:
         validate_semantic_prototype(semantic, brief=brief)
 
 
-def test_capture_each_requires_bound_editable_item_field() -> None:
+def test_capture_each_expands_bound_editor_to_editable_item_fields() -> None:
     brief, semantic = _fixture()
     binding = next(
         item
@@ -285,8 +285,13 @@ def test_capture_each_requires_bound_editable_item_field() -> None:
         "view:work-editor",
     ]
 
-    with pytest.raises(BuilderWorkflowError, match="editable item field"):
-        validate_semantic_prototype(semantic, brief=brief)
+    result = compile_semantic_prototype(semantic, brief=brief)
+
+    assert "field:result" in result["binding_expansions"]["collection:01"]
+    assert any(
+        ".inputs.fields.@result" in runtime_ref
+        for runtime_ref in result["requirement_runtime_map"]["collection:01"]
+    )
 
 
 def test_semantic_prototype_rejects_dangling_refs_before_compilation() -> None:
