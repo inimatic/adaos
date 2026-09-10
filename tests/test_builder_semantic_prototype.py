@@ -166,13 +166,7 @@ def _fixture() -> tuple[dict, dict]:
                 "id": "empty",
                 "label": _text("work.state.empty", "Empty", "Пусто"),
                 "view_ref": "work-list",
-                "filters": [
-                    {
-                        "field_ref": "title",
-                        "operator": "eq",
-                        "value": "No such work item",
-                    }
-                ],
+                "filters": [],
                 "min_items": 0,
                 "max_items": 0,
             }
@@ -258,17 +252,12 @@ def test_semantic_prototype_compiles_to_valid_webui_with_source_maps() -> None:
         {
             "state_id": "empty",
             "view_ref": "work-list",
-            "filters": [
-                {
-                    "field_ref": "title",
-                    "operator": "eq",
-                    "value": "No such work item",
-                }
-            ],
+            "filters": [],
             "matching_record_ids": [],
             "matching_record_count": 0,
             "min_items": 0,
             "max_items": 0,
+            "fixture_mode": "empty",
             "ok": True,
         }
     ]
@@ -561,6 +550,14 @@ def test_semantic_prototype_rejects_unproven_representative_state() -> None:
     ]
 
     with pytest.raises(BuilderWorkflowError, match="expected 0..0.*found 1"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_empty_fixture_requires_a_rendered_empty_state() -> None:
+    brief, semantic = _fixture()
+    del semantic["views"][0]["empty_state"]
+
+    with pytest.raises(BuilderWorkflowError, match="requires an empty_state"):
         validate_semantic_prototype(semantic, brief=brief)
 
 

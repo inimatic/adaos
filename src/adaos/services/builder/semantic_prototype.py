@@ -350,7 +350,6 @@ def validate_semantic_prototype(
                     f"representative state {state_id!r} has invalid choice filter "
                     f"for field {field_ref!r}"
                 )
-        matching_records = _matching_state_records(resource["records"], filters)
         minimum = int(state["min_items"])
         maximum = (
             int(state["max_items"])
@@ -361,6 +360,17 @@ def validate_semantic_prototype(
             _fail(
                 f"representative state {state_id!r} max_items is below min_items"
             )
+        empty_fixture = not filters and minimum == 0 and maximum == 0
+        if empty_fixture and not isinstance(views[view_ref].get("empty_state"), Mapping):
+            _fail(
+                f"representative state {state_id!r} requires an empty_state "
+                f"on collection view {view_ref!r}"
+            )
+        matching_records = (
+            []
+            if empty_fixture
+            else _matching_state_records(resource["records"], filters)
+        )
         count = len(matching_records)
         if count < minimum or (maximum is not None and count > maximum):
             expected_range = (
@@ -859,11 +869,26 @@ def compile_semantic_prototype(
     representative_state_checks: list[dict[str, Any]] = []
     for state in document["representative_states"]:
         filters = [dict(item) for item in state.get("filters") or []]
-        matching_records = _matching_state_records(prototype_records, filters)
+        minimum = int(state["min_items"])
+        maximum = (
+            int(state["max_items"])
+            if state.get("max_items") is not None
+            else None
+        )
+        empty_fixture = not filters and minimum == 0 and maximum == 0
+        matching_records = (
+            []
+            if empty_fixture
+            else _matching_state_records(prototype_records, filters)
+        )
         state_id = str(state["id"])
         view_ref = str(state["view_ref"])
         source_map[f"state:{state_id}"] = [
-            f"ui.application.desktop.pageSchema.widgets.@{view_ref}"
+            (
+                f"ui.application.desktop.pageSchema.widgets.@{view_ref}.inputs.emptyState"
+                if empty_fixture
+                else f"ui.application.desktop.pageSchema.widgets.@{view_ref}"
+            )
         ]
         representative_state_checks.append(
             {
@@ -872,12 +897,9 @@ def compile_semantic_prototype(
                 "filters": filters,
                 "matching_record_ids": [record["id"] for record in matching_records],
                 "matching_record_count": len(matching_records),
-                "min_items": int(state["min_items"]),
-                "max_items": (
-                    int(state["max_items"])
-                    if state.get("max_items") is not None
-                    else None
-                ),
+                "min_items": minimum,
+                "max_items": maximum,
+                "fixture_mode": "empty" if empty_fixture else "filtered_records",
                 "ok": True,
             }
         )
