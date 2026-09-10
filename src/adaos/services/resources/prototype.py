@@ -283,7 +283,11 @@ class PrototypeResourceService:
         for record in records:
             if token and token not in json.dumps(record, ensure_ascii=False, sort_keys=True).lower():
                 continue
-            if any(not self._filter_matches(record, key, expected) for key, expected in filters.items() if key != "search"):
+            if any(
+                not self._filter_matches(record, key, expected)
+                for key, expected in filters.items()
+                if key != "search" and expected is not None and expected != ""
+            ):
                 continue
             result.append(record)
         for spec in reversed(list(sort or [])):

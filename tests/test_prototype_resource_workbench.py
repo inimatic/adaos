@@ -217,6 +217,8 @@ def test_prototype_resource_runs_generic_query_and_crud_across_service_instances
         sort=[{"field": "title", "direction": "asc"}],
     )
     assert [item["id"] for item in filtered["items"]] == ["one"]
+    unfiltered = _query(workbench, filters={"status": ""})
+    assert [item["id"] for item in unfiltered["items"]] == ["one", "two"]
 
     created = _operate(
         workbench,

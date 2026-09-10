@@ -257,7 +257,6 @@ def _add_query_controls(semantic: dict) -> None:
             "id": "item-search",
             "kind": "search",
             "label": _text("work.search", "Search", "Поиск"),
-            "field_refs": ["title", "result"],
         },
         {
             "id": "result-filter",
@@ -283,7 +282,7 @@ def test_semantic_query_controls_compile_to_typed_runtime_wiring() -> None:
     collection = page["widgets"][2]
     assert collection["dataSource"]["query"] == {
         "search": "$state.query_item_search",
-        "result": "$state.query_result_filter",
+        "filters": {"result": "$state.query_result_filter"},
     }
     assert page["initialState"]["query_item_search"] == ""
     assert page["initialState"]["query_result_filter"] == ""
@@ -344,7 +343,7 @@ def test_search_and_filter_require_matching_query_bindings() -> None:
         validate_semantic_prototype(semantic, brief=brief)
 
 
-def test_query_controls_reject_duplicate_and_invalid_field_ownership() -> None:
+def test_query_controls_reject_duplicate_and_non_collection_ownership() -> None:
     brief, semantic = _fixture()
     _add_query_controls(semantic)
     semantic["views"][1]["query_controls"] = [
@@ -354,8 +353,10 @@ def test_query_controls_reject_duplicate_and_invalid_field_ownership() -> None:
         validate_semantic_prototype(semantic, brief=brief)
 
     del semantic["views"][1]["query_controls"]
-    semantic["views"][0]["query_controls"][0]["field_refs"] = ["comment"]
-    with pytest.raises(BuilderWorkflowError, match="outside its view"):
+    semantic["views"][1]["query_controls"] = [
+        semantic["views"][0]["query_controls"].pop(0)
+    ]
+    with pytest.raises(BuilderWorkflowError, match="must belong to a collection view"):
         validate_semantic_prototype(semantic, brief=brief)
 
 

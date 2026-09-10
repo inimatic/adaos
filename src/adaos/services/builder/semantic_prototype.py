@@ -133,10 +133,26 @@ def validate_semantic_prototype(
     views = _unique(document["views"], "view")
     query_controls: dict[str, dict[str, Any]] = {}
     for view in views.values():
+        search_controls = [
+            control
+            for control in view.get("query_controls") or []
+            if control.get("kind") == "search"
+        ]
+        if len(search_controls) > 1:
+            _fail(f"collection view {view['id']!r} has more than one search control")
+        filter_fields: set[str] = set()
         for control in view.get("query_controls") or []:
             identifier = str(control.get("id") or "")
             if identifier in query_controls:
                 _fail(f"duplicate query control id {identifier!r}")
+            if control.get("kind") == "filter":
+                field_ref = str(control.get("field_ref") or "")
+                if field_ref in filter_fields:
+                    _fail(
+                        f"collection view {view['id']!r} has duplicate filter for "
+                        f"field {field_ref!r}"
+                    )
+                filter_fields.add(field_ref)
             query_controls[identifier] = dict(control)
     commands = _unique(document["commands"], "command")
     states = _unique(document["representative_states"], "state")
@@ -244,27 +260,15 @@ def validate_semantic_prototype(
             query_id = str(control["id"])
             if view["role"] != "collection":
                 _fail(f"query control {query_id!r} must belong to a collection view")
-            field_refs = (
-                [str(control["field_ref"])]
-                if control["kind"] == "filter"
-                else [str(item) for item in control.get("field_refs") or []]
-            )
-            unknown_query_fields = sorted(set(field_refs) - set(fields))
-            if unknown_query_fields:
-                _fail(
-                    f"query control {query_id!r} references unknown fields "
-                    f"{unknown_query_fields}"
-                )
-            hidden_query_fields = sorted(set(field_refs) - set(view["field_refs"]))
-            if hidden_query_fields:
-                _fail(
-                    f"query control {query_id!r} references fields outside its view "
-                    f"{hidden_query_fields}"
-                )
-            if control["kind"] == "filter" and fields[field_refs[0]][
-                "value_type"
-            ] != "choice":
-                _fail(f"filter query control {query_id!r} requires a choice field")
+            if control["kind"] == "filter":
+                field_ref = str(control["field_ref"])
+                if field_ref not in fields:
+                    _fail(
+                        f"query control {query_id!r} references unknown field "
+                        f"{field_ref!r}"
+                    )
+                if fields[field_ref]["value_type"] != "choice":
+                    _fail(f"filter query control {query_id!r} requires a choice field")
 
     for command in commands.values():
         if command["view_ref"] not in views:
@@ -561,9 +565,9 @@ def compile_semantic_prototype(
                         },
                     }
                 )
-                widget["dataSource"]["query"][str(control["field_ref"])] = (
-                    f"$state.{state_ref}"
-                )
+                widget["dataSource"]["query"].setdefault("filters", {})[
+                    str(control["field_ref"])
+                ] = f"$state.{state_ref}"
             widgets.append(query_widget)
             source_map[f"query:{query_id}"] = [
                 f"ui.application.desktop.pageSchema.widgets.@query-{query_id}"
@@ -572,9 +576,9 @@ def compile_semantic_prototype(
         if isinstance(filter_value, Mapping):
             state_ref = str(filter_value["state_ref"])
             initial_state.setdefault(state_ref, "")
-            widget["dataSource"]["query"][str(filter_value["field_ref"])] = (
-                f"$state.{state_ref}"
-            )
+            widget["dataSource"]["query"].setdefault("filters", {})[
+                str(filter_value["field_ref"])
+            ] = f"$state.{state_ref}"
         if role == "collection":
             widget["type"] = "ui.list"
             title_key = next(

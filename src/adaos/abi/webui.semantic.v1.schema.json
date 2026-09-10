@@ -243,23 +243,12 @@
         "id": { "$ref": "#/$defs/id" },
         "kind": { "enum": ["search", "filter"] },
         "label": { "$ref": "#/$defs/localizedText" },
-        "field_ref": { "$ref": "#/$defs/id" },
-        "field_refs": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 8,
-          "uniqueItems": true,
-          "items": { "$ref": "#/$defs/id" }
-        }
+        "field_ref": { "$ref": "#/$defs/id" }
       },
       "allOf": [
         {
           "if": { "properties": { "kind": { "const": "filter" } } },
           "then": { "required": ["field_ref"] }
-        },
-        {
-          "if": { "properties": { "kind": { "const": "search" } } },
-          "then": { "required": ["field_refs"] }
         }
       ]
     },
