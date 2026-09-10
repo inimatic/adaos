@@ -132,14 +132,26 @@ application compilation, 116/116 focused `PageDataService` tests, inventory and
 boundary checks. The Angular test bundle took 26.8 seconds; browser execution
 took 0.22 seconds.
 
+Client commit `3566e96` makes widget ownership executable instead of merely
+descriptive. `PageWidgetRegistryService` now contains only generic and shell
+registrations; desktop catalog/grid, Voice, Media, and Vision components are
+supplied by the explicit `client.product-widgets.compatibility.v1` extension.
+Constructing the registry without extensions cannot resolve those component
+types, while the normal Client composition root opts into the compatibility
+pack. The generated inventory reads both registries, rejects duplicate or
+missing ABI registrations, and the generic boundary gate covers the registry
+and its extension contract. Evidence is TypeScript compilation, 15/15 focused
+registry/host tests, and current inventory/boundary checks. The Angular test
+bundle took 35.2 seconds; browser execution took 0.35 seconds.
+
 The gate remains open. The generated inventory makes the next failures
 explicit: the semantic contract advertises action kinds `apply_review_change`,
 `emit`, `navigate`, and `patch_y`, and binding kinds `projection` and `view`,
 without corresponding lowering. Product-specific compatibility still exists
-in generic chat/voice/command/file widgets, the collection grid, desktop shell
-orchestration, and selected desktop compatibility widgets. Those branches
-require typed ports or explicit product ownership before a clean Builder
-baseline.
+in generic chat/command/file widgets and desktop shell orchestration. The
+collection grid, voice, media, vision, and desktop widget implementations are
+now explicitly product-owned, but still require compatibility fixtures and a
+browser-selectable generic composition profile before the clean baseline.
 
 - [ ] `[must]` Extract Builder, Applications/Marketplace, Infrastate, Voice,
   and Media Center behavior from generic widgets and runtime services into
