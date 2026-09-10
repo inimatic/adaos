@@ -236,6 +236,26 @@ def test_project_can_adopt_an_existing_unowned_builder_component(project_space) 
     )
 
 
+def test_project_component_lookup_does_not_reread_scanned_manifests(
+    project_space, monkeypatch
+) -> None:
+    _scenario(project_space["scenarios"], "kanban_demo")
+    compositions.create_for_existing_component(
+        "kanban_demo",
+        kind="scenario",
+        component_id="kanban_demo",
+    )
+
+    def unexpected_get(_project_id: str) -> dict:
+        raise AssertionError("project_for_component reread a scanned manifest")
+
+    monkeypatch.setattr(compositions, "get", unexpected_get)
+
+    assert compositions.project_for_component("scenario:kanban_demo")["ref"] == (
+        "project:kanban_demo"
+    )
+
+
 def test_standard_project_creation_persists_optional_development_origin(
     project_space,
 ) -> None:

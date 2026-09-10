@@ -902,13 +902,16 @@ def create_research_direction(
 
 
 def project_for_component(component_ref: str) -> dict[str, Any] | None:
-    matches = []
-    for item in list_projects(limit=5000):
-        project = get(str(item["id"]))
-        if component_ref in {
-            str(owned["ref"]) for owned in project["components"]["owned"]
-        }:
-            matches.append(project)
+    matches = [
+        project
+        for project in list_projects(limit=5000)
+        if component_ref
+        in {
+            str(owned["ref"])
+            for owned in project["components"]["owned"]
+            if isinstance(owned, Mapping)
+        }
+    ]
     if not matches:
         return None
     if len(matches) > 1:
