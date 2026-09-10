@@ -177,6 +177,26 @@ false-green path but is not the R2 outcome gate: the model grader is not yet
 calibrated against human labels and deterministic compact/wide browser jobs
 remain open.
 
+The public CLI smoke `cli-model-free-20260910-01` executed the declared
+`runner-observation` case through `adaos builder e2e`, retained a schema-valid
+bundle, and passed both required steps in 18.4 ms with zero model calls. The
+focused runner, grader, evaluation, and governed-flow suite passes 33 tests,
+including selection, isolation, resume identity, bounded retry accounting,
+cleanup failure handling, evidence compaction, attribution, and baseline
+comparison. The CLI item remains open only because the current live adapter is
+`legacy_dev_chat.v1`; public SDK transitions are an R3 dependency.
+
+The first retained clean-profile outcome probe,
+`baseline-generic-equipment-ru-20260910-01`, failed its independent grade at
+`0.45625` after passing creation, generation, job synchronization, and schema
+validation. Its single Builder model call used 5,713 fresh input and 823 output
+tokens; no cached tokens were reported. Inspection of the exact request found
+unconditional Application CAS instructions, board-only acceptance rules for a
+non-board selection, an incorrectly reusable variable "stable" segment, and a
+brief that omitted explicit states and capability gaps. The failed candidate
+is retained unchanged and these are architecture inputs, not case-specific
+prompt tuning.
+
 - [x] `[must]` Publish and validate the declarative E2E suite, case, resolved
   run, case-result, report, and immutable baseline contracts defined by the
   [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md). Reuse
@@ -187,7 +207,7 @@ remain open.
   DEV state, execute public SDK transitions, collect evidence, compare an
   optional baseline, report, and clean up without exposing low-level eval CRUD
   commands to normal Builder users.
-- [ ] `[must]` Prove runner isolation, deterministic case selection,
+- [x] `[must]` Prove runner isolation, deterministic case selection,
   interruption/resume, retry accounting, cleanup, artifact retention, and
   matched-run comparability with model-free self-tests.
 - [x] `[must]` Build a visible development suite from the application
