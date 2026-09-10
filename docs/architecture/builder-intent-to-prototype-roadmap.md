@@ -461,6 +461,30 @@ mask no measured bottleneck. Root queueing was 6-8 ms, while the draft
 checkpoint upload was about 3.4 seconds and remains a separate orchestration
 optimization target.
 
+Performance follow-up (2026-09-11): phase-level evidence, rather than an
+arbitrary validator timeout, isolated two local defects. Builder session state
+was rewriting a roughly 3.9 MB compatibility JSON file on every mutation, and
+workflow inspection repeated admission validation of the same 220 KB
+definition. Owner-scoped relational state with lazy compatibility migration
+reduced the measured session writes from roughly 0.6 seconds to 7-8 ms. The
+workflow service now reuses the exact validation report retained with the
+admitted definition; warm state inspection fell to roughly 0.16 seconds.
+Copied runtime context is propagated into Builder background workers so those
+workers retain the relational-storage authority of the activating skill.
+
+Fresh run `sdk-semantic-operations-20260911-06` then took 49.0 seconds. Local
+scenario validation was 109 ms, Root queueing was 4 ms, and provider execution
+was 29.0 seconds; the independent grader took 10.3 seconds. Generation reused
+2,688 cached input tokens out of 2,786 and emitted 4,517 output tokens. The
+candidate covered all four primary jobs and representative states, but was
+correctly rejected at `0.925` because status mutations had no confirmation.
+This separates semantic failure from transport and validator latency. No
+validator timeout was added. A timeout may exist only as an outer circuit
+breaker after a measured per-route SLO, must name the interrupted phase, and
+must not count as a latency improvement or turn an incomplete result into a
+pass. The remaining cost target is fewer and smaller model outputs and
+stage-specific context, not a shorter local deadline.
+
 - [ ] `[must]` Replace complete WebUI/project-memory/history inclusion with
   brief deltas, semantic slices, accepted constraints, findings, and retrievable
   content-addressed refs.

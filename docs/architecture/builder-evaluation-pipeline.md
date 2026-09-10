@@ -513,3 +513,14 @@ one repair took 4.8 seconds. This is evidence for explicit semantic entity/item
 granularity, requirement bindings, and deterministic source-map validation.
 It is not evidence for a shorter validator timeout; timeouts remain outer
 safety controls and may be tuned only after stage-specific SLO diagnosis.
+
+The 2026-09-11 operations follow-up made the timeout distinction executable.
+After replacing repeated multi-megabyte Builder state rewrites with
+owner-scoped relational state and reusing the workflow admission report, a
+fresh run recorded 109 ms local scenario validation and 4 ms Root queueing,
+while provider generation still took 29.0 seconds and emitted 4,517 tokens.
+The separate grader took 10.3 seconds. The runner must preserve these phase
+boundaries in every result. A timeout is an outer circuit breaker only: it is
+reported against the phase it interrupted, cannot be credited as a performance
+gain, and cannot substitute for root-cause work on context, output size,
+provider execution, persistence, or repeated validation.
