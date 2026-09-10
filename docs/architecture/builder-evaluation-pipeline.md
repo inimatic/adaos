@@ -408,3 +408,15 @@ the sibling-key rule, which makes further prose repetition a poor remedy.
 Catalog 2.0.3 now enumerates the board's localizable input pairs, and the
 compatibility parser moves a grouped descriptor only when its scalar sibling
 exists and the canonical target is free; conflicts remain validation errors.
+
+`operations-typed-i18n-20260910` is the first fresh end-to-end pass for this
+visible case: all four required steps, input attribution, validation, and exact
+draft/component/Project cleanup passed, and no DEV object remained. The run
+took 78.7 seconds and used three model calls, 11,334 fresh input tokens, 4,608
+cached input tokens, and 2,831 output tokens. A first repair addressed a
+candidate defect but emitted a JSON Pointer to a non-existent stable id; the
+legacy parser then made a second repair call. This pass proves functional and
+cleanup correctness, but it fails the intended one-repair cost discipline and
+must not be treated as a clean performance baseline. The typed plan/compiler
+route must remove structural patch authorship from the design model, and the
+legacy route needs an explicit repair-attempt budget in the interim.
