@@ -163,11 +163,22 @@ now covers the command bar implementation. Evidence is TypeScript compilation,
 18/18 focused command-bar tests, inventory, and boundary checks. Test bundle
 generation took 43.6 seconds; browser execution took 0.04 seconds.
 
+Client commit `9e9df96` stops advertising the current chat, file-upload, and
+document-viewer implementations in the generic registry. Their implementations
+remain unchanged and available in the default compatibility profile, with
+explicit `conversation.compatibility`, `resource-upload.compatibility`, and
+`builder.artifact.compatibility` ownership. This preserves published Research,
+Drive, Vision, and Builder behavior while ensuring the clean profile reports a
+capability gap until C2 defines transport-neutral conversation and resource
+ports. Evidence is TypeScript compilation, 11/11 registry tests, inventory, and
+boundary checks; test bundle generation took 31.5 seconds and browser execution
+took 0.14 seconds.
+
 The gate remains open. The generated inventory makes the next failures
 explicit: the semantic contract advertises action kinds `apply_review_change`,
 `emit`, `navigate`, and `patch_y`, and binding kinds `projection` and `view`,
 without corresponding lowering. Product-specific compatibility still exists
-in generic chat/command/file widgets and desktop shell orchestration. The
+in desktop shell orchestration and product-owned compatibility components. The
 collection grid, voice, media, vision, and desktop widget implementations are
 now explicitly product-owned and can be disabled by browser profile, but still
 require retained compatibility fixtures before the clean baseline.
