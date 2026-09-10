@@ -14,6 +14,7 @@ SCHEMA = "adaos.builder.llm_input_attribution.v1"
 _SAFE_GENERATION_OPTIONS = frozenset(
     {
         "max_tokens",
+        "output_mode",
         "prompt_cache_key",
         "prompt_cache_retention",
         "reasoning",

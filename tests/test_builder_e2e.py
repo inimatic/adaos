@@ -75,6 +75,7 @@ def _write_suite(
         "defaults": {
             "adapter": "fixture.v1",
             "profile": "generic",
+            "generation_contract": "webui.v1",
             "repetitions": repetitions,
             "browser": "off",
         },
@@ -466,6 +467,37 @@ def test_runner_constructs_public_sdk_adapter(tmp_path: Path) -> None:
     assert isinstance(runner.executor, SdkBuilderExecutor)
 
 
+def test_sdk_adapter_routes_declared_generation_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from adaos.sdk.builder import prototype
+
+    captured: dict[str, Any] = {}
+
+    def fake_submit_request(statement: str, **kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"ok": True, "statement": statement}
+
+    monkeypatch.setattr(prototype, "submit_request", fake_submit_request)
+    executor = SdkBuilderExecutor(repo_root=tmp_path, browser_mode="off")
+
+    result = executor.execute(
+        "builder.chat",
+        {"text": "Create a queue"},
+        {
+            "run_id": "semantic-run",
+            "case_id": "queue",
+            "repetition": 1,
+            "locale": "en",
+            "generation_contract": "semantic.v1",
+        },
+    )
+
+    assert result["ok"] is True
+    assert captured["metadata"]["builder_e2e_generation_contract"] == "semantic.v1"
+    assert captured["metadata"]["builder_semantic_compiler"] is True
+
+
 def test_case_repetitions_use_distinct_webspaces(tmp_path: Path) -> None:
     case = _case()
     case["steps"] = case["steps"][:1]
@@ -735,6 +767,7 @@ def test_compatibility_executor_validates_actual_generic_request_journal(
             "items": [],
             "input_attribution": {"profile": "generic", "domain_packs": []},
         },
+        generation_options={"output_mode": "json_patch_batch_v1"},
         created_at="2026-09-10T10:00:00+00:00",
     )
     (journal_dir / "request-actual.request.json").write_text(
@@ -751,6 +784,7 @@ def test_compatibility_executor_validates_actual_generic_request_journal(
     result = CompatibilityBuilderExecutor(repo_root=tmp_path).collect_input_attribution(
         {
             "profile": "generic",
+            "generation_contract": "webui.v1",
             "domain_packs": [],
             "outputs": {"create": {"artifact_root": str(artifact_root)}},
         }
@@ -761,6 +795,19 @@ def test_compatibility_executor_validates_actual_generic_request_journal(
     assert result["unique_receipt_count"] == 1
     assert result["observed_model_calls"] == 1
     assert result["receipts"][0]["request_id"] == "request-actual"
+
+    mismatch = CompatibilityBuilderExecutor(
+        repo_root=tmp_path
+    ).collect_input_attribution(
+        {
+            "profile": "generic",
+            "generation_contract": "semantic.v1",
+            "domain_packs": [],
+            "outputs": {"create": {"artifact_root": str(artifact_root)}},
+        }
+    )
+    assert mismatch["status"] == "failed"
+    assert mismatch["violations"][0]["code"] == "generation_contract_mismatch"
 
 
 def test_compatibility_executor_waits_for_exact_llm_job(

@@ -32,7 +32,7 @@ CASE_RESULT_SCHEMA = "adaos.builder.e2e_case_result.v1"
 REPORT_SCHEMA = "adaos.builder.e2e_report.v1"
 BASELINE_SCHEMA = "adaos.builder.e2e_baseline.v1"
 CHECKPOINT_SCHEMA = "adaos.builder.e2e_checkpoint.v1"
-RUNNER_VERSION = "0.1.0"
+RUNNER_VERSION = "0.2.0"
 _INLINE_STEP_OUTPUT_BYTES = 16_384
 _RESULTS = {"passed", "failed", "inconclusive", "skipped"}
 _LOWER_IS_BETTER = {
@@ -53,6 +53,10 @@ _LOWER_IS_BETTER = {
     "step_retries",
     "failed",
     "inconclusive",
+}
+_GENERATION_OUTPUT_MODES = {
+    "webui.v1": {"full_webui", "jsonl_patch_v1", "json_patch_batch_v1"},
+    "semantic.v1": {"semantic_v1"},
 }
 
 
@@ -91,6 +95,14 @@ def _digest(value: Any) -> str:
 def _safe_token(value: str, *, fallback: str) -> str:
     token = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip()).strip("-.")
     return token[:120] or fallback
+
+
+def _generation_metadata(context: Mapping[str, Any]) -> dict[str, Any]:
+    contract = str(context.get("generation_contract") or "webui.v1")
+    return {
+        "builder_e2e_generation_contract": contract,
+        "builder_semantic_compiler": contract == "semantic.v1",
+    }
 
 
 def _load_document(path: Path) -> dict[str, Any]:
@@ -739,6 +751,7 @@ class CompatibilityBuilderExecutor:
                 "locale": context["locale"],
                 "builder_e2e_run_id": context["run_id"],
                 "builder_e2e_case_id": context["case_id"],
+                **_generation_metadata(context),
             },
         }
         return self._manager().run_dev_tool(
@@ -1126,6 +1139,12 @@ class CompatibilityBuilderExecutor:
             if str(pack_id)
         )
         expected_profile = str(context.get("profile") or "generic")
+        expected_generation_contract = str(
+            context.get("generation_contract") or "webui.v1"
+        )
+        expected_output_modes = _GENERATION_OUTPUT_MODES[
+            expected_generation_contract
+        ]
         violations: list[dict[str, Any]] = []
         receipts: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
@@ -1183,6 +1202,24 @@ class CompatibilityBuilderExecutor:
                             "actual": receipt.get("profile"),
                         }
                     )
+                generation_options = dict(
+                    dict(receipt.get("generation") or {}).get("options") or {}
+                )
+                actual_output_mode = str(
+                    generation_options.get("output_mode") or ""
+                ).strip()
+                if (
+                    receipt.get("stage") == "generate"
+                    and actual_output_mode not in expected_output_modes
+                ):
+                    violations.append(
+                        {
+                            "code": "generation_contract_mismatch",
+                            "request_id": receipt.get("request_id"),
+                            "expected": expected_generation_contract,
+                            "actual_output_mode": actual_output_mode or None,
+                        }
+                    )
                 receipts.append(receipt)
         usage = _collect_usage(outputs)
         if usage["model_calls"] and not receipts:
@@ -1198,6 +1235,7 @@ class CompatibilityBuilderExecutor:
             "unique_receipt_count": len(receipts),
             "observed_model_calls": max(usage["model_calls"], len(receipts)),
             "expected_profile": expected_profile,
+            "expected_generation_contract": expected_generation_contract,
             "expected_domain_packs": expected_packs,
             "receipts": receipts,
             "violations": violations,
@@ -1302,6 +1340,7 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
                 "topic_id": conversation_id,
                 "builder_e2e_run_id": context["run_id"],
                 "builder_e2e_case_id": context["case_id"],
+                **_generation_metadata(context),
             },
             source_kind="e2e",
         )
@@ -1468,6 +1507,7 @@ def compare_builder_e2e_baseline(
             reasons.append(f"suite.{key}")
     current_cohort = {
         "profile": run_manifest.get("profile"),
+        "generation_contract": run_manifest.get("generation_contract"),
         "browser": run_manifest.get("browser"),
         "repetitions": run_manifest.get("repetitions"),
         "grader_model": dict(
@@ -1553,6 +1593,9 @@ class BuilderE2ERunner:
         self.case_ids = tuple(str(item) for item in case_ids if str(item))
         self.tags = tuple(str(item) for item in tags if str(item))
         self.profile = str(profile or defaults.get("profile") or "generic").strip()
+        self.generation_contract = str(
+            defaults.get("generation_contract") or "webui.v1"
+        ).strip()
         self.repetitions = int(repetitions or defaults.get("repetitions") or 1)
         self.browser = str(browser or defaults.get("browser") or "auto").strip()
         self.grader_model = str(
@@ -1567,6 +1610,10 @@ class BuilderE2ERunner:
             raise BuilderE2EError("repetitions must be between 1 and 20")
         if self.browser not in {"auto", "on", "off"}:
             raise BuilderE2EError("browser must be auto, on, or off")
+        if self.generation_contract not in _GENERATION_OUTPUT_MODES:
+            raise BuilderE2EError(
+                "generation_contract must be webui.v1 or semantic.v1"
+            )
         self.baseline_path = (
             Path(baseline_path).expanduser().resolve() if baseline_path else None
         )
@@ -1692,6 +1739,7 @@ class BuilderE2ERunner:
             "repetition": repetition,
             "locale": case["locale"],
             "profile": self.profile,
+            "generation_contract": self.generation_contract,
             "browser": self.browser,
             "bundle_dir": str(self.bundle_dir),
             "webspace_id": case_webspace_id,
@@ -2185,6 +2233,7 @@ class BuilderE2ERunner:
                 },
                 "adapter": self.executor.adapter_id,
                 "profile": self.profile,
+                "generation_contract": self.generation_contract,
                 "repetitions": self.repetitions,
                 "browser": self.browser,
                 "evaluation": {
@@ -2243,6 +2292,7 @@ class BuilderE2ERunner:
                 "suite",
                 "adapter",
                 "profile",
+                "generation_contract",
                 "repetitions",
                 "browser",
                 "evaluation",
@@ -2371,6 +2421,7 @@ def create_builder_e2e_baseline(
             },
             "cohort": {
                 "profile": run_checked["profile"],
+                "generation_contract": run_checked["generation_contract"],
                 "browser": run_checked["browser"],
                 "repetitions": run_checked["repetitions"],
                 "grader_model": dict(
