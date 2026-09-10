@@ -77,15 +77,14 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "label", "evidence"],
+        "required": ["id", "label", "view_ref", "filters", "min_items"],
         "properties": {
           "id": { "$ref": "#/$defs/id" },
           "label": { "$ref": "#/$defs/localizedText" },
-          "evidence": {
-            "type": "array",
-            "minItems": 1,
-            "items": { "type": "string", "minLength": 1 }
-          }
+          "view_ref": { "$ref": "#/$defs/id" },
+          "filters": { "type": "object", "additionalProperties": true },
+          "min_items": { "type": "integer", "minimum": 0 },
+          "max_items": { "type": "integer", "minimum": 0 }
         }
       }
     },

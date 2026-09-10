@@ -271,6 +271,57 @@ def validate_semantic_prototype(
                         "date field"
                     )
 
+    for state in states.values():
+        state_id = str(state["id"])
+        view_ref = str(state["view_ref"])
+        if view_ref not in views or views[view_ref]["role"] != "collection":
+            _fail(
+                f"representative state {state_id!r} requires a collection view_ref"
+            )
+        filters = dict(state.get("filters") or {})
+        unknown_state_fields = sorted(set(filters) - set(fields))
+        if unknown_state_fields:
+            _fail(
+                f"representative state {state_id!r} filters unknown fields "
+                f"{unknown_state_fields}"
+            )
+        for field_ref, expected_value in filters.items():
+            field = fields[field_ref]
+            if field["value_type"] == "choice" and not any(
+                option["value"] == expected_value for option in field.get("options") or []
+            ):
+                _fail(
+                    f"representative state {state_id!r} has invalid choice filter "
+                    f"for field {field_ref!r}"
+                )
+        matching_records = [
+            record
+            for record in resource["records"]
+            if all(
+                record.get(field_ref) == expected
+                for field_ref, expected in filters.items()
+            )
+        ]
+        minimum = int(state["min_items"])
+        maximum = (
+            int(state["max_items"])
+            if state.get("max_items") is not None
+            else None
+        )
+        if maximum is not None and maximum < minimum:
+            _fail(
+                f"representative state {state_id!r} max_items is below min_items"
+            )
+        count = len(matching_records)
+        if count < minimum or (maximum is not None and count > maximum):
+            expected_range = (
+                f">={minimum}" if maximum is None else f"{minimum}..{maximum}"
+            )
+            _fail(
+                f"representative state {state_id!r} expected {expected_range} "
+                f"matching records but found {count}"
+            )
+
     for command in commands.values():
         if command["view_ref"] not in views:
             _fail(
@@ -751,6 +802,39 @@ def compile_semantic_prototype(
                 f"ui.application.desktop.pageSchema.widgets.@{view_id}.actions.@{command_id}"
             ]
 
+    representative_state_checks: list[dict[str, Any]] = []
+    for state in document["representative_states"]:
+        filters = dict(state.get("filters") or {})
+        matching_records = [
+            record
+            for record in prototype_records
+            if all(
+                record.get(field_ref) == expected
+                for field_ref, expected in filters.items()
+            )
+        ]
+        state_id = str(state["id"])
+        view_ref = str(state["view_ref"])
+        source_map[f"state:{state_id}"] = [
+            f"ui.application.desktop.pageSchema.widgets.@{view_ref}"
+        ]
+        representative_state_checks.append(
+            {
+                "state_id": state_id,
+                "view_ref": view_ref,
+                "filters": filters,
+                "matching_record_ids": [record["id"] for record in matching_records],
+                "matching_record_count": len(matching_records),
+                "min_items": int(state["min_items"]),
+                "max_items": (
+                    int(state["max_items"])
+                    if state.get("max_items") is not None
+                    else None
+                ),
+                "ok": True,
+            }
+        )
+
     layout_type, layout_pattern = {
         "flow": ("stack", "stack"),
         "split": ("split", "split"),
@@ -849,6 +933,7 @@ def compile_semantic_prototype(
         "webui": webui,
         "locale_dictionaries": dictionaries,
         "prototype_records": prototype_records,
+        "representative_state_checks": representative_state_checks,
         "source_map": source_map,
         "requirement_runtime_map": requirement_map,
         "binding_expansions": binding_expansions,

@@ -165,7 +165,10 @@ def _fixture() -> tuple[dict, dict]:
             {
                 "id": "empty",
                 "label": _text("work.state.empty", "Empty", "Пусто"),
-                "evidence": ["intent.statement"],
+                "view_ref": "work-list",
+                "filters": {"title": "No such work item"},
+                "min_items": 0,
+                "max_items": 0,
             }
         ],
         "requirement_bindings": [],
@@ -245,6 +248,18 @@ def test_semantic_prototype_compiles_to_valid_webui_with_source_maps() -> None:
     assert editor["actions"][1]["params"]["operation_id"] == "update"
     assert "comment.length > 0" in editor["actions"][1]["enabledIf"]
     assert result["requirement_runtime_map"]["collection:01"]
+    assert result["representative_state_checks"] == [
+        {
+            "state_id": "empty",
+            "view_ref": "work-list",
+            "filters": {"title": "No such work item"},
+            "matching_record_ids": [],
+            "matching_record_count": 0,
+            "min_items": 0,
+            "max_items": 0,
+            "ok": True,
+        }
+    ]
 
 
 def _add_query_controls(semantic: dict) -> None:
@@ -491,6 +506,14 @@ def test_semantic_prototype_rejects_invalid_representative_record() -> None:
     semantic["resource"]["records"][0]["result"] = "not-an-option"
 
     with pytest.raises(BuilderWorkflowError, match="invalid choice value"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_semantic_prototype_rejects_unproven_representative_state() -> None:
+    brief, semantic = _fixture()
+    semantic["representative_states"][0]["filters"] = {"status": "open"}
+
+    with pytest.raises(BuilderWorkflowError, match="expected 0..0.*found 1"):
         validate_semantic_prototype(semantic, brief=brief)
 
 
