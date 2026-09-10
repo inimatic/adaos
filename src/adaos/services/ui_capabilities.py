@@ -799,6 +799,20 @@ def selected_ui_capabilities(
             item_id for item_id in expanded_ids if item_id not in root_ids
         ],
         "items": items,
+        "repair_guidance": {
+            "general": [],
+            "by_postcondition": {
+                "resource.prototype_source": [
+                    "Use exactly one prototype.<resource_name> resourceType for the workbench, its projections, mutations, and prototype_records; keep bounded reference choices static until a multi-resource contract is selected."
+                ],
+                "resource.persistence_operations": [
+                    "Use widget.actions entries with type=resourceOperation, target equal to the queried prototype resourceType, and params.operation_id=create/update/delete as required; localCreate, localUpdate, and updateState are not persistence operations."
+                ],
+                "resource.prototype_records": [
+                    "Return bounded representative prototype_records for the same single prototype resource; AdaOS derives its schema and provider."
+                ],
+            },
+        },
         "input_attribution": {"profile": "generic", "domain_packs": []},
     }
 

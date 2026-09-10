@@ -382,6 +382,7 @@
         ]
       },
       "composition": {
+        "scope": "This recipe materializes exactly one Prototype resource. Use static bounded reference choices unless another admitted recipe explicitly declares multiple resources.",
         "collection": "Use ui.list or ui.table with widget.dataSource.kind=resourceQuery and one prototype.<resource_name> resourceType. dataSource is a widget peer of inputs, never inputs.dataSource.",
         "selection": "Write the selected stable record id to page state and use the same id for details and updates.",
         "operations": "Put resourceOperation declarations in widget.actions for create, update, and delete. updateState alone is not persistence.",

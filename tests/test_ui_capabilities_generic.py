@@ -145,6 +145,10 @@ def test_generic_mutation_selects_resource_collection_contract() -> None:
 
     assert qualification["requirements"]["prototype_resource"] is True
     assert selection["root_item_ids"][0] == "recipe.resource_collection_workbench"
+    assert (
+        "resource.persistence_operations"
+        in selection["repair_guidance"]["by_postcondition"]
+    )
     assert "collection.board" not in {
         item["id"] for item in selection["items"] if isinstance(item, dict)
     }
