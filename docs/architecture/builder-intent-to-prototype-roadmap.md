@@ -219,6 +219,12 @@ must demonstrate measured improvement against this baseline.
 
 ## R3. Ownership And Public SDK Seams
 
+Progress note (2026-09-10): `adaos.sdk.builder.intent` is the first target
+SDK slice. It exposes exact intent admission and deterministic Prototype Brief
+compilation while keeping schema validation and interpretation in Core. The
+generation, candidate, evaluation, and artifact-write operations still use the
+legacy skill path, so the R3 gate remains open.
+
 - [ ] `[must]` Define public SDK operations for Prototype request admission,
   brief inspection/confirmation, plan execution, candidate status, and
   evaluation. Builder skill calls only these operations.
@@ -249,7 +255,17 @@ admits patterns whose data/action invariants are not grounded in a typed
 brief. This is a compiler-boundary defect, not evidence that the prompt needs
 component terminology.
 
-- [ ] `[must]` Publish `adaos.builder.intent.v1` and
+Implementation note (2026-09-10): Core now validates content-addressed
+`adaos.builder.intent.v1` and `adaos.builder.prototype_brief.v1` records. The
+deterministic compiler preserves the exact statement, source/scope/authority,
+locale, explicit refs, unknown fields, evidence spans, recognized generic
+operations, principal job clauses, and explicit workflow states. It excludes
+Builder authoring commands such as "create an application" from the
+application's own operation set. Generic capability selection consumes these
+facts before lexical fallback. Residual model interpretation, accepted-field
+persistence, ambiguity policy, and user confirmation remain open.
+
+- [x] `[must]` Publish `adaos.builder.intent.v1` and
   `adaos.builder.prototype_brief.v1` schemas with provenance and `unknown`
   semantics.
 - [ ] `[must]` Implement deterministic extraction for explicit refs, locale,
@@ -330,6 +346,13 @@ Exit gate: at least four development application archetypes compile from brief t
 valid executable Prototype without a subject-specific recipe.
 
 ## R7. Context And Model Execution
+
+Progress note (2026-09-10): DEV Builder now removes request-specific
+qualification from the stable capability bundle and puts the typed brief in
+the dynamic suffix. A characterization test proves that two different prompts
+which resolve to the same capability bundle produce byte-identical stable
+prompts. The complete-WebUI/project-memory reductions and content-addressed
+retrieval path remain open.
 
 - [ ] `[must]` Replace complete WebUI/project-memory/history inclusion with
   brief deltas, semantic slices, accepted constraints, findings, and retrievable
