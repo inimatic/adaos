@@ -348,12 +348,14 @@ Tags indicate priority, not implementation order:
   after the remaining templates are migrated.
 - [ ] `[should]` Remove compatibility aliases after all consumers migrate.
 - [ ] `[could]` Extend the guard to all workspace skills.
-- [ ] `[deferred]` Split the large Prompt Engineer handler by project,
-  specification, LLM, metadata, and VCS capabilities.
-- [ ] `[deferred]` Split `builder_skill` into dialog, transformation, revision,
-  workbench, automation, and checkpoint modules.
-- [ ] `[deferred]` Decompose Root developer, scenario runtime, and conversation
-  storage behind characterization tests.
+- [x] `[deferred]` The original SDK migration deliberately postponed physical
+  splitting of Prompt Engineer, `builder_skill`, and adjacent Core services.
+  The 2026-09-10 audit supersedes that disposition for the Prototype path:
+  [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md)
+  now requires state and authority to move to their owning contracts before
+  module decomposition. The
+  [corrective roadmap](builder-intent-to-prototype-roadmap.md) owns that work;
+  this SDK checklist does not duplicate it.
 - [ ] `[deferred]` Remove legacy Prompt IDE only after autonomous Builder
   development and rollback procedures are proven.
 

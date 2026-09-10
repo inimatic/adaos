@@ -192,6 +192,10 @@ nav:
       - Agent And Project Context Capsules: architecture/agent-context-capsules.md
       - Skill Factory: architecture/skill-factory.md
       - Builder: architecture/builder.md
+      - Builder Intent-to-Prototype Architecture: architecture/builder-intent-to-prototype.md
+      - Builder E2E Evaluation Pipeline: architecture/builder-evaluation-pipeline.md
+      - Builder Intent-to-Prototype Roadmap: architecture/builder-intent-to-prototype-roadmap.md
+      - Client Component System Roadmap: architecture/client-component-system-roadmap.md
       - Builder Conversational Development: architecture/builder-conversational-development.md
       - Executable Prototype Architecture: architecture/executable-prototype-architecture.md
       - Builder Roadmap: architecture/builder-roadmap.md

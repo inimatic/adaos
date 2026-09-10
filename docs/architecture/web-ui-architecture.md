@@ -16,6 +16,10 @@ The target is a stable universal client that:
 This document is target-state architecture.
 It is intentionally compatible with the current `webui.v1` runtime manifest and
 the current Angular/Ionic client while defining the next structural boundary.
+The [Client Component System Roadmap](client-component-system-roadmap.md) owns
+the corrective sequence for removing product logic from this universal layer,
+making component contracts authoritative, and growing the renderer set from
+measured cross-domain capability gaps.
 
 ## Governing Rules
 
@@ -28,6 +32,12 @@ the current Angular/Ionic client while defining the next structural boundary.
    client-owned view state.
 5. The same semantic schema should be renderable in desktop-rich and
    mobile-compact profiles.
+6. Generic shell, renderer, action, data, and diagnostic paths must not branch
+   on product names, widget titles, subject vocabulary, or product endpoint
+   conventions. Product behavior enters through explicit typed extensions.
+7. A declared semantic capability is either lowered faithfully or rejected
+   with a structured capability gap. Silent omission and approximate mapping
+   to an unrelated component are invalid.
 
 ## Current Implementation Base
 
@@ -692,6 +702,14 @@ Each semantic view kind maps to a renderer entry that declares:
 - device-profile compatibility
 
 The target client should use lazy `import()` for semantic renderer entries.
+
+Every registry entry must be generated from one versioned component contract
+beside the implementation. That contract is also the source for Core
+validation, Builder capability retrieval, TypeScript types, fixtures,
+documentation, compatibility, i18n/accessibility expectations, and ABI impact
+analysis. Handwritten compatibility aliases may remain temporarily, but they
+must reference the authoritative entry and cannot advertise additional
+capabilities.
 
 ## Responsive Strategy
 

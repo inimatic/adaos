@@ -1,0 +1,172 @@
+# Client Component System Roadmap
+
+Status: active prerequisite and growth roadmap for the universal AdaOS Client.
+
+Last reviewed: 2026-09-10.
+
+Architecture owner: [Web UI Architecture](web-ui-architecture.md).
+Builder dependency: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
+
+This roadmap removes application-domain knowledge from the universal browser
+runtime, makes the semantic/component ABI truthful, and establishes a
+repeatable way to grow the Client component set. It owns Client work only.
+Builder intent interpretation, capability selection, compilation, and
+evaluation remain in their Builder architecture and roadmap.
+
+## Decision
+
+A bounded Client integrity pass is required before recording a clean generic
+Builder baseline. Building all missing cross-domain components first is not.
+
+The prerequisite pass must ensure that the baseline measures a universal
+renderer rather than hidden Applications, Builder, Infrastate, Voice, or Media
+Center behavior. The first eight application archetypes used to discover
+component gaps become a visible development suite. They are not held-out after
+the component design has been derived from them. New components are selected
+after the clean baseline from the observed cross-domain gap taxonomy.
+
+## Priority Rules
+
+- `must`: required for a truthful generic Client or clean Builder baseline;
+- `should`: required for maintainable component growth and release quality;
+- `could`: useful after measured demand exists;
+- `deferred`: deliberately excluded from the current correction.
+
+## Current Audit
+
+The current Client is a useful compatibility runtime, but not yet a clean
+generic baseline:
+
+- generic-looking widgets contain product names, endpoints, modal IDs, and
+  action branches for Applications, Builder, Infrastate, Voice, and Media
+  Center;
+- the semantic adapter accepts more action, binding, and layout kinds than it
+  can faithfully lower, and some unsupported values are dropped or
+  approximated;
+- component declarations are repeated across handwritten TypeScript unions,
+  registries, Core catalogs, Builder context, documentation, and tests;
+- several widgets are eagerly loaded despite being optional or heavy;
+- renderer error classification sometimes infers diagnostic codes from human
+  message text;
+- i18n, long-content, accessibility, and representative-state behavior are
+  not uniformly declared or tested.
+
+These findings do not invalidate existing renderer evidence. They limit its
+claim to the explicit compatibility profile in which it was produced.
+
+## C0. Inventory And Compatibility Freeze
+
+- [ ] `[must]` Inventory every registered widget, modal, page-data provider,
+  page action, semantic mapping, alias, load class, and owning product.
+- [ ] `[must]` Classify each entry as shell, generic component, generic
+  adapter, or product-owned extension. Record all domain identifiers and
+  endpoint assumptions reachable from shell/generic code.
+- [ ] `[must]` Retain representative compatibility fixtures and wide/compact
+  browser traces for currently published applications before extraction.
+- [ ] `[must]` Record the exact Client commit, build, WebUI ABI, semantic ABI,
+  registry digest, locale set, and browser profiles used by the legacy run.
+- [ ] `[should]` Add bundle ownership and size reporting by shell, common,
+  on-demand, and heavy class.
+
+Exit gate: every current behavior has an owner and a retained compatibility
+fixture; no branch is moved based only on a filename or component title.
+
+## C1. Baseline Integrity Gate
+
+- [ ] `[must]` Extract Builder, Applications/Marketplace, Infrastate, Voice,
+  and Media Center behavior from generic widgets and runtime services into
+  explicitly registered product adapters or extensions.
+- [ ] `[must]` Make generic actions operate on typed addresses, resources, and
+  capabilities. They must not select endpoints, tools, modals, or copy from a
+  product name, widget ID, title, or payload shape.
+- [ ] `[must]` Make semantic lowering total for the advertised contract. An
+  unsupported action, binding, layout, or state mapping produces a typed
+  capability-gap/diagnostic result; it is never silently omitted or replaced
+  by an unrelated widget.
+- [ ] `[must]` Replace message-text error inference with structured diagnostic
+  codes, owner, retryability, and remediation metadata from the failing layer.
+- [ ] `[must]` Preserve the current behavior through explicit compatibility
+  adapters, with no reverse dependency from generic code into product code.
+- [ ] `[must]` Add a static boundary check that rejects known product IDs,
+  endpoints, localized product vocabulary, and product action names in the
+  shell/generic allowlist.
+- [ ] `[should]` Normalize generic attachment, document, media, and chat
+  integration around typed resource/action ports; product adapters may map
+  those ports to existing endpoints.
+
+Exit gate: the generic Client profile can render and fail honestly with all
+product extensions disabled. This gate is required before the clean Builder
+baseline.
+
+## C2. Single Component Contract
+
+- [ ] `[must]` Publish a versioned component contract beside each supported
+  implementation. It declares semantic roles, data shapes, properties,
+  defaults, events, actions, side effects, state ownership, i18n,
+  accessibility, responsive behavior, loading class, compatibility, fixtures,
+  and compiler mappings.
+- [ ] `[must]` Generate Client registration, TypeScript types, Core validation
+  indexes, Builder retrieval units, documentation indexes, and conformance
+  manifests from that contract.
+- [ ] `[must]` Reject a component whose runtime registration and generated
+  manifest disagree. Do not diagnose this condition from display text.
+- [ ] `[must]` Emit an ABI impact report naming affected compiler mappings,
+  applications/scenarios, migrations, fixtures, and Client tests.
+- [ ] `[should]` Replace public `any`/unbounded dictionary inputs with generated
+  discriminated types at the renderer boundary.
+- [ ] `[should]` Require fixtures for empty, loading, error, permission-denied,
+  long-content, compact, wide, English, and Russian states where applicable.
+
+Exit gate: adding or changing a component has one declaration and a complete,
+machine-checked impact set.
+
+## C3. Renderer Conformance And Delivery
+
+- [ ] `[must]` Add contract-driven renderer tests for semantic input,
+  interactions, action emission, state ownership, and structured failures.
+- [ ] `[must]` Add compact and wide browser probes with DOM, accessibility
+  tree, screenshot, console, network, and retained failure trace evidence.
+- [ ] `[must]` Verify EN/RU key-set parity, interpolation, pluralization,
+  locale formatting, and long-content layout for all admitted components.
+- [ ] `[must]` Enforce stable dimensions and no incoherent overlap in declared
+  representative states.
+- [ ] `[should]` Load non-shell components by generated async factories and set
+  bundle budgets per loading class.
+- [ ] `[should]` Run focused component tests on contract changes and a complete
+  cross-component suite on Client/semantic ABI changes.
+
+Exit gate: contract conformance and browser behavior are reproducible without
+running a subject-specific Builder prompt.
+
+## C4. Measured Cross-Domain Growth
+
+Start this phase only after the clean generic Builder baseline. Prioritize a
+primitive when failures in at least two unrelated development archetypes show
+the same semantic gap. Do not create product-named components.
+
+- [ ] `[must]` Convert baseline failures into typed capability gaps with
+  affected jobs, data shapes, operations, layouts, locales, and view states.
+- [ ] `[must]` Select the first component tranche from measured reuse and task
+  impact, then rerun the same suite and baseline comparison.
+- [ ] `[should]` Evaluate form repetition, money/units/computed values,
+  attachments, lifecycle/status, schedule/availability, timeline, multi-series
+  chart, annotations, and generic collection exploration as candidate
+  primitives.
+- [ ] `[should]` Keep development archetypes and component fixtures visible;
+  keep the sealed prompt-autonomy set unavailable to generation and tuning.
+- [ ] `[could]` Add map/spatial, scanner/camera capture, richer offline draft,
+  and advanced visualization only after measured demand and ownership exist.
+
+Exit gate: each new primitive improves matched task outcomes without adding
+domain branches or regressing Client conformance, bundle, or latency gates.
+
+## Deferred
+
+- [ ] `[deferred]` Generate or ship arbitrary Angular/JavaScript renderer code
+  as part of Builder Prototype creation.
+- [ ] `[deferred]` Introduce a micro-frontend runtime or separately deployed
+  component marketplace before the generated contract registry is proven.
+- [ ] `[deferred]` Build a general visual component editor or multi-user
+  semantic layout editor.
+- [ ] `[deferred]` Tune components directly against the sealed held-out suite.
+

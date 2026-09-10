@@ -7,6 +7,17 @@ human-signal -> Issue -> Builder -> release -> runtime-evidence loop is defined
 by [Governed Evolution](governed-evolution.md); its cross-domain proof order is
 tracked in the [Governed Evolution Roadmap](governed-evolution-roadmap.md).
 
+The interpretation and composition boundary for ordinary user requests is
+defined by the
+[Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
+The 2026-09-10 audit found that the current direct prompt-to-`webui.json` path
+is transitional: it lacks a typed Prototype Brief and compensates with
+domain-specific qualification, detailed recipes, large prompt context, and
+output repair. Recipe-guided evidence remains valid only in that narrower
+scope and does not prove generic prompt autonomy. The corrective sequence is
+owned by the
+[Builder Intent-to-Prototype Roadmap](builder-intent-to-prototype-roadmap.md).
+
 Implementation alignment (2026-07-24): the single-user Builder delivery path
 now uses immutable source checkpoints, component packages, a dependency-locked
 project release, an isolated candidate trial, explicit acceptance, and
@@ -421,6 +432,14 @@ backend process to NATS/dev-node execution without changing the Builder-facing
 API.
 
 ## UI Prototyping LLM Contract
+
+This section describes compatibility behavior around the current
+`adaos.webui.v1` artifact. The target understanding and generation pipeline is
+`intent -> Prototype Brief -> adaptive plan -> semantic UI document ->
+webui.v1 compiler`, as specified by
+[Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
+Direct model generation of full WebUI or RFC 6902 patches must not be treated
+as the target product-understanding boundary.
 
 Long-running UI transformations follow the target
 [Builder Streaming Patch Architecture](builder-streaming-patches.md). Provider

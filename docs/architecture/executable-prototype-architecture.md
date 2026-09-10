@@ -7,6 +7,10 @@ the [Web UI Architecture](web-ui-architecture.md), and the
 [Governed Data-Driven Workflow Model](governed-workflow-runtime.md). Delivery
 priority and evidence remain owned by the [Builder Roadmap](builder-roadmap.md)
 and the [Governed Workflow Runtime Roadmap](governed-workflow-runtime-roadmap.md).
+Interpretation of an ordinary user request, adaptive planning, capability
+retrieval, semantic UI generation, and compilation into this executable model
+are owned by the
+[Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
 
 ## Decision Summary
 
@@ -18,7 +22,9 @@ process before Automation implements real effects.
 The MVP deliberately prefers a small formal vocabulary over broad implicit
 behavior:
 
-- `webui.json` remains the declarative UI source;
+- `webui.json` remains the canonical executable runtime source and atomic
+  promotion unit; the target Builder path compiles it from a semantic UI
+  document rather than treating renderer syntax as the product brief;
 - stable semantic refs and a bounded composition slice describe what the model
   is changing and where it appears;
 - typed Preview binding profiles separate logical data from `mock`, `fixture`,

@@ -1,7 +1,16 @@
 # Builder Streaming Patch Architecture
 
-Status: target architecture with a backward-compatible first implementation
-slice validated end to end in July 2026.
+Status: transport and atomic-application architecture with a
+backward-compatible first implementation slice validated end to end in July
+2026.
+
+This page owns transport, journaling, and atomic application of streamed
+renderer-artifact patches. It no longer owns the target product-understanding
+or UI-generation representation. The target path compiles a typed Prototype
+Brief and semantic UI document as defined by
+[Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
+Direct model output of RFC 6902 against `webui.json` remains a measured
+compatibility profile during migration.
 
 ## Objective
 
@@ -98,7 +107,8 @@ The full-response path is a supported compatibility mode, not an error path.
 ## Prompt Cache Strategy
 
 Provider prompt caching only helps when the repeated prefix is byte-stable.
-Builder therefore orders context from stable to dynamic:
+The compatibility WebUI-patch profile therefore orders context from stable to
+dynamic:
 
 1. versioned Builder system contract and safety rules
 2. versioned compact `webui.v1` ABI/component capability catalog
@@ -106,6 +116,12 @@ Builder therefore orders context from stable to dynamic:
 4. project memory and recent revision evidence
 5. current `webui.json`
 6. the current user instruction
+
+The target semantic profile replaces items 4-5 with a selected immutable
+component-contract bundle followed by a dynamic Prototype Brief delta,
+semantic target slice, accepted constraints, and validation findings. Complete
+project memory and `webui.json` are ref-retrievable recovery inputs, not default
+prompt content.
 
 Builder supplies a stable `prompt_cache_key` derived from provider, model,
 prompt-profile version, ABI version, and semantic output mode. Project ids and

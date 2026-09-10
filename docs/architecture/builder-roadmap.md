@@ -2,7 +2,7 @@
 
 Status: high-level sequencing for the AdaOS Builder vertical slice.
 
-Last reviewed: 2026-09-07.
+Last reviewed: 2026-09-10.
 
 This roadmap tracks how AdaOS evolves from separate skill/scenario/runtime
 surfaces into a coherent Builder workflow: idea -> governed artifact -> preview
@@ -10,6 +10,37 @@ surfaces into a coherent Builder workflow: idea -> governed artifact -> preview
 
 Detailed implementation remains in the specialized roadmaps. This page is the
 cross-cutting source of truth for Builder readiness.
+
+## Corrective Rebaseline - 2026-09-10
+
+The current Prototype LLM path is not the target generic architecture. A code,
+prompt, and evidence audit found that it jumps from user text to renderer-level
+WebUI, distributes interpretation rules across a large Builder skill and Core,
+and uses detailed subject recipes to compensate for the missing typed product
+brief and semantic compiler. The roadmap previously allowed recipe-guided
+Applications evidence to stand too close to a genericity claim.
+
+The [Builder Intent-to-Prototype Roadmap](builder-intent-to-prototype-roadmap.md)
+is now the authoritative corrective sequence for request understanding,
+adaptive planning, capability retrieval, semantic UI compilation, component
+growth, context/model execution, and Prototype quality evaluation. The
+[Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md) and
+[Client Component System Roadmap](client-component-system-roadmap.md) define
+its reproducible evidence and Client prerequisite. Its `must`
+gates take priority over further Phase 11/13 Prototype expansion. Existing
+checks below retain historical lifecycle, runtime, renderer, and
+recipe-materialization evidence, but do not prove prompt autonomy.
+
+Until that roadmap reaches its cutover gate:
+
+- Applications `027` is `renderer-qualified` and `recipe-guided`, not
+  `prompt-autonomous`;
+- the cumulative Applications experiment is a compatibility/evaluation
+  fixture, not a proof of generic composition;
+- no new subject-specific recipe, lexical domain branch, or prompt phase may
+  be added to generic Core or Builder skill;
+- further Builder restructuring must move state and authority to their owning
+  contracts before merely splitting large modules.
 
 The [Governed Evolution Roadmap](governed-evolution-roadmap.md) places Builder
 inside the larger managed-deployment, Issue-first repair, and trusted-reuse
@@ -75,6 +106,11 @@ clean-stand or multi-user production acceptance claim.
 ## Reading Rules
 
 - [Builder](builder.md) defines the role and architecture boundary.
+- [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md)
+  defines ordinary-request understanding, adaptive planning, semantic UI
+  compilation, and the component-contract growth boundary. Its
+  [corrective roadmap](builder-intent-to-prototype-roadmap.md) owns the current
+  Prototype rework and supersedes broader completion interpretations below.
 - [Builder Conversational Development Architecture](builder-conversational-development.md)
   defines the chat-first product model, canonical Issue/Change/Run terms,
   context packets, semantic UI changes, and future collaboration seams.
@@ -144,6 +180,7 @@ gate easy to read by priority.
 | 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, dependent Process projection, durable prose continuation, outcome-oriented stable installation/placement, isolated Trial Workspace activation, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gates include the executable-prototype foundation: bounded local CRUD/provider mocks, semantic activity requirements and simulation trace, compact composition slices, and the constrained conversational workflow profile and Automation handoff; plus one production IntentProposal rail, compatibility-rail retirement, complete registered activity/reply recovery, one fresh operational empty-scenario acceptance run through the isolated Trial path, and Applications dogfooding through public SDK/MCP contracts. | Open: complete Builder-caller migration, deterministic representative-state profiles, structured renderer composition evidence, durable external delivery receipts, live English/Russian mutating Telegram parity, human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. Web/Voice consumed-control parity is locally complete. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: screenshot/multimodal context, general workflow prototype slices and round trips, protected-node migration/retirement, reverse/legacy workflow inference, visual workflow studio, non-conversational/advanced workflow prototyping, full Trial data isolation, simultaneous shared-skill versions, hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 | 12. Project Composition And Scoped Development | Specified: Project is a distribution definition; Development Session, presentations, fallback skill preview, local artifact context, and canonical navigation have target contracts. | Open: registry/Catalog Project projection and portable artifact groups. | None. | External artifact providers/MCP and remote multi-component Project install/remove are deferred until local TLP proof. |
 | 13. Context-Compiled Execution | Open: typed subject resolution, ref-only automation state, role-scoped restoration, Context Receipts, domain handoff isolation, and Subscription accounting proofs. | Open: Context Inspector, related-work batching, and evidence-gated warm caches. | Open: model-assisted ranking behind deterministic policy gates. | Distributed context federation remains owned by the context/distributed roadmaps. |
+| Corrective. Intent-to-Prototype | Open and blocking: forensic snapshot, Core/Builder domain decontamination, Client integrity gate, declarative E2E runner, clean generic baseline, ownership seams, typed Prototype Brief, adaptive plan, component contracts, semantic compiler, bounded context/model execution, held-out evaluation, and shadow cutover. | Open: Client conformance/lazy-loading completion, trace diagnostics, incremental brief repair, retrieval comparison, candidate reuse, and failure-corpus curation. | Open only after measured baseline: cross-domain component growth, learned ranking, selective design alternatives, and governed domain-pack registry. | Multi-agent orchestration, generated Client renderer code, general reverse inference, unbounded visual iteration, and multi-user semantic editing. |
 
 ## Phase 0. Terminology And Ownership
 
