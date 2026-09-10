@@ -445,6 +445,12 @@ _SCHEMA_COLUMN_MIGRATIONS = {
         ("adoption_status", "TEXT NOT NULL DEFAULT 'not_applicable'"),
     ),
 }
+_POST_COLUMN_SCHEMA = (
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_thread_seq
+    ON conversation_messages(conversation_id, thread_id, seq);
+    """,
+)
 _ENSURED_SQL_IDS: set[int] = set()
 _FTS_UNAVAILABLE_SQL_IDS: set[int] = set()
 
@@ -588,6 +594,8 @@ def ensure_schema(sql: Any | None = None) -> bool:
             cur.execute(stmt)
         for table, columns in _SCHEMA_COLUMN_MIGRATIONS.items():
             _ensure_columns(con, table, columns)
+        for stmt in _POST_COLUMN_SCHEMA:
+            cur.execute(stmt)
         _ensure_fts(con)
         con.commit()
     _ENSURED_SQL_IDS.add(token)

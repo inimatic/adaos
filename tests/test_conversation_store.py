@@ -82,6 +82,14 @@ def test_transport_inspector_requires_a_new_explicit_recovery_operation() -> Non
 
 def test_conversation_store_appends_messages_with_monotonic_seq() -> None:
     conversation_store.ensure_schema()
+    with get_ctx().sql.connect() as con:
+        index_columns = [
+            row[2]
+            for row in con.execute(
+                "PRAGMA index_info(idx_conversation_messages_conversation_thread_seq)"
+            )
+        ]
+    assert index_columns == ["conversation_id", "thread_id", "seq"]
     conversation_store.upsert_conversation(
         conversation_id="conv.test",
         webspace_id="desktop",
