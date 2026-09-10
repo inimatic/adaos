@@ -413,6 +413,86 @@ def test_activate_dev_runtime_reprepares_when_source_tree_changes(
     assert prepared == [(skill_name, "1.0.0", "B")]
 
 
+def test_activate_dev_runtime_prepares_changed_source_in_inactive_slot(
+    monkeypatch, tmp_path: Path
+) -> None:
+    skill_name = "active_changed_dev_skill"
+    dev_root = tmp_path / "skills"
+    skill_dir = dev_root / skill_name
+    handlers_dir = skill_dir / "handlers"
+    handlers_dir.mkdir(parents=True)
+    (skill_dir / "skill.yaml").write_text(
+        f"name: {skill_name}\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    (handlers_dir / "main.py").write_text("VALUE = 'new'\n", encoding="utf-8")
+
+    env = SkillRuntimeEnvironment(skills_root=dev_root, skill_name=skill_name)
+    env.prepare_version("1.0.0")
+    env.set_active_slot("1.0.0", "A")
+    active_slot = env.build_slot_paths("1.0.0", "A")
+    active_source = active_slot.src_dir / "skills" / skill_name
+    active_source.mkdir(parents=True)
+    (active_source / "skill.yaml").write_text(
+        f"name: {skill_name}\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    active_slot.resolved_manifest.write_text(
+        json.dumps({"name": skill_name, "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    metadata = env.read_version_metadata("1.0.0")
+    metadata.setdefault("slots", {})["A"] = {
+        "version": "1.0.0",
+        "resolved_manifest": str(active_slot.resolved_manifest),
+        "source_manifest_digest": "sha256:" + "0" * 64,
+        "preparation_identity": skill_manager_module._runtime_preparation_identity(),
+    }
+    metadata.setdefault("history", {})["last_install_slot"] = "A"
+    env.write_version_metadata("1.0.0", metadata)
+
+    mgr = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
+    mgr.ctx = SimpleNamespace(paths=SimpleNamespace(dev_skills_dir=lambda: dev_root))
+    prepared: list[str] = []
+
+    def _prepare(name: str, *, version_override: str, run_tests: bool, preferred_slot: str):
+        prepared.append(preferred_slot)
+        target = env.build_slot_paths(version_override, preferred_slot)
+        target_source = target.src_dir / "skills" / name
+        target_source.mkdir(parents=True, exist_ok=True)
+        (target_source / "skill.yaml").write_text(
+            f"name: {name}\nversion: '{version_override}'\n",
+            encoding="utf-8",
+        )
+        target.resolved_manifest.write_text(
+            json.dumps({"name": name, "version": version_override}),
+            encoding="utf-8",
+        )
+        refreshed = env.read_version_metadata(version_override)
+        refreshed.setdefault("slots", {})[preferred_slot] = {
+            "version": version_override,
+            "resolved_manifest": str(target.resolved_manifest),
+        }
+        env.write_version_metadata(version_override, refreshed)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(mgr, "prepare_dev_runtime", _prepare)
+    monkeypatch.setattr(mgr, "_ensure_core_compatible", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(mgr, "_slot_lifecycle_state", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        mgr,
+        "_invoke_slot_lifecycle_hook",
+        lambda **_kwargs: {"ok": True, "skipped": True},
+    )
+    monkeypatch.setattr(mgr, "_prune_runtime_history", lambda **_kwargs: None)
+    monkeypatch.setattr(mgr, "_smoke_import", lambda **_kwargs: None)
+
+    activated_slot = mgr.activate_dev_runtime(skill_name)
+
+    assert activated_slot == "B"
+    assert prepared == ["B"]
+
+
 def test_internal_data_is_shared_inside_runtime_bucket() -> None:
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())

@@ -5876,6 +5876,17 @@ class SkillManager:
             or slot_meta.get("preparation_identity") != _runtime_preparation_identity()
         )
         if needs_prepare:
+            if slot is None:
+                active_slot = env.read_active_slot(target_version)
+                if target_slot == active_slot:
+                    target_slot = env.select_inactive_slot(target_version)
+                    slot_paths = env.build_slot_paths(target_version, target_slot)
+                    slot_meta = metadata.get("slots", {}).get(target_slot, {})
+                    manifest_path = Path(
+                        slot_meta.get("resolved_manifest")
+                        or slot_paths.resolved_manifest
+                    )
+                    slot_source_root = slot_paths.src_dir / "skills" / name
             # Prepare from DEV sources when the slot is absent, incomplete, or
             # belongs to another patch version in the same runtime bucket.
             self.prepare_dev_runtime(name, version_override=target_version, run_tests=False, preferred_slot=target_slot)
