@@ -31,6 +31,33 @@ def _statements(value: Any) -> list[dict[str, str]]:
     ]
 
 
+def prototype_state_requirements(brief: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Return stable model-facing refs for accepted representative states."""
+
+    jobs = _statements(brief.get("principal_jobs"))
+    jobs_by_statement = {item["statement"]: item["id"] for item in jobs}
+    raw_states = _known_value(brief.get("representative_states"))
+    if not isinstance(raw_states, list):
+        raw_states = [] if raw_states is None else [raw_states]
+
+    requirements: list[dict[str, str]] = []
+    for raw in raw_states:
+        statement = str(raw or "").strip()
+        if not statement:
+            continue
+        job_ref = jobs_by_statement.get(statement)
+        if job_ref:
+            requirements.append({"job_ref": job_ref})
+            continue
+        requirements.append(
+            {
+                "id": f"representative_state:{len(requirements) + 1:02d}",
+                "statement": statement,
+            }
+        )
+    return requirements
+
+
 def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
     """Remove persistence metadata and raw-statement duplication from a brief.
 
@@ -43,19 +70,7 @@ def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("Builder Prototype model context requires a Prototype Brief")
 
     jobs = _statements(value.get("principal_jobs"))
-    jobs_by_statement = {item["statement"]: item["id"] for item in jobs}
-    raw_states = _known_value(value.get("representative_states"))
-    if not isinstance(raw_states, list):
-        raw_states = [] if raw_states is None else [raw_states]
-    state_requirements: list[dict[str, str]] = []
-    for raw in raw_states:
-        statement = str(raw or "").strip()
-        if not statement:
-            continue
-        job_ref = jobs_by_statement.get(statement)
-        state_requirements.append(
-            {"job_ref": job_ref} if job_ref else {"statement": statement}
-        )
+    state_requirements = prototype_state_requirements(value)
 
     facts = {
         name: fact
@@ -126,4 +141,8 @@ def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-__all__ = ["MODEL_CONTEXT_SCHEMA", "compile_prototype_model_context"]
+__all__ = [
+    "MODEL_CONTEXT_SCHEMA",
+    "compile_prototype_model_context",
+    "prototype_state_requirements",
+]

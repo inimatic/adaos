@@ -36,6 +36,21 @@ def test_model_context_rejects_an_untyped_mapping() -> None:
         raise AssertionError("untyped context must be rejected")
 
 
+def test_model_context_assigns_stable_ids_to_independent_state_requirements() -> None:
+    brief = intent.compile_brief(
+        "Move work through New, In progress, Blocked and Done."
+    )
+
+    context = prototype.model_context(brief)
+
+    assert context["state_requirements"] == [
+        {"id": "representative_state:01", "statement": "New"},
+        {"id": "representative_state:02", "statement": "In progress"},
+        {"id": "representative_state:03", "statement": "Blocked"},
+        {"id": "representative_state:04", "statement": "Done"},
+    ]
+
+
 def test_model_context_keeps_attachment_capture_without_renderer_terms() -> None:
     brief = intent.compile_brief(
         "A field worker uploads a photo before completing the report."

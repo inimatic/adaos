@@ -259,6 +259,34 @@ def test_semantic_prototype_rejects_unbound_accepted_requirement() -> None:
         validate_semantic_prototype(semantic, brief=brief)
 
 
+def test_semantic_prototype_accepts_stable_representative_state_requirements() -> None:
+    brief, semantic = _fixture()
+    brief = compile_prototype_brief(
+        "Move work through New, In progress, Blocked and Done."
+    )
+    semantic["brief_ref"] = brief["brief_id"]
+    semantic["brief_digest"] = brief["digest"]
+    semantic["requirement_bindings"] = [
+        {
+            "requirement_ref": item["id"],
+            "semantic_refs": ["field:status"],
+        }
+        for item in prototype_sdk.model_context(brief)["state_requirements"]
+        if "id" in item
+    ]
+    semantic["requirement_bindings"].extend(
+        {
+            "requirement_ref": item["id"],
+            "semantic_refs": ["command:complete"],
+        }
+        for item in brief["principal_jobs"] + brief["operations"]
+    )
+
+    assert validate_semantic_prototype(semantic, brief=brief)["document_id"] == (
+        "work-review"
+    )
+
+
 def test_capture_each_requires_collection_and_editor_bindings() -> None:
     brief, semantic = _fixture()
     binding = next(

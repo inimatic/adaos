@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from adaos.services.ui_capabilities import validate_webui_capabilities
 
+from .prototype_context import prototype_state_requirements
 from .workflow import BuilderWorkflowError
 
 
@@ -71,6 +72,11 @@ def _brief_requirement_ids(brief: Mapping[str, Any]) -> set[str]:
             for item in brief.get(key) or []
             if isinstance(item, Mapping) and str(item.get("id") or "")
         )
+    result.update(
+        str(item["id"])
+        for item in prototype_state_requirements(brief)
+        if str(item.get("id") or "")
+    )
     return result
 
 
