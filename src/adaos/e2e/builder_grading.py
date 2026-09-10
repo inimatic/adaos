@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "3"
+PROTOTYPE_GRADER_VERSION = "4"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -108,6 +108,8 @@ construct or edit an array index, and never append a label, explanation, or
 parenthetical note to evidence.pointer. Each cited object must itself contain the fact
 described in the reason; a sibling or nearby object is not evidence. Cite the nearest
 containing object when a more specific property is not available in the enum.
+For an empty representative state, cite an explicit emptyState/state object or its
+containing widget; a query or filter object proves filtering, not empty-state rendering.
 An absent prohibited assumption needs no positive evidence. Mark an assumption present
 when an executable path explicitly implements it or necessarily relies on it. In
 particular, a direct mutation with no explicit confirmation control or policy implements
@@ -131,12 +133,23 @@ def _evidence_pointers(artifact: Mapping[str, Any]) -> list[str]:
 
     entries: list[str] = []
     identity_keys = {"id", "type", "kind", "on", "resource_type", "status"}
+    semantic_container_names = {
+        "condition",
+        "emptyState",
+        "filters",
+        "initialState",
+        "payload",
+        "query",
+        "validation",
+        "visibleWhen",
+    }
 
     def visit(value: Any, pointer: str) -> None:
         if isinstance(value, Mapping):
             if pointer and (
                 pointer.count("/") <= 5
                 or identity_keys.intersection(value)
+                or pointer.rsplit("/", 1)[-1] in semantic_container_names
                 or (
                     "/prototype_resources/" in pointer
                     and "/records/" in pointer
@@ -394,7 +407,7 @@ def grade_builder_prototype(
                 }
             },
             request_id=request_id,
-            prompt_cache_key="adaos-builder-e2e-prototype-grader-v3",
+            prompt_cache_key="adaos-builder-e2e-prototype-grader-v4",
             timeout=min(15.0, timeout_seconds),
         )
     )

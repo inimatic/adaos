@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from adaos.e2e.builder import validate_builder_e2e_record
-from adaos.e2e.builder_grading import grade_builder_prototype
+from adaos.e2e.builder_grading import _evidence_pointers, grade_builder_prototype
 
 
 def _model_result(*, evidence: str = "/ui") -> str:
@@ -34,6 +34,35 @@ def _model_result(*, evidence: str = "/ui") -> str:
                 }
             ],
         }
+    )
+
+
+def test_evidence_index_includes_deep_semantic_state_containers() -> None:
+    artifact = {
+        "webui": {
+            "ui": {
+                "application": {
+                    "desktop": {
+                        "pageSchema": {
+                            "widgets": [
+                                {
+                                    "id": "items",
+                                    "type": "ui.list",
+                                    "inputs": {
+                                        "emptyState": {"message": "No items"}
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    assert (
+        "/webui/ui/application/desktop/pageSchema/widgets/0/inputs/emptyState"
+        in _evidence_pointers(artifact)
     )
 
 
