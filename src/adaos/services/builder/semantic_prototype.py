@@ -301,10 +301,14 @@ def validate_semantic_prototype(
                         f"query control {query_id!r} references unknown field "
                         f"{field_ref!r}"
                     )
-                if fields[field_ref]["value_type"] not in {"choice", "date"}:
+                if fields[field_ref]["value_type"] not in {
+                    "choice",
+                    "date",
+                    "short_text",
+                }:
                     _fail(
-                        f"filter query control {query_id!r} requires a choice or "
-                        "date field"
+                        f"filter query control {query_id!r} requires a choice, "
+                        "date, or short_text field"
                     )
 
     for state in states.values():
@@ -667,13 +671,18 @@ def compile_semantic_prototype(
                     str(control["field_ref"])
                 ] = f"$state.{state_ref}"
             else:
+                input_type = (
+                    "date"
+                    if fields[str(control["field_ref"])]["value_type"] == "date"
+                    else "text"
+                )
                 query_widget.update(
                     {
                         "type": "input.text",
                         "inputs": {
                             "label": query_label,
                             "label_i18n": query_label_i18n,
-                            "inputType": "date",
+                            "inputType": input_type,
                             "initialValue": "",
                             "clearable": True,
                         },

@@ -386,10 +386,43 @@ def test_query_controls_reject_duplicate_and_non_collection_ownership() -> None:
 def test_filter_query_control_requires_supported_field_type() -> None:
     brief, semantic = _fixture()
     _add_query_controls(semantic)
-    semantic["views"][0]["query_controls"][1]["field_ref"] = "title"
+    semantic["resource"]["fields"].append(
+        {
+            "id": "effort",
+            "label": _text("work.field.effort", "Effort", "Трудоемкость"),
+            "value_type": "number",
+            "required": False,
+            "editable": True,
+        }
+    )
+    semantic["views"][0]["query_controls"][1]["field_ref"] = "effort"
 
-    with pytest.raises(BuilderWorkflowError, match="requires a choice or date field"):
+    with pytest.raises(
+        BuilderWorkflowError, match="requires a choice, date, or short_text field"
+    ):
         validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_short_text_filter_compiles_to_native_text_input() -> None:
+    brief, semantic = _fixture()
+    semantic["views"][0]["query_controls"] = [
+        {
+            "id": "owner-filter",
+            "kind": "filter",
+            "label": _text("work.filter.owner", "Owner", "Ответственный"),
+            "field_ref": "title",
+        }
+    ]
+
+    result = compile_semantic_prototype(semantic, brief=brief)
+
+    page = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    control = page["widgets"][0]
+    assert control["type"] == "input.text"
+    assert control["inputs"]["inputType"] == "text"
+    assert page["widgets"][1]["dataSource"]["query"]["filters"] == {
+        "title": "$state.query_owner_filter"
+    }
 
 
 def test_date_filter_compiles_to_native_date_input() -> None:
