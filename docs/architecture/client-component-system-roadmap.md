@@ -144,14 +144,23 @@ and its extension contract. Evidence is TypeScript compilation, 15/15 focused
 registry/host tests, and current inventory/boundary checks. The Angular test
 bundle took 35.2 seconds; browser execution took 0.35 seconds.
 
+Client commit `e566476` exposes the same boundary through the real composition
+root. A browser opened with `client_profile=generic` registers none of the
+product action, modal, data, or widget extensions; the default remains
+`compatibility` so existing user behavior is unchanged. The selector is exact
+and fail-safe: unknown values do not silently enter the evaluation profile.
+TypeScript compilation, profile tests, registry tests, inventory, and boundary
+checks pass. Compact/wide browser traces for both profiles are still required
+by C0/C3.
+
 The gate remains open. The generated inventory makes the next failures
 explicit: the semantic contract advertises action kinds `apply_review_change`,
 `emit`, `navigate`, and `patch_y`, and binding kinds `projection` and `view`,
 without corresponding lowering. Product-specific compatibility still exists
 in generic chat/command/file widgets and desktop shell orchestration. The
 collection grid, voice, media, vision, and desktop widget implementations are
-now explicitly product-owned, but still require compatibility fixtures and a
-browser-selectable generic composition profile before the clean baseline.
+now explicitly product-owned and can be disabled by browser profile, but still
+require retained compatibility fixtures before the clean baseline.
 
 - [ ] `[must]` Extract Builder, Applications/Marketplace, Infrastate, Voice,
   and Media Center behavior from generic widgets and runtime services into
