@@ -132,8 +132,19 @@ def validate_semantic_prototype(
 
     record_ids: set[str] = set()
     allowed_record_keys = {"id", "revision", *fields}
+    identity_field_refs = [
+        str(item) for item in resource.get("identity_field_refs") or []
+    ]
+    unknown_identity_fields = sorted(set(identity_field_refs) - {"id"} - set(fields))
+    if unknown_identity_fields:
+        _fail(f"resource identity references unknown fields {unknown_identity_fields}")
     for index, record in enumerate(resource["records"]):
-        record_id = str(record.get("id") or "").strip()
+        identity_values = [record.get(field_id) for field_id in identity_field_refs]
+        if any(value in (None, "") for value in identity_values):
+            _fail(
+                f"resource record {index} requires identity fields {identity_field_refs}"
+            )
+        record_id = "::".join(str(value).strip() for value in identity_values)
         if not record_id:
             _fail(f"resource record {index} requires a stable id")
         if record_id in record_ids:
@@ -374,6 +385,14 @@ def compile_semantic_prototype(
             "ui.application.desktop.pageSchema.widgets[*].dataSource.resourceType"
         ]
     }
+    prototype_records = []
+    for record in resource["records"]:
+        runtime_record = copy.deepcopy(dict(record))
+        runtime_record["id"] = "::".join(
+            str(record[field_id]).strip()
+            for field_id in resource["identity_field_refs"]
+        )
+        prototype_records.append(runtime_record)
 
     title, title_i18n = _localized(document["title"], dictionaries)
     item_label, _item_label_i18n = _localized(resource["item_label"], dictionaries)
@@ -621,7 +640,7 @@ def compile_semantic_prototype(
         "semantic_digest": _digest(document),
         "webui": webui,
         "locale_dictionaries": dictionaries,
-        "prototype_records": copy.deepcopy(resource["records"]),
+        "prototype_records": prototype_records,
         "source_map": source_map,
         "requirement_runtime_map": requirement_map,
         "capability_gaps": copy.deepcopy(document["capability_gaps"]),

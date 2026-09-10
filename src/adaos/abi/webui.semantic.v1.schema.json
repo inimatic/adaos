@@ -49,9 +49,17 @@
     "resource": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "item_semantics", "item_label", "fields", "records"],
+      "required": ["id", "identity_field_refs", "item_semantics", "item_label", "fields", "records"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "identity_field_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "description": "Fields whose values form the stable identity of one semantic item. Use id only when records already carry a generic id.",
+          "items": { "$ref": "#/$defs/id" }
+        },
         "item_semantics": { "type": "string", "minLength": 1, "maxLength": 240 },
         "item_label": { "$ref": "#/$defs/localizedText" },
         "fields": {

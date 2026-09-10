@@ -37,6 +37,7 @@ def _fixture() -> tuple[dict, dict]:
         },
         "resource": {
             "id": "work_items",
+            "identity_field_refs": ["id"],
             "item_semantics": "One record is one independently editable work item.",
             "item_label": _text("work.item", "Work item", "Пункт работы"),
             "fields": [
@@ -311,6 +312,16 @@ def test_semantic_prototype_rejects_invalid_representative_record() -> None:
 
     with pytest.raises(BuilderWorkflowError, match="invalid choice value"):
         validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_semantic_composite_identity_compiles_to_runtime_id() -> None:
+    brief, semantic = _fixture()
+    semantic["resource"]["identity_field_refs"] = ["status", "title"]
+
+    result = compile_semantic_prototype(semantic, brief=brief)
+
+    assert result["prototype_records"][0]["id"] == "open::Pressure check"
+    assert result["prototype_records"][1]["id"] == "complete::Guard check"
 
 
 def test_public_sdk_exposes_semantic_compilation() -> None:
