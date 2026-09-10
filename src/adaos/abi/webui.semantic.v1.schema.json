@@ -262,6 +262,10 @@
           "description": "The single editor view that owns and renders this command."
         },
         "label": { "$ref": "#/$defs/localizedText" },
+        "confirmation": {
+          "$ref": "#/$defs/localizedText",
+          "description": "User-facing confirmation required before this mutating command is dispatched. Transition and delete commands default to confirmation in the v1 compiler when omitted."
+        },
         "input_field_refs": {
           "type": "array",
           "uniqueItems": true,

@@ -404,6 +404,15 @@ manual tables.
 
 ## R6. Semantic Prototype Compiler
 
+Progress note (2026-09-11): semantic commands can now carry localized
+confirmation text through compilation into the Client action runtime. For
+backward-compatible semantic-v1 documents, transition and delete commands
+receive a generic fail-closed confirmation default. This fixes the observed
+direct-transition omission without teaching Core an application domain. It is
+an interim safety policy: R4/R5 must make authority, reversibility, and risk
+explicit so the compiler can derive confirmation from accepted semantics
+rather than command kind alone.
+
 - [ ] `[must]` Replace or promote `webui.semantic.v0` with a complete versioned
   semantic document for the currently supported Prototype component set.
 - [ ] `[must]` Represent entity and collection-item granularity explicitly;

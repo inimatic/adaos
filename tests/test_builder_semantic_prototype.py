@@ -247,6 +247,19 @@ def test_semantic_prototype_compiles_to_valid_webui_with_source_maps() -> None:
     ]
     assert editor["actions"][1]["params"]["operation_id"] == "update"
     assert "comment.length > 0" in editor["actions"][1]["enabledIf"]
+    assert "confirmation" not in editor["actions"][0]
+    assert editor["actions"][1]["confirmation"] == {
+        "message": "Confirm Complete?",
+        "message_i18n": {
+            "key": "work.complete.confirmation",
+            "fallback": "Confirm Complete?",
+        },
+        "confirmLabel": "Complete",
+        "confirmLabel_i18n": {
+            "key": "work.complete",
+            "fallback": "Complete",
+        },
+    }
     assert result["requirement_runtime_map"]["collection:01"]
     assert result["representative_state_checks"] == [
         {
@@ -533,6 +546,30 @@ def test_semantic_command_has_one_editor_owner() -> None:
 
     with pytest.raises(BuilderWorkflowError, match="owned by an editor view"):
         validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_semantic_command_compiles_explicit_localized_confirmation() -> None:
+    brief, semantic = _fixture()
+    semantic["commands"][0]["confirmation"] = _text(
+        "work.save.confirmation",
+        "Save these changes?",
+        "Сохранить эти изменения?",
+    )
+
+    result = compile_semantic_prototype(semantic, brief=brief)
+    action = result["webui"]["ui"]["application"]["desktop"]["pageSchema"][
+        "widgets"
+    ][2]["actions"][0]
+
+    assert action["confirmation"] == {
+        "message": "Save these changes?",
+        "message_i18n": {
+            "key": "work.save.confirmation",
+            "fallback": "Save these changes?",
+        },
+        "confirmLabel": "Save",
+        "confirmLabel_i18n": {"key": "work.save", "fallback": "Save"},
+    }
 
 
 def test_semantic_prototype_rejects_invalid_representative_record() -> None:

@@ -194,6 +194,24 @@ proven insufficient or an unrelated archetype supplies the second occurrence
 required by C4. The inventory should record the unresolved need without
 advertising a component contract that has not been admitted.
 
+The first cross-layer command-policy slice is now explicit. Semantic
+Prototype commands may compile a localized confirmation descriptor into a
+runtime action, and the Client blocks every such action before extension
+adaptation or side effects through a dedicated confirmation service. The
+service uses an accessible Ionic alert, escapes declarative message content,
+and fails closed when the confirmation interface is unavailable. The new
+runtime source participates in the content-addressed Client capability
+inventory. This closes the immediate direct-transition gap without completing
+C2: the v1 compiler still supplies a generic safety default for transition
+and delete commands, while the target contract must derive confirmation from
+explicit authority, reversibility, and risk policy.
+
+Focused evidence separates Client correctness from build latency: 74
+PageAction tests executed in 0.68 seconds, while Angular test bundle generation
+took 29.6 seconds and total wall time was 42.0 seconds. TypeScript checking took
+14-19 seconds. A shorter test timeout would hide no runtime defect; test-target
+cache and compilation-graph improvements must be measured separately.
+
 - [ ] `[must]` Extract Builder, Applications/Marketplace, Infrastate, Voice,
   and Media Center behavior from generic widgets and runtime services into
   explicitly registered product adapters or extensions.
@@ -214,6 +232,9 @@ advertising a component contract that has not been admitted.
 - [ ] `[should]` Normalize generic attachment, document, media, and chat
   integration around typed resource/action ports; product adapters may map
   those ports to existing endpoints.
+- [ ] `[should]` Add a cached focused test target for runtime contract tests
+  and report bundle-generation separately from browser execution. Do not tune
+  correctness timeouts to compensate for repeated Angular bundling.
 
 Exit gate: the generic Client profile can render and fail honestly with all
 product extensions disabled. This gate is required before the clean Builder
@@ -226,6 +247,9 @@ baseline.
   defaults, events, actions, side effects, state ownership, i18n,
   accessibility, responsive behavior, loading class, compatibility, fixtures,
   and compiler mappings.
+- [ ] `[must]` Make action risk, reversibility, and confirmation policy part
+  of that contract. Remove the semantic-v1 transition/delete safety default
+  only after every admitted producer declares and validates the replacement.
 - [ ] `[must]` Generate Client registration, TypeScript types, Core validation
   indexes, Builder retrieval units, documentation indexes, and conformance
   manifests from that contract.

@@ -839,6 +839,26 @@ def compile_semantic_prototype(
                         },
                     },
                 }
+                confirmation = command.get("confirmation")
+                if not isinstance(confirmation, Mapping) and command["kind"] in {
+                    "transition",
+                    "delete",
+                }:
+                    confirmation = {
+                        "key": f"{command['label']['key']}.confirmation",
+                        "en": f"Confirm {command['label']['en']}?",
+                        "ru": f"Подтвердить «{command['label']['ru']}»?",
+                    }
+                if isinstance(confirmation, Mapping):
+                    confirmation_message, confirmation_message_i18n = _localized(
+                        confirmation, dictionaries
+                    )
+                    action["confirmation"] = {
+                        "message": confirmation_message,
+                        "message_i18n": confirmation_message_i18n,
+                        "confirmLabel": label,
+                        "confirmLabel_i18n": label_i18n,
+                    }
                 action["params"]["payload"].update(
                     copy.deepcopy(dict(command.get("fixed_values") or {}))
                 )
