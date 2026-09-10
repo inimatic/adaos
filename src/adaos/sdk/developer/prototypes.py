@@ -45,6 +45,36 @@ def _surface_widgets(webui: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return widgets
 
 
+def _resource_query_widgets(
+    webui: Mapping[str, Any],
+) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
+    result: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
+    for widget in _surface_widgets(webui):
+        data_source = (
+            widget.get("dataSource")
+            if isinstance(widget.get("dataSource"), Mapping)
+            else {}
+        )
+        if str(data_source.get("kind") or "") != "resourceQuery":
+            continue
+        resource_type = str(data_source.get("resourceType") or "").strip()
+        if resource_type.startswith("prototype."):
+            result.append((widget, data_source))
+    return result
+
+
+def _resource_action_operations(webui: Mapping[str, Any], resource_type: str) -> set[str]:
+    return {
+        str(dict(action.get("params") or {}).get("operation_id") or "").strip()
+        for widget in _surface_widgets(webui)
+        for action in widget.get("actions") or []
+        if isinstance(action, Mapping)
+        and str(action.get("type") or "") == "resourceOperation"
+        and str(action.get("target") or "") == resource_type
+        and str(dict(action.get("params") or {}).get("operation_id") or "").strip()
+    }
+
+
 def _json_type(values: Sequence[Any]) -> dict[str, Any]:
     observed = set()
     for value in values:
@@ -125,6 +155,202 @@ def _activity(activity_id: str, operation: str, record_schema: Mapping[str, Any]
         "implementation_status": "prototype_only",
         "implementation_ref": None,
     }
+
+
+def derive_record_resource_spec(
+    webui: Mapping[str, Any],
+    records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Derive one typed local CRUD resource from generic resource projections."""
+
+    projections = _resource_query_widgets(webui)
+    resource_types = {
+        str(data_source.get("resourceType") or "").strip()
+        for _, data_source in projections
+    }
+    if len(resource_types) != 1:
+        raise ValueError(
+            "Prototype records require exactly one prototype resourceQuery resourceType"
+        )
+    resource_type = next(iter(resource_types))
+    normalized = [dict(item) for item in records if isinstance(item, Mapping)]
+    if len(normalized) != len(records) or len(normalized) > 1000:
+        raise ValueError("Prototype records must be a bounded object array")
+
+    item_id_keys = {
+        str(dict(widget.get("inputs") or {}).get("itemIdKey") or "id").strip()
+        for widget, _ in projections
+    }
+    if len(item_id_keys) != 1:
+        raise ValueError("Prototype projections must agree on one itemIdKey")
+    item_id_key = next(iter(item_id_keys)) or "id"
+    if "." in item_id_key:
+        raise ValueError("Prototype itemIdKey must be a direct named resource property")
+    for index, record in enumerate(normalized, start=1):
+        record.setdefault(item_id_key, f"record-{index}")
+        record.setdefault("revision", 1)
+        if not str(record.get(item_id_key) or "").strip():
+            raise ValueError("Prototype records require stable ids")
+
+    form_fields: dict[str, Mapping[str, Any]] = {}
+    for widget in _surface_widgets(webui):
+        actions = [item for item in widget.get("actions") or [] if isinstance(item, Mapping)]
+        if not any(
+            str(action.get("type") or "") == "resourceOperation"
+            and str(action.get("target") or "") == resource_type
+            for action in actions
+        ):
+            continue
+        inputs = widget.get("inputs") if isinstance(widget.get("inputs"), Mapping) else {}
+        for field in inputs.get("fields") or []:
+            if isinstance(field, Mapping) and str(field.get("id") or "").strip():
+                form_fields[str(field.get("id"))] = field
+
+    fields = sorted(
+        {key for record in normalized for key in record}
+        | set(form_fields)
+        | {item_id_key, "revision"}
+    )
+    properties = {
+        key: _json_type([record.get(key) for record in normalized]) for key in fields
+    }
+    properties[item_id_key] = {"type": "string", "minLength": 1}
+    properties["revision"] = {"type": "integer", "minimum": 1}
+    required = [item_id_key, "revision"] + [
+        key for key, field in form_fields.items() if field.get("required") is True
+    ]
+    record_schema = {
+        "type": "object",
+        "required": list(dict.fromkeys(required)),
+        "properties": properties,
+        "additionalProperties": False,
+    }
+
+    action_operations = _resource_action_operations(webui, resource_type)
+    mutable_operations = [
+        operation
+        for operation in ("create", "update", "delete", "reset")
+        if operation in action_operations
+    ]
+    operation_ids = ["list", "show", *mutable_operations]
+    operations = [
+        {
+            "id": operation,
+            "kind": {"show": "show", "list": "list"}.get(operation, operation),
+            "risk": (
+                "read"
+                if operation in {"list", "show"}
+                else "medium" if operation == "delete" else "low"
+            ),
+            "prototype_activity_id": "get" if operation == "show" else operation,
+        }
+        for operation in operation_ids
+    ]
+    widget_types = {str(widget.get("type") or "") for widget, _ in projections}
+    widget_types.update(
+        str(widget.get("type") or "")
+        for widget in _surface_widgets(webui)
+        if any(
+            str(action.get("type") or "") == "resourceOperation"
+            and str(action.get("target") or "") == resource_type
+            for action in widget.get("actions") or []
+            if isinstance(action, Mapping)
+        )
+    )
+    view_kinds = [
+        kind
+        for component_type, kind in (
+            ("ui.list", "list"),
+            ("ui.table", "table"),
+            ("collection.board", "board"),
+            ("item.details", "detail"),
+            ("ui.form", "form"),
+        )
+        if component_type in widget_types
+    ]
+    title_key = next(
+        (
+            key
+            for key in ("title", "name", "label", "summary")
+            if key in properties
+        ),
+        item_id_key,
+    )
+    source_id = resource_type.removeprefix("prototype.")
+    definition = {
+        "schema": "adaos.resource.definition.v1",
+        "resource_type": resource_type,
+        "version": "0.0.0-prototype",
+        "title": str(projections[0][0].get("title") or "Prototype records"),
+        "description": "Disposable typed records for Builder Prototype review.",
+        "authority": {
+            "provider": "prototype",
+            "binding": source_id,
+            "writes": "local_reversible",
+            "source_of_truth": "builder_preview",
+        },
+        "record_schema_ref": f"inline:{resource_type}",
+        "record_schema": record_schema,
+        "query": {
+            "default": str(projections[0][1].get("queryId") or "all"),
+            "filters": [item_id_key, "search"],
+            "sort": [title_key],
+            "cursor": False,
+            "include": [],
+        },
+        "operations": operations,
+        "views": [
+            {"id": kind, "kind": kind, "title": kind.replace("_", " ").title()}
+            for kind in dict.fromkeys(view_kinds or ["list"])
+        ],
+        "events": {
+            "emits": [
+                "resource.record.created",
+                "resource.record.updated",
+                "resource.record.deleted",
+            ]
+        },
+        "i18n": {"default_locale": "en", "locales": ["en", "ru"]},
+        "access": {
+            "role_fixtures": {
+                "owner": {operation: "allowed" for operation in operation_ids},
+                "guest": {
+                    operation: "denied"
+                    for operation in mutable_operations
+                },
+            }
+        },
+        "privacy": {
+            "sensitivity": "synthetic",
+            "retention": "preview",
+            "external_export": "denied",
+        },
+        "readiness": {"states": ["ready", "empty", "validation_error"]},
+    }
+    data_definition = {
+        "schema": "adaos.builder.prototype_data.v1",
+        "source_id": source_id,
+        "mode": "local_crud",
+        "record_schema": record_schema,
+        "seed": normalized,
+        "activities": [
+            _activity(activity, activity, record_schema)
+            for activity in ["list", "get", *mutable_operations]
+        ],
+    }
+    return {"resource_definition": definition, "data_definition": data_definition}
+
+
+def derive_resource_spec(
+    webui: Mapping[str, Any],
+    records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Derive the local Prototype resource for the selected generic projection."""
+
+    projections = _resource_query_widgets(webui)
+    if len(projections) == 1 and str(projections[0][0].get("type") or "") == "collection.board":
+        return derive_board_resource_spec(webui, records)
+    return derive_record_resource_spec(webui, records)
 
 
 def derive_board_resource_spec(
@@ -331,4 +557,9 @@ def materialize_resources(
     }
 
 
-__all__ = ["derive_board_resource_spec", "materialize_resources"]
+__all__ = [
+    "derive_board_resource_spec",
+    "derive_record_resource_spec",
+    "derive_resource_spec",
+    "materialize_resources",
+]

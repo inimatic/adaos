@@ -451,6 +451,67 @@ def test_materialize_resources_stamps_authoritative_revision_identity(monkeypatc
     assert result["webui_digest"] == captured[0]["webui_digest"]
 
 
+def test_derive_generic_record_resource_spec_without_board() -> None:
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "widgets": [
+                            {
+                                "id": "requests",
+                                "type": "ui.list",
+                                "title": "Requests",
+                                "inputs": {"itemIdKey": "id", "titleKey": "title"},
+                                "dataSource": {
+                                    "kind": "resourceQuery",
+                                    "resourceType": "prototype.requests",
+                                    "query": {},
+                                },
+                            },
+                            {
+                                "id": "request-form",
+                                "type": "ui.form",
+                                "inputs": {
+                                    "fields": [
+                                        {"id": "title", "type": "text", "required": True}
+                                    ]
+                                },
+                                "actions": [
+                                    {
+                                        "on": "submit",
+                                        "type": "resourceOperation",
+                                        "target": "prototype.requests",
+                                        "params": {
+                                            "operation_id": "create",
+                                            "payload": "$event.values",
+                                        },
+                                    }
+                                ],
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+    }
+
+    spec = developer_prototypes.derive_resource_spec(
+        webui, [{"id": "one", "title": "Inspect pump", "priority": 2}]
+    )
+
+    definition = spec["resource_definition"]
+    assert definition["resource_type"] == "prototype.requests"
+    assert {item["id"] for item in definition["operations"]} == {
+        "list",
+        "show",
+        "create",
+    }
+    assert {item["kind"] for item in definition["views"]} == {"list", "form"}
+    assert spec["data_definition"]["seed"][0]["revision"] == 1
+
+
 def test_prototype_webui_digest_ignores_release_version_only() -> None:
     first = {
         "schema": "adaos.webui.v1",

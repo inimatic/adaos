@@ -137,6 +137,93 @@ def test_generic_evaluation_records_clean_attribution() -> None:
     assert result["input_attribution"] == {"profile": "generic", "domain_packs": []}
 
 
+def test_generic_mutation_selects_resource_collection_contract() -> None:
+    request = "Build a list where staff create and update service requests."
+
+    qualification = qualify_ui_request(request)
+    selection = selected_ui_capabilities(request)
+
+    assert qualification["requirements"]["prototype_resource"] is True
+    assert selection["root_item_ids"][0] == "recipe.resource_collection_workbench"
+    assert "collection.board" not in {
+        item["id"] for item in selection["items"] if isinstance(item, dict)
+    }
+
+
+def test_generic_mutation_requires_executable_prototype_resource() -> None:
+    request = "Build a list where staff create and update service requests."
+    webui = _empty_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page["initialState"] = {"selectedRecordId": ""}
+    page["widgets"] = [
+        {
+            "id": "requests",
+            "type": "ui.list",
+            "area": "main",
+            "dataSource": {
+                "kind": "resourceQuery",
+                "resourceType": "prototype.service_requests",
+                "query": {},
+            },
+            "inputs": {"itemIdKey": "id", "titleKey": "title"},
+            "actions": [
+                {
+                    "on": "select",
+                    "type": "updateState",
+                    "params": {"selectedRecordId": "$event.id"},
+                }
+            ],
+        },
+        {
+            "id": "create-request",
+            "type": "ui.form",
+            "area": "main",
+            "inputs": {"fields": [{"id": "title", "type": "text"}]},
+            "actions": [
+                {
+                    "on": "submit",
+                    "type": "resourceOperation",
+                    "target": "prototype.service_requests",
+                    "params": {
+                        "operation_id": "create",
+                        "payload": "$event.values",
+                    },
+                }
+            ],
+        },
+        {
+            "id": "update-request",
+            "type": "ui.form",
+            "area": "main",
+            "inputs": {"fields": [{"id": "title", "type": "text"}]},
+            "actions": [
+                {
+                    "on": "submit",
+                    "type": "resourceOperation",
+                    "target": "prototype.service_requests",
+                    "params": {
+                        "operation_id": "update",
+                        "record_id": "$state.selectedRecordId",
+                        "payload": "$event.values",
+                    },
+                }
+            ],
+        },
+    ]
+    records = [{"id": "request-1", "title": "Inspect pump"}]
+
+    accepted = evaluate_ui_request(request, webui, prototype_records=records)
+    assert accepted["ok"] is True
+
+    page["widgets"][0]["dataSource"] = {"kind": "static", "value": records}
+    page["widgets"][1]["actions"] = [
+        {"on": "submit", "type": "updateState", "params": {"draft": "$event.values"}}
+    ]
+    rejected = evaluate_ui_request(request, webui, prototype_records=records)
+    failed = {item["id"] for item in rejected["postconditions"] if not item["ok"]}
+    assert {"resource.prototype_source", "resource.persistence_operations"} <= failed
+
+
 def test_resource_move_diagnostic_exposes_the_inconsistent_source_and_action() -> None:
     webui = _empty_webui()
     webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"] = [

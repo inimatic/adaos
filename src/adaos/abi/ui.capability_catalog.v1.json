@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "2.0.3",
+  "catalog_version": "2.1.0",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -170,8 +170,11 @@
       "manifest": {
         "widget_type": "ui.form",
         "field_type_property": "inputs.fields[*].type",
+        "representative_field_types": ["shortText", "longText", "number", "date", "boolean", "toggle", "singleChoice", "checkboxes", "dropdown", "combobox", "fileUpload"],
+        "single_boolean_field_types": ["boolean", "toggle", "switch"],
+        "multiple_boolean_field_types": ["checkboxes", "checkboxGroup", "checkbox_group"],
         "choice_field_types": ["select", "dropdown", "combobox", "singleChoice", "radio"],
-        "invalid_field_types": ["selector", "input.selector"]
+        "invalid_field_types": ["checkbox", "selector", "input.selector"]
       },
       "data_shape": { "kind": "record" },
       "events": ["submit", "validate", "save_draft", "reset", "change:<fieldId>"],
@@ -344,6 +347,71 @@
         "Selecting a card identifies one stable resource record for details or editing.",
         "Ordinary CRUD does not require a generated skill-specific handler.",
         "Every mutation is checked against the ResourceDefinition operation and role policy."
+      ]
+    },
+    {
+      "id": "recipe.resource_collection_workbench",
+      "title": "Resource collection workbench",
+      "summary": "Compose a list or table, record details, and typed local CRUD over one generic Prototype resource.",
+      "aliases": {
+        "en": [
+          "editable list",
+          "editable table",
+          "resource collection",
+          "master detail crud"
+        ],
+        "ru": [
+          "редактируемый список",
+          "редактируемая таблица",
+          "коллекция ресурсов",
+          "список с редактированием"
+        ]
+      },
+      "requires": {
+        "layouts": [
+          "layout.flow",
+          "layout.split"
+        ],
+        "components": [
+          "ui.list",
+          "ui.table",
+          "ui.form",
+          "item.details",
+          "input.text",
+          "input.selector"
+        ]
+      },
+      "composition": {
+        "collection": "Use ui.list or ui.table with widget.dataSource.kind=resourceQuery and one prototype.<resource_name> resourceType. dataSource is a widget peer of inputs, never inputs.dataSource.",
+        "selection": "Write the selected stable record id to page state and use the same id for details and updates.",
+        "operations": "Put resourceOperation declarations in widget.actions for create, update, and delete. updateState alone is not persistence.",
+        "prototype": {
+          "records": "Return prototype_records beside WebUI so Builder can derive and materialize the disposable local CRUD provider.",
+          "create": {
+            "on": "submit",
+            "type": "resourceOperation",
+            "target": "prototype.<resource_name>",
+            "params": {
+              "operation_id": "create",
+              "payload": "$event.values"
+            }
+          },
+          "update": {
+            "on": "submit",
+            "type": "resourceOperation",
+            "target": "prototype.<resource_name>",
+            "params": {
+              "operation_id": "update",
+              "record_id": "$state.selectedRecordId",
+              "payload": "$event.values"
+            }
+          }
+        }
+      },
+      "postconditions": [
+        "Mutations target the same prototype resourceType used by the collection query.",
+        "Every requested mutation has a resourceOperation instead of a decorative state-only action.",
+        "Ordinary local CRUD does not require a generated skill-specific handler."
       ]
     },
     {

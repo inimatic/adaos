@@ -574,6 +574,12 @@ def qualify_ui_request(
         for item in prototype_brief.get("operations") or []
         if isinstance(item, Mapping) and str(item.get("kind") or "")
     ]
+    brief_operations = set(brief_operation_kinds)
+    prototype_resource_required = bool(
+        brief_operations
+        & {"create", "update", "assign", "transition", "delete", "archive"}
+        and brief_operations & {"inspect", "list", "search", "filter"}
+    )
     text = _normalized_text(request)
     literal_text_change = _literal_text_change(request)
     prototype_iteration = _prototype_iteration(request)
@@ -639,6 +645,7 @@ def qualify_ui_request(
         requirements["prototype_iteration"] = prototype_iteration
     requirements["prototype_brief_ref"] = prototype_brief["brief_id"]
     requirements["brief_operation_kinds"] = brief_operation_kinds
+    requirements["prototype_resource"] = prototype_resource_required
     gaps: list[dict[str, Any]] = []
     return {
         "schema": QUALIFICATION_SCHEMA,
@@ -697,9 +704,21 @@ def selected_ui_capabilities(
         if value and value not in selected_ids:
             selected_ids.append(value)
     if (
-        requirements.get("resource_query") or requirements.get("operation_kinds")
-    ) and "recipe.resource_board_workbench" not in selected_ids:
+        requirements.get("component_type") == "collection.board"
+        and (
+            requirements.get("resource_query")
+            or requirements.get("operation_kinds")
+            or requirements.get("prototype_resource")
+        )
+        and "recipe.resource_board_workbench" not in selected_ids
+    ):
         selected_ids.append("recipe.resource_board_workbench")
+    if (
+        requirements.get("component_type") != "collection.board"
+        and requirements.get("prototype_resource")
+        and "recipe.resource_collection_workbench" not in selected_ids
+    ):
+        selected_ids.append("recipe.resource_collection_workbench")
     if (
         "transition" in brief_operation_kinds
         and representative_states.get("state") == "known"
@@ -893,6 +912,49 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 if isinstance(widget.get("dataSource"), Mapping)
                 else {}
             )
+            actions = (
+                widget.get("actions")
+                if isinstance(widget.get("actions"), list)
+                else []
+            )
+            for action_index, action in enumerate(actions):
+                if (
+                    not isinstance(action, Mapping)
+                    or str(action.get("type") or "") != "resourceOperation"
+                ):
+                    continue
+                params = (
+                    action.get("params")
+                    if isinstance(action.get("params"), Mapping)
+                    else {}
+                )
+                if not str(action.get("target") or "").strip() or not str(
+                    params.get("operation_id") or ""
+                ).strip():
+                    findings.append(
+                        {
+                            "code": "ui.resource_operation.identity_missing",
+                            "severity": "error",
+                            "path": f"{widget_path}.actions[{action_index}]",
+                            "message": (
+                                "resourceOperation requires a non-empty target and "
+                                "params.operation_id."
+                            ),
+                        }
+                    )
+                payload = params.get("payload")
+                if isinstance(payload, Mapping) and payload.get("__noop") is True:
+                    findings.append(
+                        {
+                            "code": "ui.resource_operation.noop_payload",
+                            "severity": "error",
+                            "path": f"{widget_path}.actions[{action_index}].params.payload",
+                            "message": (
+                                "A declared resource mutation cannot use a no-op "
+                                "placeholder payload."
+                            ),
+                        }
+                    )
             if str(data_source.get("kind") or "") == "resourceQuery":
                 query = (
                     data_source.get("query")
@@ -1143,6 +1205,73 @@ def evaluate_ui_request(
                     "targetCount": target_count,
                 },
             }
+        )
+    if requirements.get("prototype_resource") is True:
+        resource_types = {
+            str(data_source.get("resourceType") or "").strip()
+            for _, page in _page_schemas(webui)
+            for widget in page.get("widgets") or []
+            if isinstance(widget, Mapping)
+            for data_source in [
+                widget.get("dataSource")
+                if isinstance(widget.get("dataSource"), Mapping)
+                else {}
+            ]
+            if str(data_source.get("kind") or "") == "resourceQuery"
+            and str(data_source.get("resourceType") or "").startswith("prototype.")
+        }
+        resource_actions = [
+            action
+            for _, page in _page_schemas(webui)
+            for widget in page.get("widgets") or []
+            if isinstance(widget, Mapping)
+            for action in widget.get("actions") or []
+            if isinstance(action, Mapping)
+            and str(action.get("type") or "") == "resourceOperation"
+            and str(action.get("target") or "") in resource_types
+        ]
+        brief_operations = {
+            str(item or "").strip()
+            for item in requirements.get("brief_operation_kinds") or []
+            if str(item or "").strip()
+        }
+        expected_operations = set(requirements.get("operation_kinds") or [])
+        if "create" in brief_operations:
+            expected_operations.add("create")
+        if brief_operations & {"update", "assign", "transition", "archive"}:
+            expected_operations.add("update")
+        if "delete" in brief_operations:
+            expected_operations.add("delete")
+        actual_operations = {
+            str(dict(action.get("params") or {}).get("operation_id") or "").strip()
+            for action in resource_actions
+        }
+        postconditions.extend(
+            [
+                {
+                    "id": "resource.prototype_source",
+                    "ok": len(resource_types) == 1,
+                    "expected": "exactly one prototype resourceQuery resourceType",
+                    "actual": sorted(resource_types),
+                },
+                {
+                    "id": "resource.persistence_operations",
+                    "ok": expected_operations.issubset(actual_operations),
+                    "expected": sorted(expected_operations),
+                    "actual": sorted(actual_operations),
+                },
+                {
+                    "id": "resource.prototype_records",
+                    "ok": prototype_records is not None
+                    and all(isinstance(item, Mapping) for item in prototype_records),
+                    "expected": "bounded prototype_records object array",
+                    "actual": (
+                        len(prototype_records)
+                        if isinstance(prototype_records, Sequence)
+                        else None
+                    ),
+                },
+            ]
         )
     if requirements.get("component_type") == "collection.board":
         boards: list[Mapping[str, Any]] = []
