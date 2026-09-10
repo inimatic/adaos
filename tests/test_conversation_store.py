@@ -130,6 +130,24 @@ def test_conversation_store_appends_messages_with_monotonic_seq() -> None:
     assert [item["id"] for item in older["messages"]] == ["msg.1", "msg.2"]
 
 
+def test_conversation_schema_uses_persisted_migration_version(
+    monkeypatch,
+) -> None:
+    sql = get_ctx().sql
+    assert conversation_store.ensure_schema(sql)
+    with sql.connect() as con:
+        assert con.execute(
+            "SELECT version FROM conversation_schema_meta WHERE id=1"
+        ).fetchone()[0] == conversation_store._CONVERSATION_SCHEMA_VERSION
+
+    conversation_store._ENSURED_SQL_IDS.discard(
+        conversation_store._schema_cache_key(sql)
+    )
+    monkeypatch.setattr(conversation_store, "_SCHEMA", ("INVALID DDL",))
+
+    assert conversation_store.ensure_schema(sql)
+
+
 def test_job_progress_updates_one_durable_message_without_reexecuting_the_job() -> None:
     suffix = uuid4().hex[:10]
     conversation_id = f"conv.job.{suffix}"
@@ -882,7 +900,9 @@ def test_conversation_store_records_retention_and_redaction_metadata() -> None:
 
 def test_conversation_store_migrates_retention_and_redaction_columns() -> None:
     sql = get_ctx().sql
-    conversation_store._ENSURED_SQL_IDS.discard(id(sql))
+    conversation_store._ENSURED_SQL_IDS.discard(
+        conversation_store._schema_cache_key(sql)
+    )
     with sql.connect() as con:
         con.execute(
             """

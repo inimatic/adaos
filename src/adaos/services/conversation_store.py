@@ -11,7 +11,15 @@ import uuid
 from adaos.services.agent_context import get_ctx
 
 
+_CONVERSATION_SCHEMA_VERSION = 1
 _SCHEMA = (
+    """
+    CREATE TABLE IF NOT EXISTS conversation_schema_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    """,
     """
     CREATE TABLE IF NOT EXISTS conversation_conversations (
         conversation_id TEXT PRIMARY KEY,
@@ -451,8 +459,17 @@ _POST_COLUMN_SCHEMA = (
     ON conversation_messages(conversation_id, thread_id, seq);
     """,
 )
-_ENSURED_SQL_IDS: set[int] = set()
+_ENSURED_SQL_IDS: set[tuple[int, str]] = set()
 _FTS_UNAVAILABLE_SQL_IDS: set[int] = set()
+
+
+def _schema_cache_key(sql: Any) -> tuple[int, str]:
+    raw_path = getattr(sql, "_db_path", None)
+    try:
+        path = str(raw_path.resolve()) if raw_path is not None else ""
+    except (OSError, RuntimeError):
+        path = str(raw_path or "")
+    return id(sql), path
 
 
 def _json_dump(value: Any) -> str:
@@ -551,39 +568,19 @@ def ensure_schema(sql: Any | None = None) -> bool:
     sql = sql or _sql()
     if not sql or not hasattr(sql, "connect"):
         return False
-    token = id(sql)
+    token = _schema_cache_key(sql)
     if token in _ENSURED_SQL_IDS:
-        try:
-            with sql.connect() as con:
-                rows = con.execute(
-                    """
-                    SELECT name FROM sqlite_master
-                    WHERE type='table' AND name IN (
-                        'conversation_segment_summary_jobs',
-                        'conversation_transport_ingress',
-                        'conversation_development_runs',
-                        'conversation_channel_capability_profiles',
-                        'conversation_interactions',
-                        'conversation_interaction_presentations',
-                        'conversation_interaction_responses',
-                        'conversation_intent_proposals'
-                    )
-                    """
-                ).fetchall()
-            if {str(row[0]) for row in rows} == {
-                "conversation_segment_summary_jobs",
-                "conversation_transport_ingress",
-                "conversation_development_runs",
-                "conversation_channel_capability_profiles",
-                "conversation_interactions",
-                "conversation_interaction_presentations",
-                "conversation_interaction_responses",
-                "conversation_intent_proposals",
-            }:
-                return True
-        except sqlite3.Error:
-            pass
-        _ENSURED_SQL_IDS.discard(token)
+        return True
+    try:
+        with sql.connect() as con:
+            row = con.execute(
+                "SELECT version FROM conversation_schema_meta WHERE id=1"
+            ).fetchone()
+        if row is not None and int(row[0]) == _CONVERSATION_SCHEMA_VERSION:
+            _ENSURED_SQL_IDS.add(token)
+            return True
+    except (sqlite3.Error, TypeError, ValueError):
+        pass
     with sql.connect() as con:
         try:
             con.execute("PRAGMA journal_mode=WAL")
@@ -597,6 +594,16 @@ def ensure_schema(sql: Any | None = None) -> bool:
         for stmt in _POST_COLUMN_SCHEMA:
             cur.execute(stmt)
         _ensure_fts(con)
+        con.execute(
+            """
+            INSERT INTO conversation_schema_meta(id, version, updated_at)
+            VALUES(1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                version=excluded.version,
+                updated_at=excluded.updated_at
+            """,
+            (_CONVERSATION_SCHEMA_VERSION, time.time()),
+        )
         con.commit()
     _ENSURED_SQL_IDS.add(token)
     return True
