@@ -809,7 +809,7 @@ def selected_ui_capabilities(
                     "Use widget.actions entries with type=resourceOperation, target equal to the queried prototype resourceType, and params.operation_id=create/update/delete as required; localCreate, localUpdate, and updateState are not persistence operations."
                 ],
                 "resource.prototype_records": [
-                    "Return bounded representative prototype_records for the same single prototype resource; AdaOS derives its schema and provider."
+                    "Return a bounded array of direct representative records for the same single prototype resource; each array item is one record, never a {resourceType, records} transport envelope. AdaOS derives the resource type, schema, and provider."
                 ],
             },
         },
@@ -1260,6 +1260,24 @@ def evaluate_ui_request(
             str(dict(action.get("params") or {}).get("operation_id") or "").strip()
             for action in resource_actions
         }
+        prototype_record_count = (
+            len(prototype_records)
+            if isinstance(prototype_records, Sequence)
+            and not isinstance(prototype_records, (str, bytes, bytearray))
+            else None
+        )
+        direct_prototype_records = bool(
+            prototype_record_count
+            and all(isinstance(item, Mapping) for item in prototype_records or ())
+            and not any(
+                "resourceType" in item and isinstance(item.get("records"), Sequence)
+                for item in prototype_records or ()
+                if isinstance(item, Mapping)
+            )
+        )
+        prototype_records_bounded = bool(
+            prototype_record_count is not None and prototype_record_count <= 1000
+        )
         postconditions.extend(
             [
                 {
@@ -1276,14 +1294,13 @@ def evaluate_ui_request(
                 },
                 {
                     "id": "resource.prototype_records",
-                    "ok": prototype_records is not None
-                    and all(isinstance(item, Mapping) for item in prototype_records),
-                    "expected": "bounded prototype_records object array",
-                    "actual": (
-                        len(prototype_records)
-                        if isinstance(prototype_records, Sequence)
-                        else None
-                    ),
+                    "ok": direct_prototype_records and prototype_records_bounded,
+                    "expected": "non-empty bounded array of direct record objects",
+                    "actual": {
+                        "count": prototype_record_count,
+                        "bounded": prototype_records_bounded,
+                        "direct_records": direct_prototype_records,
+                    },
                 },
             ]
         )

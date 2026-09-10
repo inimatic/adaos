@@ -219,6 +219,21 @@ def test_generic_mutation_requires_executable_prototype_resource() -> None:
     accepted = evaluate_ui_request(request, webui, prototype_records=records)
     assert accepted["ok"] is True
 
+    enveloped = evaluate_ui_request(
+        request,
+        webui,
+        prototype_records=[
+            {"resourceType": "prototype.service_requests", "records": records}
+        ],
+    )
+    prototype_records_check = next(
+        item
+        for item in enveloped["postconditions"]
+        if item["id"] == "resource.prototype_records"
+    )
+    assert prototype_records_check["ok"] is False
+    assert prototype_records_check["actual"]["direct_records"] is False
+
     page["widgets"][0]["dataSource"] = {"kind": "static", "value": records}
     page["widgets"][1]["actions"] = [
         {"on": "submit", "type": "updateState", "params": {"draft": "$event.values"}}
