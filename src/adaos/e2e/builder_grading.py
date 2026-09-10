@@ -41,7 +41,7 @@ _MODEL_RESULT_SCHEMA: dict[str, Any] = {
                     },
                     "evidence": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": {"$ref": "#/$defs/evidence"},
                         "maxItems": 8,
                     },
                     "reason": {"type": "string", "maxLength": 800},
@@ -51,6 +51,18 @@ _MODEL_RESULT_SCHEMA: dict[str, Any] = {
         "summary": {"type": "string", "maxLength": 1200},
     },
     "$defs": {
+        "evidence": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["pointer"],
+            "properties": {
+                "pointer": {
+                    "type": "string",
+                    "pattern": r"^/(?:[^~/]|~[01])*(?:/(?:[^~/]|~[01])*)*$",
+                    "maxLength": 500,
+                }
+            },
+        },
         "checks": {
             "type": "array",
             "items": {
@@ -64,7 +76,7 @@ _MODEL_RESULT_SCHEMA: dict[str, Any] = {
                     },
                     "evidence": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": {"$ref": "#/$defs/evidence"},
                         "maxItems": 8,
                     },
                     "reason": {"type": "string", "maxLength": 800},
@@ -91,8 +103,9 @@ declares. They do not prove row editing, filtering, selection, navigation, file
 attachment, validation, or lifecycle transitions. Mutating jobs need both an
 available control and an executable action or binding that consumes its value.
 Every supported or partial verdict must cite one or more existing RFC 6901 JSON
-pointers in the evaluation artifact. Be conservative: use unclear when evidence is
-insufficient. Return only the requested JSON object.
+pointers in the evaluation artifact. Put the exact pointer alone in evidence.pointer;
+never append a label, explanation, or parenthetical note to it. Be conservative: use
+unclear when evidence is insufficient. Return only the requested JSON object.
 """
 
 
@@ -212,15 +225,21 @@ def _normalize_checks(
         verdict = str(item.get("verdict") or "unclear").strip().lower()
         if verdict not in admitted:
             verdict = "unclear"
+        evidence_pointers = [
+            str(evidence_item.get("pointer") or "")
+            for evidence_item in item.get("evidence") or []
+            if isinstance(evidence_item, Mapping)
+            and str(evidence_item.get("pointer") or "")
+        ]
         evidence = [
-            str(pointer)
-            for pointer in item.get("evidence") or []
-            if isinstance(pointer, str) and _json_pointer_exists(artifact, pointer)
+            pointer
+            for pointer in evidence_pointers
+            if _json_pointer_exists(artifact, pointer)
         ]
         invalid_evidence = [
-            str(pointer)
-            for pointer in item.get("evidence") or []
-            if isinstance(pointer, str) and not _json_pointer_exists(artifact, pointer)
+            pointer
+            for pointer in evidence_pointers
+            if not _json_pointer_exists(artifact, pointer)
         ]
         if invalid_evidence or (
             verdict in {"supported", "partial"} and not evidence

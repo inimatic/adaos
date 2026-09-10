@@ -13,7 +13,7 @@ def _model_result(*, evidence: str = "/ui") -> str:
                 {
                     "index": 0,
                     "verdict": "supported",
-                    "evidence": [evidence],
+                    "evidence": [{"pointer": evidence}],
                     "reason": "The control and action are present.",
                 }
             ],
@@ -107,7 +107,7 @@ def test_prototype_grader_exposes_hard_gate_failure_above_score_threshold() -> N
     def wait(_job_id, **_kwargs):
         result = json.loads(_model_result())
         result["representative_states"][0]["verdict"] = "partial"
-        result["representative_states"][0]["evidence"] = ["/ui"]
+        result["representative_states"][0]["evidence"] = [{"pointer": "/ui"}]
         return {"status": "succeeded", "output_text": json.dumps(result)}
 
     grade, _request = grade_builder_prototype(
@@ -226,7 +226,7 @@ def test_prototype_grader_accepts_revision_bound_record_evidence() -> None:
     def wait(_job_id, **_kwargs):
         result = json.loads(_model_result())
         result["primary_jobs"][0]["evidence"] = [
-            "/prototype_resources/0/records/0/status"
+            {"pointer": "/prototype_resources/0/records/0/status"}
         ]
         return {"status": "succeeded", "output_text": json.dumps(result)}
 
