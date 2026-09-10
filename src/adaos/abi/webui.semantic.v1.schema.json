@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.webui.semantic.v1",
+  "title": "AdaOS Builder semantic Prototype document",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "document_id",
+    "brief_ref",
+    "brief_digest",
+    "title",
+    "layout",
+    "resource",
+    "views",
+    "commands",
+    "representative_states",
+    "requirement_bindings",
+    "capability_gaps"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.webui.semantic.v1" },
+    "document_id": { "$ref": "#/$defs/id" },
+    "brief_ref": { "type": "string", "pattern": "^brief:[a-f0-9]{24}$" },
+    "brief_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "title": { "$ref": "#/$defs/localizedText" },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern", "regions"],
+      "properties": {
+        "pattern": { "enum": ["flow", "split", "grid", "focus_detail"] },
+        "regions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "role"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "role": { "enum": ["primary", "supporting", "actions"] }
+            }
+          }
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "item_semantics", "item_label", "fields", "records"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "item_semantics": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "item_label": { "$ref": "#/$defs/localizedText" },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 40,
+          "items": { "$ref": "#/$defs/field" }
+        },
+        "records": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "type": "object" }
+        }
+      }
+    },
+    "views": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/view" }
+    },
+    "commands": {
+      "type": "array",
+      "maxItems": 24,
+      "items": { "$ref": "#/$defs/command" }
+    },
+    "representative_states": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label", "evidence"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "label": { "$ref": "#/$defs/localizedText" },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "requirement_bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement_ref", "semantic_refs"],
+        "properties": {
+          "requirement_ref": { "type": "string", "minLength": 1 },
+          "semantic_refs": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^(resource|field|view|command|state):[A-Za-z0-9_.:-]+$"
+            }
+          }
+        }
+      }
+    },
+    "capability_gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement_ref", "code", "detail"],
+        "properties": {
+          "requirement_ref": { "type": "string", "minLength": 1 },
+          "code": { "type": "string", "minLength": 1 },
+          "detail": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+    "localizedText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "en", "ru"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+        "en": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "ru": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "label"],
+      "properties": {
+        "value": { "type": ["string", "number", "boolean"] },
+        "label": { "$ref": "#/$defs/localizedText" }
+      }
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field_ref", "operator"],
+      "properties": {
+        "field_ref": { "$ref": "#/$defs/id" },
+        "operator": { "enum": ["equals", "not_equals", "nonempty", "empty"] },
+        "value": { "type": ["string", "number", "boolean", "null"] }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "value_type", "required", "editable"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "$ref": "#/$defs/localizedText" },
+        "value_type": {
+          "enum": ["short_text", "long_text", "number", "date", "boolean", "choice", "attachment"]
+        },
+        "required": { "type": "boolean" },
+        "editable": { "type": "boolean" },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 24,
+          "items": { "$ref": "#/$defs/option" }
+        },
+        "visible_when": { "$ref": "#/$defs/condition" }
+      }
+    },
+    "emptyState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title"],
+      "properties": {
+        "title": { "$ref": "#/$defs/localizedText" },
+        "detail": { "$ref": "#/$defs/localizedText" }
+      }
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "region_ref", "title", "field_refs", "command_refs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "role": { "enum": ["collection", "details", "editor"] },
+        "region_ref": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/localizedText" },
+        "field_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "command_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "selection_state_ref": { "$ref": "#/$defs/id" },
+        "filter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field_ref", "state_ref"],
+          "properties": {
+            "field_ref": { "$ref": "#/$defs/id" },
+            "state_ref": { "$ref": "#/$defs/id" }
+          }
+        },
+        "empty_state": { "$ref": "#/$defs/emptyState" }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "view_ref", "label", "input_field_refs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["create", "update", "transition", "delete"] },
+        "view_ref": { "$ref": "#/$defs/id" },
+        "label": { "$ref": "#/$defs/localizedText" },
+        "input_field_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "selected_state_ref": { "$ref": "#/$defs/id" },
+        "fixed_values": { "type": "object" },
+        "guard": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["when", "require_nonempty"],
+          "properties": {
+            "when": { "$ref": "#/$defs/condition" },
+            "require_nonempty": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/id" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

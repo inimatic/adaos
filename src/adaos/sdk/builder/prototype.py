@@ -79,6 +79,16 @@ def model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
     return compile_prototype_model_context(brief)
 
 
+def compile_semantic(
+    document: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    """Compile a semantic Prototype document into canonical runtime artifacts."""
+
+    from adaos.services.builder.semantic_prototype import compile_semantic_prototype
+
+    return compile_semantic_prototype(document, brief=brief)
+
+
 def start_data_runtime(definition: Mapping[str, Any]):
     from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
 
@@ -121,7 +131,9 @@ def validate_workflow_slice(
         validate_conversational_workflow_slice,
     )
 
-    return validate_conversational_workflow_slice(value, source_definition=source_definition)
+    return validate_conversational_workflow_slice(
+        value, source_definition=source_definition
+    )
 
 
 def automation_handoff(**kwargs: Any) -> dict[str, Any]:
@@ -133,6 +145,7 @@ def automation_handoff(**kwargs: Any) -> dict[str, Any]:
 __all__ = [
     "candidate_status",
     "check_spatial_constraint",
+    "compile_semantic",
     "composition_slice",
     "automation_handoff",
     "model_context",

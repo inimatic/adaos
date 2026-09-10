@@ -140,6 +140,7 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   reviewing WebUI view, modal route, modal domain, ownership, and diagnostics
   contracts against `webui.v1`
 - `webui.semantic.v0.schema.json` - draft semantic browser UI ABI for future semantic views, typed bindings, view state, and typed actions layered above `webui.v1`
+- `webui.semantic.v1.schema.json` - Builder semantic Prototype source with explicit item granularity, requirement bindings, localized content, and deterministic compilation to `webui.v1`
 
 ## Current Manifest Runtime Extensions
 
