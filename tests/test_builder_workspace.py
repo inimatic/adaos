@@ -373,6 +373,45 @@ def test_builder_draft_uses_portable_core_paths_and_survives_dev_root_move(tmp_p
     assert preview["summary"]["schema_ok"] is True
 
 
+def test_new_scenario_draft_uses_project_scoped_builder_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service(tmp_path)
+    captured: dict[str, Any] = {}
+
+    def _context_packet(webspace_id: str | None = None, **kwargs: Any) -> dict[str, Any]:
+        captured.update({"webspace_id": webspace_id, **kwargs})
+        return {
+            "schema": "adaos.context.packet.v1",
+            "conversation_ref": {
+                "conversation_id": "conv.skill.builder_skill.default",
+                "thread_id": "prompt-project:scenario:scoped_scene",
+                "topic_id": "prompt-project:scenario:scoped_scene",
+            },
+        }
+
+    monkeypatch.setattr(
+        "adaos.services.builder.workspace.conversation_links.builder_context_packet",
+        _context_packet,
+    )
+
+    result = service.create_draft(
+        kind="scenario",
+        artifact_id="scoped_scene",
+        source_idea="Show a scoped project.",
+        webspace_id="builder-scoped-ws",
+    )
+
+    assert captured == {
+        "webspace_id": "builder-scoped-ws",
+        "scenario_id": "scoped_scene",
+        "project_id": "scoped_scene",
+    }
+    assert result["draft"]["links"]["conversation"]["thread_id"] == (
+        "prompt-project:scenario:scoped_scene"
+    )
+
+
 def test_builder_draft_rejects_unknown_or_escaping_core_path_refs(tmp_path: Path) -> None:
     service = _service(tmp_path)
 

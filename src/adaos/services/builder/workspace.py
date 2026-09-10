@@ -1512,8 +1512,21 @@ class BuilderWorkspaceService:
         else:
             self._patch_scenario_template(artifact_root, artifact_id, source_idea)
 
-        builder_ref = conversation_links.ensure_builder_conversation(webspace_id)
-        context_packet = conversation_links.builder_context_packet(webspace_id)
+        context_packet = conversation_links.builder_context_packet(
+            webspace_id,
+            scenario_id=artifact_id if kind == "scenario" else None,
+            project_id=artifact_id,
+        )
+        builder_ref = (
+            dict(context_packet.get("conversation_ref") or {})
+            if isinstance(context_packet.get("conversation_ref"), Mapping)
+            else conversation_links.ensure_builder_topic(
+                webspace_id,
+                scenario_id=artifact_id if kind == "scenario" else None,
+                project_id=artifact_id,
+                title=f"Builder: {artifact_id}",
+            )
+        )
         draft = self._draft_payload(
             draft_id=draft_id,
             task_id=task_id,

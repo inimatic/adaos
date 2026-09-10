@@ -80,9 +80,43 @@ def build_context_packet(
     clean_topic_ref = dict(topic_ref or {}) if isinstance(topic_ref, Mapping) else {}
     if not clean_thread_id:
         clean_thread_id = str(clean_topic_ref.get("thread_id") or "").strip()
-    search_index = conversation_store.search_index_health()
+    phase_timings_ms: dict[str, int] = {}
+    phase_started = time.monotonic()
+    messages = _select_recent_messages(cid, limits.max_messages, thread_id=clean_thread_id or None)
+    phase_timings_ms["recent_messages"] = int(round((time.monotonic() - phase_started) * 1000))
+    if _timed_out(started, limits.timeout_ms):
+        search_index = {
+            "schema": "adaos.conversation.search_index_health.v1",
+            "status": "skipped",
+            "fts_available": False,
+            "reason": "timeout_budget",
+        }
+        segment_health = {
+            "schema": "adaos.conversation.segment_summary_health.v1",
+            "status": "skipped",
+            "conversation_id": cid,
+            "thread_id": clean_thread_id or None,
+            "reason": "timeout_budget",
+        }
+    else:
+        phase_started = time.monotonic()
+        search_index = conversation_store.search_index_health()
+        phase_timings_ms["search_index_health"] = int(round((time.monotonic() - phase_started) * 1000))
+        if _timed_out(started, limits.timeout_ms):
+            segment_health = {
+                "schema": "adaos.conversation.segment_summary_health.v1",
+                "status": "skipped",
+                "conversation_id": cid,
+                "thread_id": clean_thread_id or None,
+                "reason": "timeout_budget",
+            }
+        else:
+            phase_started = time.monotonic()
+            segment_health = conversation_store.segment_summary_health(cid, thread_id=clean_thread_id or None)
+            phase_timings_ms["segment_summary_health"] = int(
+                round((time.monotonic() - phase_started) * 1000)
+            )
     fts_available = bool(search_index.get("fts_available"))
-    segment_health = conversation_store.segment_summary_health(cid, thread_id=clean_thread_id or None)
     fallbacks = ["semantic_retrieval_unavailable"]
     if not fts_available:
         fallbacks.insert(0, "fts_unavailable")
@@ -98,6 +132,7 @@ def build_context_packet(
         "segment_summary": segment_health,
         "safety_flags": [],
         "budget_exhausted": False,
+        "phase_timings_ms": phase_timings_ms,
     }
     packet: dict[str, Any] = {
         "schema": "adaos.context.packet.v1",
@@ -123,7 +158,6 @@ def build_context_packet(
             packet["topic_id"] = topic_id
     remaining_tokens = limits.max_tokens
 
-    messages = _select_recent_messages(cid, limits.max_messages, thread_id=clean_thread_id or None)
     selected_messages: list[dict[str, Any]] = []
     for message in reversed(messages):
         if _timed_out(started, limits.timeout_ms):
@@ -221,6 +255,7 @@ def build_context_packet(
     packet["memory"] = selected_memory
     packet["token_estimate"] = limits.max_tokens - remaining_tokens
     diagnostics["latency_ms"] = int(round((time.monotonic() - started) * 1000))
+    phase_timings_ms["total"] = diagnostics["latency_ms"]
     diagnostics["selected_message_count"] = len(selected_messages)
     diagnostics["selected_segment_count"] = len(selected_segments)
     diagnostics["selected_memory_count"] = len(selected_memory)

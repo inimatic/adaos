@@ -48,6 +48,8 @@ def test_context_packet_uses_recent_messages_and_strict_budgets() -> None:
     assert packet["memory"] == []
     assert packet["token_estimate"] > 0
     assert packet["diagnostics"]["selected_message_count"] == 2
+    assert packet["diagnostics"]["phase_timings_ms"]["recent_messages"] >= 0
+    assert packet["diagnostics"]["phase_timings_ms"]["total"] >= 0
     assert packet["diagnostics"]["search_index"]["schema"] == "adaos.conversation.search_index_health.v1"
     if packet["diagnostics"]["search_index"]["fts_available"]:
         assert "fts_unavailable" not in packet["diagnostics"]["fallbacks"]
