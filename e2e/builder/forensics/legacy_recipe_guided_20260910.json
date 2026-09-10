@@ -1,0 +1,2312 @@
+{
+  "builder": {
+    "adapter": "legacy_dev_chat.v1",
+    "dev_skill_version": "0.3.145",
+    "dev_subnet_id": "sn_6acf0c01",
+    "prompt_autonomy_claim": false
+  },
+  "captured_at": "2026-09-10T00:00:00Z",
+  "catalog": {
+    "catalog_version": "1.3.31",
+    "component_count": 10,
+    "layout_count": 3,
+    "recipes": [
+      {
+        "classification": "generic_composition_pattern",
+        "digest": "sha256:d24f2bc69b691c22c2640a3be811d36eacf23e7350f2c4ecd7da8d15fc52c052",
+        "disposition": "retain_generic",
+        "id": "recipe.kanban_board",
+        "serialized_bytes": 1788
+      },
+      {
+        "classification": "generic_composition_pattern",
+        "digest": "sha256:c18fc18ab342311d9720a8d77b4145a596025bddd9d1fc87928f86f993f7c82b",
+        "disposition": "review_for_example_leakage",
+        "id": "recipe.resource_board_workbench",
+        "serialized_bytes": 3467
+      },
+      {
+        "classification": "generic_composition_pattern",
+        "digest": "sha256:97164abb0ecca90390388799b6eab50ac271bbf267de34323f5d94d105c3f6ca",
+        "disposition": "retain_generic",
+        "id": "recipe.master_detail",
+        "serialized_bytes": 557
+      },
+      {
+        "classification": "subject_domain_pack",
+        "digest": "sha256:4dc667e55e9dfc2ad472b5ca960cc93c5dd5a7c24ba5a30991866ffab0200030",
+        "disposition": "move_to_versioned_compatibility_pack",
+        "id": "recipe.application_manager",
+        "serialized_bytes": 53983
+      },
+      {
+        "classification": "generic_composition_pattern",
+        "digest": "sha256:06b36f0a056765e0eaf41304f9af46e1bab7323a67db0e4f3c3efd01b9b7db76",
+        "disposition": "retain_generic",
+        "id": "recipe.data_entry",
+        "serialized_bytes": 469
+      },
+      {
+        "classification": "generic_composition_pattern",
+        "digest": "sha256:57dbab7f7ca49a7fd36ada013a45e470a64b4fba8f414ef2fe4f609831c8c3a3",
+        "disposition": "retain_generic",
+        "id": "recipe.dashboard",
+        "serialized_bytes": 486
+      }
+    ],
+    "schema": "adaos.ui.capability_catalog.v1"
+  },
+  "classification": "legacy_recipe_guided",
+  "development_projects": [
+    {
+      "bytes": 1114,
+      "exists": true,
+      "file_count": 1,
+      "path": ".adaos/dev/sn_6acf0c01/projects/applications",
+      "tree_digest": "sha256:7b6c876fc9372b4a8e2335b24376a5287b9ccbedce21a7d63c0a21549408bf10"
+    },
+    {
+      "bytes": 1557,
+      "exists": true,
+      "file_count": 1,
+      "path": ".adaos/dev/sn_6acf0c01/projects/applications_243b080a",
+      "tree_digest": "sha256:e04b631ac9cbea1823b6b4dfa8eaf55a946b027596c16f28d5edc9456f8abaed"
+    },
+    {
+      "bytes": 2494,
+      "exists": true,
+      "file_count": 1,
+      "path": ".adaos/dev/sn_6acf0c01/projects/applications_clean_experiment_20260908_d448a2e3",
+      "tree_digest": "sha256:eab33651ea0ad68deb1fa2e24e569326722e581dbc50e9e68be6a6319267d5fe"
+    },
+    {
+      "bytes": 1232,
+      "exists": true,
+      "file_count": 1,
+      "path": ".adaos/dev/sn_6acf0c01/projects/applications_minimum_proven_20260908",
+      "tree_digest": "sha256:100908077be49f84a9fccb539582aae7deea4a8f7d11960de06db22700f6d423"
+    },
+    {
+      "bytes": 1937,
+      "exists": true,
+      "file_count": 1,
+      "path": ".adaos/dev/sn_6acf0c01/projects/applications_phased_prototype_experiment_c118d053",
+      "tree_digest": "sha256:8c7dfc4d36eb8d3ccf027598d9621b608aebcb8fad175d9a867622cd7598b693"
+    }
+  ],
+  "development_scenarios": [
+    {
+      "bytes": 7278295,
+      "current_revision": "027",
+      "exists": true,
+      "file_count": 76,
+      "llm_job_result_count": 37,
+      "llm_job_statuses": {
+        "failed": 24,
+        "succeeded": 13
+      },
+      "models": {
+        "gpt-5": 13
+      },
+      "path": ".adaos/dev/sn_6acf0c01/scenarios/applications",
+      "provider_processing_ms": [
+        252,
+        469,
+        1396,
+        542,
+        518,
+        503,
+        471,
+        269,
+        677,
+        449,
+        609,
+        1115,
+        707
+      ],
+      "providers": {
+        "openai": 13
+      },
+      "repair_attempt_count": 29,
+      "tree_digest": "sha256:d5f896145f3e8a0a9ac4041350d1ebb4b30974eeb83e6697c5be262dbaa9a878",
+      "ui_revision_count": 27,
+      "usage_by_revision": [
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "reasoning_tokens": 0,
+          "revision": "002",
+          "total_tokens": 0
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 7849,
+          "output_tokens": 1897,
+          "reasoning_tokens": 0,
+          "revision": "003",
+          "total_tokens": 9746
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 4224,
+          "input_tokens": 8528,
+          "output_tokens": 850,
+          "reasoning_tokens": 0,
+          "revision": "004",
+          "total_tokens": 9378
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 8756,
+          "output_tokens": 2561,
+          "reasoning_tokens": 0,
+          "revision": "005",
+          "total_tokens": 11317
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 18411,
+          "output_tokens": 5300,
+          "reasoning_tokens": 0,
+          "revision": "006",
+          "total_tokens": 23711
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "reasoning_tokens": 0,
+          "revision": "007",
+          "total_tokens": 0
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 11103,
+          "output_tokens": 241,
+          "reasoning_tokens": 0,
+          "revision": "008",
+          "total_tokens": 11344
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 23148,
+          "output_tokens": 6040,
+          "reasoning_tokens": 0,
+          "revision": "009",
+          "total_tokens": 29188
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 23943,
+          "output_tokens": 5710,
+          "reasoning_tokens": 0,
+          "revision": "010",
+          "total_tokens": 29653
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 1280,
+          "input_tokens": 11800,
+          "output_tokens": 262,
+          "reasoning_tokens": 0,
+          "revision": "011",
+          "total_tokens": 12062
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 1280,
+          "input_tokens": 36502,
+          "output_tokens": 13870,
+          "reasoning_tokens": 0,
+          "revision": "012",
+          "total_tokens": 50372
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 37585,
+          "output_tokens": 11528,
+          "reasoning_tokens": 0,
+          "revision": "013",
+          "total_tokens": 49113
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 1280,
+          "input_tokens": 18777,
+          "output_tokens": 276,
+          "reasoning_tokens": 0,
+          "revision": "014",
+          "total_tokens": 19053
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 10880,
+          "input_tokens": 19454,
+          "output_tokens": 802,
+          "reasoning_tokens": 0,
+          "revision": "015",
+          "total_tokens": 20256
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 1280,
+          "input_tokens": 19955,
+          "output_tokens": 233,
+          "reasoning_tokens": 0,
+          "revision": "016",
+          "total_tokens": 20188
+        }
+      ],
+      "validation_failure_count": 4
+    },
+    {
+      "bytes": 150968,
+      "current_revision": "001",
+      "exists": true,
+      "file_count": 12,
+      "llm_job_result_count": 1,
+      "llm_job_statuses": {
+        "failed": 1
+      },
+      "models": {},
+      "path": ".adaos/dev/sn_6acf0c01/scenarios/applications_243b080a",
+      "provider_processing_ms": [],
+      "providers": {},
+      "repair_attempt_count": 0,
+      "tree_digest": "sha256:5b512623b00a3eb714ffcf36df17cd5ca33cc100bb043ac98fa239e34a17065b",
+      "ui_revision_count": 1,
+      "usage_by_revision": [],
+      "validation_failure_count": 0
+    },
+    {
+      "bytes": 281554,
+      "current_revision": "001",
+      "exists": true,
+      "file_count": 13,
+      "llm_job_result_count": 2,
+      "llm_job_statuses": {
+        "failed": 2
+      },
+      "models": {},
+      "path": ".adaos/dev/sn_6acf0c01/scenarios/applications_clean_experiment_20260908_d448a2e3",
+      "provider_processing_ms": [],
+      "providers": {},
+      "repair_attempt_count": 2,
+      "tree_digest": "sha256:7c830ea7ef1fcddcc6e64d8a2ef47351e9c43d4bea76e0648a849dc3f50131df",
+      "ui_revision_count": 1,
+      "usage_by_revision": [],
+      "validation_failure_count": 0
+    },
+    {
+      "bytes": 673586,
+      "current_revision": "001",
+      "exists": true,
+      "file_count": 13,
+      "llm_job_result_count": 0,
+      "llm_job_statuses": {},
+      "models": {},
+      "path": ".adaos/dev/sn_6acf0c01/scenarios/applications_minimum_proven_20260908",
+      "provider_processing_ms": [],
+      "providers": {},
+      "repair_attempt_count": 0,
+      "tree_digest": "sha256:f1acb9512cdec76103b91bc1f0fa7fda3eb5fbcf1850d864b106d06da515dbe0",
+      "ui_revision_count": 1,
+      "usage_by_revision": [],
+      "validation_failure_count": 0
+    },
+    {
+      "bytes": 10006282,
+      "current_revision": "018",
+      "exists": true,
+      "file_count": 93,
+      "llm_job_result_count": 20,
+      "llm_job_statuses": {
+        "failed": 13,
+        "succeeded": 7
+      },
+      "models": {
+        "gpt-5": 6
+      },
+      "path": ".adaos/dev/sn_6acf0c01/scenarios/applications_phased_prototype_experiment_c118d053",
+      "provider_processing_ms": [
+        557,
+        633,
+        482,
+        1194,
+        576,
+        575
+      ],
+      "providers": {
+        "openai": 6
+      },
+      "repair_attempt_count": 17,
+      "tree_digest": "sha256:7cf59aef6506179c747f06abd3277c0e17bbe11a6ed41fba664cd4ed36bf3d81",
+      "ui_revision_count": 18,
+      "usage_by_revision": [
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "reasoning_tokens": 0,
+          "revision": "002",
+          "total_tokens": 0
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 9903,
+          "output_tokens": 2388,
+          "reasoning_tokens": 0,
+          "revision": "003",
+          "total_tokens": 12291
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 6016,
+          "input_tokens": 25227,
+          "output_tokens": 668,
+          "reasoning_tokens": 0,
+          "revision": "004",
+          "total_tokens": 25895
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 8704,
+          "input_tokens": 30045,
+          "output_tokens": 1743,
+          "reasoning_tokens": 0,
+          "revision": "005",
+          "total_tokens": 31788
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 1152,
+          "input_tokens": 21907,
+          "output_tokens": 153,
+          "reasoning_tokens": 0,
+          "revision": "006",
+          "total_tokens": 22060
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 12160,
+          "input_tokens": 13585,
+          "output_tokens": 2029,
+          "reasoning_tokens": 0,
+          "revision": "007",
+          "total_tokens": 15614
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 1792,
+          "input_tokens": 23157,
+          "output_tokens": 187,
+          "reasoning_tokens": 0,
+          "revision": "008",
+          "total_tokens": 23344
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "reasoning_tokens": 0,
+          "revision": "009",
+          "total_tokens": 0
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "reasoning_tokens": 0,
+          "revision": "011",
+          "total_tokens": 0
+        },
+        {
+          "cache_write_tokens": 0,
+          "cached_input_tokens": 0,
+          "input_tokens": 50850,
+          "output_tokens": 3495,
+          "reasoning_tokens": 0,
+          "revision": "012",
+          "total_tokens": 54345
+        }
+      ],
+      "validation_failure_count": 0
+    }
+  ],
+  "evidence_labels": [
+    {
+      "labels": [
+        "recipe-guided",
+        "renderer-qualified"
+      ],
+      "prompt_autonomy": false,
+      "ref": "docs/architecture/applications-builder-dogfood-evidence-2026-09-07.md"
+    }
+  ],
+  "known_migrations": [
+    {
+      "owner": "Core generic capability catalog and evaluator",
+      "source": "recipe.application_manager",
+      "target": "versioned Applications compatibility domain pack"
+    },
+    {
+      "owner": "Core generic Builder context compiler",
+      "source": "adaos.application.lifecycle.v1 prompt capsule",
+      "target": "versioned Applications policy pack"
+    },
+    {
+      "owner": "DEV Builder and retained experiment fixtures",
+      "source": "shopping-list, recipe-book, and todo examples",
+      "target": "explicit development/evaluation fixtures only"
+    },
+    {
+      "owner": "Client generic runtime and collection renderer",
+      "source": "Marketplace action and renderer branches",
+      "target": "typed product adapter or generic operation contract"
+    }
+  ],
+  "limitations": [
+    "The current Client worktree commit differs from the parent-recorded submodule commit.",
+    "Legacy LLM telemetry has no uniform end-to-end stage timing; provider processing values are partial.",
+    "Usage rows are extracted only from canonical ui_revision.llm.telemetry.usage records and are not billed-cost estimates.",
+    "Applications-prefixed experiments remain recipe-guided unless an individual retained run proves otherwise."
+  ],
+  "prompt_capsules": {
+    "items": [
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.builder.execution_boundary.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.sdk_boundary.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.webui_tool_contract.v2"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.ui.declarative_state.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.ui.interaction_resources.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.scenario.composition_boundary.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.builder.workflow_definition.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.data_route_receiver.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.receiver_snapshot.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.causal_read.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.resource_storage.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.runtime_lifecycle.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.python_lifecycle.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.event_loop_isolation.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.conversation_i18n.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.async_llm_job.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.skill.member_subnet.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.resource.access_privacy.v1"
+      },
+      {
+        "classification": "platform_policy",
+        "disposition": "retain_generic_after_boundary_review",
+        "id": "adaos.builder.consumer_contract.v1"
+      },
+      {
+        "classification": "subject_domain_pack",
+        "disposition": "move_to_application_pack",
+        "id": "adaos.application.lifecycle.v1"
+      },
+      {
+        "classification": "subject_domain_pack",
+        "disposition": "move_to_research_pack",
+        "id": "adaos.research.scientific_handoff.v1"
+      },
+      {
+        "classification": "subject_domain_pack",
+        "disposition": "move_to_research_pack",
+        "id": "adaos.research.runner_input_policy.v1"
+      },
+      {
+        "classification": "subject_domain_pack",
+        "disposition": "move_to_research_pack",
+        "id": "adaos.research.initial_equivalence.v1"
+      }
+    ],
+    "version": "0.5.0"
+  },
+  "repository": {
+    "branch": "rev2026",
+    "client_recorded_commit": "9c7aef23a1bfc774e24ce0ffb2d8bfed0566bcaa",
+    "client_worktree_commit": "fe020f7a0854df45c9a737cdb640f656e4371897",
+    "commit": "8abc661e0d56fb5e02e3caa91a4e7373461cb9a9"
+  },
+  "schema": "adaos.builder.forensic_snapshot.v1",
+  "snapshot_digest": "sha256:6613d466477a6daa84d781be2abb193bf8aaa55b68b6558a1bdd2ec449ba4528",
+  "snapshot_id": "legacy_recipe_guided_20260910",
+  "surfaces": {
+    "client_action_runtime": {
+      "bytes": 136677,
+      "exists": true,
+      "file_count": 1,
+      "owner": "Client generic action runtime",
+      "path": "src/adaos/integrations/adaos-client/src/app/runtime/page-action.service.ts",
+      "subject_matches": {
+        "marketplace_lifecycle": {
+          "count": 1,
+          "sample_locations": [
+            {
+              "line": 2659,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/runtime/page-action.service.ts"
+            }
+          ]
+        }
+      },
+      "tree_digest": "sha256:898b909d7bc26645c3644d991b1aa4480bbe34c2180e0675e9803daeb321f39c"
+    },
+    "client_collection_grid": {
+      "bytes": 111030,
+      "exists": true,
+      "file_count": 1,
+      "owner": "Client generic collection renderer",
+      "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts",
+      "subject_matches": {
+        "marketplace_lifecycle": {
+          "count": 27,
+          "sample_locations": [
+            {
+              "line": 168,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 418,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 422,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 424,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1174,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1177,
+              "match_count": 2,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1426,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1428,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1431,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1434,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1436,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1467,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1470,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1779,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1908,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1909,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1910,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1943,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1944,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1946,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 1948,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 2838,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 2839,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 2842,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 2845,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            },
+            {
+              "line": 2846,
+              "match_count": 1,
+              "path": "src/adaos/integrations/adaos-client/src/app/renderer/widgets/collection-grid.widget.component.ts"
+            }
+          ]
+        }
+      },
+      "tree_digest": "sha256:58c84718669551a6e035d2e37d541b33d23a4f211ef27b5d4fafd19b6df4a509"
+    },
+    "client_semantic_adapter": {
+      "bytes": 12304,
+      "exists": true,
+      "file_count": 1,
+      "owner": "Client generic semantic adapter",
+      "path": "src/adaos/integrations/adaos-client/src/app/runtime/semantic-schema-adapter.ts",
+      "subject_matches": {},
+      "tree_digest": "sha256:b02fd1a3cf7b9609d4fb529ffa40b2ae629ae70aa01ddc766213a51c0aeeec29"
+    },
+    "client_widget_registry": {
+      "bytes": 6649,
+      "exists": true,
+      "file_count": 1,
+      "owner": "Client generic widget registry",
+      "path": "src/adaos/integrations/adaos-client/src/app/runtime/page-widget-registry.service.ts",
+      "subject_matches": {},
+      "tree_digest": "sha256:459690da9a5bfafbad1a956df996efd090e81abd597c53bff4f22eaaeb42a556"
+    },
+    "dev_builder_skill": {
+      "bytes": 1679784,
+      "exists": true,
+      "file_count": 26,
+      "owner": "DEV Builder conversation and orchestration adapter",
+      "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill",
+      "subject_matches": {
+        "applications_recipe": {
+          "count": 16,
+          "sample_locations": [
+            {
+              "line": 7632,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 11951,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 17641,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 18606,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 18607,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 4670,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 4691,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 5238,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 5277,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 5296,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 5346,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 5355,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 5394,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 6198,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 6765,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 6816,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            }
+          ]
+        },
+        "example_products": {
+          "count": 370,
+          "sample_locations": [
+            {
+              "line": 627,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 1197,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 1198,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 1199,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 1200,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 1241,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 1245,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 1251,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 2298,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 3760,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 3794,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 6670,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 6671,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 6672,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 6673,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 7752,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 12698,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 17048,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 17053,
+              "match_count": 2,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 18606,
+              "match_count": 2,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 18607,
+              "match_count": 2,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 694,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/skill.yaml"
+            },
+            {
+              "line": 711,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/skill.yaml"
+            },
+            {
+              "line": 151,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 160,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 163,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 181,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 193,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 195,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 199,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 200,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 202,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 206,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 210,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 252,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 253,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 259,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 260,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 289,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 291,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            }
+          ]
+        },
+        "marketplace_lifecycle": {
+          "count": 31,
+          "sample_locations": [
+            {
+              "line": 17806,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 17825,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 17826,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 17836,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 17837,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 17840,
+              "match_count": 2,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"
+            },
+            {
+              "line": 340,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/skill.yaml"
+            },
+            {
+              "line": 353,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/skill.yaml"
+            },
+            {
+              "line": 5269,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 5808,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 5810,
+              "match_count": 2,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 5826,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 5831,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 6884,
+              "match_count": 2,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 6916,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 6933,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 6938,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 11868,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 11933,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 11969,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 11970,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 11971,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 11999,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 12029,
+              "match_count": 2,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 12031,
+              "match_count": 2,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            },
+            {
+              "line": 12032,
+              "match_count": 1,
+              "path": ".adaos/dev/sn_6acf0c01/skills/builder_skill/tests/test_builder_skill.py"
+            }
+          ]
+        }
+      },
+      "tree_digest": "sha256:ec3f90f872903ce275b9854c87d178f2f2c11781af1cdf9c64c3c41d68aef56a"
+    },
+    "generic_capability_catalog": {
+      "bytes": 81359,
+      "exists": true,
+      "file_count": 1,
+      "owner": "Core generic UI capability catalog",
+      "path": "src/adaos/abi/ui.capability_catalog.v1.json",
+      "subject_matches": {
+        "applications_recipe": {
+          "count": 30,
+          "sample_locations": [
+            {
+              "line": 348,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 361,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 416,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 417,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 418,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 420,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 421,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 422,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 423,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 424,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 430,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 431,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 432,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 433,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 434,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 435,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 455,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 469,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 470,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 471,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 472,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 477,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 478,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 479,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 480,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 531,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 532,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 557,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 560,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 617,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            }
+          ]
+        },
+        "example_products": {
+          "count": 20,
+          "sample_locations": [
+            {
+              "line": 249,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 251,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 290,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 339,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 348,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 542,
+              "match_count": 3,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 543,
+              "match_count": 6,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 549,
+              "match_count": 2,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 570,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 610,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 630,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 639,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            }
+          ]
+        },
+        "marketplace_lifecycle": {
+          "count": 94,
+          "sample_locations": [
+            {
+              "line": 352,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 396,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 399,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 400,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 417,
+              "match_count": 3,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 418,
+              "match_count": 2,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 422,
+              "match_count": 6,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 426,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 427,
+              "match_count": 2,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 442,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 444,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 446,
+              "match_count": 5,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 447,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 456,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 490,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 493,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 498,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 500,
+              "match_count": 3,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 505,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 508,
+              "match_count": 2,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 514,
+              "match_count": 2,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 515,
+              "match_count": 3,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 516,
+              "match_count": 2,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 517,
+              "match_count": 4,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 519,
+              "match_count": 2,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 534,
+              "match_count": 2,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 537,
+              "match_count": 5,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 538,
+              "match_count": 3,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 539,
+              "match_count": 3,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 540,
+              "match_count": 8,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 541,
+              "match_count": 2,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 542,
+              "match_count": 2,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 543,
+              "match_count": 3,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 544,
+              "match_count": 3,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 547,
+              "match_count": 3,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 549,
+              "match_count": 2,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 559,
+              "match_count": 6,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 563,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 619,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 620,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            }
+          ]
+        },
+        "research_domain": {
+          "count": 8,
+          "sample_locations": [
+            {
+              "line": 540,
+              "match_count": 7,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            },
+            {
+              "line": 549,
+              "match_count": 1,
+              "path": "src/adaos/abi/ui.capability_catalog.v1.json"
+            }
+          ]
+        }
+      },
+      "tree_digest": "sha256:20ad093f29cc3c62d445af962917e5c1fcac9a107920c499147da09eb78ef002"
+    },
+    "generic_capability_service": {
+      "bytes": 148805,
+      "exists": true,
+      "file_count": 1,
+      "owner": "Core generic UI capability service",
+      "path": "src/adaos/services/ui_capabilities.py",
+      "subject_matches": {
+        "applications_recipe": {
+          "count": 42,
+          "sample_locations": [
+            {
+              "line": 503,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 550,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 551,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 570,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 573,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 574,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 576,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 577,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 578,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 579,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 580,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 582,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 593,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 594,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 618,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 619,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1013,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1019,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1385,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1389,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1393,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1397,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1418,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1432,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1446,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1452,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1776,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1777,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1778,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1779,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1786,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2292,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2430,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2551,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2580,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2601,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2619,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2620,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2621,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2927,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            }
+          ]
+        },
+        "example_products": {
+          "count": 47,
+          "sample_locations": [
+            {
+              "line": 239,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 258,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 283,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 404,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 405,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 410,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 411,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 423,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 424,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 426,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 427,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 431,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 432,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 470,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 471,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 478,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 481,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 486,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 503,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 556,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 574,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 612,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 619,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 620,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 626,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 627,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 654,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 672,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1014,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1017,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1019,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1024,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1025,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1221,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2888,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2896,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 3465,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 3466,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 3468,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 3472,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            }
+          ]
+        },
+        "marketplace_lifecycle": {
+          "count": 23,
+          "sample_locations": [
+            {
+              "line": 1865,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1866,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1870,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1995,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 1998,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2148,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2394,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2395,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2452,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2482,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2483,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2484,
+              "match_count": 2,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2487,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2513,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2707,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2752,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2753,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2755,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2904,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            },
+            {
+              "line": 2962,
+              "match_count": 1,
+              "path": "src/adaos/services/ui_capabilities.py"
+            }
+          ]
+        }
+      },
+      "tree_digest": "sha256:131f3173fd6d810858ca24d0cfe36a4199dbd3f8e784a2b7049986273dca2c30"
+    },
+    "generic_prompt_capsules": {
+      "bytes": 22680,
+      "exists": true,
+      "file_count": 1,
+      "owner": "Core generic Builder context compiler",
+      "path": "src/adaos/services/builder/prompt_rule_capsules.json",
+      "subject_matches": {
+        "marketplace_lifecycle": {
+          "count": 4,
+          "sample_locations": [
+            {
+              "line": 301,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 302,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 307,
+              "match_count": 2,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            }
+          ]
+        },
+        "research_domain": {
+          "count": 14,
+          "sample_locations": [
+            {
+              "line": 242,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 313,
+              "match_count": 2,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 314,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 315,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 317,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 321,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 326,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 327,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 328,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 330,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 333,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 339,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            },
+            {
+              "line": 341,
+              "match_count": 1,
+              "path": "src/adaos/services/builder/prompt_rule_capsules.json"
+            }
+          ]
+        }
+      },
+      "tree_digest": "sha256:d29e31709ff942e57c1bf767d0c640a612f301f4fd29376f745b9418ac34fc99"
+    }
+  }
+}

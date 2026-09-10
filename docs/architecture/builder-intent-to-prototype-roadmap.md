@@ -41,6 +41,14 @@ Until R8 is complete:
 
 ## R0. Forensic Snapshot
 
+Progress note (2026-09-10): the reproducible
+[legacy forensic snapshot](builder-forensic-snapshot-2026-09-10.md) freezes
+selected Core, DEV Builder, Client, and Applications trees plus canonical
+revision usage and repair evidence. It also records ownership/disposition and
+correct evidence labels. End-to-end stage spans, immutable compact/wide Client
+traces, dynamic reachability, and the executable legacy characterization suite
+remain open, so R0 is not yet complete.
+
 - [ ] `[must]` Freeze an exact forensic snapshot of the contaminated current
   path: code revisions, prompt profiles, component catalog, model profiles,
   Applications inputs/outputs, token usage, latency, repairs, and validation

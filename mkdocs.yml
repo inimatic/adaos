@@ -194,6 +194,7 @@ nav:
       - Builder: architecture/builder.md
       - Builder Intent-to-Prototype Architecture: architecture/builder-intent-to-prototype.md
       - Builder E2E Evaluation Pipeline: architecture/builder-evaluation-pipeline.md
+      - Builder Legacy Forensic Snapshot: architecture/builder-forensic-snapshot-2026-09-10.md
       - Builder Intent-to-Prototype Roadmap: architecture/builder-intent-to-prototype-roadmap.md
       - Client Component System Roadmap: architecture/client-component-system-roadmap.md
       - Builder Conversational Development: architecture/builder-conversational-development.md
