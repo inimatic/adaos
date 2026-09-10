@@ -397,3 +397,14 @@ contract the exact resource-query and button shapes. The compatibility parser
 also deterministically canonicalizes these unambiguous aliases and records the
 normalization; this remains a bridge to the typed compiler, not permission to
 silently approximate unsupported semantics.
+
+The subsequent `operations-typed-contract-20260910` run again produced a
+relevant resource-backed board but grouped two field descriptors under
+`inputs.i18n`; WebUI requires the descriptors beside their scalar fallbacks as
+`<field>_i18n`. The repair retained the invalid grouping, so the run failed in
+52.3 seconds after two model calls (10,736 fresh, 6,400 cached input tokens and
+2,508 output tokens). This happened despite the stable prompt already stating
+the sibling-key rule, which makes further prose repetition a poor remedy.
+Catalog 2.0.3 now enumerates the board's localizable input pairs, and the
+compatibility parser moves a grouped descriptor only when its scalar sibling
+exists and the canonical target is free; conflicts remain validation errors.

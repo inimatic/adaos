@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "2.0.2",
+  "catalog_version": "2.0.3",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -97,7 +97,8 @@
         "required_inputs": ["lanes", "laneKey", "titleKey"],
         "optional_inputs": ["descriptionKey", "cardFields", "imageKey", "imageAltKey", "itemIdKey", "minLaneWidth", "showCounts", "compact", "dragDrop", "loadingText", "emptyText", "addItemLabel", "moveItemLabel", "buttons"],
         "resource_query_shape": { "kind": "resourceQuery", "resourceType": "prototype.<resource_name>", "query": {} },
-        "button_shape": { "required": ["id"], "kind": ["primary", "secondary", "danger"], "fill": ["solid", "outline", "clear"] }
+        "button_shape": { "required": ["id"], "kind": ["primary", "secondary", "danger"], "fill": ["solid", "outline", "clear"] },
+        "localizable_inputs": { "loadingText": "loadingText_i18n", "emptyText": "emptyText_i18n", "addItemLabel": "addItemLabel_i18n", "moveItemLabel": "moveItemLabel_i18n" }
       },
       "data_shape": {
         "kind": "flat_collection",

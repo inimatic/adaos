@@ -83,6 +83,12 @@ def test_resource_board_contract_exposes_exact_query_and_button_shapes() -> None
         "kind": ["primary", "secondary", "danger"],
         "fill": ["solid", "outline", "clear"],
     }
+    assert board["manifest"]["localizable_inputs"] == {
+        "loadingText": "loadingText_i18n",
+        "emptyText": "emptyText_i18n",
+        "addItemLabel": "addItemLabel_i18n",
+        "moveItemLabel": "moveItemLabel_i18n",
+    }
 
 
 def test_generic_request_cannot_select_subject_pack_by_wording_or_id() -> None:
