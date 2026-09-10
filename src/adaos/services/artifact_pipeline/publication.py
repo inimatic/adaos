@@ -48,6 +48,7 @@ from adaos.services.artifact_pipeline.channels import (
 from adaos.services.artifact_pipeline.packages import (
     BuiltArtifactPackage,
     ContentAddressedPackageStore,
+    artifact_source_snapshot,
     build_artifact_package,
 )
 from adaos.services.artifact_pipeline.project_build import (
@@ -1433,6 +1434,42 @@ class ArtifactPublicationService:
         """Verify that a recorded checkpoint still matches its DEV source."""
 
         return self._verify_current_source(record, artifact_dir)
+
+    def verify_pushed_source_content(
+        self,
+        record: PushedSourceRecord,
+        artifact_dir: Path,
+    ) -> BuiltArtifactPackage:
+        """Verify exact source bytes without recompiling an existing checkpoint.
+
+        This is the narrow idempotency check used when the same checkpoint
+        change id is replayed. Semantic validation remains a separate preflight;
+        candidate preparation continues to rebuild the complete package.
+        """
+
+        try:
+            checkpoint_bytes, checkpoint = self.package_store.read_verified(
+                record.package.digest
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise PublicationError(
+                "exact Forge checkpoint package is unavailable or invalid"
+            ) from exc
+        if checkpoint.ref != record.package:
+            raise PublicationError(
+                "exact Forge checkpoint package does not match its pushed source receipt"
+            )
+        current = artifact_source_snapshot(artifact_dir)
+        expected_files = checkpoint.package_manifest.get("files") or []
+        if current.get("files") != expected_files:
+            raise PublicationError(
+                "DEV content changed after the exact Forge checkpoint; push a new checkpoint"
+            )
+        return BuiltArtifactPackage(
+            ref=checkpoint.ref,
+            archive_bytes=checkpoint_bytes,
+            package_manifest=checkpoint.package_manifest,
+        )
 
     @staticmethod
     def _manifest(artifact_dir: Path, kind: str) -> Mapping[str, Any]:

@@ -1440,6 +1440,8 @@ class BuilderWorkspaceService:
             "package_digest": getattr(result, "package_digest", None),
             "source_revision": getattr(result, "source_revision", None),
             "source_tree": getattr(result, "source_tree", None),
+            "operation_id": getattr(result, "operation_id", None),
+            "timings_ms": dict(getattr(result, "timings_ms", None) or {}),
         }
 
     def create_draft(

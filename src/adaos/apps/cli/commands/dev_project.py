@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -389,6 +390,7 @@ def checkpoint(
         raise typer.BadParameter("change id is required", param_hint="--change-id")
     service = _service()
     checkpoints: list[dict[str, Any]] = []
+    checkpoint_started = time.perf_counter()
     for item in (project.get("components") or {}).get("owned") or []:
         component_ref = str(item.get("ref") or "").strip()
         kind, separator, artifact_id = component_ref.partition(":")
@@ -397,8 +399,8 @@ def checkpoint(
                 f"unsupported owned component ref: {component_ref!r}",
                 param_hint="project_id",
             )
-        checkpoints.append(
-            service.checkpoint_artifact(
+        component_started = time.perf_counter()
+        component_checkpoint = service.checkpoint_artifact(
                 kind=kind,
                 artifact_id=artifact_id,
                 message=message or f"checkpoint(project): {project_id} {change_token}",
@@ -408,7 +410,11 @@ def checkpoint(
                     "change_id": change_token,
                 },
             )
+        component_checkpoint["cli_elapsed_ms"] = round(
+            (time.perf_counter() - component_started) * 1000.0,
+            3,
         )
+        checkpoints.append(component_checkpoint)
     failures = [item for item in checkpoints if not bool(item.get("ok"))]
     payload = {
         "ok": not failures,
@@ -416,6 +422,10 @@ def checkpoint(
         "status": "checkpointed" if not failures else "checkpoint_failed",
         "project_id": project_id,
         "change_id": change_token,
+        "operation_id": f"project-checkpoint:{project_id}:{change_token}",
+        "timings_ms": {
+            "total": round((time.perf_counter() - checkpoint_started) * 1000.0, 3)
+        },
         "components": checkpoints,
     }
     _echo(payload, json_output=json_output)

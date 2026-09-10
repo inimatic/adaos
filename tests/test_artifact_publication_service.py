@@ -1217,6 +1217,32 @@ def test_candidate_reuses_exact_checkpoint_after_build_policy_changes(
     assert remote.archives[pushed.package.digest] == verified.archive_bytes
 
 
+def test_checkpoint_replay_verifies_source_bytes_without_rebuilding_candidate(
+    tmp_path: Path,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=_Remote(tmp_path / "remote"),
+    )
+    pushed = service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+
+    verified = service.verify_pushed_source_content(pushed, dev)
+
+    assert verified.ref == pushed.package
+    (dev / "webui.json").write_text(
+        '{"ui": {"changed": true}}\n', encoding="utf-8"
+    )
+    with pytest.raises(PublicationError, match="changed after"):
+        service.verify_pushed_source_content(pushed, dev)
+
+
 def test_build_policy_change_does_not_hide_dev_content_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

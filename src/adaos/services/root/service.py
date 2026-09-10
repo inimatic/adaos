@@ -585,6 +585,8 @@ class ArtifactPushResult:
     package_digest: str | None = None
     source_revision: str | None = None
     source_tree: str | None = None
+    operation_id: str | None = None
+    timings_ms: dict[str, float] | None = None
 
 
 @dataclass(slots=True)
@@ -3613,6 +3615,35 @@ class RootDeveloperService:
         message: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> ArtifactPushResult:
+        operation_id = f"artifact-checkpoint:{kind.rstrip('s')}:{name}:{uuid4().hex}"
+        operation_started = time.perf_counter()
+        timings_ms: dict[str, float] = {}
+
+        def timed(phase: str, action: Callable[[], Any]) -> Any:
+            phase_started = time.perf_counter()
+            status = "completed"
+            try:
+                return action()
+            except Exception:
+                status = "failed"
+                raise
+            finally:
+                elapsed_ms = (time.perf_counter() - phase_started) * 1000.0
+                timings_ms[phase] = round(timings_ms.get(phase, 0.0) + elapsed_ms, 3)
+                _log.info(
+                    "artifact checkpoint phase operation_id=%s phase=%s status=%s elapsed_ms=%.3f",
+                    operation_id,
+                    phase,
+                    status,
+                    elapsed_ms,
+                )
+
+        def timing_snapshot() -> dict[str, float]:
+            return {
+                **timings_ms,
+                "total": round((time.perf_counter() - operation_started) * 1000.0, 3),
+            }
+
         cfg = self._load_config()
 
         owner_id = cfg.owner_id
@@ -3622,7 +3653,6 @@ class RootDeveloperService:
         source = workspace / kind / name
         if not source.exists():
             raise RootServiceError(f"{kind[:-1].capitalize()} '{name}' not found at {source}")
-        self._validate_artifact_preflight(kind, name, source)
         commit_message = _normalize_draft_commit_message(message)
         commit_metadata = _normalize_draft_metadata(metadata)
         change_id = str(commit_metadata.get("change_id") or "").strip()
@@ -3695,6 +3725,8 @@ class RootDeveloperService:
                 package_digest=pushed_source.package.digest,
                 source_revision=source_ref.revision,
                 source_tree=pushed_source.source_tree,
+                operation_id=operation_id,
+                timings_ms=timing_snapshot(),
             )
 
         def verified_source_tree(
@@ -3756,12 +3788,17 @@ class RootDeveloperService:
             recorded = publication.load_pushed_source(kind.rstrip("s"), name)
             if change_id in recorded.change_ids:
                 try:
-                    publication.verify_pushed_source(recorded, source)
+                    timed(
+                        "local_receipt_verify",
+                        lambda: publication.verify_pushed_source_content(
+                            recorded, source
+                        ),
+                    )
                 except Exception as exc:
                     raise RootServiceError(
                         f"checkpoint id {change_id} was already used for different content"
                     ) from exc
-                archive_bytes = create_zip_bytes(source)
+                archive_bytes = timed("archive_create", lambda: create_zip_bytes(source))
                 stored_path = str(recorded.source_ref.path_scope[0]).rstrip("/")
                 return result_from_checkpoint(
                     source_ref=recorded.source_ref,
@@ -3771,18 +3808,26 @@ class RootDeveloperService:
                     archive_bytes=archive_bytes,
                 )
 
+        timed(
+            "local_validate",
+            lambda: self._validate_artifact_preflight(kind, name, source),
+        )
+
         if change_id:
             draft_info: Mapping[str, Any] = {}
             if intent.get("status") == "remote_confirmed" and isinstance(intent.get("receipt"), Mapping):
                 draft_info = dict(intent["receipt"])
             try:
                 if not draft_info:
-                    draft_info = client.get_draft_info(
-                        kind=kind,
-                        name=name,
-                        node_id=node_id,
-                        verify=verify,
-                        cert=(cert_path, key_path),
+                    draft_info = timed(
+                        "root_preflight",
+                        lambda: client.get_draft_info(
+                            kind=kind,
+                            name=name,
+                            node_id=node_id,
+                            verify=verify,
+                            cert=(cert_path, key_path),
+                        ),
                     )
             except Exception as exc:
                 missing = isinstance(exc, FileNotFoundError) or getattr(exc, "status_code", None) == 404
@@ -3802,7 +3847,9 @@ class RootDeveloperService:
                 if intent_archive_path is not None and intent_archive_path.is_file():
                     archive_bytes = intent_archive_path.read_bytes()
                 else:
-                    archive_bytes = create_zip_bytes(source)
+                    archive_bytes = timed(
+                        "archive_create", lambda: create_zip_bytes(source)
+                    )
                 digest = hashlib.sha256(archive_bytes).hexdigest()
                 expected_digest = str(draft_info.get("sha256") or "").strip().lower()
                 if expected_digest and expected_digest != digest:
@@ -3810,7 +3857,10 @@ class RootDeveloperService:
                         f"checkpoint id {change_id} was already used for different content"
                     )
                 if intent_archive_path is not None and intent_archive_path.is_file():
-                    _extract_zip_bytes(archive_bytes, source)
+                    timed(
+                        "archive_restore",
+                        lambda: _extract_zip_bytes(archive_bytes, source),
+                    )
                 stored = str(draft_info.get("stored_path") or "").strip()
                 commit = str(draft_info.get("commit") or "").strip()
                 if not stored or not commit:
@@ -3824,13 +3874,20 @@ class RootDeveloperService:
                     revision=commit,
                     path_scope=(stored.rstrip("/") + "/",),
                 )
-                pushed_source = publication.record_push(
-                    kind=kind.rstrip("s"),
-                    artifact_id=name,
-                    artifact_dir=source,
-                    source_ref=source_ref,
-                    change_ids=(change_id,),
-                    source_tree=verified_source_tree(draft_info, revision=commit),
+                source_tree = timed(
+                    "root_verify",
+                    lambda: verified_source_tree(draft_info, revision=commit),
+                )
+                pushed_source = timed(
+                    "local_receipt_write",
+                    lambda: publication.record_push(
+                        kind=kind.rstrip("s"),
+                        artifact_id=name,
+                        artifact_dir=source,
+                        source_ref=source_ref,
+                        change_ids=(change_id,),
+                        source_tree=source_tree,
+                    ),
                 )
                 write_intent(
                     "completed",
@@ -3928,7 +3985,10 @@ class RootDeveloperService:
                 expected_archive_sha = str(intent.get("archive_sha256") or "").strip().lower()
                 if hashlib.sha256(archive_bytes).hexdigest() != expected_archive_sha:
                     raise RootServiceError("Prepared checkpoint archive does not match its journal")
-                _extract_zip_bytes(archive_bytes, source)
+                timed(
+                    "archive_restore",
+                    lambda: _extract_zip_bytes(archive_bytes, source),
+                )
                 _, resumed_version, resumed_updated_at = self._artifact_manifest_info(source, kind)
                 manifest_meta = {
                     "version": resumed_version,
@@ -3959,14 +4019,17 @@ class RootDeveloperService:
                 if kind == "scenarios":
                     _sync_scenario_content_metadata(source, name, manifest_meta)
 
-            build_artifact_package(
-                source,
-                kind=kind.rstrip("s"),  # type: ignore[arg-type]
-                source_ref=ArtifactSourceRef(
-                    forge="checkpoint-preflight",
-                    repository="local-dev",
-                    revision="0" * 40,
-                    path_scope=(f"{kind}/{name}/",),
+            timed(
+                "package_validate",
+                lambda: build_artifact_package(
+                    source,
+                    kind=kind.rstrip("s"),  # type: ignore[arg-type]
+                    source_ref=ArtifactSourceRef(
+                        forge="checkpoint-preflight",
+                        repository="local-dev",
+                        revision="0" * 40,
+                        path_scope=(f"{kind}/{name}/",),
+                    ),
                 ),
             )
             try:
@@ -3991,7 +4054,7 @@ class RootDeveloperService:
                     exc_info=True,
                 )
             if not resume_archive:
-                archive_bytes = create_zip_bytes(source)
+                archive_bytes = timed("archive_create", lambda: create_zip_bytes(source))
             archive_b64 = archive_bytes_to_b64(archive_bytes)
             digest = hashlib.sha256(archive_bytes).hexdigest()
             if change_id and intent_archive_path is not None:
@@ -4006,15 +4069,18 @@ class RootDeveloperService:
             )
             write_intent("dispatching", archive_sha256=digest)
             dispatch_started = True
-            response = push_method(
-                name=name,
-                archive_b64=archive_b64,
-                node_id=node_id,
-                verify=verify,
-                cert=(cert_path, key_path),
-                sha256=digest,
-                message=commit_message,
-                metadata=commit_metadata,
+            response = timed(
+                "root_upload",
+                lambda: push_method(
+                    name=name,
+                    archive_b64=archive_b64,
+                    node_id=node_id,
+                    verify=verify,
+                    cert=(cert_path, key_path),
+                    sha256=digest,
+                    message=commit_message,
+                    metadata=commit_metadata,
+                ),
             )
             remote_committed = True
             write_intent(
@@ -4044,14 +4110,20 @@ class RootDeveloperService:
                 revision=commit,
                 path_scope=(stored.rstrip("/") + "/",),
             )
-            source_tree = verified_source_tree(response, revision=commit)
-            pushed_source = publication.record_push(
-                kind=kind.rstrip("s"),
-                artifact_id=name,
-                artifact_dir=source,
-                source_ref=source_ref,
-                change_ids=(change_id,) if change_id else (),
-                source_tree=source_tree,
+            source_tree = timed(
+                "root_verify",
+                lambda: verified_source_tree(response, revision=commit),
+            )
+            pushed_source = timed(
+                "local_receipt_write",
+                lambda: publication.record_push(
+                    kind=kind.rstrip("s"),
+                    artifact_id=name,
+                    artifact_dir=source,
+                    source_ref=source_ref,
+                    change_ids=(change_id,) if change_id else (),
+                    source_tree=source_tree,
+                ),
             )
             write_intent(
                 "completed",

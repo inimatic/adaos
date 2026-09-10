@@ -48,6 +48,40 @@ _DIRECT_PROJECTION_WRITE_CALLS = {
     "adaos.services.yjs.gateway.mutate_live_room",
     "y_py.apply_update",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class _PythonModuleSnapshot:
+    path: Path
+    relative: str
+    text: str
+    tree: ast.Module | None
+
+
+def _python_module_snapshots(skill_dir: Path) -> tuple[_PythonModuleSnapshot, ...]:
+    """Read and parse runtime Python sources once for one validation pass."""
+
+    snapshots: list[_PythonModuleSnapshot] = []
+    for path in sorted(skill_dir.rglob("*.py")):
+        if any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        try:
+            tree: ast.Module | None = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            tree = None
+        snapshots.append(
+            _PythonModuleSnapshot(
+                path=path,
+                relative=_relative_to(path, skill_dir),
+                text=text,
+                tree=tree,
+            )
+        )
+    return tuple(snapshots)
 _ASYNC_SUBSCRIPTION_BLOCKING_CALLS = {
     "adaos.sdk.data.skill_env_get",
     "adaos.sdk.data.skill_env_set",
@@ -324,6 +358,7 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     handler = skill_dir / "handlers" / "main.py"
     if not handler.exists():
         issues.append(Issue("error", "missing.handler", "handlers/main.py not found", str(handler)))
+    python_modules = _python_module_snapshots(skill_dir)
 
     tools = data.get("tools") or []
     names = [t.get("name") for t in tools if isinstance(t, dict)]
@@ -395,13 +430,37 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     issues.extend(validate_data_route_contract(data))
     issues.extend(validate_local_resource_declarations(skill_dir, data))
     issues.extend(validate_provider_contract_declarations(data, install_mode=install_mode))
-    issues.extend(_sdk_only_import_issues(skill_dir, manifest=data))
-    issues.extend(_direct_projection_write_issues(skill_dir))
-    issues.extend(_async_subscription_blocking_issues(skill_dir))
+    issues.extend(
+        _sdk_only_import_issues(
+            skill_dir,
+            manifest=data,
+            python_modules=python_modules,
+        )
+    )
+    issues.extend(
+        _direct_projection_write_issues(skill_dir, python_modules=python_modules)
+    )
+    issues.extend(
+        _async_subscription_blocking_issues(skill_dir, python_modules=python_modules)
+    )
     issues.extend(_personalization_manifest_policy_issues(data, install_mode=install_mode))
     issues.extend(validate_python_stdlib_shadowing(skill_dir))
-    issues.extend(validate_dependency_isolation_contract(skill_dir, data, install_mode=install_mode))
-    issues.extend(_conversation_native_static_checks(skill_dir, manifest=data, install_mode=install_mode))
+    issues.extend(
+        validate_dependency_isolation_contract(
+            skill_dir,
+            data,
+            install_mode=install_mode,
+            python_modules=python_modules,
+        )
+    )
+    issues.extend(
+        _conversation_native_static_checks(
+            skill_dir,
+            manifest=data,
+            install_mode=install_mode,
+            python_modules=python_modules,
+        )
+    )
     return issues
 
 
@@ -532,6 +591,7 @@ def validate_dependency_isolation_contract(
     manifest: Dict[str, Any],
     *,
     install_mode: bool,
+    python_modules: tuple[_PythonModuleSnapshot, ...] | None = None,
 ) -> List[Issue]:
     """Predict dependency-isolation failures before packaging or activation."""
 
@@ -585,12 +645,10 @@ def validate_dependency_isolation_contract(
 
     heavy = heavy_dependency_names(dependency_args)
     imported_roots: set[str] = set()
-    for source in Path(skill_dir).rglob("*.py"):
-        if any(part in {".git", ".runtime", "vendor", "artifacts", "__pycache__"} for part in source.parts):
-            continue
-        try:
-            tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-        except (OSError, UnicodeError, SyntaxError):
+    modules = python_modules or _python_module_snapshots(skill_dir)
+    for module in modules:
+        tree = module.tree
+        if tree is None:
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -704,7 +762,12 @@ def validate_data_route_contract(manifest: Dict[str, Any]) -> List[Issue]:
     return issues
 
 
-def _sdk_only_import_issues(skill_dir: Path, *, manifest: Dict[str, Any]) -> List[Issue]:
+def _sdk_only_import_issues(
+    skill_dir: Path,
+    *,
+    manifest: Dict[str, Any],
+    python_modules: tuple[_PythonModuleSnapshot, ...] | None = None,
+) -> List[Issue]:
     """Enforce the opt-in SDK boundary for runtime skill code."""
 
     runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
@@ -712,13 +775,9 @@ def _sdk_only_import_issues(skill_dir: Path, *, manifest: Dict[str, Any]) -> Lis
         return []
 
     issues: List[Issue] = []
-    for path in sorted(skill_dir.rglob("*.py")):
-        if any(part in _SKIP_DIRS for part in path.parts):
-            continue
-        rel = _relative_to(path, skill_dir)
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (OSError, SyntaxError):
+    for module in python_modules or _python_module_snapshots(skill_dir):
+        tree = module.tree
+        if tree is None:
             continue
         for node in ast.walk(tree):
             modules: list[str] = []
@@ -726,16 +785,19 @@ def _sdk_only_import_issues(skill_dir: Path, *, manifest: Dict[str, Any]) -> Lis
                 modules.extend(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 modules.append(node.module)
-            for module in modules:
-                if module == "adaos.sdk" or module.startswith("adaos.sdk."):
+            for imported_module in modules:
+                if imported_module == "adaos.sdk" or imported_module.startswith(
+                    "adaos.sdk."
+                ):
                     continue
-                if module == "adaos" or module.startswith("adaos."):
+                if imported_module == "adaos" or imported_module.startswith("adaos."):
                     issues.append(
                         Issue(
                             "error",
                             "runtime.sdk_only_import",
-                            f"runtime.sdk_only permits only adaos.sdk imports; found {module}",
-                            rel,
+                            "runtime.sdk_only permits only adaos.sdk imports; "
+                            f"found {imported_module}",
+                            module.relative,
                         )
                     )
     return issues
@@ -750,17 +812,17 @@ def _ast_dotted_name(node: ast.AST) -> str:
     return ""
 
 
-def _direct_projection_write_issues(skill_dir: Path) -> List[Issue]:
+def _direct_projection_write_issues(
+    skill_dir: Path,
+    *,
+    python_modules: tuple[_PythonModuleSnapshot, ...] | None = None,
+) -> List[Issue]:
     """Warn when skill code bypasses projection/SDK ownership for Yjs writes."""
 
     issues: List[Issue] = []
-    for path in sorted(skill_dir.rglob("*.py")):
-        if any(part in _SKIP_DIRS for part in path.parts):
-            continue
-        rel = _relative_to(path, skill_dir)
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (OSError, SyntaxError):
+    for module in python_modules or _python_module_snapshots(skill_dir):
+        tree = module.tree
+        if tree is None:
             continue
 
         symbol_aliases: dict[str, str] = {}
@@ -795,13 +857,17 @@ def _direct_projection_write_issues(skill_dir: Path) -> List[Issue]:
                 "projection.direct_yjs_write",
                 "direct write-capable Yjs access bypasses the declared projection contract "
                 f"({calls}); use ctx_* setters/ProjectionService, or adaos.sdk.web.yjs for non-projection access",
-                f"{rel}:{first_line}",
+                f"{module.relative}:{first_line}",
             )
         )
     return issues
 
 
-def _async_subscription_blocking_issues(skill_dir: Path) -> List[Issue]:
+def _async_subscription_blocking_issues(
+    skill_dir: Path,
+    *,
+    python_modules: tuple[_PythonModuleSnapshot, ...] | None = None,
+) -> List[Issue]:
     """Find synchronous I/O reachable from any async skill function.
 
     Detached tasks share the core event loop with channel handling just like
@@ -811,13 +877,9 @@ def _async_subscription_blocking_issues(skill_dir: Path) -> List[Issue]:
     """
 
     issues: List[Issue] = []
-    for path in sorted(skill_dir.rglob("*.py")):
-        if any(part in _SKIP_DIRS for part in path.parts):
-            continue
-        rel = _relative_to(path, skill_dir)
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (OSError, SyntaxError):
+    for module in python_modules or _python_module_snapshots(skill_dir):
+        tree = module.tree
+        if tree is None:
             continue
 
         symbol_aliases: dict[str, str] = {}
@@ -963,7 +1025,7 @@ def _async_subscription_blocking_issues(skill_dir: Path) -> List[Issue]:
                     issue_code,
                     f"async skill function '{function_name}' can reach synchronous blocking APIs ({calls}); "
                     "move the operation behind await asyncio.to_thread(...) or a bounded SDK worker",
-                    f"{rel}:{first_line}",
+                    f"{module.relative}:{first_line}",
                 )
             )
     return issues
@@ -1080,21 +1142,23 @@ def _personalization_manifest_policy_issues(manifest: Dict[str, Any], *, install
     return issues
 
 
-def _conversation_native_static_checks(skill_dir: Path, *, manifest: Dict[str, Any], install_mode: bool) -> List[Issue]:
+def _conversation_native_static_checks(
+    skill_dir: Path,
+    *,
+    manifest: Dict[str, Any],
+    install_mode: bool,
+    python_modules: tuple[_PythonModuleSnapshot, ...] | None = None,
+) -> List[Issue]:
     issues: List[Issue] = []
     uses_conversation_sdk = False
     uses_memory_sdk = False
     declared_transport_tokens = _declared_transport_tokens(skill_dir, manifest)
     skill_name = str(manifest.get("name") or "").strip()
     bounded_memory_names = _bounded_process_memory_names(manifest)
-    for path in sorted(skill_dir.rglob("*.py")):
-        if any(part in _SKIP_DIRS for part in path.parts):
-            continue
-        rel = _relative_to(path, skill_dir)
-        try:
-            text = path.read_text(encoding="utf-8")
-        except Exception:
-            continue
+    for module in python_modules or _python_module_snapshots(skill_dir):
+        path = module.path
+        rel = module.relative
+        text = module.text
         uses_conversation_sdk = uses_conversation_sdk or any(pattern in text for pattern in _CONVERSATION_SDK_PATTERNS)
         uses_memory_sdk = uses_memory_sdk or any(pattern in text for pattern in _MEMORY_SDK_PATTERNS)
         for pattern in _YJS_PATTERNS:
@@ -1127,6 +1191,7 @@ def _conversation_native_static_checks(skill_dir: Path, *, manifest: Dict[str, A
                 text,
                 install_mode=install_mode,
                 bounded_memory_names=bounded_memory_names,
+                tree=module.tree,
             )
         )
     for path in sorted(skill_dir.rglob("*")):
@@ -1248,11 +1313,13 @@ def _conversation_memory_ast_issues(
     *,
     install_mode: bool,
     bounded_memory_names: set[str],
+    tree: ast.Module | None = None,
 ) -> List[Issue]:
-    try:
-        tree = ast.parse(text, filename=str(path))
-    except SyntaxError:
-        return []
+    if tree is None:
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            return []
     issues: List[Issue] = []
     for node in tree.body:
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
