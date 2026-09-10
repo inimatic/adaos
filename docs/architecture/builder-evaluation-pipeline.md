@@ -329,3 +329,35 @@ Core/provider/runtime stage spans, browser task assertions, graders, sealed
 datasets, and the target `sdk.v1` adapter remain open. Therefore this
 implementation is an evaluation bootstrap, not the R2 clean-baseline exit
 proof.
+
+The visible development suite now contains eight ordinary EN/RU archetype
+cases. They contain no component IDs, recipe names, AdaOS paths, or internal
+implementation phases. A `builder.wait` step binds to the case webspace and,
+when the Builder returns an artifact root, waits for the exact durable
+`adaos.builder.llm_job_result.v1` journal instead of treating a reconciled
+session revision as provider completion. This closes the observed race where
+cleanup could remove a scenario while its worker was still validating or
+writing telemetry. Compact Project creation receipts also retain the primary
+component ref required for fail-closed cleanup.
+
+The first live visible case produced three distinct diagnostic runs on
+2026-09-10. The first exposed incorrect webspace propagation and a 420-second
+poll timeout. The second completed functionally in 33.5 seconds but exposed
+the session-reconciliation/cleanup race. After adding the durable terminal
+barrier, the third reached a genuine Builder validation failure in 42.9
+seconds: the model selected a useful work-queue board, repaired malformed
+action structure, but left a static data source attached to a mutating move
+action. Input attribution proved a generic profile with no domain packs and
+three actual model requests. Provider usage was 24,320 input tokens, of which
+14,976 were cached, and 2,001 output tokens. The validator now returns the
+inconsistent source/action values and the exact expected contract, but this
+case remains intentionally red until a generic architecture change passes a
+fresh run.
+
+This evidence also exposes a pre-R4 limitation: deterministic qualification
+returned an unspecified surface and no structured requirements, while lexical
+capability ranking selected board patterns. The model therefore received
+strict component constraints without a typed statement of the user's jobs,
+data, operations, or authority. Improving a repair prompt alone would be
+case-level tuning; the required correction is the typed intent/Prototype Brief
+and deterministic capability filtering defined by R4 and R5.

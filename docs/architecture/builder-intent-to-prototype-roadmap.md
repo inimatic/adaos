@@ -157,6 +157,16 @@ returns its existing report byte-for-byte. A second local Notes run passed in
 legacy chat adapter and 2.55 seconds a second runtime session read. These are
 compatibility-adapter overhead, not target SDK latency.
 
+The visible development suite now has eight EN/RU archetype cases expressed as
+ordinary user turns. Its first live operations-queue case was deliberately
+inspected and is development evidence, not a holdout. Successive runs exposed
+and fixed case-webspace propagation, terminal-job synchronization, compact
+Project ownership receipts, and usage double counting. The hardened run then
+failed for a substantive reason: a generated board combined a static source
+with a mutating move action. The exact three model inputs were attributed to a
+generic profile with no domain packs. The failure is retained as evidence for
+R4/R5 rather than hidden by a fixture-specific rule.
+
 - [x] `[must]` Publish and validate the declarative E2E suite, case, resolved
   run, case-result, report, and immutable baseline contracts defined by the
   [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md). Reuse
@@ -230,6 +240,14 @@ Exit gate: a dependency test proves
 domain-specific generic-Core branches.
 
 ## R4. Intent And Prototype Brief
+
+Evidence note (2026-09-10): the first visible cross-domain case showed that
+the current generic qualifier can return `surface_kind=unspecified` and an
+empty requirement set even when the prompt explicitly names primary jobs,
+fields, operations, and workflow states. Lexical capability selection then
+admits patterns whose data/action invariants are not grounded in a typed
+brief. This is a compiler-boundary defect, not evidence that the prompt needs
+component terminology.
 
 - [ ] `[must]` Publish `adaos.builder.intent.v1` and
   `adaos.builder.prototype_brief.v1` schemas with provenance and `unknown`
