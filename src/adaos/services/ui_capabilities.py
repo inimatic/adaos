@@ -583,6 +583,14 @@ def qualify_ui_request(
             and str(item.get("kind") or "").strip()
         }
     )
+    brief_collection_requirements = [
+        {
+            key: copy.deepcopy(item.get(key))
+            for key in ("id", "kind", "interaction", "statement")
+        }
+        for item in prototype_brief.get("collection_requirements") or []
+        if isinstance(item, Mapping)
+    ]
     brief_operations = set(brief_operation_kinds)
     prototype_resource_required = bool(
         brief_operations
@@ -655,6 +663,7 @@ def qualify_ui_request(
     requirements["prototype_brief_ref"] = prototype_brief["brief_id"]
     requirements["brief_operation_kinds"] = brief_operation_kinds
     requirements["brief_information_kinds"] = brief_information_kinds
+    requirements["brief_collection_requirements"] = brief_collection_requirements
     requirements["prototype_resource"] = prototype_resource_required
     gaps: list[dict[str, Any]] = []
     return {

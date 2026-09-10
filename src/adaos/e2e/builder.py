@@ -517,6 +517,20 @@ def _collect_usage(value: Any) -> dict[str, int]:
     def visit(item: Any) -> None:
         if isinstance(item, Mapping):
             keys = {str(key): child for key, child in item.items()}
+            usage_breakdown = keys.get("usage_breakdown")
+            if isinstance(usage_breakdown, Mapping):
+                for child in usage_breakdown.values():
+                    visit(child)
+                for key, child in keys.items():
+                    if key in {
+                        "generation_diagnostic",
+                        "repair",
+                        "usage",
+                        "usage_breakdown",
+                    }:
+                        continue
+                    visit(child)
+                return
             usage_like = any(
                 key in keys
                 for key in (
@@ -553,7 +567,11 @@ def _collect_usage(value: Any) -> dict[str, int]:
                     )
                 totals["model_calls"] += 1
                 return
-            for child in item.values():
+            for key, child in keys.items():
+                # This is an evidence copy of the terminal generation result.
+                # Its usage is already present on the public wait result.
+                if key == "generation_diagnostic":
+                    continue
                 visit(child)
         elif isinstance(item, list):
             for child in item:

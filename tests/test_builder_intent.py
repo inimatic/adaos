@@ -154,6 +154,51 @@ def test_brief_preserves_explicit_attachment_capture_in_en_and_ru() -> None:
         assert statement[start:end] == requirement["statement"]
 
 
+def test_brief_preserves_repeated_collection_cardinality() -> None:
+    statement = (
+        "Build a repeatable list of checks and let the technician record a result "
+        "for each check."
+    )
+
+    brief = compile_prototype_brief(statement)
+
+    assert brief["collection_requirements"] == [
+        {
+            "id": "collection:01",
+            "kind": "repeated_collection",
+            "interaction": "capture_each",
+            "statement": statement.removesuffix("."),
+            "evidence": [f"intent.statement#char=0:{len(statement) - 1}"],
+            "confidence": 1.0,
+        }
+    ]
+    selection = selected_ui_capabilities(statement)
+    assert selection["qualification"]["requirements"][
+        "brief_collection_requirements"
+    ] == [
+        {
+            "id": "collection:01",
+            "kind": "repeated_collection",
+            "interaction": "capture_each",
+            "statement": statement.removesuffix("."),
+        }
+    ]
+
+
+def test_brief_does_not_turn_ru_nouns_and_field_capture_into_crud() -> None:
+    statement = (
+        "Техник проходит повторяемый список проверок, отмечает результат каждого "
+        "пункта, добавляет измерение и фотографию дефекта. Покажи состояние без "
+        "назначенных осмотров и затем заверши осмотр."
+    )
+
+    brief = compile_prototype_brief(statement)
+
+    assert [item["kind"] for item in brief["operations"]] == ["list", "transition"]
+    assert brief["collection_requirements"][0]["interaction"] == "capture_each"
+    assert brief["information_requirements"][0]["kind"] == "attachment"
+
+
 def test_brief_preserves_ru_lifecycle_and_exception_states_without_domain_terms() -> (
     None
 ):

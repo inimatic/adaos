@@ -47,7 +47,8 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "inspect",
         re.compile(
-            r"\b(?:inspect|open|view|review|scan|browse|откр|просмотр|провер|изуч)\w*\b",
+            r"\b(?:inspect|open|view|review|scan|browse|откр|просмотр|изуч)\w*\b|"
+            r"\bпровер(?:ить|ять|яет|яют|ял|яла|яли|ь|ьте)\b",
             re.IGNORECASE,
         ),
     ),
@@ -63,7 +64,13 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"\b(?:add|create|capture|record|добав|созда|запис)\w*\b", re.IGNORECASE
         ),
     ),
-    ("assign", re.compile(r"\b(?:assign|delegate|назнач|поруч)\w*\b", re.IGNORECASE)),
+    (
+        "assign",
+        re.compile(
+            r"\b(?:assign|delegate|поруч)\w*\b|\bназнач(?!енн|ени)\w*\b",
+            re.IGNORECASE,
+        ),
+    ),
     (
         "transition",
         re.compile(
@@ -94,6 +101,18 @@ _CAPTURE_ATTACHMENT_PATTERN = re.compile(
     r"(?:\u0444\u043e\u0442\u043e|\u0438\u0437\u043e\u0431\u0440\u0430\u0436|\u0441\u043d\u0438\u043c\u043e\u043a|\u0444\u0430\u0439\u043b|\u0432\u043b\u043e\u0436\u0435\u043d|\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442)\w*|"
     r"(?:\u0444\u043e\u0442\u043e|\u0438\u0437\u043e\u0431\u0440\u0430\u0436|\u0441\u043d\u0438\u043c\u043e\u043a|\u0444\u0430\u0439\u043b|\u0432\u043b\u043e\u0436\u0435\u043d|\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442)\w*.{0,40}"
     r"(?:\u043f\u0440\u0438\u043b\u043e\u0436|\u0437\u0430\u0433\u0440\u0443\u0437)\w*)\b",
+    re.IGNORECASE,
+)
+_REPEATED_COLLECTION_PATTERN = re.compile(
+    r"\b(?:repeat(?:able|ed)?\s+(?:collections?|lists?|groups?|rows?|items?|entries)|"
+    r"(?:collections?|lists?|groups?|rows?|items?|entries)\s+(?:that\s+)?(?:repeat|can\s+be\s+added)|"
+    r"\u043f\u043e\u0432\u0442\u043e\u0440\u044f\u0435\u043c\w*\s+(?:\u0441\u043f\u0438\u0441\u043e\u043a|\u0433\u0440\u0443\u043f\u043f|\u0441\u0442\u0440\u043e\u043a|\u043f\u0443\u043d\u043a\u0442|\u044d\u043b\u0435\u043c\u0435\u043d\u0442)\w*|"
+    r"(?:\u0441\u043f\u0438\u0441\u043e\u043a|\u0433\u0440\u0443\u043f\u043f\u0430)\w*\s+\u0441\s+\u0432\u043e\u0437\u043c\u043e\u0436\u043d\u043e\u0441\u0442\w*\s+\u0434\u043e\u0431\u0430\u0432\w*)\b",
+    re.IGNORECASE,
+)
+_PER_ITEM_CAPTURE_PATTERN = re.compile(
+    r"\b(?:each|every|per)\s+(?:item|entry|row|check)\w*\b|"
+    r"\b(?:\u043a\u0430\u0436\u0434)\w*\s+(?:\u043f\u0443\u043d\u043a\u0442|\u044d\u043b\u0435\u043c\u0435\u043d\u0442|\u0441\u0442\u0440\u043e\u043a|\u043f\u0440\u043e\u0432\u0435\u0440\u043a)\w*\b",
     re.IGNORECASE,
 )
 _RESPONSIVE_PATTERN = re.compile(
@@ -212,9 +231,15 @@ def _extract_operations(statement: str) -> tuple[list[dict[str, Any]], list[str]
     seen_operations: set[str] = set()
     for clause, clause_start, _clause_end in _clauses(statement):
         authoring_spans = _authoring_spans(clause)
+        operation_exclusion_spans = [
+            *authoring_spans,
+            *(match.span() for match in _CAPTURE_ATTACHMENT_PATTERN.finditer(clause)),
+        ]
         clause_operations = []
         for kind, pattern in _OPERATION_PATTERNS:
-            match = _first_non_authoring_match(pattern, clause, authoring_spans)
+            match = _first_non_authoring_match(
+                pattern, clause, operation_exclusion_spans
+            )
             if match is not None:
                 clause_operations.append((kind, match))
         if not clause_operations:
@@ -254,6 +279,28 @@ def _extract_information_requirements(statement: str) -> list[dict[str, Any]]:
                 "interaction": "capture",
                 "statement": match.group(0).strip(),
                 "evidence": [f"intent.statement#char={match.start()}:{match.end()}"],
+                "confidence": 1.0,
+            }
+        )
+    return requirements[:12]
+
+
+def _extract_collection_requirements(statement: str) -> list[dict[str, Any]]:
+    requirements: list[dict[str, Any]] = []
+    for clause, start, end in _clauses(statement):
+        if not _REPEATED_COLLECTION_PATTERN.search(clause):
+            continue
+        requirements.append(
+            {
+                "id": f"collection:{len(requirements) + 1:02d}",
+                "kind": "repeated_collection",
+                "interaction": (
+                    "capture_each"
+                    if _PER_ITEM_CAPTURE_PATTERN.search(clause)
+                    else "present"
+                ),
+                "statement": clause,
+                "evidence": [f"intent.statement#char={start}:{end}"],
                 "confidence": 1.0,
             }
         )
@@ -351,6 +398,7 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
     statement = str(captured["statement"])
     operations, job_statements = _extract_operations(statement)
     information_requirements = _extract_information_requirements(statement)
+    collection_requirements = _extract_collection_requirements(statement)
     jobs = [
         {
             "id": f"job:{index:02d}",
@@ -399,6 +447,7 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
         "principal_jobs": jobs,
         "entities": _knowledge("unknown"),
         "information_requirements": information_requirements,
+        "collection_requirements": collection_requirements,
         "operations": operations,
         "representative_states": _extract_representative_states(statement),
         "boundaries": {

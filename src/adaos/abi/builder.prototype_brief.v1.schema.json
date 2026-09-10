@@ -42,6 +42,10 @@
       "type": "array",
       "items": { "$ref": "#/$defs/informationRequirement" }
     },
+    "collection_requirements": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/collectionRequirement" }
+    },
     "operations": {
       "type": "array",
       "items": {
@@ -128,6 +132,19 @@
         "id": { "type": "string", "minLength": 1 },
         "kind": { "enum": ["attachment", "text", "number", "choice", "boolean", "date", "time", "other"] },
         "interaction": { "enum": ["capture", "present"] },
+        "statement": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "collectionRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "interaction", "statement", "evidence", "confidence"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "const": "repeated_collection" },
+        "interaction": { "enum": ["present", "capture_each"] },
         "statement": { "type": "string", "minLength": 1 },
         "evidence": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 }

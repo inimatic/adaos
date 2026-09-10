@@ -88,6 +88,14 @@ def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
         for item in value.get("information_requirements") or []
         if isinstance(item, Mapping)
     ]
+    collection_requirements = [
+        {
+            key: copy.deepcopy(item.get(key))
+            for key in ("id", "kind", "interaction", "statement")
+        }
+        for item in value.get("collection_requirements") or []
+        if isinstance(item, Mapping)
+    ]
     interpretation = (
         value.get("interpretation")
         if isinstance(value.get("interpretation"), Mapping)
@@ -100,6 +108,7 @@ def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
         "primary_jobs": jobs,
         "operations": operations,
         "information_requirements": information_requirements,
+        "collection_requirements": collection_requirements,
         "state_requirements": state_requirements,
         "facts": facts,
         "boundaries": boundaries,

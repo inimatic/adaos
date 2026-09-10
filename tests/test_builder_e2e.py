@@ -159,6 +159,60 @@ def test_runner_writes_schema_valid_bundle_and_resolves_step_input(
     assert len(list((bundle / "cases" / "case-en").glob("*.json"))) == 2
 
 
+def test_runner_counts_generation_usage_breakdown_once(tmp_path: Path) -> None:
+    case = _case()
+    case["steps"] = case["steps"][:1]
+    suite = _write_suite(tmp_path / "definitions", cases=[case])
+    telemetry = {
+        "usage": {
+            "input_tokens": 220,
+            "cached_input_tokens": 80,
+            "output_tokens": 30,
+        },
+        "usage_breakdown": {
+            "primary": {
+                "input_tokens": 120,
+                "cached_input_tokens": 0,
+                "output_tokens": 20,
+            },
+            "repair": {
+                "input_tokens": 100,
+                "cached_input_tokens": 80,
+                "output_tokens": 10,
+            },
+        },
+        "repair": {
+            "usage": {
+                "input_tokens": 100,
+                "cached_input_tokens": 80,
+                "output_tokens": 10,
+            }
+        },
+    }
+    executor = FixtureExecutor(
+        {
+            "first": {
+                "ok": True,
+                "telemetry": telemetry,
+                "generation_diagnostic": {"telemetry": telemetry},
+            }
+        }
+    )
+
+    report = BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="usage-breakdown",
+        executor=executor,
+    ).run()
+
+    assert report["metrics"]["model_calls"] == 2
+    assert report["metrics"]["fresh_input_tokens"] == 140
+    assert report["metrics"]["cached_input_tokens"] == 80
+    assert report["metrics"]["output_tokens"] == 30
+
+
 def test_required_failure_stops_case_but_optional_failure_does_not(
     tmp_path: Path,
 ) -> None:
