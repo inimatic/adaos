@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "2.0.0",
+  "catalog_version": "2.0.1",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -14,7 +14,15 @@
       },
       "manifest": {
         "types": ["single", "stack"],
-        "patterns": ["stack", "modal", "sheet", "tabs"]
+        "patterns": ["stack", "modal", "sheet", "tabs"],
+        "required_properties": ["type", "areas"],
+        "single_area_shape": {
+          "layout": {
+            "type": "single",
+            "areas": [{"id": "main", "role": "main"}]
+          },
+          "widget_area": "main"
+        }
       },
       "responsive": {
         "desktop": "single ordered track",

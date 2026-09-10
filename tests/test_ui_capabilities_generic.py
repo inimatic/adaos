@@ -53,6 +53,20 @@ def test_generic_catalog_contains_no_subject_recipe() -> None:
         get_ui_capability("recipe.application_manager")
 
 
+def test_flow_layout_contract_exposes_required_single_area_shape() -> None:
+    catalog = ui_capability_catalog()
+    flow = next(item for item in catalog["layouts"] if item["id"] == "layout.flow")
+
+    assert flow["manifest"]["required_properties"] == ["type", "areas"]
+    assert flow["manifest"]["single_area_shape"] == {
+        "layout": {
+            "type": "single",
+            "areas": [{"id": "main", "role": "main"}],
+        },
+        "widget_area": "main",
+    }
+
+
 def test_generic_request_cannot_select_subject_pack_by_wording_or_id() -> None:
     for request in (
         "Create an Applications marketplace with stable and prerelease versions",

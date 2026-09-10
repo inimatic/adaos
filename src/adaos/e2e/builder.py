@@ -886,7 +886,7 @@ class CompatibilityBuilderExecutor:
             "status": "failed" if violations else "passed",
             "journal_count": journal_count,
             "unique_receipt_count": len(receipts),
-            "observed_model_calls": usage["model_calls"],
+            "observed_model_calls": max(usage["model_calls"], len(receipts)),
             "expected_profile": expected_profile,
             "expected_domain_packs": expected_packs,
             "receipts": receipts,

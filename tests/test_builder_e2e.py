@@ -590,6 +590,7 @@ def test_compatibility_executor_validates_actual_generic_request_journal(
     assert result["status"] == "passed"
     assert result["journal_count"] == 1
     assert result["unique_receipt_count"] == 1
+    assert result["observed_model_calls"] == 1
     assert result["receipts"][0]["request_id"] == "request-actual"
 
 

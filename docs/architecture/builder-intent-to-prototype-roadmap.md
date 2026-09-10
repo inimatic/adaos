@@ -180,7 +180,7 @@ R4/R5 rather than hidden by a fixture-specific rule.
 - [ ] `[must]` Prove runner isolation, deterministic case selection,
   interruption/resume, retry accounting, cleanup, artifact retention, and
   matched-run comparability with model-free self-tests.
-- [ ] `[must]` Build a visible development suite from the application
+- [x] `[must]` Build a visible development suite from the application
   archetypes already used for Client/component analysis. Use it to debug the
   harness and metric collectors; never call it held-out.
 - [ ] `[must]` Define and seal an evaluation set of at least 40 ordinary EN/RU
@@ -268,7 +268,7 @@ persistence, ambiguity policy, and user confirmation remain open.
 - [x] `[must]` Publish `adaos.builder.intent.v1` and
   `adaos.builder.prototype_brief.v1` schemas with provenance and `unknown`
   semantics.
-- [ ] `[must]` Implement deterministic extraction for explicit refs, locale,
+- [x] `[must]` Implement deterministic extraction for explicit refs, locale,
   source Project/Change, accepted requirements, authority, and recognized
   operation verbs before model interpretation.
 - [ ] `[must]` Implement schema-constrained brief compilation for the residual

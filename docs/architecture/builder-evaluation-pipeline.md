@@ -361,3 +361,19 @@ strict component constraints without a typed statement of the user's jobs,
 data, operations, or authority. Improving a repair prompt alone would be
 case-level tuning; the required correction is the typed intent/Prototype Brief
 and deterministic capability filtering defined by R4 and R5.
+
+A fourth retained run, `operations-typed-20260910`, exercised the first typed
+Prototype Brief. It selected the resource-board, master-detail, and data-entry
+contracts from explicit inspect/create/assign/transition operations and passed
+input attribution with no domain packs. The primary JSONL response was
+syntactically malformed; one repair produced the intended query-backed board,
+details, create/edit forms, six representative records, and all required
+operations, but omitted the required `areas` property from two single-area
+modal layouts. Total duration was 63.9 seconds with two model calls, 11,630
+fresh input tokens, 4,480 cached input tokens, and 3,594 output tokens. Offline
+validation proved that four unambiguous structural normalizations, adding the
+single `main` area and binding each modal form to it, make that exact retained
+candidate pass every generic request postcondition. The generic flow-layout
+contract now exposes this exact shape and the parser records this bounded
+normalization instead of spending another model call. The run remains failed
+evidence; only a fresh run may establish the correction.
