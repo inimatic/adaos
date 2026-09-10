@@ -567,11 +567,11 @@ def compile_semantic_prototype(
                 f"ui.application.desktop.pageSchema.widgets.@{view_id}.actions.@{command_id}"
             ]
 
-    layout_type = {
-        "flow": "stack",
-        "split": "split",
-        "grid": "grid",
-        "focus_detail": "split",
+    layout_type, layout_pattern = {
+        "flow": ("stack", "stack"),
+        "split": ("split", "split"),
+        "grid": ("grid", "grid"),
+        "focus_detail": ("split", "focus-detail"),
     }[str(document["layout"]["pattern"])]
     page_schema = {
         "id": str(document["document_id"]),
@@ -579,7 +579,7 @@ def compile_semantic_prototype(
         "title_i18n": title_i18n,
         "layout": {
             "type": layout_type,
-            "pattern": str(document["layout"]["pattern"]),
+            "pattern": layout_pattern,
             "areas": [
                 {
                     "id": str(region["id"]),

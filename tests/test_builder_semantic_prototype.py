@@ -321,3 +321,27 @@ def test_public_sdk_exposes_semantic_compilation() -> None:
     assert result["validation"]["ok"] is True
     assert result["webui"]["generated_by"] == "builder.semantic_compiler.v1"
     assert prototype_sdk.semantic_contract()["$id"] == "adaos.webui.semantic.v1"
+
+
+@pytest.mark.parametrize(
+    ("semantic_pattern", "runtime_type", "runtime_pattern"),
+    [
+        ("flow", "stack", "stack"),
+        ("split", "split", "split"),
+        ("grid", "grid", "grid"),
+        ("focus_detail", "split", "focus-detail"),
+    ],
+)
+def test_semantic_layout_maps_to_runtime_abi(
+    semantic_pattern: str,
+    runtime_type: str,
+    runtime_pattern: str,
+) -> None:
+    brief, semantic = _fixture()
+    semantic["layout"]["pattern"] = semantic_pattern
+
+    result = compile_semantic_prototype(semantic, brief=brief)
+
+    layout = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]["layout"]
+    assert layout["type"] == runtime_type
+    assert layout["pattern"] == runtime_pattern
