@@ -89,6 +89,14 @@ def compile_semantic(
     return compile_semantic_prototype(document, brief=brief)
 
 
+def semantic_contract() -> dict[str, Any]:
+    """Return the schema used for semantic Prototype generation."""
+
+    from adaos.services.builder.semantic_prototype import semantic_prototype_contract
+
+    return semantic_prototype_contract()
+
+
 def start_data_runtime(definition: Mapping[str, Any]):
     from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
 
@@ -149,6 +157,7 @@ __all__ = [
     "composition_slice",
     "automation_handoff",
     "model_context",
+    "semantic_contract",
     "start_data_runtime",
     "submit_request",
     "validate_workflow_slice",

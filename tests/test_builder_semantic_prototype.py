@@ -320,3 +320,4 @@ def test_public_sdk_exposes_semantic_compilation() -> None:
 
     assert result["validation"]["ok"] is True
     assert result["webui"]["generated_by"] == "builder.semantic_compiler.v1"
+    assert prototype_sdk.semantic_contract()["$id"] == "adaos.webui.semantic.v1"

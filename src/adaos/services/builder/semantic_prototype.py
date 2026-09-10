@@ -320,6 +320,12 @@ def validate_semantic_prototype(
     return document
 
 
+def semantic_prototype_contract() -> dict[str, Any]:
+    """Return the immutable model-facing semantic document contract."""
+
+    return copy.deepcopy(_validator().schema)
+
+
 def _localized(
     value: Mapping[str, Any], dictionaries: dict[str, dict[str, str]]
 ) -> tuple[str, dict[str, str]]:
@@ -643,5 +649,6 @@ __all__ = [
     "SEMANTIC_COMPILE_RESULT_SCHEMA",
     "SEMANTIC_PROTOTYPE_SCHEMA",
     "compile_semantic_prototype",
+    "semantic_prototype_contract",
     "validate_semantic_prototype",
 ]
