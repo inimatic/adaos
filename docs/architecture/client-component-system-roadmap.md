@@ -97,13 +97,22 @@ On this machine, test execution took 0.79 seconds after a 52.0-second test
 bundle build, while the application bundle took 90.5 seconds. Build-graph
 latency is therefore tracked separately from runtime behavior.
 
+Client commit `559413e` adds the equivalent `PAGE_MODAL_EXTENSIONS` port and
+moves the desktop Apps/Widgets catalog schemas, IDs, materialization recovery,
+and diagnostics into an explicit compatibility extension. With product modal
+extensions disabled, the generic runtime now reports `modal.not_found` instead
+of silently exposing a catalog. The generated inventory records modal
+extensions and their matched IDs. Evidence is 31/31 focused modal tests,
+TypeScript compilation, and the inventory/boundary gates; the test bundle took
+27.6 seconds while actual tests took 0.21 seconds.
+
 The gate remains open. The generated inventory makes the next failures
 explicit: the semantic contract advertises action kinds `apply_review_change`,
 `emit`, `navigate`, and `patch_y`, and binding kinds `projection` and `view`,
 without corresponding lowering. Product-specific compatibility still exists
-in `PageModalService`, `PageDataService`, generic chat/command/file widgets,
-and selected desktop compatibility widgets. Those branches require typed
-ports or explicitly registered owners before a clean Builder baseline.
+in `PageDataService`, generic chat/command/file widgets, and selected desktop
+compatibility widgets. Those branches require typed ports or explicitly
+registered owners before a clean Builder baseline.
 
 - [ ] `[must]` Extract Builder, Applications/Marketplace, Infrastate, Voice,
   and Media Center behavior from generic widgets and runtime services into
