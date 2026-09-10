@@ -1,6 +1,7 @@
 # src\adaos\services\root\client.py
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 import httpx
@@ -12,7 +13,7 @@ import os
 import ssl
 import threading
 import uuid
-from typing import Any, Mapping, MutableMapping, Optional, Tuple
+from typing import Any, Iterator, Mapping, MutableMapping, Optional, Tuple
 from urllib.parse import quote
 
 from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
@@ -160,6 +161,27 @@ def _env_timeout_s(name: str, default: float, *, minimum: float = 0.25, maximum:
 
 
 @dataclass(slots=True)
+class _SessionRootHttpClient:
+    owner: Any
+    client: httpx.Client
+
+    @property
+    def base_url(self) -> str:
+        return str(self.owner.base_url)
+
+    @property
+    def verify(self) -> str | bool | ssl.SSLContext:
+        return self.owner.verify
+
+    @property
+    def cert(self) -> Optional[Tuple[str, str]]:
+        return self.owner.cert
+
+    def request(self, method: str, path: str, **kwargs: Any) -> Any:
+        return self.owner._request(method, path, client=self.client, **kwargs)
+
+
+@dataclass(slots=True)
 class RootHttpClient:
     """HTTP client for the Inimatic Root API."""
 
@@ -257,6 +279,34 @@ class RootHttpClient:
             response_bytes=response_bytes,
         )
 
+    @contextmanager
+    def session(self, *, timeout: float | None = None) -> Iterator[Any]:
+        """Reuse one HTTP connection pool for a bounded sequence of requests."""
+
+        effective_verify = self._effective_verify(self.verify)
+        with httpx.Client(
+            base_url=self.base_url,
+            timeout=timeout or self.timeout,
+            verify=effective_verify,
+            cert=self.cert,
+        ) as client:
+            yield _SessionRootHttpClient(owner=self, client=client)
+
+    @staticmethod
+    def _effective_verify(
+        verify: str | bool | ssl.SSLContext,
+    ) -> str | bool | ssl.SSLContext:
+        effective_verify = verify
+        if isinstance(effective_verify, str):
+            mode = (os.getenv("ADAOS_ROOT_CA_MODE") or "append").strip().lower()
+            if mode == "append":
+                ca_path = Path(effective_verify)
+                if ca_path.exists():
+                    ctx = ssl.create_default_context()
+                    ctx.load_verify_locations(cafile=str(ca_path))
+                    effective_verify = ctx
+        return effective_verify
+
     def _request(
         self,
         method: str,
@@ -271,29 +321,18 @@ class RootHttpClient:
         timeout: float | None = None,
         accept_204: bool = False,
         response_bytes: bool = False,
+        client: httpx.Client | None = None,
     ) -> Any:
         trace_request = _trace_root_http_request(path)
         started = time.perf_counter()
         request_headers: MutableMapping[str, str] | None = None
         if headers:
             request_headers = {str(k): str(v) for k, v in headers.items()}
-        effective_verify = self.verify if verify is None else verify
-        if isinstance(effective_verify, str):
-            mode = (os.getenv("ADAOS_ROOT_CA_MODE") or "append").strip().lower()
-            if mode == "append":
-                ca_path = Path(effective_verify)
-                if ca_path.exists():
-                    ctx = ssl.create_default_context()
-                    # Add user-provided CA certificates without discarding system defaults.
-                    ctx.load_verify_locations(cafile=str(ca_path))
-                    effective_verify = ctx
+        effective_verify = self._effective_verify(
+            self.verify if verify is None else verify
+        )
         try:
-            with httpx.Client(
-                base_url=self.base_url,
-                timeout=timeout or self.timeout,
-                verify=effective_verify,
-                cert=cert,
-            ) as client:
+            if client is not None:
                 response = client.request(
                     method,
                     path,
@@ -301,7 +340,23 @@ class RootHttpClient:
                     json=json,
                     data=data,
                     headers=request_headers,
+                    timeout=timeout or self.timeout,
                 )
+            else:
+                with httpx.Client(
+                    base_url=self.base_url,
+                    timeout=timeout or self.timeout,
+                    verify=effective_verify,
+                    cert=cert,
+                ) as transient_client:
+                    response = transient_client.request(
+                        method,
+                        path,
+                        params=params,
+                        json=json,
+                        data=data,
+                        headers=request_headers,
+                    )
         except httpx.RequestError as exc:  # pragma: no cover - network errors are environment specific
             if trace_request:
                 _ROOT_HTTP_LOG.warning(

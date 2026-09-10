@@ -584,6 +584,66 @@ def test_wait_response_job_retries_transient_poll_502(monkeypatch: pytest.Monkey
     ]
 
 
+def test_wait_response_job_reuses_one_root_http_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adaos.sdk.llm import llm_client as llm
+
+    _clear_llm_env(monkeypatch)
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://api.inimatic.com"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    lifecycle = {"created": 0, "entered": 0, "exited": 0}
+    statuses = iter(("running", "succeeded"))
+
+    class _Session:
+        def __init__(self, client):
+            self.client = client
+
+        def __enter__(self):
+            lifecycle["entered"] += 1
+            return self.client
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            lifecycle["exited"] += 1
+            return False
+
+    class FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):  # noqa: ARG002
+            lifecycle["created"] += 1
+            self.base_url = base_url
+            self.verify = verify
+            self.cert = cert
+
+        def session(self, *, timeout=None):  # noqa: ARG002
+            return _Session(self)
+
+        def request(self, method, path, **kwargs):  # noqa: ARG002
+            assert method == "GET"
+            assert path == "/v1/llm/jobs/llm_job_session"
+            return {
+                "ok": True,
+                "schema": "adaos.root.llm.job.v1",
+                "job_id": "llm_job_session",
+                "status": next(statuses),
+            }
+
+    monkeypatch.setattr(llm, "_current_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "RootHttpClient", FakeRootHttpClient)
+
+    result = llm.wait_response_job(
+        "llm_job_session",
+        base_url="https://api.inimatic.com",
+        timeout_s=2,
+        poll_interval_s=0.01,
+        request_timeout=0.25,
+    )
+
+    assert result["status"] == "succeeded"
+    assert lifecycle == {"created": 1, "entered": 1, "exited": 1}
+
+
 def test_llm_root_payload_includes_stream_prompt_cache_and_text_format_controls() -> None:
     from adaos.sdk.llm import llm_client as llm
 

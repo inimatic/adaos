@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Optional
 import json
 import logging
 import os
@@ -1015,7 +1016,14 @@ def submit_response_job(
     return {}
 
 
-def get_response_job(job_id: str, *, base_url: str | None = None, timeout: float | None = None) -> Dict[str, Any]:
+def get_response_job(
+    job_id: str,
+    *,
+    base_url: str | None = None,
+    timeout: float | None = None,
+    _poll_http: Any | None = None,
+    _poll_cfg: Any | None = None,
+) -> Dict[str, Any]:
     """
     Read a Root LLM job status. Use base_url from submit_response_job["_client"]
     when available so polling stays on the root that owns the job.
@@ -1023,7 +1031,7 @@ def get_response_job(job_id: str, *, base_url: str | None = None, timeout: float
     job_id = str(job_id or "").strip()
     if not job_id:
         raise ValueError("job_id is required")
-    if _legacy_http_enabled() and not base_url:
+    if _legacy_http_enabled() and not base_url and _poll_http is None:
         resp = requests.get(_llm_job_endpoint(job_id), headers=_auth_headers(), timeout=timeout or 15)
         resp.raise_for_status()
         data: Dict[str, Any] = resp.json() if resp.text else {}
@@ -1031,7 +1039,10 @@ def get_response_job(job_id: str, *, base_url: str | None = None, timeout: float
         return data
 
     ctx = _current_ctx()
-    primary, cfg = _root_http_client(ctx)
+    if _poll_http is None:
+        primary, cfg = _root_http_client(ctx)
+    else:
+        primary, cfg = _poll_http, _poll_cfg
     headers = _identity_headers(ctx, cfg)
     primary_base_url = _normalize_root_base_url(getattr(primary, "base_url", None))
     base_urls = [_normalize_root_base_url(base_url)] if base_url else _root_llm_base_urls(primary)
@@ -1071,7 +1082,29 @@ def get_response_job(job_id: str, *, base_url: str | None = None, timeout: float
     return {}
 
 
-def wait_response_job(
+@contextmanager
+def _response_job_poll_session(
+    base_url: str | None,
+    *,
+    timeout: float,
+) -> Iterator[tuple[Any | None, Any | None]]:
+    if _legacy_http_enabled() or not _normalize_root_base_url(base_url):
+        yield None, None
+        return
+    ctx = _current_ctx()
+    primary, cfg = _root_http_client(ctx)
+    primary_base_url = _normalize_root_base_url(getattr(primary, "base_url", None))
+    target_base_url = _normalize_root_base_url(base_url)
+    http = _root_http_for_base(primary, primary_base_url, target_base_url, 0)
+    session = getattr(http, "session", None)
+    if not callable(session):
+        yield None, None
+        return
+    with session(timeout=timeout) as active_http:
+        yield active_http, cfg
+
+
+def _wait_response_job_loop(
     job_id: str,
     *,
     base_url: str | None = None,
@@ -1080,6 +1113,8 @@ def wait_response_job(
     request_timeout: float | None = None,
     log_interval_s: float = 30,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
+    _poll_http: Any | None = None,
+    _poll_cfg: Any | None = None,
 ) -> Dict[str, Any]:
     started = time.monotonic()
     deadline = started + max(0.1, float(timeout_s))
@@ -1102,7 +1137,13 @@ def wait_response_job(
     while True:
         poll_count += 1
         try:
-            last = get_response_job(job_id, base_url=base_url, timeout=request_timeout or min(15, interval + 5))
+            last = get_response_job(
+                job_id,
+                base_url=base_url,
+                timeout=request_timeout or min(15, interval + 5),
+                _poll_http=_poll_http,
+                _poll_cfg=_poll_cfg,
+            )
         except Exception as exc:
             if not _retryable_llm_job_poll_error(exc):
                 _LOG.warning(
@@ -1180,6 +1221,35 @@ def wait_response_job(
                 + (f" last_poll_error={last_poll_error}" if last_poll_error else "")
             )
         time.sleep(interval)
+
+
+def wait_response_job(
+    job_id: str,
+    *,
+    base_url: str | None = None,
+    timeout_s: float = 240,
+    poll_interval_s: float = 2,
+    request_timeout: float | None = None,
+    log_interval_s: float = 30,
+    progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
+) -> Dict[str, Any]:
+    interval = max(0.25, float(poll_interval_s))
+    effective_request_timeout = request_timeout or min(15, interval + 5)
+    with _response_job_poll_session(
+        base_url,
+        timeout=effective_request_timeout,
+    ) as (poll_http, poll_cfg):
+        return _wait_response_job_loop(
+            job_id,
+            base_url=base_url,
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
+            request_timeout=request_timeout,
+            log_interval_s=log_interval_s,
+            progress_callback=progress_callback,
+            _poll_http=poll_http,
+            _poll_cfg=poll_cfg,
+        )
 
 
 def _load_prompt(template_path: Path, substitutions: Mapping[str, str]) -> str:

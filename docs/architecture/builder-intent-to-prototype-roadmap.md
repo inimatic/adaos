@@ -359,8 +359,10 @@ Progress note (2026-09-10): DEV Builder now removes request-specific
 qualification from the stable capability bundle and puts the typed brief in
 the dynamic suffix. A characterization test proves that two different prompts
 which resolve to the same capability bundle produce byte-identical stable
-prompts. The complete-WebUI/project-memory reductions and content-addressed
-retrieval path remain open.
+prompts. Root LLM job polling now reuses one explicitly scoped HTTP connection
+pool and still reports provider execution separately from orchestration time.
+The complete-WebUI/project-memory reductions and content-addressed retrieval
+path remain open.
 
 - [ ] `[must]` Replace complete WebUI/project-memory/history inclusion with
   brief deltas, semantic slices, accepted constraints, findings, and retrievable

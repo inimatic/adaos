@@ -420,3 +420,11 @@ cleanup correctness, but it fails the intended one-repair cost discipline and
 must not be treated as a clean performance baseline. The typed plan/compiler
 route must remove structural patch authorship from the design model, and the
 legacy route needs an explicit repair-attempt budget in the interim.
+
+The same live traces showed that the SDK opened a new TCP/TLS connection for
+every Root job poll. `wait_response_job` now owns one bounded keep-alive session
+for the exact Root that accepted the job and closes it when waiting ends; retry
+classification, identity headers, request timeout, and Root ownership remain
+unchanged. This removes local transport overhead and connection churn, while
+provider `queue_ms` and `execution_ms` remain separately reported so the
+optimization cannot be mistaken for reduced model inference time.

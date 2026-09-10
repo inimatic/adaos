@@ -20,6 +20,43 @@ class _FakeRootHttpLogger:
         self.calls.append(("warning", args))
 
 
+def test_scoped_session_reuses_one_httpx_client(monkeypatch) -> None:
+    lifecycle = {"created": 0, "entered": 0, "exited": 0, "requests": 0}
+
+    class _Response:
+        status_code = 200
+        content = b'{"ok": true}'
+        text = '{"ok": true}'
+
+        def json(self):
+            return {"ok": True}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):  # noqa: ARG002
+            lifecycle["created"] += 1
+
+        def __enter__(self):
+            lifecycle["entered"] += 1
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            lifecycle["exited"] += 1
+            return False
+
+        def request(self, *args, **kwargs):  # noqa: ARG002
+            lifecycle["requests"] += 1
+            return _Response()
+
+    monkeypatch.setattr(root_client_module.httpx, "Client", _Client)
+    client = RootHttpClient(base_url="https://api.example.test")
+
+    with client.session(timeout=3) as session:
+        assert session.request("GET", "/v1/one") == {"ok": True}
+        assert session.request("GET", "/v1/two") == {"ok": True}
+
+    assert lifecycle == {"created": 1, "entered": 1, "exited": 1, "requests": 2}
+
+
 def test_routine_control_report_success_is_aggregated(monkeypatch) -> None:
     class _Response:
         status_code = 202
