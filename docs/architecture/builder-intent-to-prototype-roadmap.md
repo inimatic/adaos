@@ -265,6 +265,16 @@ application's own operation set. Generic capability selection consumes these
 facts before lexical fallback. Residual model interpretation, accepted-field
 persistence, ambiguity policy, and user confirmation remain open.
 
+RU/EN parity note (2026-09-10): authoring exclusion is now span-aware rather
+than clause-wide. A single ordinary turn may say "create an application" and
+then name its actual operations in the same sentence; only the Builder command
+span is excluded, while later operation evidence keeps its exact source
+offsets. The generic lifecycle vocabulary covers common close/complete,
+submit/approve/reject/cancel, and status-change forms in both locales. Tests
+also prohibit lexical prefix leakage such as interpreting `marketplace` as a
+`mark` operation. All four visible RU development archetypes now compile a
+non-empty operation set without introducing subject entities into Core.
+
 - [x] `[must]` Publish `adaos.builder.intent.v1` and
   `adaos.builder.prototype_brief.v1` schemas with provenance and `unknown`
   semantics.

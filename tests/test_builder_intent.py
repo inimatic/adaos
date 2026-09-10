@@ -56,6 +56,45 @@ def test_brief_separates_builder_authoring_from_in_application_operations() -> N
     assert "entities" in brief["interpretation"]["unresolved_fields"]
 
 
+def test_brief_preserves_ru_operations_after_authoring_prefix_in_same_clause() -> None:
+    statement = (
+        "Создай приложение для учета заявок: добавлять, назначать, "
+        "менять статус и закрывать."
+    )
+
+    brief = compile_prototype_brief(statement)
+
+    assert [item["kind"] for item in brief["operations"]] == [
+        "create",
+        "assign",
+        "transition",
+    ]
+    assert brief["principal_jobs"] == [
+        {
+            "id": "job:01",
+            "statement": (
+                "для учета заявок: добавлять, назначать, менять статус и закрывать"
+            ),
+            "evidence": ["intent.statement"],
+            "confidence": 1.0,
+        }
+    ]
+    assert "operations" not in brief["interpretation"]["unresolved_fields"]
+    for operation in brief["operations"]:
+        offsets = operation["evidence"][0].removeprefix(
+            "intent.statement#char="
+        )
+        start, end = (int(value) for value in offsets.split(":"))
+        assert statement[start:end] == operation["statement"]
+
+
+def test_ru_builder_authoring_is_not_an_application_create_operation() -> None:
+    brief = compile_prototype_brief('Создай новое приложение "Заявки" для команды.')
+
+    assert brief["operations"] == []
+    assert brief["principal_jobs"] == []
+
+
 def test_brief_drives_generic_capabilities_without_internal_prompt_terms() -> None:
     selection = selected_ui_capabilities(
         "Team members need to scan work, open one item, add a request, "

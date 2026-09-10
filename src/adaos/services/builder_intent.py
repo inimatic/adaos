@@ -67,14 +67,20 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "transition",
         re.compile(
-            r"\b(?:move|advance|transition|перемещ|перевод|сменить статус)\w*\b",
+            r"\b(?:move|advance|transition|close|complete|finish|submit|approve|reject|cancel|"
+            r"перемещ|перевод|закры|заверш|отправ|соглас|одобр|отклон|отмен)\w*\b|"
+            r"\b(?:change|set|смен|меня)\w*\s+status\b|"
+            r"\b(?:смен|меня)\w*\s+статус\w*\b",
             re.IGNORECASE,
         ),
     ),
     (
         "update",
         re.compile(
-            r"\b(?:edit|update|change|mark|редакт|измен|отмет)\w*\b", re.IGNORECASE
+            r"\b(?:(?:edit(?:s|ed|ing)?|updat(?:e|es|ed|ing)|"
+            r"chang(?:e|es|ed|ing)|mark(?:s|ed|ing)?)\b|"
+            r"(?:редакт|измен|отмет)\w*\b)",
+            re.IGNORECASE,
         ),
     ),
     ("archive", re.compile(r"\b(?:archive|архив)\w*\b", re.IGNORECASE)),
@@ -146,8 +152,41 @@ def _clauses(statement: str) -> list[tuple[str, int, int]]:
     return result
 
 
-def _is_authoring_clause(clause: str) -> bool:
-    return any(pattern.search(clause) for pattern in _AUTHORING_PATTERNS)
+def _authoring_spans(clause: str) -> list[tuple[int, int]]:
+    spans = [
+        match.span()
+        for pattern in _AUTHORING_PATTERNS
+        for match in pattern.finditer(clause)
+    ]
+    return sorted(spans)
+
+
+def _overlaps_any(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start < span_end and end > span_start for span_start, span_end in spans)
+
+
+def _without_spans(value: str, spans: list[tuple[int, int]]) -> str:
+    if not spans:
+        return value
+    chars = list(value)
+    for start, end in spans:
+        chars[start:end] = " " * (end - start)
+    return "".join(chars).strip(" \t\r\n,;:-.!?")
+
+
+def _first_non_authoring_match(
+    pattern: re.Pattern[str],
+    clause: str,
+    authoring_spans: list[tuple[int, int]],
+) -> re.Match[str] | None:
+    return next(
+        (
+            match
+            for match in pattern.finditer(clause)
+            if not _overlaps_any(match.start(), match.end(), authoring_spans)
+        ),
+        None,
+    )
 
 
 def _extract_operations(statement: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -155,16 +194,17 @@ def _extract_operations(statement: str) -> tuple[list[dict[str, Any]], list[str]
     jobs: list[str] = []
     seen_operations: set[str] = set()
     for clause, clause_start, _clause_end in _clauses(statement):
-        if _is_authoring_clause(clause):
-            continue
-        clause_operations = [
-            (kind, match)
-            for kind, pattern in _OPERATION_PATTERNS
-            if (match := pattern.search(clause)) is not None
-        ]
+        authoring_spans = _authoring_spans(clause)
+        clause_operations = []
+        for kind, pattern in _OPERATION_PATTERNS:
+            match = _first_non_authoring_match(pattern, clause, authoring_spans)
+            if match is not None:
+                clause_operations.append((kind, match))
         if not clause_operations:
             continue
-        jobs.append(clause)
+        job_statement = _without_spans(clause, authoring_spans)
+        if job_statement:
+            jobs.append(job_statement)
         for kind, match in clause_operations:
             if kind in seen_operations:
                 continue
