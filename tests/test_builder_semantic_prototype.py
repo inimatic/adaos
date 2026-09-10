@@ -119,7 +119,6 @@ def _fixture() -> tuple[dict, dict]:
                 "region_ref": "primary",
                 "title": _text("work.list", "Items", "Пункты"),
                 "field_refs": ["title", "result", "status"],
-                "selection_state_ref": "selectedWorkItemId",
                 "empty_state": {
                     "title": _text("work.empty", "No work items", "Нет пунктов")
                 },
@@ -130,7 +129,6 @@ def _fixture() -> tuple[dict, dict]:
                 "region_ref": "supporting",
                 "title": _text("work.details", "Selected item", "Выбранный пункт"),
                 "field_refs": ["title", "result", "status"],
-                "selection_state_ref": "selectedWorkItemId",
             },
             {
                 "id": "work-editor",
@@ -138,7 +136,6 @@ def _fixture() -> tuple[dict, dict]:
                 "region_ref": "supporting",
                 "title": _text("work.editor", "Record result", "Заполнить результат"),
                 "field_refs": ["result", "comment", "evidence"],
-                "selection_state_ref": "selectedWorkItemId",
             },
         ],
         "commands": [
@@ -148,7 +145,6 @@ def _fixture() -> tuple[dict, dict]:
                 "view_ref": "work-editor",
                 "label": _text("work.save", "Save", "Сохранить"),
                 "input_field_refs": ["result", "comment", "evidence"],
-                "selected_state_ref": "selectedWorkItemId",
                 "fixed_values": {"status": "open"},
             },
             {
@@ -157,7 +153,6 @@ def _fixture() -> tuple[dict, dict]:
                 "view_ref": "work-editor",
                 "label": _text("work.complete", "Complete", "Завершить"),
                 "input_field_refs": ["result", "comment", "evidence"],
-                "selected_state_ref": "selectedWorkItemId",
                 "fixed_values": {"status": "complete"},
                 "guard": {
                     "when": {

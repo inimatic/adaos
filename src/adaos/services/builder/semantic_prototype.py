@@ -183,8 +183,6 @@ def validate_semantic_prototype(
                 f"view {view['id']!r} references unknown filter field "
                 f"{filter_value['field_ref']!r}"
             )
-        if view["role"] == "details" and not view.get("selection_state_ref"):
-            _fail(f"details view {view['id']!r} requires selection_state_ref")
         if view["role"] == "editor" and not any(
             fields[field_id]["editable"] for field_id in view["field_refs"]
         ):
@@ -209,10 +207,6 @@ def validate_semantic_prototype(
             _fail(
                 f"command {command['id']!r} sets unknown fields {unknown_fixed_fields}"
             )
-        if command["kind"] in {"update", "transition", "delete"} and not command.get(
-            "selected_state_ref"
-        ):
-            _fail(f"command {command['id']!r} requires selected_state_ref")
         guard = command.get("guard")
         if isinstance(guard, Mapping):
             guard_fields = {
@@ -372,7 +366,8 @@ def compile_semantic_prototype(
     fields = {str(item["id"]): dict(item) for item in resource["fields"]}
     commands = {str(item["id"]): dict(item) for item in document["commands"]}
     resource_type = f"prototype.{resource['id']}"
-    initial_state: dict[str, Any] = {}
+    selection_ref = f"selected_{resource['id']}_id"
+    initial_state: dict[str, Any] = {selection_ref: ""}
     widgets: list[dict[str, Any]] = []
     source_map: dict[str, list[str]] = {
         f"resource:{resource['id']}": [
@@ -406,10 +401,6 @@ def compile_semantic_prototype(
             widget["dataSource"]["query"][str(filter_value["field_ref"])] = (
                 f"$state.{state_ref}"
             )
-        selection_ref = str(view.get("selection_state_ref") or "").strip()
-        if selection_ref:
-            initial_state.setdefault(selection_ref, "")
-
         if role == "collection":
             widget["type"] = "ui.list"
             title_key = next(
@@ -429,15 +420,14 @@ def compile_semantic_prototype(
                 source_map.setdefault(f"field:{title_key}", []).append(
                     f"ui.application.desktop.pageSchema.widgets.@{view_id}.inputs.titleKey"
                 )
-            if selection_ref:
-                widget["actions"] = [
-                    {
-                        "id": f"select-{view_id}",
-                        "on": "select",
-                        "type": "updateState",
-                        "params": {selection_ref: "$event.id"},
-                    }
-                ]
+            widget["actions"] = [
+                {
+                    "id": f"select-{view_id}",
+                    "on": "select",
+                    "type": "updateState",
+                    "params": {selection_ref: "$event.id"},
+                }
+            ]
             empty_state = view.get("empty_state")
             if isinstance(empty_state, Mapping):
                 empty_title, empty_title_i18n = _localized(
@@ -459,8 +449,7 @@ def compile_semantic_prototype(
             widget["type"] = "item.details"
             widget["selectedStateKey"] = selection_ref
             widget["inputs"] = {"fields": []}
-            if selection_ref:
-                widget["dataSource"]["query"]["id"] = f"$state.{selection_ref}"
+            widget["dataSource"]["query"]["id"] = f"$state.{selection_ref}"
             for field_id in view["field_refs"]:
                 label, label_i18n = _localized(fields[field_id]["label"], dictionaries)
                 widget["inputs"]["fields"].append(
@@ -472,8 +461,7 @@ def compile_semantic_prototype(
         else:
             widget["type"] = "ui.form"
             widget["inputs"] = {"layout": "responsiveGrid", "fields": [], "buttons": []}
-            if selection_ref:
-                widget["dataSource"]["query"]["id"] = f"$state.{selection_ref}"
+            widget["dataSource"]["query"]["id"] = f"$state.{selection_ref}"
             for field_id in view["field_refs"]:
                 field = fields[field_id]
                 if not field["editable"]:
@@ -539,10 +527,8 @@ def compile_semantic_prototype(
                 action["params"]["payload"].update(
                     copy.deepcopy(dict(command.get("fixed_values") or {}))
                 )
-                selected_ref = str(command.get("selected_state_ref") or "").strip()
-                if selected_ref:
-                    initial_state.setdefault(selected_ref, "")
-                    action["params"]["record_id"] = f"$state.{selected_ref}"
+                if command["kind"] != "create":
+                    action["params"]["record_id"] = f"$state.{selection_ref}"
                 if command["kind"] == "delete":
                     action["params"].pop("payload", None)
                 if isinstance(command.get("guard"), Mapping):

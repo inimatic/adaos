@@ -204,7 +204,6 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/id" }
         },
-        "selection_state_ref": { "$ref": "#/$defs/id" },
         "filter": {
           "type": "object",
           "additionalProperties": false,
@@ -234,7 +233,6 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/id" }
         },
-        "selected_state_ref": { "$ref": "#/$defs/id" },
         "fixed_values": { "type": "object" },
         "guard": {
           "type": "object",
