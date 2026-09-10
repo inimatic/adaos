@@ -106,12 +106,25 @@ extensions and their matched IDs. Evidence is 31/31 focused modal tests,
 TypeScript compilation, and the inventory/boundary gates; the test bundle took
 27.6 seconds while actual tests took 0.21 seconds.
 
+The next Client slice adds the generic `PAGE_DATA_EXTENSIONS` port. Operational
+snapshot roots, their skill/API recovery routes, freshness rules, local-path
+alias, and plain-JSON observation policy now live in the registered
+`OperationalPageDataExtension`; the generic `PageDataService` only supplies
+typed path, read, addressing, reliability, and `DataSourceConfig` primitives.
+The no-extension profile reads YDoc without inferring a product recovery route,
+and compatibility fallback calls now pass through the normal read-intent policy
+and cache. Five tests for the old private Infrastate freshness helper were
+removed because that helper was unreachable from the production read path;
+retained tests exercise observable read and no-fallback behavior instead. The
+generated inventory and static boundary gate now include the data port and
+generic service.
+
 The gate remains open. The generated inventory makes the next failures
 explicit: the semantic contract advertises action kinds `apply_review_change`,
 `emit`, `navigate`, and `patch_y`, and binding kinds `projection` and `view`,
 without corresponding lowering. Product-specific compatibility still exists
-in `PageDataService`, generic chat/command/file widgets, and selected desktop
-compatibility widgets. Those branches require typed ports or explicitly
+in desktop transformations, generic chat/command/file widgets, and selected
+desktop compatibility widgets. Those branches require typed ports or explicitly
 registered owners before a clean Builder baseline.
 
 - [ ] `[must]` Extract Builder, Applications/Marketplace, Infrastate, Voice,
