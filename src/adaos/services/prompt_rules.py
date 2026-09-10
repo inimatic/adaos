@@ -8,13 +8,15 @@ from functools import lru_cache
 from importlib import resources
 from typing import Any, Mapping, Sequence
 
+from adaos.services.builder_domain_packs import domain_prompt_rules
+
 
 _REGISTRY_PACKAGE = "adaos.services.builder"
 _REGISTRY_NAME = "prompt_rule_capsules.json"
 
 
-@lru_cache(maxsize=1)
-def load_prompt_rule_registry() -> dict[str, Any]:
+@lru_cache(maxsize=16)
+def _load_prompt_rule_registry(domain_packs: tuple[str, ...]) -> dict[str, Any]:
     raw = resources.files(_REGISTRY_PACKAGE).joinpath(_REGISTRY_NAME).read_bytes()
     registry = json.loads(raw.decode("utf-8"))
     if registry.get("schema") != "adaos.builder.prompt_rule_registry.v1":
@@ -25,7 +27,8 @@ def load_prompt_rule_registry() -> dict[str, Any]:
         raise ValueError("Builder prompt rule registry published_at is required")
     if not str(registry.get("authority_ref") or "").strip():
         raise ValueError("Builder prompt rule registry authority_ref is required")
-    items = registry.get("items")
+    items = [*list(registry.get("items") or []), *domain_prompt_rules(domain_packs)]
+    registry["items"] = items
     if not isinstance(items, list) or not items:
         raise ValueError("Builder prompt rule registry items are required")
     ids: set[str] = set()
@@ -39,8 +42,24 @@ def load_prompt_rule_registry() -> dict[str, Any]:
         if not isinstance(rules, list) or not all(str(rule).strip() for rule in rules):
             raise ValueError(f"Builder prompt rule {rule_id} requires non-empty rules")
         ids.add(rule_id)
-    registry["digest"] = "sha256:" + hashlib.sha256(raw).hexdigest()
+    digest_input = json.dumps(registry, ensure_ascii=False, sort_keys=True).encode(
+        "utf-8"
+    )
+    registry["digest"] = "sha256:" + hashlib.sha256(digest_input).hexdigest()
     return registry
+
+
+def load_prompt_rule_registry(
+    *, domain_packs: Sequence[str] | None = None
+) -> dict[str, Any]:
+    normalized = tuple(
+        dict.fromkeys(
+            str(pack_id or "").strip()
+            for pack_id in domain_packs or ()
+            if str(pack_id or "").strip()
+        )
+    )
+    return deepcopy(_load_prompt_rule_registry(normalized))
 
 
 def select_prompt_rules(
@@ -48,8 +67,9 @@ def select_prompt_rules(
     target_type: str,
     evidence: str,
     facts: Mapping[str, Any] | None = None,
+    domain_packs: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    registry = load_prompt_rule_registry()
+    registry = load_prompt_rule_registry(domain_packs=domain_packs)
     selected: list[dict[str, Any]] = []
     normalized_target = str(target_type or "").strip().lower()
     normalized_evidence = str(evidence or "").lower()
@@ -152,8 +172,14 @@ def select_prompt_rules(
             not has_structured_routing
             and any(marker in normalized_evidence for marker in markers),
             bool(profile and profile in profiles),
-            any(fnmatch(path, pattern) for path in target_paths for pattern in path_globs),
-            any(ref.startswith(prefix) for ref in target_refs for prefix in ref_prefixes),
+            any(
+                fnmatch(path, pattern)
+                for path in target_paths
+                for pattern in path_globs
+            ),
+            any(
+                ref.startswith(prefix) for ref in target_refs for prefix in ref_prefixes
+            ),
             bool(facet_keys & required_facets),
             bool(requirements & required_capabilities),
             *structured_matches,
@@ -169,6 +195,8 @@ def select_prompt_rules(
 def context_capsule_request(rule: Mapping[str, Any]) -> dict[str, Any]:
     registry = load_prompt_rule_registry()
     rule_id = str(rule.get("id") or "").strip()
+    registry_version = str(rule.get("registry_version") or registry["version"])
+    registry_digest = str(rule.get("registry_digest") or registry["digest"])
     return {
         "kind": "procedural",
         "subject_refs": [f"prompt-rule:{rule_id}"],
@@ -180,9 +208,9 @@ def context_capsule_request(rule: Mapping[str, Any]) -> dict[str, Any]:
         "origin": {
             "type": "core_declaration",
             "registry_schema": registry["schema"],
-            "registry_version": registry["version"],
+            "registry_version": registry_version,
         },
-        "source_digests": {"prompt_rule_registry": registry["digest"]},
+        "source_digests": {"prompt_rule_registry": registry_digest},
         "valid_from": registry["published_at"],
         "recorded_at": registry["published_at"],
         "summary": rule.get("title"),
@@ -195,7 +223,8 @@ def context_capsule_request(rule: Mapping[str, Any]) -> dict[str, Any]:
         },
         "metadata": {
             "prompt_rule_id": rule_id,
-            "registry_version": registry["version"],
+            "registry_version": registry_version,
+            "domain_pack": deepcopy(rule.get("domain_pack")),
         },
     }
 

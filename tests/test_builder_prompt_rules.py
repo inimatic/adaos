@@ -29,7 +29,7 @@ def test_prompt_rule_registry_is_versioned_and_selects_by_facets() -> None:
         {key: value for key, value in registry.items() if key != "digest"}
     )
     assert registry["schema"] == "adaos.builder.prompt_rule_registry.v1"
-    assert registry["version"] == "0.5.0"
+    assert registry["version"] == "0.6.0"
     assert registry["digest"].startswith("sha256:")
     assert len({item["id"] for item in registry["items"]}) == len(registry["items"])
     assert [
@@ -55,7 +55,10 @@ def test_prompt_rule_registry_uses_structured_task_facts() -> None:
             evidence="rename the visible control",
             facts={
                 "profile": "resource_crud",
-                "target_files": ["skills/demo/handlers/main.py", "skills/demo/webui.json"],
+                "target_files": [
+                    "skills/demo/handlers/main.py",
+                    "skills/demo/webui.json",
+                ],
                 "target_refs": ["resource:demo.note"],
             },
         )
@@ -134,8 +137,22 @@ def test_applications_builder_gets_lifecycle_authority_capsule() -> None:
         target_type="scenario",
         evidence="Create the Applications catalog with prerelease and stable controls",
         facts={"concepts": ["application", "catalog", "prerelease"]},
+        domain_packs=("applications.compatibility.v1",),
     )
-    rule = next(item for item in selected if item["id"] == "adaos.application.lifecycle.v1")
+    rule = next(
+        item for item in selected if item["id"] == "adaos.application.lifecycle.v1"
+    )
 
     assert "adaos.sdk.builder.applications" in rule["rules"][0]
     assert "top-level `trials`" in rule["rules"][1]
+
+
+def test_generic_prompt_rules_do_not_retrieve_subject_policies() -> None:
+    selected = select_prompt_rules(
+        target_type="scenario",
+        evidence="Create the Applications catalog with prerelease and stable controls",
+        facts={"concepts": ["application", "catalog", "prerelease"]},
+    )
+
+    assert all("adaos.application." not in item["id"] for item in selected)
+    assert all("adaos.research." not in item["id"] for item in selected)

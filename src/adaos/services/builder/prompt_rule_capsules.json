@@ -1,6 +1,6 @@
 {
   "schema": "adaos.builder.prompt_rule_registry.v1",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "published_at": "2026-09-05T15:00:00+00:00",
   "authority_ref": "core:adaos.prompt-rule-registry",
   "items": [
@@ -291,61 +291,5 @@
         "Resolve declared working directories and expected outputs exactly, then collect and verify through the admitted operations; do not substitute an implicit path or permissive local schema.",
         "When the public SDK/API cannot express the requirement, do not patch around core or imitate the contract locally; return the governed core-capability escalation."
       ]
-    },
-    {
-      "id": "adaos.application.lifecycle.v1",
-      "title": "Application lifecycle and publisher authority",
-      "source": "docs/architecture/application-lifecycle-and-distribution.md",
-      "applicability": {
-        "target_types": ["scenario"],
-        "concepts": ["application", "applications", "catalog", "prerelease"],
-        "match_any": ["application", "applications", "catalog", "market", "prerelease", "stable", "trial link"]
-      },
-      "rules": [
-        "Use only `adaos.sdk.builder.applications` for authoring lifecycle and `adaos.sdk.applications` or ApplicationsPlane for product lifecycle; never import Application services, mutate registries, or address runtime filesystem paths.",
-        "Keep DEV preview in `dev/.runtime`, Trial source/runtime in the top-level `trials` tree, and stable installation/runtime in `workspace`; do not introduce alpha or place Trial state below Workspace.",
-        "Publish only an accepted immutable Candidate. First stable promotes its exact link-only Trial digest; later stable promotes the exact current prerelease digest and retires that prerelease pointer.",
-        "Bind every mutation to actor, publisher subnet, required capability, expected revision, idempotency key, and its durable operation and plan digests. An unknown outcome must be reconciled before retry.",
-        "Applications owns product inventory and Development Report UX, but do not remove Infrastate Inventory until the Applications system release has passed the replacement acceptance gate."
-      ]
-    },
-    {
-      "id": "adaos.research.scientific_handoff.v1",
-      "title": "Governed scientific handoff",
-      "source": "docs/architecture/research-fabric.md",
-      "applicability": {
-        "facet_keys": ["scientific_handoff"]
-      },
-      "rules": [
-        "Treat the accepted experiment system specification and digest as executable subject authority: preserve component settings, arm semantics, intervention boundaries, and locked invariants on the production runner path.",
-        "A bounded fixture may reduce cost only where the admitted execution profile permits; it must not substitute another model family, operator, input geometry, output space, or scientific subject.",
-        "Emit the required implementation observation from that same path so an independent consumer can detect semantic substitution."
-      ]
-    },
-    {
-      "id": "adaos.research.runner_input_policy.v1",
-      "title": "Research runner input policy",
-      "source": "docs/architecture/research-fabric.md",
-      "applicability": {
-        "facet_keys": ["research_runner"]
-      },
-      "rules": [
-        "For `adaos.research.runner.v1`, select input only from the admitted `request.profile_conditions.input_policy.source`.",
-        "`deterministic_contract_fixture` runs bounded production conformance without opening the accepted dataset; `accepted_dataset` selects the admitted dataset path.",
-        "Do not add a duplicate private selector under `request.conditions` or infer dataset authority from ambient files."
-      ]
-    },
-    {
-      "id": "adaos.research.initial_equivalence.v1",
-      "title": "Initial equivalence evidence",
-      "source": "docs/architecture/research-fabric.md",
-      "applicability": {
-        "facet_keys": ["initial_equivalence"]
-      },
-      "rules": [
-        "When initial equivalence is required, test it on production operators before training with the same admitted input and shared initialization state for both arms.",
-        "Enforce the admitted tolerance directly; a declaration, parameter default, or post-training comparison is not equivalence evidence."
-      ]
-    }
-  ]
+    }  ]
 }

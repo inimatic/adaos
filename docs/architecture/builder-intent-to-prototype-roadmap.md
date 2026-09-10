@@ -74,29 +74,40 @@ autonomy baseline.
 
 ## R1. Domain Decontamination And Compatibility Seam
 
-- [ ] `[must]` Add characterization tests around the legacy Applications and
+Progress note (2026-09-10): generic UI capability selection and prompt-rule
+selection now start with no domain packs. Applications and research policy was
+extracted into versioned compatibility packs; the Applications evaluator is
+retained behind an explicit adapter. DEV Projects may bind packs through
+`development.domain_packs`, and historical recipe receipts resolve through the
+pack registry. Product wording and IDs no longer activate a pack. The
+Applications DEV experiments were migrated explicitly. Generic boundary tests
+and the retained legacy characterization suite pass. End-to-end attribution
+for every Builder model route remains open, so R1 is not yet an exit-gate
+claim.
+
+- [x] `[must]` Add characterization tests around the legacy Applications and
   other subject-guided paths before moving them.
-- [ ] `[must]` Classify catalog entries as atomic component contracts, generic
+- [x] `[must]` Classify catalog entries as atomic component contracts, generic
   composition patterns, or subject domain packs. A board, form, or
   master-detail pattern may remain generic; a finished application's
   information architecture, vocabulary, operations, fixtures, or grading
   rules may not.
-- [ ] `[must]` Move `recipe.application_manager`, Applications-specific
+- [x] `[must]` Move `recipe.application_manager`, Applications-specific
   vocabulary, lifecycle defaults, phases, and postconditions out of generic
   Core into a versioned compatibility/evaluation domain pack.
-- [ ] `[must]` Remove shopping-list, todo, recipe-book, and other product-title
+- [x] `[must]` Remove shopping-list, todo, recipe-book, and other product-title
   heuristics and examples from the generic Builder execution path. Retain them
   only in explicitly selected development fixtures or domain packs.
-- [ ] `[must]` Add a generic-profile policy that supplies no domain packs and
+- [x] `[must]` Add a generic-profile policy that supplies no domain packs and
   rejects hidden selection by subject ID, project name, prompt wording, or
   postcondition prefix.
 - [ ] `[must]` Persist an input-attribution receipt proving which component
   contracts, generic patterns, examples, and domain packs were available to
   every model run.
-- [ ] `[must]` Preserve current user-visible behavior behind one explicit
-  legacy adapter and feature flag. New generic code must not call its private
-  helpers.
-- [ ] `[should]` Add a static boundary test and allowlist that reject subject
+- [x] `[must]` Preserve current user-visible behavior behind one explicit
+  legacy adapter and project-scoped profile switch. New generic code must not
+  call its private helpers.
+- [x] `[should]` Add a static boundary test and allowlist that reject subject
   identifiers and localized product vocabulary in generic Core prompt,
   qualification, catalog, and validation modules.
 

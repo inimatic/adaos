@@ -2024,6 +2024,13 @@ def test_accepted_prototype_qualification_routes_scenario_capsules() -> None:
             "prototype": {
                 "acceptance": {
                     "decision": "accepted",
+                    "deterministic_evaluation": {
+                        "input_attribution": {
+                            "domain_packs": [
+                                {"pack_id": "applications.compatibility.v1"}
+                            ]
+                        }
+                    },
                     "qualification": {
                         "surface_kind": "board",
                         "concepts": [
@@ -2051,6 +2058,7 @@ def test_accepted_prototype_qualification_routes_scenario_capsules() -> None:
     assert prompt_facts["surface_kinds"] == ["board"]
     assert prompt_facts["data_planes"] == ["resource_provider"]
     assert prompt_facts["operation_kinds"] == ["create", "update", "delete"]
+    assert prompt_facts["domain_packs"] == ["applications.compatibility.v1"]
     ids = [item["id"] for item in capsules]
     assert "adaos.skill.sdk_boundary.v1" in ids
     assert "adaos.skill.webui_tool_contract.v2" in ids
@@ -4562,6 +4570,12 @@ def test_contract_prompt_facets_select_research_rules_structurally() -> None:
             "contracts": [
                 {
                     "contract": "adaos.research.runner.v1",
+                    "domain_pack": "research.compatibility.v1",
+                    "prompt_facets": [
+                        "research_runner",
+                        "scientific_handoff",
+                        "initial_equivalence",
+                    ],
                     "domain_conformance": {
                         "system_specification": {"required": True},
                         "initial_equivalence": {"required": True},
@@ -4572,7 +4586,10 @@ def test_contract_prompt_facets_select_research_rules_structurally() -> None:
     )
     capsules = worker_module._selected_prompt_rule_capsules(
         target_type="skill",
-        repair_hints={"facet_keys": facets},
+        repair_hints={
+            "facet_keys": facets,
+            "domain_packs": ["research.compatibility.v1"],
+        },
         context_packet={},
     )
 

@@ -223,6 +223,21 @@ def test_standard_project_creation_persists_optional_development_origin(
     }
 
 
+def test_standard_project_creation_persists_builder_domain_packs(project_space) -> None:
+    _scenario(project_space["scenarios"], "domain_bound")
+
+    result = compositions.create_for_existing_component(
+        "domain_bound",
+        kind="scenario",
+        component_id="domain_bound",
+        development={"domain_packs": ["applications.compatibility.v1"]},
+    )
+
+    assert result["project"]["development"] == {
+        "domain_packs": ["applications.compatibility.v1"]
+    }
+
+
 def test_project_rejects_invalid_development_origin(project_space) -> None:
     value = _project("invalid_origin", "one")
     value["development"] = {"initiator_ref": "webspace:desktop"}

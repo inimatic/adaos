@@ -128,6 +128,22 @@ of deterministic and model-assisted steps for the request at hand.
     require handwritten changes to independent prompt, catalog, validator,
     documentation, registry, and loading tables.
 
+The current compatibility seam is deliberately narrower than the future
+measured-retrieval design. A DEV Project declares any admitted packs in
+`project.yaml.development.domain_packs`. Builder resolves only those IDs and
+records each pack's version and content digest in `input_attribution`. A
+persisted historical `recipe_id` may resolve to its owning pack through the
+pack registry so an old session remains replayable. Project names, scenario
+IDs, user wording, postcondition prefixes, and product titles never select a
+pack. The generic profile supplies an empty pack set.
+
+`applications.compatibility.v1` currently owns the extracted
+`recipe.application_manager` catalog, qualification/evaluation adapter,
+prototype locale policy, repair guidance, phases, defaults, and
+Applications-specific prompt rules. `research.compatibility.v1` owns the
+extracted research prompt rules. These are transitional compatibility packs,
+not evidence that the target brief/compiler architecture is implemented.
+
 ## Required Separation Of Representations
 
 ### 1. User Intent

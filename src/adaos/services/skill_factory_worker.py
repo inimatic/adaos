@@ -1535,6 +1535,10 @@ def _selected_prompt_rule_capsules(
     selected = select_prompt_rules(
         target_type=target_type,
         evidence=evidence,
+        domain_packs=[
+            *_string_list(repair_hints.get("domain_packs")),
+            *_string_list(prompt_facts.get("domain_packs")),
+        ],
         facts={
             "profile": repair_hints.get("profile"),
             "target_files": repair_hints.get("target_files"),
@@ -1635,6 +1639,16 @@ def _prototype_prompt_facts(context_packet: Mapping[str, Any]) -> dict[str, Any]
     data_planes: list[str] = []
     if any(item in concepts for item in ("resource_query", "resource_crud")):
         data_planes.append("resource_provider")
+    input_attribution = (
+        evaluation.get("input_attribution")
+        if isinstance(evaluation.get("input_attribution"), Mapping)
+        else {}
+    )
+    domain_packs = [
+        str(item.get("pack_id") or "").strip()
+        for item in input_attribution.get("domain_packs") or []
+        if isinstance(item, Mapping) and str(item.get("pack_id") or "").strip()
+    ]
     return {
         "concepts": list(dict.fromkeys(concepts)),
         "surface_kinds": [surface_kind] if surface_kind else [],
@@ -1645,6 +1659,7 @@ def _prototype_prompt_facts(context_packet: Mapping[str, Any]) -> dict[str, Any]
         "requires_access": bool(requirements.get("requires_access")),
         "requires_conversation": bool(requirements.get("requires_conversation")),
         "requires_lifecycle": bool(requirements.get("requires_lifecycle")),
+        "domain_packs": list(dict.fromkeys(domain_packs)),
     }
 
 
@@ -1655,6 +1670,7 @@ def _merge_prompt_facts(*values: Mapping[str, Any]) -> dict[str, Any]:
         "operation_kinds",
         "data_planes",
         "effects",
+        "domain_packs",
     }
     merged: dict[str, Any] = {}
     for value in values:
@@ -1691,28 +1707,19 @@ def _contract_prompt_facet_keys(
         return []
     facets = {"provider_operation_set"}
     for contract in contracts:
-        contract_id = str(contract.get("contract") or "").strip().lower()
-        domain = (
-            dict(contract.get("domain_conformance"))
-            if isinstance(contract.get("domain_conformance"), Mapping)
-            else {}
-        )
-        if contract_id == "adaos.research.runner.v1":
-            facets.update({"research_runner", "scientific_handoff"})
-        if any(
-            key in domain
-            for key in (
-                "experiment_plan",
-                "system",
-                "system_specification",
-                "scientific_subject",
-            )
-        ):
-            facets.add("scientific_handoff")
-        equivalence = domain.get("initial_equivalence")
-        if isinstance(equivalence, Mapping) and equivalence.get("required") is True:
-            facets.add("initial_equivalence")
+        facets.update(_string_list(contract.get("prompt_facets")))
     return sorted(facets)
+
+
+def _contract_domain_pack_ids(checklist: Mapping[str, Any]) -> list[str]:
+    return list(
+        dict.fromkeys(
+            str(contract.get("domain_pack") or "").strip()
+            for contract in checklist.get("contracts") or []
+            if isinstance(contract, Mapping)
+            and str(contract.get("domain_pack") or "").strip()
+        )
+    )
 
 
 def _prompt_rule_capsules_markdown(capsules: Sequence[Mapping[str, Any]]) -> str:
@@ -2533,6 +2540,8 @@ def _contract_execution_checklist(
                 "domain_conformance": copy.deepcopy(
                     contract.get("domain_conformance") or {}
                 ),
+                "prompt_facets": _string_list(contract.get("prompt_facets")),
+                "domain_pack": str(contract.get("domain_pack") or "").strip() or None,
             }
         )
     if not contracts:
@@ -5913,6 +5922,14 @@ class LocalSkillFactoryWorker:
                         else []
                     ),
                     *_contract_prompt_facet_keys(contract_checklist),
+                ]
+            )
+        )
+        capsule_repair_hints["domain_packs"] = list(
+            dict.fromkeys(
+                [
+                    *_string_list(capsule_repair_hints.get("domain_packs")),
+                    *_contract_domain_pack_ids(contract_checklist),
                 ]
             )
         )

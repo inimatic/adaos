@@ -5,7 +5,8 @@ Status: frozen pre-decontamination characterization evidence.
 Captured: 2026-09-10.
 
 Machine-readable record:
-[`legacy_recipe_guided_20260910.json`](../../e2e/builder/forensics/legacy_recipe_guided_20260910.json).
+The machine-readable evidence is retained at
+`e2e/builder/forensics/legacy_recipe_guided_20260910.json` in the repository.
 
 ## Scope And Claim
 

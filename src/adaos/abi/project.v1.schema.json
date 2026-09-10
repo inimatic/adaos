@@ -151,11 +151,21 @@
     },
     "development": {
       "type": "object",
-      "required": ["initiator_ref"],
+      "minProperties": 1,
       "properties": {
         "initiator_ref": {
           "type": "string",
           "pattern": "^(project|skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "domain_packs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.-]{0,127}$"
+          }
         }
       },
       "additionalProperties": false

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 
-from adaos.services.ui_capabilities import (
+from adaos.services.builder.domain_packs.application_manager_legacy import (
     evaluate_ui_request,
     get_ui_capability,
     qualify_ui_request,
@@ -360,8 +360,12 @@ def test_application_manager_detail_phase_requires_the_state_resolver() -> None:
 def test_application_manager_lifecycle_phase_defers_review_operations() -> None:
     webui = _application_manager_webui()
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
-    widgets.remove(next(widget for widget in widgets if widget["id"] == "review-actions"))
-    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
+    widgets.remove(
+        next(widget for widget in widgets if widget["id"] == "review-actions")
+    )
+    lifecycle = next(
+        widget for widget in widgets if widget["id"] == "lifecycle-actions"
+    )
     lifecycle["actions"] = [
         action
         for action in lifecycle["actions"]
@@ -377,9 +381,7 @@ def test_application_manager_lifecycle_phase_defers_review_operations() -> None:
         webui,
     )
 
-    lifecycle_by_id = {
-        item["id"]: item for item in lifecycle_result["postconditions"]
-    }
+    lifecycle_by_id = {item["id"]: item for item in lifecycle_result["postconditions"]}
     reviewed_by_id = {item["id"]: item for item in reviewed["postconditions"]}
     assert lifecycle_result["ok"] is True
     assert lifecycle_by_id["applications.lifecycle_controls"]["required"] is True
@@ -388,12 +390,16 @@ def test_application_manager_lifecycle_phase_defers_review_operations() -> None:
     assert reviewed_by_id["applications.reviewed_plan_apply"]["required"] is True
 
 
-def test_application_manager_lifecycle_phase_rejects_shadow_state_and_late_toolbar() -> None:
+def test_application_manager_lifecycle_phase_rejects_shadow_state_and_late_toolbar() -> (
+    None
+):
     webui = _application_manager_webui()
     page = webui["ui"]["application"]["desktop"]["pageSchema"]
     page["state"] = copy.deepcopy(page["initialState"])
     widgets = page["widgets"]
-    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
+    lifecycle = next(
+        widget for widget in widgets if widget["id"] == "lifecycle-actions"
+    )
     widgets.remove(lifecycle)
     tabs_index = next(
         index for index, widget in enumerate(widgets) if widget["id"] == "tabs"
@@ -1506,12 +1512,16 @@ def _application_manager_webui() -> dict:
 
     page = webui["ui"]["application"]["desktop"]["pageSchema"]
     widgets = page["widgets"]
-    lifecycle = next(widget for widget in widgets if widget["id"] == "lifecycle-actions")
+    lifecycle = next(
+        widget for widget in widgets if widget["id"] == "lifecycle-actions"
+    )
     tabs = next(widget for widget in widgets if widget["id"] == "tabs")
     widgets.remove(lifecycle)
     widgets.remove(tabs)
     header_index = next(
-        index for index, widget in enumerate(widgets) if widget["id"] == "application-header"
+        index
+        for index, widget in enumerate(widgets)
+        if widget["id"] == "application-header"
     )
     widgets.insert(header_index + 1, lifecycle)
     widgets.insert(header_index + 2, tabs)
@@ -1757,9 +1767,10 @@ def test_application_manager_evaluation_requires_permissions_for_every_plan_kind
     assert fixture_check["actual"]["invalidPlanCases"] == [
         {"kind": "remove", "missing": ["non-empty plan.permissions"]}
     ]
-    assert "non-empty plan.permissions" in fixture_check["actual"][
-        "missingRequirements"
-    ][0]
+    assert (
+        "non-empty plan.permissions"
+        in fixture_check["actual"]["missingRequirements"][0]
+    )
 
 
 def test_application_manager_evaluation_rejects_named_fixture_placeholders() -> None:
