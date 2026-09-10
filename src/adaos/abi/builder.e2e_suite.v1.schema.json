@@ -28,6 +28,7 @@
         "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 1800},
         "browser": {"enum": ["auto", "on", "off"]},
         "grader_model": {"type": "string", "minLength": 1, "maxLength": 120},
+        "require_client_profile": {"type": "boolean"},
         "domain_packs": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
       }
     },

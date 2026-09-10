@@ -18,6 +18,7 @@ from adaos.e2e.builder import (
     compare_builder_e2e_baseline,
     create_builder_e2e_baseline,
     load_builder_e2e_suite,
+    _client_capability_environment,
 )
 from adaos.services.builder.llm_input_attribution import (
     build_llm_input_attribution,
@@ -864,3 +865,50 @@ def test_visible_archetype_suite_uses_ordinary_prompts_without_internal_hints() 
         ).lower()
         assert chat_text
         assert not any(token in chat_text for token in prohibited)
+
+
+def test_client_profile_evidence_rejects_core_components_missing_at_runtime(
+    tmp_path: Path,
+) -> None:
+    inventory_path = (
+        tmp_path
+        / "src/adaos/integrations/adaos-client/architecture/evidence"
+        / "client-capability-inventory.v1.json"
+    )
+    catalog_path = tmp_path / "src/adaos/abi/ui.capability_catalog.v1.json"
+    inventory_path.parent.mkdir(parents=True)
+    catalog_path.parent.mkdir(parents=True)
+    inventory_path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.client.capability_inventory.v1",
+                "digest": "sha256:inventory",
+                "widgets": [
+                    {
+                        "type": "ui.form",
+                        "classification": "generic",
+                    }
+                ],
+                "semantics": {"unsupported": {"action_kinds": ["emit"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "catalog_version": "test",
+                "components": [
+                    {"manifest": {"widget_type": "ui.form"}},
+                    {"manifest": {"widget_type": "ui.table"}},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = _client_capability_environment(tmp_path)
+
+    assert evidence["status"] == "incompatible"
+    assert evidence["missing_runtime_types"] == ["ui.table"]
+    assert evidence["semantic_unsupported"] == {"action_kinds": ["emit"]}

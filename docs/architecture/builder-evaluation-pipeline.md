@@ -321,6 +321,15 @@ outputs are gzip-compressed behind a digest-bearing evidence ref while the
 case result remains compact; in-memory full outputs still drive typed step
 references and usage accounting.
 
+Suites that claim the generic Client profile must declare
+`defaults.require_client_profile=true`. The runner then records the exact
+Client commit and content-addressed capability inventory and verifies that
+every component admitted by the Core catalog has a generic/shell runtime
+registration before provisioning or model execution. Missing or invalid
+inventory evidence and catalog/runtime drift are configuration failures, not
+lower prototype scores. Unsupported semantic lowering kinds remain recorded
+in the run environment for later C1/C2 gating.
+
 The current adapter is explicitly `legacy_dev_chat.v1`. Case/repetition
 webspaces are isolated; checkpoints and run identity support interruption and
 resume; retry attempts remain explicit; and actual input receipts are checked

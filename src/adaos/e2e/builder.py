@@ -239,9 +239,86 @@ def _repository_environment(repo_root: Path) -> dict[str, Any]:
             if client_root.is_dir()
             else None
         ),
+        "client_profile": _client_capability_environment(repo_root),
         "python": platform.python_version(),
         "node": _run_command(["node", "--version"], repo_root),
         "platform": platform.platform(),
+    }
+
+
+def _client_capability_environment(repo_root: Path) -> dict[str, Any]:
+    inventory_path = (
+        repo_root
+        / "src"
+        / "adaos"
+        / "integrations"
+        / "adaos-client"
+        / "architecture"
+        / "evidence"
+        / "client-capability-inventory.v1.json"
+    )
+    catalog_path = repo_root / "src" / "adaos" / "abi" / "ui.capability_catalog.v1.json"
+    if not inventory_path.is_file() or not catalog_path.is_file():
+        return {
+            "status": "unavailable",
+            "profile": "generic",
+            "missing": [
+                name
+                for name, path in (
+                    ("client_inventory", inventory_path),
+                    ("core_catalog", catalog_path),
+                )
+                if not path.is_file()
+            ],
+        }
+    try:
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "status": "invalid",
+            "profile": "generic",
+            "diagnostic": f"{type(exc).__name__}: {exc}",
+        }
+    generic_types = sorted(
+        {
+            str(item.get("type") or "").strip()
+            for item in inventory.get("widgets") or []
+            if isinstance(item, Mapping)
+            and item.get("classification") in {"generic", "shell"}
+            and str(item.get("type") or "").strip()
+        }
+    )
+    catalog_types = sorted(
+        {
+            str(dict(item.get("manifest") or {}).get("widget_type") or "").strip()
+            for item in catalog.get("components") or []
+            if isinstance(item, Mapping)
+            and str(dict(item.get("manifest") or {}).get("widget_type") or "").strip()
+        }
+    )
+    missing_runtime_types = sorted(set(catalog_types) - set(generic_types))
+    semantics = (
+        inventory.get("semantics")
+        if isinstance(inventory.get("semantics"), Mapping)
+        else {}
+    )
+    unsupported = (
+        semantics.get("unsupported")
+        if isinstance(semantics.get("unsupported"), Mapping)
+        else {}
+    )
+    return {
+        "status": "compatible" if not missing_runtime_types else "incompatible",
+        "profile": "generic",
+        "inventory_schema": inventory.get("schema"),
+        "inventory_digest": inventory.get("digest"),
+        "catalog_version": catalog.get("catalog_version"),
+        "catalog_digest": _digest(catalog),
+        "catalog_component_types": catalog_types,
+        "generic_runtime_types": generic_types,
+        "missing_runtime_types": missing_runtime_types,
+        "semantic_unsupported": copy.deepcopy(dict(unsupported)),
     }
 
 
@@ -1289,6 +1366,7 @@ class BuilderE2ERunner:
             or os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL")
             or "gpt-4.1"
         ).strip()
+        self.require_client_profile = bool(defaults.get("require_client_profile", False))
         if self.repetitions < 1 or self.repetitions > 20:
             raise BuilderE2EError("repetitions must be between 1 and 20")
         if self.browser not in {"auto", "on", "off"}:
@@ -1876,6 +1954,14 @@ class BuilderE2ERunner:
         if not self.bundle_dir.exists():
             self.bundle_dir.mkdir(parents=True, exist_ok=False)
         environment = _repository_environment(self.repo_root)
+        client_profile = dict(environment.get("client_profile") or {})
+        if self.require_client_profile and client_profile.get("status") != "compatible":
+            missing = ", ".join(client_profile.get("missing_runtime_types") or [])
+            diagnostic = missing or str(client_profile.get("diagnostic") or "")
+            raise BuilderE2EError(
+                "required generic Client profile is not compatible"
+                + (f": {diagnostic}" if diagnostic else "")
+            )
         proposed_manifest = validate_builder_e2e_record(
             RUN_SCHEMA,
             {
@@ -1921,6 +2007,7 @@ class BuilderE2ERunner:
                         for case in selected
                     },
                     "adapter": self.executor.adapter_id,
+                    "client_profile": client_profile,
                 },
                 "baseline": (
                     {

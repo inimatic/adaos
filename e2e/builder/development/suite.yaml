@@ -13,6 +13,7 @@ defaults:
   repetitions: 1
   timeout_seconds: 300
   browser: "off"
+  require_client_profile: true
   domain_packs: []
 tags:
   - visible

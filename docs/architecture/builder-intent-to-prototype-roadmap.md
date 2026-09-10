@@ -186,6 +186,15 @@ cleanup failure handling, evidence compaction, attribution, and baseline
 comparison. The CLI item remains open only because the current live adapter is
 `legacy_dev_chat.v1`; public SDK transitions are an R3 dependency.
 
+Clean-profile suites now set `require_client_profile=true`. Before provisioning
+or any model call, the runner compares every Core catalog component type with
+the content-addressed Client capability inventory and rejects a missing
+generic/shell runtime registration. `cli-client-profile-20260910-01` passed
+this gate locally in 16.0 ms. Its run manifest records the Client commit,
+inventory digest, Core catalog version/digest, complete generic runtime type
+set, and unsupported semantic kinds. This is a reproducibility and fail-closed
+compatibility gate; it does not replace the C2 single-source contract.
+
 The first retained clean-profile outcome probe,
 `baseline-generic-equipment-ru-20260910-01`, failed its independent grade at
 `0.45625` after passing creation, generation, job synchronization, and schema
