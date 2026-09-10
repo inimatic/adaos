@@ -166,7 +166,13 @@ def _fixture() -> tuple[dict, dict]:
                 "id": "empty",
                 "label": _text("work.state.empty", "Empty", "Пусто"),
                 "view_ref": "work-list",
-                "filters": {"title": "No such work item"},
+                "filters": [
+                    {
+                        "field_ref": "title",
+                        "operator": "eq",
+                        "value": "No such work item",
+                    }
+                ],
                 "min_items": 0,
                 "max_items": 0,
             }
@@ -252,7 +258,13 @@ def test_semantic_prototype_compiles_to_valid_webui_with_source_maps() -> None:
         {
             "state_id": "empty",
             "view_ref": "work-list",
-            "filters": {"title": "No such work item"},
+            "filters": [
+                {
+                    "field_ref": "title",
+                    "operator": "eq",
+                    "value": "No such work item",
+                }
+            ],
             "matching_record_ids": [],
             "matching_record_count": 0,
             "min_items": 0,
@@ -511,10 +523,40 @@ def test_semantic_prototype_rejects_invalid_representative_record() -> None:
 
 def test_semantic_prototype_rejects_unproven_representative_state() -> None:
     brief, semantic = _fixture()
-    semantic["representative_states"][0]["filters"] = {"status": "open"}
+    semantic["representative_states"][0]["filters"] = [
+        {"field_ref": "status", "operator": "eq", "value": "open"}
+    ]
 
     with pytest.raises(BuilderWorkflowError, match="expected 0..0.*found 1"):
         validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_representative_state_supports_typed_date_ranges() -> None:
+    brief, semantic = _fixture()
+    semantic["resource"]["fields"].append(
+        {
+            "id": "due_on",
+            "label": _text("work.field.due_on", "Due on", "Срок"),
+            "value_type": "date",
+            "required": False,
+            "editable": True,
+        }
+    )
+    semantic["resource"]["records"][0]["due_on"] = "2026-09-11"
+    semantic["representative_states"][0] = {
+        "id": "current-week",
+        "label": _text("work.state.current_week", "Current week", "Текущая неделя"),
+        "view_ref": "work-list",
+        "filters": [
+            {"field_ref": "due_on", "operator": "gte", "value": "2026-09-07"},
+            {"field_ref": "due_on", "operator": "lte", "value": "2026-09-13"},
+        ],
+        "min_items": 1,
+    }
+
+    result = compile_semantic_prototype(semantic, brief=brief)
+
+    assert result["representative_state_checks"][0]["matching_record_count"] == 1
 
 
 def test_multiple_attachments_compile_to_file_upload_cardinality() -> None:

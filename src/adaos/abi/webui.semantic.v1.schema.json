@@ -82,7 +82,10 @@
           "id": { "$ref": "#/$defs/id" },
           "label": { "$ref": "#/$defs/localizedText" },
           "view_ref": { "$ref": "#/$defs/id" },
-          "filters": { "type": "object", "additionalProperties": true },
+          "filters": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/statePredicate" }
+          },
           "min_items": { "type": "integer", "minimum": 0 },
           "max_items": { "type": "integer", "minimum": 0 }
         }
@@ -150,6 +153,16 @@
       "properties": {
         "field_ref": { "$ref": "#/$defs/id" },
         "operator": { "enum": ["equals", "not_equals", "nonempty", "empty"] },
+        "value": { "type": ["string", "number", "boolean", "null"] }
+      }
+    },
+    "statePredicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field_ref", "operator", "value"],
+      "properties": {
+        "field_ref": { "$ref": "#/$defs/id" },
+        "operator": { "enum": ["eq", "neq", "lt", "lte", "gt", "gte"] },
         "value": { "type": ["string", "number", "boolean", "null"] }
       }
     },

@@ -75,6 +75,42 @@ def _unique(
     return result
 
 
+def _state_predicate_matches(
+    record: Mapping[str, Any], predicate: Mapping[str, Any]
+) -> bool:
+    actual = record.get(str(predicate["field_ref"]))
+    expected = predicate.get("value")
+    operator = str(predicate["operator"])
+    if operator == "eq":
+        return actual == expected
+    if operator == "neq":
+        return actual != expected
+    if actual is None or expected is None:
+        return False
+    try:
+        if operator == "lt":
+            return actual < expected
+        if operator == "lte":
+            return actual <= expected
+        if operator == "gt":
+            return actual > expected
+        if operator == "gte":
+            return actual >= expected
+    except TypeError:
+        return False
+    return False
+
+
+def _matching_state_records(
+    records: Sequence[Mapping[str, Any]], predicates: Sequence[Mapping[str, Any]]
+) -> list[Mapping[str, Any]]:
+    return [
+        record
+        for record in records
+        if all(_state_predicate_matches(record, predicate) for predicate in predicates)
+    ]
+
+
 def _brief_requirement_ids(brief: Mapping[str, Any]) -> set[str]:
     result: set[str] = set()
     for key in (
@@ -278,30 +314,39 @@ def validate_semantic_prototype(
             _fail(
                 f"representative state {state_id!r} requires a collection view_ref"
             )
-        filters = dict(state.get("filters") or {})
-        unknown_state_fields = sorted(set(filters) - set(fields))
+        filters = [dict(item) for item in state.get("filters") or []]
+        unknown_state_fields = sorted(
+            {
+                str(predicate["field_ref"])
+                for predicate in filters
+                if str(predicate["field_ref"]) not in fields
+            }
+        )
         if unknown_state_fields:
             _fail(
                 f"representative state {state_id!r} filters unknown fields "
                 f"{unknown_state_fields}"
             )
-        for field_ref, expected_value in filters.items():
+        for predicate in filters:
+            field_ref = str(predicate["field_ref"])
+            operator = str(predicate["operator"])
+            expected_value = predicate.get("value")
             field = fields[field_ref]
-            if field["value_type"] == "choice" and not any(
+            if operator in {"lt", "lte", "gt", "gte"} and field[
+                "value_type"
+            ] not in {"date", "number"}:
+                _fail(
+                    f"representative state {state_id!r} uses range operator "
+                    f"{operator!r} on non-orderable field {field_ref!r}"
+                )
+            if field["value_type"] == "choice" and operator in {"eq", "neq"} and not any(
                 option["value"] == expected_value for option in field.get("options") or []
             ):
                 _fail(
                     f"representative state {state_id!r} has invalid choice filter "
                     f"for field {field_ref!r}"
                 )
-        matching_records = [
-            record
-            for record in resource["records"]
-            if all(
-                record.get(field_ref) == expected
-                for field_ref, expected in filters.items()
-            )
-        ]
+        matching_records = _matching_state_records(resource["records"], filters)
         minimum = int(state["min_items"])
         maximum = (
             int(state["max_items"])
@@ -804,15 +849,8 @@ def compile_semantic_prototype(
 
     representative_state_checks: list[dict[str, Any]] = []
     for state in document["representative_states"]:
-        filters = dict(state.get("filters") or {})
-        matching_records = [
-            record
-            for record in prototype_records
-            if all(
-                record.get(field_ref) == expected
-                for field_ref, expected in filters.items()
-            )
-        ]
+        filters = [dict(item) for item in state.get("filters") or []]
+        matching_records = _matching_state_records(prototype_records, filters)
         state_id = str(state["id"])
         view_ref = str(state["view_ref"])
         source_map[f"state:{state_id}"] = [
