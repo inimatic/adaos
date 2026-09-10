@@ -23,7 +23,7 @@
         "required": ["id", "type"],
         "properties": {
           "id": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$", "maxLength": 120},
-          "type": {"enum": ["observe.path", "builder.chat", "builder.session", "builder.wait", "scenario.validate", "browser.probe"]},
+          "type": {"enum": ["observe.path", "builder.chat", "builder.session", "builder.wait", "scenario.validate", "prototype.grade", "browser.probe"]},
           "required": {"type": "boolean"},
           "input": {"type": "object"},
           "expect": {"$ref": "#/$defs/expectation"},

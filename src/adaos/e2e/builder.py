@@ -43,6 +43,12 @@ _LOWER_IS_BETTER = {
     "output_tokens",
     "reasoning_tokens",
     "model_calls",
+    "grader_calls",
+    "grader_fresh_input_tokens",
+    "grader_cached_input_tokens",
+    "grader_output_tokens",
+    "grader_reasoning_tokens",
+    "grader_duration_ms",
     "step_retries",
     "failed",
     "inconclusive",
@@ -392,6 +398,49 @@ def _collect_usage(value: Any) -> dict[str, int]:
     return totals
 
 
+def _collect_grader_usage(value: Any) -> dict[str, int]:
+    totals = {
+        "grader_calls": 0,
+        "grader_fresh_input_tokens": 0,
+        "grader_cached_input_tokens": 0,
+        "grader_output_tokens": 0,
+        "grader_reasoning_tokens": 0,
+        "grader_duration_ms": 0,
+    }
+
+    def visit(item: Any) -> None:
+        if isinstance(item, Mapping):
+            if item.get("schema") == "adaos.builder.prototype_grade.v1":
+                metrics = (
+                    item.get("grader_metrics")
+                    if isinstance(item.get("grader_metrics"), Mapping)
+                    else {}
+                )
+                totals["grader_calls"] += int(metrics.get("calls") or 0)
+                totals["grader_fresh_input_tokens"] += int(
+                    metrics.get("input_fresh_tokens") or 0
+                )
+                totals["grader_cached_input_tokens"] += int(
+                    metrics.get("input_cached_tokens") or 0
+                )
+                totals["grader_output_tokens"] += int(
+                    metrics.get("generated_tokens") or 0
+                )
+                totals["grader_reasoning_tokens"] += int(
+                    metrics.get("reasoning_tokens") or 0
+                )
+                totals["grader_duration_ms"] += int(metrics.get("duration_ms") or 0)
+                return
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return totals
+
+
 class BuilderE2EStepExecutor(Protocol):
     adapter_id: str
 
@@ -722,6 +771,62 @@ class CompatibilityBuilderExecutor:
             ],
         }
 
+    def _prototype_grade(
+        self, inputs: Mapping[str, Any], context: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        from adaos.e2e.builder_grading import grade_builder_prototype
+        from adaos.services.agent_context import get_ctx
+
+        path_value = str(inputs.get("path") or "").strip()
+        scenario_id = str(inputs.get("scenario_id") or "").strip()
+        if path_value:
+            scenario_path = Path(path_value).expanduser().resolve()
+        elif scenario_id:
+            scenario_path = Path(get_ctx().paths.dev_scenarios_dir()) / scenario_id
+        else:
+            raise BuilderE2EError(
+                "prototype.grade requires input.path or input.scenario_id"
+            )
+        webui_path = scenario_path / "webui.json"
+        if not webui_path.is_file():
+            raise BuilderE2EError(f"prototype artifact is missing: {webui_path}")
+        artifact = json.loads(webui_path.read_text(encoding="utf-8"))
+        if not isinstance(artifact, Mapping):
+            raise BuilderE2EError("prototype artifact must be a JSON object")
+        relative = (
+            Path("evidence")
+            / "grading"
+            / f"{_safe_token(str(context['case_id']), fallback='case')}-input.json"
+        )
+        evidence_path = Path(context["bundle_dir"]) / relative
+        try:
+            grade, _request = grade_builder_prototype(
+                artifact=dict(artifact),
+                user_turns=[str(item) for item in inputs.get("user_turns") or []],
+                requirements=dict(inputs.get("requirements") or {}),
+                prohibited_assumptions=[
+                    str(item) for item in inputs.get("prohibited_assumptions") or []
+                ],
+                locale=str(context.get("locale") or "en"),
+                threshold=float(inputs.get("threshold") or 0.85),
+                model=str(inputs.get("model") or "").strip() or None,
+                timeout_seconds=float(
+                    inputs.get("timeout_seconds")
+                    or context.get("timeout_seconds")
+                    or 180
+                ),
+                request_recorder=lambda value: _write_json(evidence_path, value),
+            )
+        except Exception as exc:
+            raise BuilderE2EUnavailable(
+                f"prototype grader unavailable: {type(exc).__name__}: {exc}"
+            ) from exc
+        checked = validate_builder_e2e_record(
+            "adaos.builder.prototype_grade.v1",
+            {**grade, "evidence_ref": relative.as_posix()},
+        )
+        return checked
+
     def _browser_probe(
         self, inputs: Mapping[str, Any], context: Mapping[str, Any]
     ) -> Mapping[str, Any]:
@@ -784,6 +889,8 @@ class CompatibilityBuilderExecutor:
             return self._wait_for_builder_job(inputs, context)
         if step_type == "scenario.validate":
             return self._scenario_validate(inputs)
+        if step_type == "prototype.grade":
+            return self._prototype_grade(inputs, context)
         if step_type == "browser.probe":
             return self._browser_probe(inputs, context)
         raise BuilderE2EError(f"unsupported Builder E2E step type: {step_type}")
@@ -976,6 +1083,22 @@ def load_builder_e2e_suite(path: Path) -> LoadedBuilderE2ESuite:
         case["_source_ref"] = case_path.relative_to(root).as_posix()
         cases.append(case)
         digests[case_id] = digest
+    gates = dict(suite.get("gates") or {})
+    if gates.get("outcome_grade_required") is True:
+        missing_grades = [
+            str(case["case_id"])
+            for case in cases
+            if not any(
+                step.get("type") == "prototype.grade"
+                for step in case.get("steps") or []
+                if isinstance(step, Mapping)
+            )
+        ]
+        if missing_grades:
+            raise BuilderE2EError(
+                "suite requires prototype.grade for cases: "
+                + ", ".join(missing_grades)
+            )
     return LoadedBuilderE2ESuite(
         path=suite_path,
         suite=suite,
@@ -1007,6 +1130,12 @@ def _aggregate_metrics(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "output_tokens",
             "reasoning_tokens",
             "model_calls",
+            "grader_calls",
+            "grader_fresh_input_tokens",
+            "grader_cached_input_tokens",
+            "grader_output_tokens",
+            "grader_reasoning_tokens",
+            "grader_duration_ms",
         )
     }
     required_total = 0
@@ -1068,6 +1197,14 @@ def compare_builder_e2e_baseline(
         "profile": run_manifest.get("profile"),
         "browser": run_manifest.get("browser"),
         "repetitions": run_manifest.get("repetitions"),
+        "grader_model": dict(
+            dict(run_manifest.get("evaluation") or {}).get("prototype_grader")
+            or {}
+        ).get("model"),
+        "grader_version": dict(
+            dict(run_manifest.get("evaluation") or {}).get("prototype_grader")
+            or {}
+        ).get("version"),
     }
     for key, expected in dict(checked.get("cohort") or {}).items():
         if key in current_cohort and current_cohort[key] != expected:
@@ -1147,6 +1284,11 @@ class BuilderE2ERunner:
         self.profile = str(profile or defaults.get("profile") or "generic").strip()
         self.repetitions = int(repetitions or defaults.get("repetitions") or 1)
         self.browser = str(browser or defaults.get("browser") or "auto").strip()
+        self.grader_model = str(
+            defaults.get("grader_model")
+            or os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL")
+            or "gpt-4.1"
+        ).strip()
         if self.repetitions < 1 or self.repetitions > 20:
             raise BuilderE2EError("repetitions must be between 1 and 20")
         if self.browser not in {"auto", "on", "off"}:
@@ -1410,6 +1552,28 @@ class BuilderE2ERunner:
                         )
                         if artifact_root:
                             resolved_input.setdefault("artifact_root", artifact_root)
+                    if declaration["type"] == "prototype.grade":
+                        resolved_input.setdefault("model", self.grader_model)
+                        resolved_input.setdefault(
+                            "requirements", copy.deepcopy(case.get("requirements") or {})
+                        )
+                        resolved_input.setdefault(
+                            "prohibited_assumptions",
+                            copy.deepcopy(case.get("prohibited_assumptions") or []),
+                        )
+                        resolved_input.setdefault(
+                            "user_turns",
+                            [
+                                str(
+                                    _resolve_value(
+                                        dict(prior.get("input") or {}).get("text") or "",
+                                        context,
+                                    )
+                                )
+                                for prior in declarations[:step_index]
+                                if prior.get("type") == "builder.chat"
+                            ],
+                        )
                     output = dict(
                         self.executor.execute(
                             str(declaration["type"]), resolved_input, context
@@ -1634,6 +1798,7 @@ class BuilderE2ERunner:
             usage["model_calls"],
             int(input_attribution.get("unique_receipt_count") or 0),
         )
+        usage.update(_collect_grader_usage(full_outputs))
         stage_duration_ms: dict[str, float] = {}
         for step in steps:
             key = str(step.get("type") or "unknown")
@@ -1726,6 +1891,13 @@ class BuilderE2ERunner:
                 "profile": self.profile,
                 "repetitions": self.repetitions,
                 "browser": self.browser,
+                "evaluation": {
+                    "prototype_grader": {
+                        "kind": "model",
+                        "model": self.grader_model,
+                        "version": "1",
+                    }
+                },
                 "cases": [
                     {
                         "case_id": case["case_id"],
@@ -1776,6 +1948,7 @@ class BuilderE2ERunner:
                 "profile",
                 "repetitions",
                 "browser",
+                "evaluation",
                 "cases",
                 "selection",
                 "input_attribution",
@@ -1903,6 +2076,18 @@ def create_builder_e2e_baseline(
                 "profile": run_checked["profile"],
                 "browser": run_checked["browser"],
                 "repetitions": run_checked["repetitions"],
+                "grader_model": dict(
+                    dict(run_checked.get("evaluation") or {}).get(
+                        "prototype_grader"
+                    )
+                    or {}
+                ).get("model"),
+                "grader_version": dict(
+                    dict(run_checked.get("evaluation") or {}).get(
+                        "prototype_grader"
+                    )
+                    or {}
+                ).get("version"),
             },
             "reference": {
                 "adapter": run_checked["adapter"],

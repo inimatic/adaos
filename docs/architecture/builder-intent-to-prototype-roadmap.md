@@ -167,6 +167,16 @@ with a mutating move action. The exact three model inputs were attributed to a
 generic profile with no domain packs. The failure is retained as evidence for
 R4/R5 rather than hidden by a fixture-specific rule.
 
+The suite now requires an independent post-generation `prototype.grade` step.
+Its oracle data cannot enter Builder generation context, exact evidence
+pointers and request digests are retained, and grader usage has separate
+metrics. A frozen RU equipment candidate that passed structural validation was
+correctly rejected at `0.425` because its checklist was static and photo,
+completion guard, and requested states were absent. This closes the immediate
+false-green path but is not the R2 outcome gate: the model grader is not yet
+calibrated against human labels and deterministic compact/wide browser jobs
+remain open.
+
 - [x] `[must]` Publish and validate the declarative E2E suite, case, resolved
   run, case-result, report, and immutable baseline contracts defined by the
   [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md). Reuse

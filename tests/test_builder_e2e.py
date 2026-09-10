@@ -283,6 +283,16 @@ def test_suite_loader_uses_yaml_12_boolean_rules(tmp_path: Path) -> None:
     assert loaded.suite["defaults"]["browser"] == "off"
 
 
+def test_suite_loader_enforces_declared_outcome_grade_gate(tmp_path: Path) -> None:
+    suite = _write_suite(tmp_path / "definitions", cases=[_case()])
+    payload = yaml.safe_load(suite.read_text(encoding="utf-8"))
+    payload["gates"] = {"outcome_grade_required": True}
+    suite.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(BuilderE2EError, match="requires prototype.grade"):
+        load_builder_e2e_suite(suite)
+
+
 def test_baseline_remains_comparable_across_implementation_commits(
     tmp_path: Path,
 ) -> None:
@@ -323,6 +333,8 @@ def test_baseline_remains_comparable_across_implementation_commits(
     assert comparison["status"] == "regressed"
     assert comparison["reasons"] == []
     assert baseline["reference"]["adapter"] == "fixture.v1"
+    assert baseline["cohort"]["grader_model"] == "gpt-4.1"
+    assert baseline["cohort"]["grader_version"] == "1"
 
 
 def test_runner_rejects_undeclared_executor_adapter(tmp_path: Path) -> None:
@@ -368,6 +380,58 @@ def test_case_repetitions_use_distinct_webspaces(tmp_path: Path) -> None:
     webspaces = [str(inputs["webspace_id"]) for _, inputs in executor.calls]
     assert len(set(webspaces)) == 2
     assert all("case-en" in item for item in webspaces)
+
+
+def test_runner_injects_case_oracle_only_into_prototype_grade(tmp_path: Path) -> None:
+    case = _case()
+    case["requirements"] = {
+        "primary_jobs": ["review entry"],
+        "representative_states": ["empty"],
+    }
+    case["prohibited_assumptions"] = ["all entries are public"]
+    case["steps"].append(
+        {
+            "id": "grade",
+            "type": "prototype.grade",
+            "input": {
+                "fixture": "grade",
+                "scenario_id": "$steps.first.result.id",
+            },
+            "expect": {"values": {"ok": True, "passed": True}},
+        }
+    )
+    suite = _write_suite(tmp_path / "definitions", cases=[case])
+    executor = FixtureExecutor(
+        {
+            "first": {"ok": True, "result": {"id": "scenario-created"}},
+            "second": {"ok": True},
+            "grade": {"ok": True, "passed": True},
+        }
+    )
+
+    report = BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="oracle-injection",
+        executor=executor,
+    ).run()
+
+    assert report["status"] == "passed"
+    assert "requirements" not in executor.calls[0][1]
+    grade_input = executor.calls[2][1]
+    assert grade_input["requirements"] == case["requirements"]
+    assert grade_input["prohibited_assumptions"] == case["prohibited_assumptions"]
+    assert grade_input["user_turns"] == ["Create a small dashboard"]
+    assert grade_input["model"] == "gpt-4.1"
+    run_manifest = json.loads(
+        (Path(report["bundle_dir"]) / "run.json").read_text(encoding="utf-8")
+    )
+    assert run_manifest["evaluation"]["prototype_grader"] == {
+        "kind": "model",
+        "model": "gpt-4.1",
+        "version": "1",
+    }
 
 
 def test_declared_retry_is_counted_and_first_attempt_is_retained(

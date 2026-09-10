@@ -325,10 +325,23 @@ The current adapter is explicitly `legacy_dev_chat.v1`. Case/repetition
 webspaces are isolated; checkpoints and run identity support interruption and
 resume; retry attempts remain explicit; and actual input receipts are checked
 before cleanup. Isolated filesystem/state provisioning, internal
-Core/provider/runtime stage spans, browser task assertions, graders, sealed
-datasets, and the target `sdk.v1` adapter remain open. Therefore this
+Core/provider/runtime stage spans, browser task assertions, calibrated
+multi-grading, sealed datasets, and the target `sdk.v1` adapter remain open.
+Therefore this
 implementation is an evaluation bootstrap, not the R2 clean-baseline exit
 proof.
+
+Suite version 2 adds the post-generation `prototype.grade` step. The runner
+injects the case jobs, representative states, prohibited assumptions, and
+actual user turns only after the candidate is immutable, records the exact
+grader request by digest, requires valid RFC 6901 evidence pointers, and keeps
+grader latency/tokens separate from generation metrics. The resolved run and
+accepted baseline cohort include the grader model and rubric version. The
+visible suite fails to load when its outcome-grade gate is enabled but a case
+omits this step. This follows the composite-grader direction supported by the
+[OpenAI grader API](https://developers.openai.com/api/reference/resources/graders),
+but local deterministic and browser graders remain authoritative for
+executable behavior; a model judgment alone cannot establish a clean pass.
 
 The visible development suite now contains eight ordinary EN/RU archetype
 cases. They contain no component IDs, recipe names, AdaOS paths, or internal
@@ -428,3 +441,23 @@ classification, identity headers, request timeout, and Root ownership remain
 unchanged. This removes local transport overhead and connection churn, while
 provider `queue_ms` and `execution_ms` remain separately reported so the
 optimization cannot be mistaken for reduced model inference time.
+
+A subsequent RU equipment-inspection candidate exposed a false-positive
+structural pass. It validated as WebUI and used one generation call in 43.1
+seconds, but manual artifact inspection found only a draft form and static
+check table: there was no row editing, photo input, completion transition,
+conditional comment guard, or requested empty state. Running the immutable
+artifact through `prototype.grade` rejected it. The first inexpensive
+`gpt-4o-mini` judge scored `0.4375` but over-credited two static affordances;
+the versioned `gpt-4.1` judge with stricter generic evidence rules scored
+`0.425`, correctly rejected check editing and treated completion as partial.
+That cold grader call took 13.7 seconds and reported 1,694 fresh input and 938
+output tokens. These results validate the harness failure signal, not grader
+calibration. Human labels, deterministic interaction proof, and compact/wide
+browser tasks are still required before baseline admission.
+
+The next fresh generation run failed before grading after three candidate and
+repair calls: the final repair was invalid JSON. It took 61.8 seconds and
+confirms that the legacy design-model-owned patch path is both unstable and
+too expensive. The failure remains retained for the typed compiler work; it
+must not be hidden by raising retry or output budgets.

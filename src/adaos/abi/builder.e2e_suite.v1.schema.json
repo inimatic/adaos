@@ -27,6 +27,7 @@
         "repetitions": {"type": "integer", "minimum": 1, "maximum": 20},
         "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 1800},
         "browser": {"enum": ["auto", "on", "off"]},
+        "grader_model": {"type": "string", "minLength": 1, "maxLength": 120},
         "domain_packs": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
       }
     },

@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.prototype_grade.v1",
+  "title": "AdaOS Builder Prototype Grade",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "ok", "status", "passed", "score", "threshold", "dimensions", "findings", "summary", "grader", "grader_metrics", "artifact_digest", "rubric_digest"],
+  "properties": {
+    "schema": {"const": "adaos.builder.prototype_grade.v1"},
+    "ok": {"const": true},
+    "status": {"enum": ["passed", "failed"]},
+    "passed": {"type": "boolean"},
+    "score": {"type": "number", "minimum": 0, "maximum": 1},
+    "threshold": {"type": "number", "minimum": 0, "maximum": 1},
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary_jobs", "representative_states", "prohibited_assumptions"],
+      "properties": {
+        "primary_jobs": {"$ref": "#/$defs/dimension"},
+        "representative_states": {"$ref": "#/$defs/dimension"},
+        "prohibited_assumptions": {"$ref": "#/$defs/dimension"}
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dimension", "requirement", "verdict", "reason"],
+        "properties": {
+          "dimension": {"enum": ["primary_job", "representative_state", "prohibited_assumption"]},
+          "requirement": {"type": "string"},
+          "verdict": {"enum": ["supported", "partial", "unsupported", "unclear", "absent", "present"]},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "summary": {"type": "string"},
+    "grader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "version", "model", "response_id", "job_id", "request_id"],
+      "properties": {
+        "kind": {"const": "model"},
+        "version": {"type": "string", "minLength": 1},
+        "model": {"type": ["string", "null"]},
+        "response_id": {"type": ["string", "null"]},
+        "job_id": {"type": "string", "minLength": 1},
+        "request_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "grader_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_fresh_tokens", "input_cached_tokens", "generated_tokens", "reasoning_tokens", "calls", "duration_ms"],
+      "properties": {
+        "input_fresh_tokens": {"type": "integer", "minimum": 0},
+        "input_cached_tokens": {"type": "integer", "minimum": 0},
+        "generated_tokens": {"type": "integer", "minimum": 0},
+        "reasoning_tokens": {"type": "integer", "minimum": 0},
+        "calls": {"type": "integer", "minimum": 1},
+        "duration_ms": {"type": "number", "minimum": 0}
+      }
+    },
+    "artifact_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "rubric_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "evidence_ref": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "checks"],
+      "properties": {
+        "score": {"type": "number", "minimum": 0, "maximum": 1},
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requirement", "verdict", "evidence", "invalid_evidence", "reason"],
+            "properties": {
+              "requirement": {"type": "string"},
+              "verdict": {"enum": ["supported", "partial", "unsupported", "unclear", "absent", "present"]},
+              "evidence": {"type": "array", "items": {"type": "string"}},
+              "invalid_evidence": {"type": "array", "items": {"type": "string"}},
+              "reason": {"type": "string"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -34,4 +34,8 @@ steps:
     type: scenario.validate
     input: {scenario_id: $steps.create.scenario_id}
     expect: {values: {ok: true}}
+  - id: grade
+    type: prototype.grade
+    input: {scenario_id: $steps.create.scenario_id, threshold: 0.85}
+    expect: {values: {ok: true, passed: true}}
 cleanup: {policy: always, retain_on_failure: true}
