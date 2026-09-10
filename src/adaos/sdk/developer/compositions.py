@@ -11,6 +11,8 @@ import json
 import hashlib
 import re
 import shutil
+import threading
+import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +42,9 @@ _INSTALL_DEFAULTS = {
     "default": False,
     "features": (),
 }
+_OWNERSHIP_INDEX_SCHEMA = "adaos.developer.component_ownership_index.v1"
+_OWNERSHIP_INDEX_NAME = ".component-ownership.v1.json"
+_OWNERSHIP_INDEX_LOCK = threading.RLock()
 
 
 class ProjectCompositionError(SdkError):
@@ -279,6 +284,152 @@ def _write(path: Path, value: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _ownership_manifest_state(parent: Path) -> dict[str, list[int]]:
+    state: dict[str, list[int]] = {}
+    if not parent.is_dir():
+        return state
+    for path in parent.glob("*/project.yaml"):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        state[path.parent.name] = [
+            int(stat.st_mtime_ns),
+            int(stat.st_ctime_ns),
+            int(stat.st_size),
+        ]
+    return dict(sorted(state.items()))
+
+
+def _ownership_index_path(parent: Path) -> Path:
+    return parent / _OWNERSHIP_INDEX_NAME
+
+
+def _read_ownership_index(parent: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(
+            _ownership_index_path(parent).read_text(encoding="utf-8-sig")
+        )
+    except (FileNotFoundError, OSError, ValueError):
+        return {}
+    if not isinstance(value, Mapping) or value.get("schema") != _OWNERSHIP_INDEX_SCHEMA:
+        return {}
+    manifest_state = value.get("manifest_state")
+    owners = value.get("owners")
+    if not isinstance(manifest_state, Mapping) or not isinstance(owners, Mapping):
+        return {}
+    if any(
+        not isinstance(project_id, str)
+        or not isinstance(identity, list)
+        or len(identity) != 3
+        or any(not isinstance(item, int) for item in identity)
+        for project_id, identity in manifest_state.items()
+    ):
+        return {}
+    if any(
+        not isinstance(component_ref, str)
+        or not isinstance(project_ids, list)
+        or any(not isinstance(project_id, str) for project_id in project_ids)
+        for component_ref, project_ids in owners.items()
+    ):
+        return {}
+    return dict(value)
+
+
+def _write_ownership_index(
+    parent: Path,
+    *,
+    manifest_state: Mapping[str, Sequence[int]],
+    owners: Mapping[str, Sequence[str]],
+) -> dict[str, Any]:
+    payload = {
+        "schema": _OWNERSHIP_INDEX_SCHEMA,
+        "manifest_state": {
+            str(project_id): [int(item) for item in identity]
+            for project_id, identity in sorted(manifest_state.items())
+        },
+        "owners": {
+            str(component_ref): sorted(
+                {str(project_id) for project_id in project_ids}
+            )
+            for component_ref, project_ids in sorted(owners.items())
+            if project_ids
+        },
+    }
+    path = _ownership_index_path(parent)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return payload
+
+
+def _rebuild_ownership_index(
+    parent: Path, manifest_state: Mapping[str, Sequence[int]]
+) -> dict[str, Any]:
+    owners: dict[str, list[str]] = {}
+    for project_id in manifest_state:
+        project = _read(parent / project_id / "project.yaml")
+        for owned in project["components"]["owned"]:
+            component_ref = str(owned.get("ref") or "")
+            if component_ref:
+                owners.setdefault(component_ref, []).append(str(project["id"]))
+    return _write_ownership_index(
+        parent, manifest_state=manifest_state, owners=owners
+    )
+
+
+def _component_ownership_index() -> dict[str, Any]:
+    parent = _root_parent()
+    with _OWNERSHIP_INDEX_LOCK:
+        manifest_state = _ownership_manifest_state(parent)
+        index = _read_ownership_index(parent)
+        if index.get("manifest_state") == manifest_state:
+            return index
+        return _rebuild_ownership_index(parent, manifest_state)
+
+
+def _update_ownership_index(project: Mapping[str, Any], *, deleted: bool) -> None:
+    parent = _root_parent()
+    project_id = str(project["id"])
+    with _OWNERSHIP_INDEX_LOCK:
+        current_state = _ownership_manifest_state(parent)
+        index = _read_ownership_index(parent)
+        prior_state = dict(index.get("manifest_state") or {})
+        other_current = {
+            key: value for key, value in current_state.items() if key != project_id
+        }
+        other_prior = {
+            key: value for key, value in prior_state.items() if key != project_id
+        }
+        if index and other_current == other_prior:
+            owners = {
+                str(component_ref): [str(item) for item in project_ids]
+                for component_ref, project_ids in dict(index.get("owners") or {}).items()
+                if isinstance(project_ids, list)
+            }
+            for component_ref in list(owners):
+                owners[component_ref] = [
+                    owner for owner in owners[component_ref] if owner != project_id
+                ]
+            if not deleted:
+                for owned in project["components"]["owned"]:
+                    component_ref = str(owned.get("ref") or "")
+                    if component_ref:
+                        owners.setdefault(component_ref, []).append(project_id)
+            _write_ownership_index(
+                parent, manifest_state=current_state, owners=owners
+            )
+            return
+        _rebuild_ownership_index(parent, current_state)
+
+
 def get(project_id: str) -> dict[str, Any]:
     root = resolve_root(project_id)
     payload = _read(root / "project.yaml")
@@ -352,6 +503,7 @@ def create(value: Mapping[str, Any]) -> dict[str, Any]:
     if root.exists():
         raise ProjectCompositionError(f"project:{payload['id']} already exists")
     _write(manifest_path, payload)
+    _update_ownership_index(payload, deleted=False)
     return get(str(payload["id"]))
 
 
@@ -393,6 +545,7 @@ def delete(
     if root.parent != parent or root == parent:
         raise ProjectCompositionError("refusing to remove Project outside DEV root")
     shutil.rmtree(root)
+    _update_ownership_index(current, deleted=True)
     return {
         "ok": True,
         "project_id": token,
@@ -430,6 +583,7 @@ def replace(
     if str(payload.get("id") or "") != token:
         raise ProjectCompositionError("replacement cannot change project id")
     _write(resolve_root(token) / "project.yaml", payload)
+    _update_ownership_index(payload, deleted=False)
     return get(token)
 
 
@@ -902,15 +1056,10 @@ def create_research_direction(
 
 
 def project_for_component(component_ref: str) -> dict[str, Any] | None:
+    index = _component_ownership_index()
     matches = [
-        project
-        for project in list_projects(limit=5000)
-        if component_ref
-        in {
-            str(owned["ref"])
-            for owned in project["components"]["owned"]
-            if isinstance(owned, Mapping)
-        }
+        str(project_id)
+        for project_id in dict(index.get("owners") or {}).get(component_ref, [])
     ]
     if not matches:
         return None
@@ -918,7 +1067,7 @@ def project_for_component(component_ref: str) -> dict[str, Any] | None:
         raise ProjectCompositionError(
             f"component {component_ref} is owned by multiple local Projects"
         )
-    return matches[0]
+    return get(matches[0])
 
 
 def prepare_candidate(

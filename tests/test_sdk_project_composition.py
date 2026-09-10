@@ -173,6 +173,7 @@ def test_project_delete_requires_exact_snapshot_and_primary_ownership(
     assert deleted["ok"] is True
     assert not (project_space["projects"] / "tlp_research").exists()
     assert (project_space["skills"] / "tlp_direction").is_dir()
+    assert compositions.project_for_component("skill:tlp_direction") is None
 
 
 def test_project_requires_one_primary_component(project_space) -> None:
@@ -236,7 +237,7 @@ def test_project_can_adopt_an_existing_unowned_builder_component(project_space) 
     )
 
 
-def test_project_component_lookup_does_not_reread_scanned_manifests(
+def test_project_component_lookup_uses_persistent_ownership_index(
     project_space, monkeypatch
 ) -> None:
     _scenario(project_space["scenarios"], "kanban_demo")
@@ -246,13 +247,66 @@ def test_project_component_lookup_does_not_reread_scanned_manifests(
         component_id="kanban_demo",
     )
 
-    def unexpected_get(_project_id: str) -> dict:
-        raise AssertionError("project_for_component reread a scanned manifest")
+    index_path = project_space["projects"] / ".component-ownership.v1.json"
+    assert index_path.is_file()
 
-    monkeypatch.setattr(compositions, "get", unexpected_get)
+    def unexpected_rebuild(*_args, **_kwargs) -> dict:
+        raise AssertionError("current ownership index was rebuilt")
+
+    monkeypatch.setattr(compositions, "_rebuild_ownership_index", unexpected_rebuild)
 
     assert compositions.project_for_component("scenario:kanban_demo")["ref"] == (
         "project:kanban_demo"
+    )
+
+
+def test_project_component_lookup_rebuilds_after_external_manifest_change(
+    project_space,
+) -> None:
+    _scenario(project_space["scenarios"], "kanban_demo")
+    compositions.create_for_existing_component(
+        "kanban_demo",
+        kind="scenario",
+        component_id="kanban_demo",
+    )
+    external = _project("external_owner", "external_skill")
+    external["components"]["owned"] = [
+        {"ref": "scenario:external_demo", "role": "primary"}
+    ]
+    external["entrypoints"] = []
+    external_root = project_space["projects"] / "external_owner"
+    external_root.mkdir()
+    (external_root / "project.yaml").write_text(
+        yaml.safe_dump(external, sort_keys=False), encoding="utf-8"
+    )
+
+    assert compositions.project_for_component("scenario:external_demo")["ref"] == (
+        "project:external_owner"
+    )
+
+
+def test_project_replace_updates_component_ownership_index(project_space) -> None:
+    _skill(project_space["skills"], "candidate_skill")
+    _skill(project_space["skills"], "replacement_skill")
+    created = compositions.create(_project("candidate_project", "candidate_skill"))
+    replacement = {
+        key: value
+        for key, value in created.items()
+        if key not in {"ref", "manifest_digest", "source_path"}
+    }
+    replacement["components"]["owned"] = [
+        {"ref": "skill:replacement_skill", "role": "primary"}
+    ]
+
+    compositions.replace(
+        "candidate_project",
+        replacement,
+        expected_manifest_digest=created["manifest_digest"],
+    )
+
+    assert compositions.project_for_component("skill:candidate_skill") is None
+    assert compositions.project_for_component("skill:replacement_skill")["ref"] == (
+        "project:candidate_project"
     )
 
 
