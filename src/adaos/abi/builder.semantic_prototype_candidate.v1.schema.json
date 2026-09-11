@@ -203,14 +203,7 @@
         "empty_state": {
           "anyOf": [{ "$ref": "#/$defs/emptyState" }, { "type": "null" }]
         }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "role": { "const": "collection" } } },
-          "then": { "properties": { "presentation": { "enum": ["list", "table", "cards"] } } },
-          "else": { "properties": { "presentation": { "type": "null" } } }
-        }
-      ]
+      }
     },
     "guard": {
       "type": "object",

@@ -1118,6 +1118,12 @@ def _lower_semantic_prototype_candidate(
     views: list[dict[str, Any]] = []
     for raw_view in candidate["views"]:
         view = dict(raw_view)
+        role = str(view["role"])
+        presentation = view.get("presentation")
+        if role == "collection" and presentation not in {"list", "table", "cards"}:
+            _fail(f"collection view {view['id']!r} requires a presentation")
+        if role != "collection" and presentation is not None:
+            _fail(f"{role} view {view['id']!r} presentation must be null")
         if view.get("presentation") is None:
             view.pop("presentation", None)
         if view.get("filter") is None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 
 import pytest
 
@@ -318,6 +319,7 @@ def test_semantic_model_contract_is_strict_and_bounded() -> None:
 
     provider_contract = semantic_prototype_provider_contract()
     unsupported_provider_keywords = {
+        "allOf",
         "maxItems",
         "maxLength",
         "maximum",
@@ -369,6 +371,27 @@ def test_semantic_model_contract_is_strict_and_bounded() -> None:
     assert set(contract["$defs"]["localizedText"]["properties"]) == {"en", "ru"}
     assert set(contract["$defs"]["record"]["properties"]) == {"id", "values"}
     assert contract["$defs"]["id"]["pattern"]
+
+
+@pytest.mark.parametrize(
+    ("role", "presentation", "message"),
+    [
+        ("collection", None, "collection view 'work-list' requires a presentation"),
+        ("details", "list", "details view 'work-details' presentation must be null"),
+    ],
+)
+def test_semantic_candidate_presentation_matches_view_role(
+    role: str,
+    presentation: str | None,
+    message: str,
+) -> None:
+    brief, semantic = _fixture()
+    candidate = _candidate(semantic)
+    view = next(item for item in candidate["views"] if item["role"] == role)
+    view["presentation"] = presentation
+
+    with pytest.raises(BuilderWorkflowError, match=re.escape(message)):
+        compile_semantic_prototype_candidate(candidate, brief=brief)
 
 
 def test_semantic_model_candidate_compiles_to_canonical_document() -> None:
