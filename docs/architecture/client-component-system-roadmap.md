@@ -374,6 +374,18 @@ the same semantic gap. Do not create product-named components.
   appointments Prototype displays raw relationship IDs and numeric minutes;
   solve this through generic field/column semantics and compiler mappings,
   with EN/RU, compact/wide and edit-round-trip tests, not an appointments widget.
+- [ ] `[should]` Qualify generic collection-tool layout with the retained
+  `effort-low-provider-max-20260911-01` and `effort-high-provider-max-20260911-01`
+  artifacts. Full-width stacked query controls dominate the first viewport in
+  both profiles; editor openers often follow all supporting collections.
+  Keep primary actions near their collection, group filters responsively and
+  preserve context without forcing one application-specific screen layout.
+  Record this as UX evidence, not a retrospective generation failure.
+- [ ] `[must]` Distinguish attachment-reference text from a rendered image,
+  playable media or readable document in browser task evidence. A populated
+  card with a filename is not proof that the requested inspection works.
+  Verify actual assets or report a capability/fixture gap; keep missing browser
+  probe support separate from model and renderer failures.
 - [ ] `[should]` Keep development archetypes and component fixtures visible;
   keep the sealed prompt-autonomy set unavailable to generation and tuning.
 - [ ] `[could]` Add map/spatial, scanner/camera capture, richer offline draft,

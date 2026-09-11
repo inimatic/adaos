@@ -422,6 +422,13 @@ an inferred action label into a hard acceptance item without a supported
 interpretation. The user's explicit outcome remains authoritative. Evaluation
 must include false-positive operation extraction, not only missing coverage.
 
+Executable postconditions follow the admitted outcome binding and resource
+model. For example, assignment can create a linking record or update an existing
+record; a verb alone cannot require one storage primitive. Equivalent designs
+still need reachable controls, editable inputs and observable record effects.
+This flexibility must not turn a semantically named but inert command into a
+passing outcome.
+
 The generation contract, canonical compiler and runtime must agree on capacity,
 relationship identity versus display labels, attachment values, query filters and
 representative-state proof. Generic invariants are derived from executable

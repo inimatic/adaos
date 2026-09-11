@@ -829,6 +829,31 @@ instructions and must not be repaired by application-specific prompt rules.
   with preservation checks, rather than rewriting the full valid candidate.
   Prefer a schema constrained by the chosen data model; do not silently coerce
   arbitrary strings into attachment arrays or invent an omitted operation.
+- [ ] `[must]` Derive executable postconditions from outcome bindings and the
+  chosen resource model, not a fixed mapping from verbs to CRUD names. The
+  model-capacity `low` volunteer case compiled assignment as link-record
+  creation, then failed a generic `assign -> update` postcondition. Preserve
+  this failed verdict, add an equivalent-create/update regression, and still
+  test actual editable inputs and record effects before declaring task success.
+- [ ] `[should]` Evaluate a smaller authoritative requirement representation
+  and deduplicated stable instructions against the retained full context.
+  Repeated job/operation/state bindings must not become a substitute for user
+  outcomes. Measure token savings, omissions and repair preservation before
+  removing context or reducing generation capacity.
+- [ ] `[must]` Calibrate the grader against browser-proven false positives.
+  `effort-low-provider-max-20260911-01/browser-selected-ru/media-review-ru`
+  renders only filenames after selection, with no image/video surface, yet
+  grader v11 awards the viewing outcome `supported` from `item.details`.
+  Preserve the score as historical evidence, require real media/display
+  evidence for that outcome, and add negative controls for property-only views.
+- [ ] `[must]` Accept scoped view-only repairs when they resolve every reported
+  state defect without changing unrelated content. The model-capacity `high`
+  media repair made the missing predicate field visible, but failed because
+  `apply_state_repair` also requires an unchanged state echo that the provider
+  schema does not require. Offline replay with only that echo added compiles
+  against the original Brief (`evidence/media-view-only-repair-audit.json` in
+  the high run). Keep both the failed run and this diagnostic; do not relabel
+  it as a fresh success or as proof of media playback.
 
 Local correction verification: 407 focused Core/Builder tests passed before the
 final diagnostic change; its focused suite adds 374 passing checks and the E2E
