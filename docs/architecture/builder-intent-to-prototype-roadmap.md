@@ -904,6 +904,13 @@ defects dominate several failures and grader v11 has a browser-proven media
 false positive. Neither cohort qualifies autonomous prototyping. This is one
 development-sample comparison, not a sealed baseline or repeated reliability proof.
 
+Handoff: DEV `builder@0.2.114` is published to the personal source repository
+as ProjectRelease `sha256:43ab1f602b1141feadde179c416718aa5f02013c2d406efae48f91b3552f13a4`.
+All sixteen experiment projects are also checkpointed via `adaos dev project
+push`, including failed candidates' source scaffolds; they remain unapproved
+tests. `dev-push-receipts.json` in the comparison bundle records all seventeen
+successful publications. No Workspace/stable Builder replacement is implied.
+
 
 Current correction evidence (2026-09-11): the eight visible rubrics now trace
 mandatory outcomes to their original user turns. Unrequested status confirmation,
