@@ -242,6 +242,36 @@ def test_generic_mutation_requires_executable_prototype_resource() -> None:
     assert prototype_records_check["ok"] is False
     assert prototype_records_check["actual"]["direct_records"] is False
 
+    page["widgets"].append(
+        {
+            "id": "people",
+            "type": "ui.table",
+            "area": "main",
+            "dataSource": {
+                "kind": "resourceQuery",
+                "resourceType": "prototype.people",
+                "query": {},
+            },
+            "inputs": {"columns": [{"key": "name", "label": "Name"}]},
+        }
+    )
+    multi_resource = evaluate_ui_request(
+        request,
+        webui,
+        prototype_resources=[
+            {
+                "resource_type": "prototype.service_requests",
+                "records": records,
+            },
+            {
+                "resource_type": "prototype.people",
+                "records": [{"id": "person-1", "name": "Alex"}],
+            },
+        ],
+    )
+    assert multi_resource["ok"] is True
+    page["widgets"].pop()
+
     page["widgets"][0]["dataSource"] = {"kind": "static", "value": records}
     page["widgets"][1]["actions"] = [
         {"on": "submit", "type": "updateState", "params": {"draft": "$event.values"}}

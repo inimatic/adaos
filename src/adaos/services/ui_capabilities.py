@@ -817,13 +817,13 @@ def selected_ui_capabilities(
             "general": [],
             "by_postcondition": {
                 "resource.prototype_source": [
-                    "Use exactly one prototype.<resource_name> resourceType for the workbench, its projections, mutations, and prototype_records; keep bounded reference choices static until a multi-resource contract is selected."
+                    "Use one prototype.<resource_name> resourceType per independently materialized resource. Every projection and mutation must target one declared type, and the prototype_resources sidecar must name the same complete set."
                 ],
                 "resource.persistence_operations": [
                     "Use widget.actions entries with type=resourceOperation, target equal to the queried prototype resourceType, and params.operation_id=create/update/delete as required; localCreate, localUpdate, and updateState are not persistence operations."
                 ],
                 "resource.prototype_records": [
-                    "Return a bounded array of direct representative records for the same single prototype resource; each array item is one record, never a {resourceType, records} transport envelope. AdaOS derives the resource type, schema, and provider."
+                    "Return bounded direct records for every declared Prototype resource in prototype_resources. A legacy single-resource result may use prototype_records. AdaOS derives schemas and provider bindings."
                 ],
                 "ui.information_capture": [
                     "Represent every expected semantic information kind as an editable ui.form field. For attachment capture use a fileUpload field rather than static explanatory text."
@@ -1193,6 +1193,7 @@ def evaluate_ui_request(
     webui: Mapping[str, Any],
     *,
     prototype_records: Sequence[Mapping[str, Any]] | None = None,
+    prototype_resources: Sequence[Mapping[str, Any]] | None = None,
     locale_dictionaries: Mapping[str, Mapping[str, Any]] | None = None,
     domain_packs: Sequence[str] | None = None,
 ) -> dict[str, Any]:
@@ -1340,13 +1341,53 @@ def evaluate_ui_request(
         prototype_records_bounded = bool(
             prototype_record_count is not None and prototype_record_count <= 1000
         )
+        resource_sidecars = (
+            [dict(item) for item in prototype_resources]
+            if isinstance(prototype_resources, Sequence)
+            and not isinstance(prototype_resources, (str, bytes, bytearray))
+            and all(isinstance(item, Mapping) for item in prototype_resources)
+            else []
+        )
+        sidecar_resource_types = {
+            str(item.get("resource_type") or "").strip()
+            for item in resource_sidecars
+            if str(item.get("resource_type") or "").strip()
+        }
+        sidecar_records = [item.get("records") for item in resource_sidecars]
+        multi_resource_records = bool(
+            resource_sidecars
+            and sidecar_resource_types == resource_types
+            and len(sidecar_resource_types) == len(resource_sidecars)
+            and all(
+                isinstance(records, list)
+                and len(records) <= 1000
+                and all(isinstance(record, Mapping) for record in records)
+                for records in sidecar_records
+            )
+            and any(sidecar_records)
+        )
+        prototype_source_ok = bool(
+            resource_types
+            and (
+                sidecar_resource_types == resource_types
+                if resource_sidecars
+                else len(resource_types) == 1
+            )
+        )
+        prototype_data_ok = bool(
+            multi_resource_records
+            or (direct_prototype_records and prototype_records_bounded)
+        )
         postconditions.extend(
             [
                 {
                     "id": "resource.prototype_source",
-                    "ok": len(resource_types) == 1,
-                    "expected": "exactly one prototype resourceQuery resourceType",
-                    "actual": sorted(resource_types),
+                    "ok": prototype_source_ok,
+                    "expected": "all queried Prototype resource types match their materialization sidecars",
+                    "actual": {
+                        "queried": sorted(resource_types),
+                        "sidecars": sorted(sidecar_resource_types),
+                    },
                 },
                 {
                     "id": "resource.persistence_operations",
@@ -1356,12 +1397,17 @@ def evaluate_ui_request(
                 },
                 {
                     "id": "resource.prototype_records",
-                    "ok": direct_prototype_records and prototype_records_bounded,
-                    "expected": "non-empty bounded array of direct record objects",
+                    "ok": prototype_data_ok,
+                    "expected": "bounded direct records for every Prototype resource",
                     "actual": {
                         "count": prototype_record_count,
                         "bounded": prototype_records_bounded,
                         "direct_records": direct_prototype_records,
+                        "resource_count": len(resource_sidecars),
+                        "resource_records": [
+                            len(records) if isinstance(records, list) else None
+                            for records in sidecar_records
+                        ],
                     },
                 },
             ]

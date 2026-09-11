@@ -67,6 +67,7 @@ def evaluate(
     webui: Mapping[str, Any],
     *,
     prototype_records: Sequence[Mapping[str, Any]] | None = None,
+    prototype_resources: Sequence[Mapping[str, Any]] | None = None,
     locale_dictionaries: Mapping[str, Mapping[str, Any]] | None = None,
     domain_packs: Sequence[str] | None = None,
 ) -> dict[str, Any]:
@@ -74,6 +75,7 @@ def evaluate(
         request,
         webui,
         prototype_records=prototype_records,
+        prototype_resources=prototype_resources,
         locale_dictionaries=locale_dictionaries,
         domain_packs=domain_packs,
     )
