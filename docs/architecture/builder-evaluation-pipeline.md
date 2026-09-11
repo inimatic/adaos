@@ -668,3 +668,14 @@ the same explicit local scope/token and a fresh `ADAOS_E2E_OUTPUT`. Unsupported
 editors are reported as `not_exercised`, never a task pass. This initial probe
 does not qualify all create/delete, upload, focus, locale or application-specific
 tasks; the roadmap retains those gates. Do not promote its test resources.
+
+For a controlled GPT-5 profile experiment, the dev runner forwards
+`ADAOS_BUILDER_LLM_REASONING_EFFORT` (`minimal`, `low`, `medium`, `high`) as explicit
+request metadata and records the override in the run environment. This does
+not change Builder's default. Actual primary/repair request artifacts remain
+the authority for effective options. Keep cases and output budgets unchanged.
+GPT-5 supports these effort levels in the [official model contract](https://developers.openai.com/api/docs/models/gpt-5).
+The diagnostic helper `e2e/stand/replay-builder-state-repair.py` replays one
+retained request with an explicit matching `--checkpoint` and `--effort` into
+a fresh output directory; `--response` validates a retained response without
+another model call. Neither route edits the test application or its old verdict.

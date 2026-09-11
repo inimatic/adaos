@@ -81,6 +81,39 @@ try {
         await expect(input).toBeVisible({ timeout: 15_000 })
         await expect(input).toBeEditable({ timeout: 30_000 })
         const original = await input.inputValue()
+        sample.conditionDebug = await form.evaluate(element => {
+          const component = window.ng?.getComponent(element.querySelector('ada-form-widget'))
+          return { record: component?.recordValues, values: component?.values,
+            buttons: component?.formActionButtons?.map(button => ({ id: button.id, disabled: component.buttonDisabled(button), enabledIf: button.enabledIf })) }
+        })
+        for (const command of widget.actions.filter(action => action.type === 'resourceOperation' && action.confirmation)) {
+          const confirmedButton = form.locator(`[data-command-id=${JSON.stringify(command.id)}]`).locator('button')
+          if (await confirmedButton.isDisabled()) {
+            sample.checks.push({ editor: widget.id, command: command.id, status: 'not_exercised', reason: 'Confirmation command disabled for selected fixture' })
+            continue
+          }
+          const count = sample.mutations.length
+          await confirmedButton.click()
+          const alert = page.locator('ion-alert').last()
+          await expect(alert).toBeVisible()
+          await alert.locator('button').first().click()
+          await expect(page.locator('ion-alert')).toHaveCount(0)
+          await expect(input).toHaveValue(original)
+          if (sample.mutations.length !== count) throw new Error('Cancelled confirmation caused a mutation')
+          sample.checks.push({ editor: widget.id, command: command.id, status: 'passed', task: 'confirmation-cancel/no-mutation' })
+        }
+        if (modalId) {
+          const count = sample.mutations.length
+          await input.fill(`cancelled-${layout}`)
+          await page.locator('ion-modal').last().getByRole('button', { name: 'Close', exact: true }).click()
+          await expect(form).toHaveCount(0)
+          const opener = host(`open-${widget.id}`).locator('[data-command-id="edit"]')
+          await expect(opener).toBeFocused()
+          await opener.click()
+          await expect(input).toHaveValue(original)
+          if (sample.mutations.length !== count) throw new Error('Dismissing an editor caused a mutation')
+          sample.checks.push({ editor: widget.id, status: 'passed', task: 'dismiss-without-save/restore-focus/reopen', surface: 'overlay' })
+        }
         const marker = `review-${checkpoint.run_id}-${layout}`
         await input.fill(marker)
         const button = form.locator(`[data-command-id=${JSON.stringify(update.id)}]`)

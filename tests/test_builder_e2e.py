@@ -27,6 +27,17 @@ from adaos.services.builder.llm_input_attribution import (
 )
 
 
+def test_reasoning_override_is_explicit_and_validated(monkeypatch):
+    from adaos.e2e.builder import _generation_metadata
+    monkeypatch.delenv("ADAOS_BUILDER_LLM_REASONING_EFFORT", raising=False)
+    assert "builder_llm_reasoning_effort" not in _generation_metadata({})
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_REASONING_EFFORT", "low")
+    assert _generation_metadata({})["builder_llm_reasoning_effort"] == "low"
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_REASONING_EFFORT", "unsupported")
+    with pytest.raises(BuilderE2EError, match="REASONING_EFFORT"):
+        _generation_metadata({})
+
+
 def test_artifact_writers_keep_unicode_readable_in_plain_and_compressed_json(tmp_path) -> None:
     from adaos.e2e.builder import _compact_step_output, _write_json
     from adaos.e2e.stand import _json_write

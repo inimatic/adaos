@@ -134,9 +134,13 @@ def _evaluation_application_context(
 
 def _generation_metadata(context: Mapping[str, Any]) -> dict[str, Any]:
     contract = str(context.get("generation_contract") or "webui.v1")
+    effort = str(os.getenv("ADAOS_BUILDER_LLM_REASONING_EFFORT") or "").strip()
+    if effort and effort not in {"minimal", "low", "medium", "high"}:
+        raise BuilderE2EError("Invalid ADAOS_BUILDER_LLM_REASONING_EFFORT")
     return {
         "builder_e2e_generation_contract": contract,
         "builder_semantic_compiler": contract.startswith("semantic."),
+        **({"builder_llm_reasoning_effort": effort} if effort else {}),
     }
 
 
@@ -486,6 +490,7 @@ def _repository_environment(repo_root: Path) -> dict[str, Any]:
     status = _run_command(["git", "status", "--porcelain"], repo_root)
     return {
         "runner_version": RUNNER_VERSION,
+        "builder_reasoning_effort_override": os.getenv("ADAOS_BUILDER_LLM_REASONING_EFFORT") or None,
         "repository_commit": _run_command(["git", "rev-parse", "HEAD"], repo_root),
         "repository_dirty": bool(status),
         "client_commit": (

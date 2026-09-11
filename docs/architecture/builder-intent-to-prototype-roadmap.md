@@ -707,7 +707,7 @@ reported as user-task success or readiness for autonomous prototyping.
 - [x] `[must]` Show canonical project/component development timestamps in the
   Builder catalog, newest first, with sortable Application and Updated columns.
   Do not infer freshness from GUIDs, preview visits or source checkout mtimes.
-- [ ] `[should]` Expose inline/modal/side-sheet editor choice and provide a small
+- [x] `[should]` Expose inline/modal/side-sheet editor choice and provide a small
   generic progressive-disclosure recommendation. The compiler owns openers,
   selection, save/error/dismissal and source-map relocation. Surface preference
   is qualitative unless the user explicitly requests it.
@@ -737,6 +737,36 @@ and offline replay through the actual Builder parser passes. The scoped repair
 also over-emphasized empty-proof examples; its context now starts from the
 requested state's meaning and forbids substituting emptiness for a populated
 condition. These fixes require another fresh cohort, not relabelling `-02`.
+
+Run `executable-surfaces-gpt5-20260911-03` completed all eight cases: 2 passed
+(appointments, media), 6 failed. There were 14 generation/repair calls, 39,109
+output tokens, 66,456 fresh and 28,800 cached input tokens, with zero reasoning
+tokens under the hard-coded GPT-5 `minimal` profile. Case p50 was 59.0 seconds,
+p90 83.1 seconds. Five cases failed state/fixture repair; budget compiled but
+lacked requested visible totals and limit indications. This does not meet R8.
+
+The appointments browser proof now covers side-sheet dismissal, focus restore,
+update/save/reopen/restore and cancelling both destructive confirmations on wide
+and compact layouts (`evidence/appointments-confirmations-03`). It exposed
+read-only record fields missing from form guards and numeric `.length > 0`
+conditions unsupported by the Client evaluator. Both were fixed without adding
+hidden fields to mutation payloads; focused Client tests now total 127.
+
+- [ ] `[must]` Compare explicit GPT-5 reasoning profiles on the same eight
+  prompts before fixing a cost/latency default. Record requested and actual
+  options; never attribute a profile change to context engineering alone.
+- [ ] `[must]` Complete all independent state-proof findings before repair;
+  query reachability failures must not remain hidden behind fixture mismatches.
+- [ ] `[must]` Reduce state-repair input to affected evidence, typed fields,
+  readable fixture values and affected Brief requirements; retain full original
+  input/output for audit. Qualify preservation and meaning, not only patch size.
+
+One retained operations repair replay at `low` compiled successfully with the
+same messages/schema that failed at `minimal` (16.1 seconds provider execution).
+Artifacts: `state-repair-effort-low-20260911-01` and its `-validated` offline
+receipt. The initial replay helper omitted the authoritative Brief; validation
+was rerun with the captured checkpoint, without a second model call. This is
+single-case diagnostic evidence, not a changed historical verdict or a baseline.
 
 
 Current correction evidence (2026-09-11): the eight visible rubrics now trace
