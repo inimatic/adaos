@@ -24,6 +24,99 @@ def _text(key: str, en: str, ru: str) -> dict[str, str]:
     return {"key": key, "en": en, "ru": ru}
 
 
+def test_nonempty_command_guards_respect_number_and_boolean_field_types() -> None:
+    brief, document = _fixture()
+    for identifier, kind, value in [("count", "number", 0), ("checked", "boolean", False)]:
+        document["resource"]["fields"].append({
+            "id": identifier, "label": _text(identifier, identifier, identifier),
+            "value_type": kind, "editable": True, "required": False,
+        })
+        for record in document["resource"]["records"]:
+            record[identifier] = value
+        document["views"][2]["field_refs"].append(identifier)
+        document["commands"][1]["input_field_refs"].append(identifier)
+        document["commands"][1]["guard"]["require_nonempty"].append(identifier)
+    compiled = compile_semantic_prototype(document, brief=brief)
+    editor = next(widget for widget in compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+                  if widget["id"] == "work-editor")
+    guard = next(action["enabledIf"] for action in editor["actions"] if action["id"] == "complete")
+    assert "count.length" not in guard
+    assert "checked.length" not in guard
+    assert "$state.count != null" in guard
+    assert "$state.checked != null" in guard
+    assert "$state.comment.length > 0" in guard
+
+
+def test_declared_types_survive_empty_resources_and_null_only_seeds() -> None:
+    from jsonschema import Draft202012Validator
+
+    _, document = _fixture()
+    document["resource"]["records"] = []
+    document["resource"]["fields"].append({
+        "id": "measure", "label": _text("measure", "Measure", "Measure"),
+        "value_type": "number", "editable": False, "required": False,
+    })
+    document["requirement_bindings"] = []
+    compiled = compile_semantic_prototype(document)
+    spec = developer_prototypes.derive_record_resource_spec(compiled["webui"], [])
+    validator = Draft202012Validator(spec["data_definition"]["record_schema"])
+    for value in (None, 0, 12.5):
+        validator.validate({"id": "one", "revision": 1, "measure": value})
+    assert not validator.is_valid({"id": "one", "revision": 1, "measure": "twelve"})
+    assert not validator.is_valid({"id": "one", "revision": 1, "undeclared": "value"})
+    seeded = developer_prototypes.derive_record_resource_spec(compiled["webui"], [{"id": "one", "measure": None}])
+    assert seeded["data_definition"]["record_schema"] == spec["data_definition"]["record_schema"]
+
+
+def test_fixed_transition_editor_does_not_require_artificial_editable_input() -> None:
+    _, document = _fixture()
+    for field in document["resource"]["fields"]:
+        field["editable"] = False
+    document["commands"] = [{
+        **document["commands"][1], "input_field_refs": [], "fixed_values": {"status": "completed"},
+    }]
+    document["commands"][0].pop("guard", None)
+    document["requirement_bindings"] = []
+    assert compile_semantic_prototype(document)["validation"]["ok"]
+
+
+def test_collection_evidence_closes_only_unambiguous_declared_ownership() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    binding = next(item for item in candidate["requirement_bindings"] if item["requirement_ref"] == "collection:01")
+    binding["semantic_refs"] = [{"kind": "resource", "id": "work_items"}]
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+    derived = {item["to"] for item in result["normalizations"] if item["kind"] == "binding_ownership"}
+    assert {"view:work-list", "view:work-editor"} <= derived
+    other = copy.deepcopy(next(view for view in candidate["views"] if view["id"] == "work-editor"))
+    other["id"] = "other-editor"
+    candidate["views"].append(other)
+    with pytest.raises(BuilderWorkflowError, match="matching editor view"):
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+
+
+def test_relationship_choice_options_are_derived_before_record_validation() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    owner = next(field for field in candidate["resources"][0]["fields"] if field["id"] == "work_owner_id")
+    owner["value_type"] = "choice"
+    owner["options"] = []
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    field = next(field for field in compiled["semantic_document"]["resources"][0]["fields"] if field["id"] == "work_owner_id")
+    assert {option["value"] for option in field["options"]} == {"person-1", "person-2"}
+
+
+def test_provider_grammar_limits_requirement_refs_to_the_active_inventory() -> None:
+    brief, _ = _multi_resource_fixture()
+    defs = semantic_prototype_provider_contract(version="v2", locales=("ru",), brief=brief)["$defs"]
+    binding_refs = defs["requirementBinding"]["properties"]["requirement_ref"]["enum"]
+    automation_refs = defs["automationRequirement"]["properties"]["requirement_ref"]["enum"]
+    assert brief["operations"][0]["id"] in binding_refs
+    assert brief["operations"][0]["id"] not in automation_refs
+    assert brief["principal_jobs"][0]["id"] in automation_refs
+    assert defs["localizedText"]["required"] == ["ru"]
+
+
 def _fixture() -> tuple[dict, dict]:
     brief = compile_prototype_brief(
         "Show a repeatable list of work items, record a result for each item, "

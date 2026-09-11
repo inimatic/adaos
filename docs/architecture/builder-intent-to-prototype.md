@@ -574,6 +574,21 @@ Literal field identifiers and nested data paths must have consistent resolution
 across compilation, resource queries, display and command payloads; a supported
 identifier cannot render correctly in one widget and disappear in another.
 
+Record types come from declared semantic fields, not from observed fixture
+values. Empty collections and all-null optional fields retain their schema;
+form-required inputs remain distinct from persistence constraints on drafts.
+Numeric zero and boolean false count as filled values. Fixed transition commands
+can use a read-only editor surface without inventing editable inputs.
+
+Evidence bindings close over declared command/view/resource ownership. Collection
+requirements can inherit a unique owned collection/editor; a search/filter can
+inherit its unique query control from a bound view. Ambiguity requires an explicit
+binding. Closure never creates views, commands or business rules and is recorded
+in normalization evidence. Automation still requires a visible view/state, not
+a resource-only assertion. Request-specific provider enums constrain requirement
+references to the accepted inventory. Measure schema-cache loss against avoided
+repairs; do not assume a dynamic grammar is free.
+
 Every Builder-visible Client component must publish one versioned component
 contract beside its implementation. The contract is the source for Builder
 retrieval, Core validation, Client registration, documentation, fixtures, and

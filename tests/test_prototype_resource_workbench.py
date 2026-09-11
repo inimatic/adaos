@@ -577,6 +577,13 @@ def test_derived_filters_execute_without_leaking_across_resources(tmp_path: Path
         developer_prototypes.derive_resource_spec(webui, records, resource_type="prototype.items")
 
 
+@pytest.mark.parametrize("path,expected", [("item.date", "flat"), ("values.item.date", "nested-flat"), ("values.title", "nested")])
+def test_resource_paths_prefer_literal_dotted_keys(path, expected) -> None:
+    value = {"item.date": "flat", "item": {"date": "wrong"},
+             "values": {"item.date": "nested-flat", "title": "nested"}}
+    assert developer_prototypes._read_path(value, path) == expected
+
+
 def test_optional_numeric_prototype_field_accepts_explicit_empty_value() -> None:
     webui = {
         "schema": "adaos.webui.v1",

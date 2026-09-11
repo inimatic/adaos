@@ -62,14 +62,19 @@ def _text(value: Any) -> str:
 
 
 def _read_path(value: Mapping[str, Any], path: str) -> Any:
-    current: Any = value
-    for token in _text(path).split("."):
-        if not token:
-            continue
-        if not isinstance(current, Mapping):
-            return None
-        current = current.get(token)
-    return current
+    # Literal field IDs may contain dots. Resolve the longest own key before
+    # descending, matching Client widget and event-envelope path semantics.
+    if not isinstance(value, Mapping):
+        return None
+    path = _text(path)
+    if path in value:
+        return value[path]
+    tokens = path.split(".")
+    for boundary in range(len(tokens) - 1, 0, -1):
+        key = ".".join(tokens[:boundary])
+        if key in value:
+            return _read_path(value[key], ".".join(tokens[boundary:]))
+    return None
 
 
 def _record_id(value: Mapping[str, Any]) -> str:

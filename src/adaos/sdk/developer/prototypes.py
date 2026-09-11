@@ -3,23 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import copy
 from typing import Any
+
+from jsonschema import Draft202012Validator
 
 from adaos.services.resources.prototype import (
     PrototypeResourceService,
+    _read_path,
     prototype_webui_digest,
 )
-
-
-def _read_path(value: Mapping[str, Any], path: str) -> Any:
-    current: Any = value
-    for token in str(path or "").split("."):
-        if not token:
-            continue
-        if not isinstance(current, Mapping):
-            return None
-        current = current.get(token)
-    return current
 
 
 def _page_widgets(webui: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -255,6 +248,17 @@ def derive_record_resource_spec(
         "properties": properties,
         "additionalProperties": False,
     }
+    page = webui.get("ui", {}).get("application", {}).get("desktop", {}).get("pageSchema", {})
+    declared = page.get("meta", {}).get("builder", {}).get("prototype_record_schemas", {}).get(resolved_resource_type)
+    if declared is not None:
+        # The compiler owns types, including empty collections and all-null
+        # optional fields. Observed seed values must not redefine those types.
+        Draft202012Validator.check_schema(declared)
+        record_schema = copy.deepcopy(declared)
+        validator = Draft202012Validator(record_schema)
+        for record in normalized:
+            validator.validate(record)
+        properties = record_schema["properties"]
 
     action_operations = _resource_action_operations(webui, resolved_resource_type)
     mutable_operations = [

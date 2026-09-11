@@ -1245,7 +1245,7 @@ the prompt against that false-positive gate or copy a domain solution into Core.
   localization keys and scenario-owned assets. Explicit multilingual requests
   and existing translations remain authoritative; never label copied text as
   a translation. Verify both EN and RU single-locale paths and the bilingual path.
-- [ ] `[must]` Compare the unchanged short media request with a moderately
+- [x] `[must]` Compare the unchanged short media request with a moderately
   elaborated request describing the same outcomes, without ABI vocabulary or
   privileged solution hints. Preserve model I/O, timings and browser evidence.
 - [ ] `[must]` Repeat all eight development archetypes after the diagnostic
@@ -1254,6 +1254,18 @@ the prompt against that false-positive gate or copy a domain solution into Core.
 - [x] `[must]` Remove pre-comparison owned test developments using provenance
   and checked paths. Keep both low/high comparison cohorts, ordinary user
   applications, source archives and historical evaluation evidence intact.
+- [x] `[must]` Preserve typed record schemas for empty/null-only resources and
+  resolve literal dotted fields consistently in Client and Prototype queries.
+  Treat zero/false as filled values and permit fixed-command read-only editors.
+- [x] `[must]` Close unambiguous ownership bindings before validation and collect
+  independent binding defects with state/type defects before choosing repair scope.
+- [ ] `[should]` Measure request-specific reference enums against their potential
+  schema-cache cost; keep the authoritative requirement inventory unchanged.
+- [ ] `[should]` Review mandatory standalone collections for lookup resources.
+  Current lowering requires every resource to have a collection, even when the
+  model correctly uses it only as a relationship selector. Qualify a typed,
+  observable lookup path before relaxing this constraint; do not fabricate UI
+  or silently omit resource validation to increase the score.
 
 Qualification progress: `context-media-paired-low-20260911-02` passed all four
 development attempts (short 2/2, detailed 2/2). Each prompt needed one repair
@@ -1272,6 +1284,14 @@ failure. Generated test records are explicitly retained where deletion is not
 part of the application's declared operations. Full eight-archetype browser
 qualification remains open: the next cohort exposed dotted-field lookup defects
 in Client and incomplete collection-binding diagnostics in Core.
+
+`context-archetypes-low-20260911-01` completed 16 attempts: 9 passed, 7 failed.
+Operations, appointments, budget and media passed twice; volunteers passed once;
+inspections, library and procurement did not pass. Browser checks exposed a
+numeric `.length` guard and literal dotted-key display/submission defects despite
+formal passes. Client fixes made the unchanged appointments candidate pass edit,
+save, reopen and cancel checks on both viewports. Compiler replay is stored as
+separate evidence, never substituted for original outcomes or a fresh generation.
 
 Cleanup receipts under `e2e/artifacts/builder/cleanup-before-effort-low-provider-max-20260911-01*`
 record 174 archived local test developments removed, with all 16 last low/high

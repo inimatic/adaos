@@ -12,11 +12,27 @@ SAMPLE_MEDIA = {
 }
 
 
+def _sample(value):
+    if isinstance(value, list):
+        return [_sample(item) for item in value]
+    if isinstance(value, str) and value.startswith("sample://"):
+        if value not in SAMPLE_MEDIA:
+            raise BuilderWorkflowError(f"Unknown built-in media sample: {value}")
+        return SAMPLE_MEDIA[value]
+    return value
+
+
 def compile_media(document: Mapping, webui: dict, resources: list[dict], source_map: dict) -> None:
     widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
     by_id = {widget["id"]: widget for widget in widgets}
     records = {resource["resource_ref"]: resource["records"] for resource in resources}
     fields = {resource["id"]: {field["id"]: field for field in resource["fields"]} for resource in document["resources"]}
+    for resource_id, resource_fields in fields.items():
+        for ref, field in resource_fields.items():
+            if field["value_type"] == "attachment":
+                for record in records[resource_id]:
+                    if ref in record:
+                        record[ref] = _sample(record[ref])
     for view in document["views"]:
         media = view.get("media")
         if not media:
@@ -36,15 +52,15 @@ def compile_media(document: Mapping, webui: dict, resources: list[dict], source_
                 continue
             source_map.setdefault(f"field:{ref}", []).append(f"ui.application.desktop.pageSchema.widgets.@{view['id']}.inputs")
             for record in records[view["resource_ref"]]:
-                value = record.get(ref)
-                if isinstance(value, str) and value.startswith("sample://"):
-                    if value not in SAMPLE_MEDIA:
-                        raise BuilderWorkflowError(f"Unknown built-in media sample: {value}")
-                    record[ref] = SAMPLE_MEDIA[value]
+                if ref in record:
+                    record[ref] = _sample(record[ref])
         if view["role"] == "collection":
             cover_key = f"_adaos_cover_{view['id']}"
             if cover_key in fields[view["resource_ref"]]:
                 raise BuilderWorkflowError("Media cover key collides with an authored field")
+            resource_type = next(item["resource_type"] for item in resources if item["resource_ref"] == view["resource_ref"])
+            schemas = webui["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"]["prototype_record_schemas"]
+            schemas[resource_type]["properties"][cover_key] = {"type": ["string", "null"]}
             for record in records[view["resource_ref"]]:
                 source = record.get(media["source_field_ref"])
                 poster = record.get(media.get("poster_field_ref"))

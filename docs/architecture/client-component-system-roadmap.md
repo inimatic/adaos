@@ -392,16 +392,20 @@ the same semantic gap. Do not create product-named components.
   The context-engineering cohort exposed valid generated field IDs losing values
   in display and submission; prompting the model to avoid these IDs is not a fix.
 
-Media progress (2026-09-11): Client `6b242dc` adds a generic native image/video/audio
-preview to `item.details`, table image cells, and delayed-dictionary refresh for
-collection choice labels. Catalog 2.2.0 and semantic v2 declare media field
-bindings; compiler lowering, attribution-bearing local media samples and
-wide/compact playback/error probes exist. The 69 focused component tests pass.
-This qualifies the viewer, not complete application behavior or all C2 contracts.
 - [ ] `[should]` Keep development archetypes and component fixtures visible;
   keep the sealed prompt-autonomy set unavailable to generation and tuning.
 - [ ] `[could]` Add map/spatial, scanner/camera capture, richer offline draft,
   and advanced visualization only after measured demand and ownership exist.
+
+Media progress (2026-09-11): Client `6b242dc` adds a generic native image/video/audio
+preview to `item.details`, table image cells, and delayed-dictionary refresh for
+collection choice labels. Catalog 2.2.0 and semantic v2 declare media field
+bindings; compiler lowering, attribution-bearing local media samples and
+wide/compact playback/error probes exist. Client `45f567e` unifies dotted-key
+display/submission; `09ae8ec` preserves empty-string length. Related component
+tests passed (83), with 15 expression tests rerun after the final correction.
+The unchanged appointments candidate passed browser edit/save/reopen on both
+viewports after the path fix. This is not complete application qualification.
 
 Exit gate: each new primitive improves matched task outcomes without adding
 domain branches or regressing Client conformance, bundle, or latency gates.

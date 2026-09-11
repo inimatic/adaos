@@ -481,7 +481,11 @@ def _validate_semantic_prototype_v1(
         if view["role"] == "editor" and not any(
             fields[field_id]["editable"] for field_id in view["field_refs"]
         ):
-            _fail(f"editor view {view['id']!r} has no editable fields")
+            transitions = [command for command in commands.values() if command["view_ref"] == view["id"]]
+            if not transitions or any(command["input_field_refs"] or not (
+                command["fixed_values"] or command["kind"] == "delete"
+            ) for command in transitions):
+                _fail(f"editor view {view['id']!r} has no editable fields or fixed transition commands")
         for control in view.get("query_controls") or []:
             query_id = str(control["id"])
             if view["role"] != "collection":
@@ -742,7 +746,7 @@ def semantic_prototype_candidate_contract(*, version: str = "v1") -> dict[str, A
     return copy.deepcopy(_validator(filename).schema)
 
 
-def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru")) -> dict[str, Any]:
+def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru"), brief: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Return the candidate schema projected to the provider strict subset."""
 
     contract = semantic_prototype_candidate_contract(version=version)
@@ -757,6 +761,15 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         contract["required"].append("automation_requirements")
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
+        if brief is not None:
+            inventory = prototype_requirement_inventory(brief)
+            for name, allowed in (
+                ("requirementBinding", [item["id"] for item in inventory]),
+                ("capabilityGap", [item["id"] for item in inventory]),
+                ("automationRequirement", [item["id"] for item in inventory if item["kind"] in {"job", "residual"}]),
+            ):
+                if allowed:
+                    contract["$defs"][name]["properties"]["requirement_ref"] = {"type": "string", "enum": allowed}
     unsupported_validation_keywords = {
         "maxItems",
         "maxLength",
@@ -825,9 +838,9 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         },
         "relationships": contract["$defs"]["relationship"]["properties"]["to_field_ref"]["description"],
         "modeling": "Use separate resources for independently editable repeated concepts, including links. Every resource has a collection; prefix field IDs with its concept. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
-        "coverage": "Use the Brief required_references once each. Bind local mutations to their command and owning view/resource. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs, not just views. Search uses field_ref=null; filters target choice, short_text or date, never multi_choice. Bind business-rule deferral to a job or residual requirement, not an operation.",
+        "coverage": "Use the Brief required_references once each. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search uses field_ref=null; filters target choice, short_text or date, never multi_choice. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
         "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
-        "state_rules": "Every proof belongs to a collection view. min_items=1 means at least one matching fixture. query_empty needs literal equality predicates addressable by that view's filter controls. Empty proofs need an explicit empty_state. Predicate fields must be visible. A required quantity is not proof of achieved quantity; show an explicit illustrative result when business computation is pending.",
+        "state_rules": "Every proof belongs to a collection view. Count fixtures satisfying ALL of that state's predicates; states do not inherit other states' filters and a view.filter is a user-controlled value, not a fixed base predicate. min_items=1 means at least one match; min=max=0 means none. query_empty needs literal equality predicates addressable by that view's filter controls. Empty proofs need an explicit empty_state. Predicate fields must be visible. A required quantity is not proof of achieved quantity; show an explicit illustrative result when business computation is pending. Choose only proofs relevant to the request, not one of each kind.",
         "interactions": "Reuse local CRUD, selectors, query controls, confirmation and field guards. Commands belong to an editor; each resource needs its own collection. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure.",
         "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references are sample://image, sample://video and sample://unavailable. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading. Illustrative collection statuses never replace the viewer.",
         "ux_recommendations": {
@@ -1556,35 +1569,65 @@ def _choice_display(field: Mapping[str, Any], dictionaries: dict[str, dict[str, 
     return {"valueI18nPrefix": prefix}
 
 
-def _condition_expression(condition: Mapping[str, Any]) -> str:
+def _nonempty_expression(ref: str, fields: Mapping[str, Any]) -> str:
+    if fields.get(ref, {}).get("value_type") in {"number", "boolean"}:
+        return f"$state.{ref} != null"
+    return f"$state.{ref} != null && $state.{ref}.length > 0"
+
+
+def _condition_expression(condition: Mapping[str, Any], fields: Mapping[str, Any]) -> str:
     ref = str(condition["field_ref"])
     operator = str(condition["operator"])
     value = condition.get("value")
     if operator == "nonempty":
-        return f"$state.{ref}"
+        return f"({_nonempty_expression(ref, fields)})"
     if operator == "empty":
-        return f"!$state.{ref}"
+        return f"!({_nonempty_expression(ref, fields)})"
     encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     token = "===" if operator == "equals" else "!=="
     return f"$state.{ref} {token} {encoded}"
 
 
-def _guard_expression(guard: Mapping[str, Any]) -> str:
+def _guard_expression(guard: Mapping[str, Any], fields: Mapping[str, Any]) -> str:
     when = dict(guard["when"])
     requirement = " && ".join(
-        f"$state.{field_ref} && $state.{field_ref}.length > 0"
+        _nonempty_expression(field_ref, fields)
         for field_ref in guard["require_nonempty"]
     )
-    condition = _condition_expression(when)
+    condition = _condition_expression(when, fields)
     if when["operator"] == "equals":
-        inverse = _condition_expression({**when, "operator": "not_equals"})
+        inverse = _condition_expression({**when, "operator": "not_equals"}, fields)
     elif when["operator"] == "not_equals":
-        inverse = _condition_expression({**when, "operator": "equals"})
+        inverse = _condition_expression({**when, "operator": "equals"}, fields)
     elif when["operator"] == "nonempty":
-        inverse = _condition_expression({**when, "operator": "empty"})
+        inverse = _condition_expression({**when, "operator": "empty"}, fields)
     else:
-        inverse = _condition_expression({**when, "operator": "nonempty"})
+        inverse = _condition_expression({**when, "operator": "nonempty"}, fields)
     return f"{inverse} || ({condition} && {requirement})"
+
+
+def _prototype_record_schema(resource: Mapping[str, Any]) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "id": {"type": "string", "minLength": 1},
+        "revision": {"type": "integer", "minimum": 1},
+    }
+    for field in resource["fields"]:
+        kind = field["value_type"]
+        scalar = "number" if kind == "number" else "boolean" if kind == "boolean" else "string"
+        descriptor: dict[str, Any] = {"type": [scalar, "null"]}
+        if kind == "multi_choice" or (kind == "attachment" and field.get("multiple")):
+            descriptor = {"type": ["array", "null"], "items": {"type": "string"}}
+        if kind in {"choice", "multi_choice"} and field.get("options"):
+            choices = [option["value"] for option in field["options"]]
+            if kind == "multi_choice":
+                descriptor["items"] = {"enum": choices}
+                descriptor["uniqueItems"] = True
+            else:
+                descriptor = {"enum": [*choices, None]}
+        properties[field["id"]] = descriptor
+    # Required input is a form constraint; persistence also admits incomplete drafts.
+    return {"type": "object", "properties": properties, "required": ["id", "revision"],
+            "additionalProperties": False}
 
 
 def _compile_semantic_prototype_v1(
@@ -1924,7 +1967,7 @@ def _compile_semantic_prototype_v1(
                         )
                 if isinstance(field.get("visible_when"), Mapping):
                     rendered_field["visibleIf"] = _condition_expression(
-                        field["visible_when"]
+                        field["visible_when"], fields
                     )
                 widget["inputs"]["fields"].append(rendered_field)
                 source_map.setdefault(f"field:{field_id}", []).append(
@@ -1987,7 +2030,7 @@ def _compile_semantic_prototype_v1(
                 if command["kind"] == "delete":
                     action["params"].pop("payload", None)
                 if isinstance(command.get("guard"), Mapping):
-                    expression = _guard_expression(command["guard"])
+                    expression = _guard_expression(command["guard"], fields)
                     button["enabledIf"] = expression
                     action["enabledIf"] = expression
                 selection_condition = f"$state.{selection_ref} {'===' if command['kind'] == 'create' else '!=='} ''"
@@ -2080,6 +2123,7 @@ def _compile_semantic_prototype_v1(
                 "semantic_digest": _digest(document),
                 "brief_ref": document["brief_ref"],
                 "capability_gaps": copy.deepcopy(document["capability_gaps"]),
+                "prototype_record_schemas": {resource_type: _prototype_record_schema(resource)},
             }
         },
     }
@@ -3024,6 +3068,8 @@ def _validate_semantic_prototype_v2(
         suffix = f" at {path}" if path else ""
         _fail(f"{exc.message}{suffix}")
 
+    _normalize_v2_ownership(document, brief=brief)
+
     resources = _unique(document["resources"], "resource")
     relationships = _unique(document["relationships"], "relationship")
     views = _unique(document["views"], "view")
@@ -3224,62 +3270,10 @@ def _validate_semantic_prototype_v2(
             _fail(f"accepted requirements have no semantic binding or gap: {missing}")
         if unexpected:
             _fail(f"semantic document references unknown requirements: {unexpected}")
-        for operation in brief.get("operations") or []:
-            if not isinstance(operation, Mapping):
-                continue
-            operation_id = str(operation.get("id") or "")
-            operation_kind = str(operation.get("kind") or "")
-            if operation_kind not in {"search", "filter"} or operation_id in gaps:
-                continue
-            matching_queries = {
-                f"query:{identifier}"
-                for identifier, control in query_controls.items()
-                if control["kind"] == operation_kind
-            }
-            if not bindings.get(operation_id, set()) & matching_queries:
-                _fail(
-                    f"{operation_kind} requirement {operation_id!r} must bind a "
-                    f"{operation_kind} query control"
-                )
-        for requirement in brief.get("collection_requirements") or []:
-            if not isinstance(requirement, Mapping):
-                continue
-            requirement_id = str(requirement.get("id") or "")
-            if not requirement_id or requirement_id in gaps:
-                continue
-            bound = bindings.get(requirement_id, set())
-            bound_resources = {
-                item.removeprefix("resource:")
-                for item in bound
-                if item.startswith("resource:")
-            }
-            bound_collection_views = [
-                views[item.removeprefix("view:")]
-                for item in bound
-                if item.startswith("view:")
-                and item.removeprefix("view:") in views
-                and views[item.removeprefix("view:")]["role"] == "collection"
-            ]
-            if not any(
-                str(view["resource_ref"]) in bound_resources
-                for view in bound_collection_views
-            ):
-                _fail(
-                    f"collection requirement {requirement_id!r} must bind a "
-                    "matching item resource and collection view"
-                )
-            if requirement.get("interaction") == "capture_each" and not any(
-                item.startswith("view:")
-                and item.removeprefix("view:") in views
-                and views[item.removeprefix("view:")]["role"] == "editor"
-                and str(views[item.removeprefix("view:")]["resource_ref"])
-                in bound_resources
-                for item in bound
-            ):
-                _fail(
-                    f"capture_each requirement {requirement_id!r} must bind a "
-                    "matching editor view"
-                )
+        from .semantic_bindings import binding_findings
+        findings = binding_findings(document, brief)
+        if findings:
+            raise SemanticPrototypeValidationError(findings)
     return document
 
 
@@ -3315,7 +3309,7 @@ def _prototype_relation_option_fields(
             continue
         field = fields.get(str(relationship.get("from_field_ref") or ""))
         target = resources.get(str(relationship.get("to_resource_ref") or ""))
-        if field is None or target is None or not field.get("editable"):
+        if field is None or target is None or (not field.get("editable") and field.get("value_type") != "choice"):
             continue
         target_records = [
             dict(item)
@@ -3325,6 +3319,9 @@ def _prototype_relation_option_fields(
         if not target_records:
             continue
         target_field_id = str(relationship.get("to_field_ref") or "")
+        target_field = next((item for item in target["fields"] if item["id"] == target_field_id), None)
+        if not _relationship_field_types_compatible(field, target_field):
+            continue
         target_values = [record.get(target_field_id) for record in target_records]
         if any(value in (None, "") for value in target_values):
             continue
@@ -3368,13 +3365,24 @@ def _prototype_relation_option_fields(
                     "value": target_value,
                     "label": {
                         "key": f"relationship.{relationship_id}.option.{key_suffix}",
-                        "en": label,
-                        "ru": label,
+                        **{locale: label for locale in _text_locales(field["label"])},
                     },
                 }
             )
         field["value_type"] = "choice"
         field["options"] = options
+
+
+def _normalize_v2_ownership(document: dict[str, Any], *, brief: Mapping[str, Any] | None) -> list[dict]:
+    from .semantic_bindings import close_bindings
+
+    resources = {item["id"]: item for item in document["resources"]}
+    for resource_id, resource in resources.items():
+        _prototype_relation_option_fields(
+            resource_id=resource_id, resource=resource, resources=resources,
+            relationships=document["relationships"], views=document["views"],
+        )
+    return close_bindings(document, brief)
 
 
 def _compile_editor_surfaces(
@@ -3465,6 +3473,7 @@ def _compile_semantic_prototype_v2(
     source_map: dict[str, list[str]] = {}
     state_checks: list[dict[str, Any]] = []
     prototype_resources: list[dict[str, Any]] = []
+    record_schemas: dict[str, Any] = {}
 
     for resource_id, resource in resources.items():
         resource_views = [
@@ -3516,6 +3525,7 @@ def _compile_semantic_prototype_v2(
             require_primary=False,
         )
         page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+        record_schemas.update(page["meta"]["builder"]["prototype_record_schemas"])
         widgets.extend(copy.deepcopy(page["widgets"]))
         initial_state.update(copy.deepcopy(page.get("initialState") or {}))
         _merge_locale_dictionaries(dictionaries, compiled["locale_dictionaries"])
@@ -3579,6 +3589,7 @@ def _compile_semantic_prototype_v2(
         "meta": {
             "builder": {
                 "semantic_source": SEMANTIC_PROTOTYPE_V2_SCHEMA,
+                "prototype_record_schemas": record_schemas,
                 "semantic_digest": _digest(document),
                 "brief_ref": document["brief_ref"],
                 "relationships": copy.deepcopy(document["relationships"]),
@@ -3724,7 +3735,10 @@ def compile_semantic_prototype_candidate(
         semantic_document = _lower_semantic_prototype_candidate_v2(
             candidate, brief=brief
         )
+        normalizations.extend(_normalize_v2_ownership(semantic_document, brief=brief))
         model_findings = _semantic_v2_model_findings(semantic_document)
+        from .semantic_bindings import binding_findings
+        model_findings.extend(binding_findings(semantic_document, brief))
         if model_findings or requirement_findings:
             raise SemanticPrototypeValidationError(
                 [*model_findings, *requirement_findings]

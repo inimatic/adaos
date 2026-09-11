@@ -170,14 +170,14 @@ def semantic_candidate_contract(*, version: str = "v1") -> dict[str, Any]:
     return semantic_prototype_candidate_contract(version=version)
 
 
-def semantic_provider_contract(*, version: str = "v1", locales: tuple[str, ...] = ("en", "ru")) -> dict[str, Any]:
+def semantic_provider_contract(*, version: str = "v1", locales: tuple[str, ...] = ("en", "ru"), brief: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Return the OpenAI strict-subset projection of the model contract."""
 
     from adaos.services.builder.semantic_prototype import (
         semantic_prototype_provider_contract,
     )
 
-    return semantic_prototype_provider_contract(version=version, locales=locales)
+    return semantic_prototype_provider_contract(version=version, locales=locales, brief=brief)
 
 
 def semantic_generation_guidance() -> dict[str, Any]:
