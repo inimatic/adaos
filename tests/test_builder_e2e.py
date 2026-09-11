@@ -948,6 +948,12 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
         json.dumps({"messages": [{"role": "user", "content": "full input"}]}),
         encoding="utf-8",
     )
+    (journal_dir / "root-job.semantic-repair.request.json").write_text(
+        json.dumps(
+            {"messages": [{"role": "user", "content": "full repair input"}]}
+        ),
+        encoding="utf-8",
+    )
     (artifact_root / "candidate.primary.json").write_text(
         json.dumps({"response": "full output", "candidate": {"views": []}}),
         encoding="utf-8",
@@ -997,6 +1003,13 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
                                 "structured": True,
                             }
                         ],
+                        "repair": {
+                            "input_artifact": {
+                                "path": (
+                                    "llm_jobs/root-job.semantic-repair.request.json"
+                                )
+                            }
+                        },
                     },
                     "telemetry": {
                         "usage": {
@@ -1066,7 +1079,12 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
     assert {
         item["kind"]
         for item in result["generation_diagnostic"]["model_io_artifacts"]
-    } == {"terminal", "request", "raw_model_output"}
+    } == {
+        "terminal",
+        "request",
+        "semantic_repair_request",
+        "raw_model_output",
+    }
     assert all(
         (tmp_path / "bundle" / reference).is_file()
         for reference in result["evidence_refs"]

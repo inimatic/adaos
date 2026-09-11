@@ -388,6 +388,25 @@ def _retain_generation_model_io(
     input_path = str(input_artifact.get("path") or "").strip()
     if input_path:
         sources.append(("request", input_path, artifact_root / input_path))
+    repair = (
+        result.get("repair")
+        if isinstance(result.get("repair"), Mapping)
+        else {}
+    )
+    repair_input_artifact = (
+        repair.get("input_artifact")
+        if isinstance(repair.get("input_artifact"), Mapping)
+        else {}
+    )
+    repair_input_path = str(repair_input_artifact.get("path") or "").strip()
+    if repair_input_path:
+        sources.append(
+            (
+                "semantic_repair_request",
+                repair_input_path,
+                artifact_root / repair_input_path,
+            )
+        )
     for candidate in result.get("candidate_artifacts") or []:
         if not isinstance(candidate, Mapping):
             continue
