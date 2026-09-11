@@ -39,14 +39,14 @@ const report = { scenario, checkpoint: checkpointPath, samples: [], passed: fals
 try {
   for (const [layout, viewport] of Object.entries({ wide: { width: 1440, height: 1000 }, compact: { width: 390, height: 844 } })) {
     const context = await browser.newContext({ viewport })
-    await context.addInitScript(({ hub, token, subnet, webspace }) => {
+    await context.addInitScript(({ hub, token, subnet, webspace, locale }) => {
       window.__ADAOS_DEBUG__ = true
       window.__ADAOS_BASE__ = hub
       window.__ADAOS_TOKEN__ = token
       for (const [key, value] of Object.entries({ adaos_device_id: 'e2e-interactions', adaos_webspace_id: webspace,
         adaos_hub_base: hub, adaos_local_hub_base: hub, adaos_try_local_hub: '1', adaos_hub_token: token,
-        adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo' })) localStorage.setItem(key, value)
-    }, { hub, token, subnet, webspace: preview.webspace_id })
+        adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo', adaos_lang: locale })) localStorage.setItem(key, value)
+    }, { hub, token, subnet, webspace: preview.webspace_id, locale: checkpoint.context.locale })
     const page = await context.newPage()
     page.setDefaultTimeout(30_000)
     page.setDefaultNavigationTimeout(60_000)
@@ -60,6 +60,22 @@ try {
       }
     })
     const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).last()
+    const operationResponse = () => {
+      const pending = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate', { timeout: 15_000 })
+      // Keep a click/confirmation failure from leaving an unhandled timeout.
+      void pending.catch(() => {})
+      return pending
+    }
+    const editorOpener = (modalId, row) => {
+      for (const owner of widgets) {
+        const action = owner.actions?.find(item => item.type === 'openModal' && item.params?.modalId === modalId
+          && item.on?.startsWith('click:') && item.on !== 'click:new')
+        if (!action) continue
+        const id = owner.type === 'ui.actions' ? action.on.slice('click:'.length) : action.id || action.on
+        return host(owner.id).locator(`[data-command-id=${JSON.stringify(id)}]`)
+      }
+      return row
+    }
     try {
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
       await page.waitForFunction(expected => {
@@ -79,8 +95,9 @@ try {
         const row = host(collection.id).locator('tr.row-selectable, .collection-focus-item').first()
         await expect(row).toBeVisible({ timeout: 30_000 })
         await row.click()
-        if (modalId) await host(`open-${widget.id}`).locator('[data-command-id="edit"]').click()
         const form = host(widget.id)
+        const opener = editorOpener(modalId, row)
+        if (modalId && opener !== row) await opener.click()
         const input = form.locator(`[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}]`).locator('input, textarea').or(form.locator(`input[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}], textarea[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}]`)).first()
         await expect(input).toBeVisible({ timeout: 15_000 })
         await expect(input).toBeEditable({ timeout: 30_000 })
@@ -109,9 +126,14 @@ try {
         if (modalId) {
           const count = sample.mutations.length
           await input.fill(field.type === 'date' ? '2099-12-29' : `cancelled-${layout}`)
+          await opener.evaluate(element => { window.__E2E_FOCUS_ORIGIN__ = element })
           await page.locator('ion-modal').last().getByRole('button', { name: 'Close', exact: true }).click()
           await expect(form).toHaveCount(0)
-          const opener = host(`open-${widget.id}`).locator('[data-command-id="edit"]')
+          sample.dismissFocus = await opener.evaluate(element => ({
+            sameElement: element === window.__E2E_FOCUS_ORIGIN__, originConnected: window.__E2E_FOCUS_ORIGIN__?.isConnected,
+            activeTag: document.activeElement?.tagName, activeCommand: document.activeElement?.getAttribute('data-command-id'),
+            activeShadowTag: document.activeElement?.shadowRoot?.activeElement?.tagName,
+          }))
           await expect(opener).toBeFocused()
           await opener.click()
           await expect(input).toHaveValue(original)
@@ -142,7 +164,7 @@ try {
           return { field: fieldId, values: component?.values, input: element.querySelector('input,textarea')?.value,
             actions: component?.widget?.actions, selectedRecordId: component?.selectedRecordId }
         }, field.id)
-        const responsePromise = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate', { timeout: 15_000 })
+        const responsePromise = operationResponse()
         await button.click()
         if (update.confirmation) await page.locator('ion-alert').last().locator('button').last().click()
         const response = await responsePromise
@@ -152,7 +174,7 @@ try {
         if (!mutation?.record || mutation.payload[field.id] !== marker) throw new Error('Wrong record or payload was submitted')
         if (modalId) {
           await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
-          await host(`open-${widget.id}`).locator('[data-command-id="edit"]').click()
+          await opener.click()
         } else await page.reload({ waitUntil: 'domcontentloaded' })
         // Re-open and verify the persisted value, not merely the edited DOM.
         if (!modalId) {
@@ -160,13 +182,20 @@ try {
           await row.click()
         }
         await expect(input).toHaveValue(marker, { timeout: 30_000 })
-        await input.fill(original)
-        const restore = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate', { timeout: 15_000 })
-        await button.click()
-        if (update.confirmation) await page.locator('ion-alert').last().locator('button').last().click()
-        const restored = await restore
+        sample.checks.push({ editor: widget.id, status: 'passed', task: 'select/edit/save/reopen', surface: modalId ? 'overlay' : 'inline' })
+        // Fixture restoration is not a claimed user workflow: an assignment
+        // command need not expose unassignment of the originally empty field.
+        const body = response.request().postDataJSON()
+        if (body.resource_type !== update.target || !body.resource_type.startsWith('prototype.')) throw new Error('Unsafe fixture restoration')
+        const headers = Object.fromEntries(Object.entries(await response.request().allHeaders())
+          .filter(([key]) => !['content-length', 'host', 'origin'].includes(key)))
+        const restored = await context.request.post(`${hub}/api/resources/operate`, { headers,
+          data: { ...body, payload: Object.fromEntries(Object.keys(body.payload)
+            .map(key => [key, sample.conditionDebug.record[key] ?? null])) },
+        })
         if (!restored.ok() || (await restored.json()).ok === false) throw new Error('Could not restore fixture')
-        sample.checks.push({ editor: widget.id, status: 'passed', task: 'select/edit/save/reopen/restore', surface: modalId ? 'overlay' : 'inline' })
+        sample.checks.push({ editor: widget.id, status: 'passed', task: 'fixture-restore', evidenceKind: 'stand_cleanup' })
+        if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: 'Close', exact: true }).click()
         const create = widget.actions.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'create')
         const remove = widget.actions.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'delete')
         const supportedTypes = ['shortText', 'longText', 'number', 'integer', 'date', 'singleChoice', 'boolean', 'toggle']
@@ -190,7 +219,7 @@ try {
             await container.locator('input,textarea').fill(value == null ? '' : String(value))
           }
         }
-        const creating = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate', { timeout: 15_000 })
+        const creating = operationResponse()
         await form.locator(`[data-command-id=${JSON.stringify(create.id)}]`).locator('button').click()
         if (create.confirmation) await page.locator('ion-alert').last().locator('button').last().click()
         const createdResponse = await creating
@@ -202,11 +231,11 @@ try {
         const newRow = host(collection.id).locator('tr.row-selectable, .collection-focus-item').filter({ hasText: createdMarker })
         await expect(newRow).toHaveCount(1, { timeout: 30_000 })
         await newRow.click()
-        if (modalId) await host(`open-${widget.id}`).locator('[data-command-id="edit"]').click()
+        if (modalId && opener !== row) await opener.click()
         await expect(input).toHaveValue(createdMarker, { timeout: 30_000 })
         const selected = await form.evaluate(element => window.ng?.getComponent(element.querySelector('ada-form-widget'))?.recordValues)
         if (selected?.[field.id] !== createdMarker || !selected.id || selected.id === sample.conditionDebug.record.id) throw new Error('Refusing to delete a record not created by this probe')
-        const deleting = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate', { timeout: 15_000 })
+        const deleting = operationResponse()
         await form.locator(`[data-command-id=${JSON.stringify(remove.id)}]`).locator('button').click()
         if (remove.confirmation) await page.locator('ion-alert').last().locator('button').last().click()
         const removedResponse = await deleting

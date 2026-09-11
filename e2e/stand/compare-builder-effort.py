@@ -25,7 +25,8 @@ def summarize(root: Path) -> dict:
     for ref in report["case_results"]:
         result = read(root / ref)
         case_id = result["case_id"]
-        generation_path = root / "evidence/generation" / f"{case_id}-attempt-01.json"
+        repetition = int(result.get("repetition", 1))
+        generation_path = root / "evidence/generation" / f"{case_id}-attempt-{repetition:02}.json"
         generation = read(generation_path) if generation_path.exists() else {}
         terminals = [item for item in generation.get("model_io_artifacts", []) if item["kind"] == "terminal"]
         terminal = read(root / terminals[0]["evidence_ref"]) if terminals else {}
@@ -53,11 +54,11 @@ def summarize(root: Path) -> dict:
                              "message_chars": [len(message["content"]) for message in messages],
                              "stable_message_digests": [digest(message) for message in messages[:2]]})
         grade = next((step["output"] for step in result["steps"] if step["id"] == "grade"), {})
-        checkpoint_path = root / "checkpoints" / case_id / "attempt-01.json"
+        checkpoint_path = root / "checkpoints" / case_id / f"attempt-{repetition:02}.json"
         checkpoint = read(checkpoint_path) if checkpoint_path.exists() else {}
         previews = checkpoint.get("cleanup", {}).get("previews", [])
         metrics = result["metrics"]
-        cases.append({"case_id": case_id, "status": result["status"], "pipeline_seconds": result["duration_ms"] / 1000,
+        cases.append({"case_id": case_id, "repetition": repetition, "status": result["status"], "pipeline_seconds": result["duration_ms"] / 1000,
                       "model_seconds": sum(call["timing"].get("execution_ms", 0) for call in calls) / 1000,
                       "input_tokens": metrics.get("fresh_input_tokens", 0) + metrics.get("cached_input_tokens", 0),
                       "cached_input_tokens": metrics.get("cached_input_tokens", 0),

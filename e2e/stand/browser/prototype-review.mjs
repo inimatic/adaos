@@ -57,6 +57,7 @@ try {
       }
     })
     let failure = null
+    const mediaChecks = []
     try {
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
       await page.waitForFunction(expected => {
@@ -69,6 +70,34 @@ try {
         await page.locator(`[data-webui-widget-id=${JSON.stringify(selectWidget)}]`)
           .locator('tr.row-selectable, .collection-focus-item').first().click()
         await page.locator('ada-details-widget .details-row').first().waitFor({ timeout: 15_000 })
+      }
+      if (process.env.ADAOS_E2E_MEDIA_TESTS === '1') {
+        const rows = page.locator(`[data-webui-widget-id=${JSON.stringify(selectWidget)}]`)
+          .locator('tr.row-selectable, .collection-focus-item')
+        for (let index = 0; index < await rows.count(); index += 1) {
+          await rows.nth(index).click()
+          const viewer = page.locator('ada-media-preview').first()
+          await viewer.waitFor()
+          await page.waitForFunction(() => ['ready', 'error'].includes(document.querySelector('ada-media-preview [data-media-state]')?.getAttribute('data-media-state')))
+          const result = await viewer.evaluate(async element => {
+            const media = element.querySelector('video,audio,img')
+            const state = element.querySelector('[data-media-state]').getAttribute('data-media-state')
+            if (state === 'ready' && media instanceof HTMLMediaElement) {
+              await media.play()
+              await new Promise((resolve, reject) => {
+                if (media.currentTime > 0) return resolve()
+                const timer = setTimeout(() => reject(new Error('Media clock did not advance')), 10_000)
+                media.addEventListener('timeupdate', () => { clearTimeout(timer); resolve() }, { once: true })
+              })
+              media.pause()
+            }
+            return { state, kind: media?.tagName, currentTime: media?.currentTime, naturalWidth: media?.naturalWidth }
+          })
+          mediaChecks.push({ row: index, ...result })
+        }
+        if (!mediaChecks.some(item => item.kind === 'VIDEO' && item.currentTime > 0)
+          || !mediaChecks.some(item => item.kind === 'IMG' && item.naturalWidth > 0)
+          || !mediaChecks.some(item => item.state === 'error')) throw new Error('Image, playing video and unavailable-media coverage required')
       }
     } catch (error) { failure = error.message }
     const text = await page.locator('body').innerText()
@@ -110,7 +139,7 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}-bottom.png`), fullPage: true })
     }
     await Promise.allSettled(responseTasks)
-    samples.push({ layout, viewport, locale, selectWidget, geometry, scrollSurfaces, failure, errors, requestFailures, text })
+    samples.push({ layout, viewport, locale, selectWidget, geometry, mediaChecks, scrollSurfaces, failure, errors, requestFailures, text })
     await context.close()
   }
 } finally { await browser.close() }

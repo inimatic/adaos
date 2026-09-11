@@ -1,0 +1,74 @@
+schema: adaos.builder.e2e_case.v1
+case_id: media-review-detailed-ru
+title: Проверка медиаматериалов
+description: Видимый пример каталога материалов, просмотра и обсуждения редакции.
+locale: ru
+tags: [visible, media, review]
+requirements:
+  primary_jobs:
+    - statement: найти материал
+      acceptance: Есть рабочий отбор по проекту, типу и статусу, видны обложка и основные свойства.
+    - statement: просмотреть
+      acceptance: Можно открыть выбранное изображение или видео через поддерживаемую поверхность просмотра.
+    - statement: оставить замечание с привязкой ко времени или области
+      acceptance: Замечание сохраняется для выбранного материала со временем или описанием области.
+      exclusions: [Графический редактор областей и интерактивная временная шкала не обязательны; явное поле привязки допустимо.]
+    - statement: запросить исправления и одобрить редакцию
+      acceptance: Доступны исполняемые изменения статуса выбранной редакции на исправление и одобрение.
+  representative_states:
+    - statement: нет материалов
+      acceptance: Доступно пустое состояние каталога.
+    - statement: ожидает проверки
+      acceptance: Видимый материал находится в ожидании проверки.
+    - statement: есть замечания
+      acceptance: Видны замечания, связанные с материалом.
+    - statement: одобрено
+      acceptance: Видна одобренная редакция.
+    - statement: загрузка и недоступный файл
+      acceptance: Поверхность просмотра имеет отображаемые состояния загрузки и недоступного файла. Измеренная задержка реальной сети не обязательна.
+prohibited_assumptions: []
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Создай новое приложение "Проверка материалов ${case_instance_id}" для редактора небольшой медиакоманды.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: >-
+        Покажи первую рабочую версию для редактора небольшой медиакоманды.
+        Нужен каталог изображений и видео с обложками, проектом, типом и статусом.
+        Материалы можно отбирать по проекту, типу и статусу. После выбора материала
+        редактор видит его свойства и открывает само изображение или видео, а не
+        только имя файла. К выбранному материалу можно добавить замечание:
+        текст, время в секундах для видео или словесное описание области изображения.
+        Замечание сохраняется и остаётся связано с материалом; редактор видит его
+        в списке замечаний. Графический редактор и временная шкала не нужны.
+        Для выбранной редакции доступны запрос исправлений и одобрение с видимым
+        изменением статуса. Добавь реалистичные примеры ожидающих проверки,
+        материалов с замечаниями и одобренных. Нужны также пустой результат отбора,
+        загрузка просмотра и недоступный файл. Это локальный прототип:
+        отправка сообщений наружу, настоящая публикация и серверная обработка
+        медиа пока не требуются. Компоновку и второстепенные детали выбери сам.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+  - id: grade
+    type: prototype.grade
+    input: {scenario_id: $steps.create.scenario_id, threshold: 0.85}
+    expect: {values: {ok: true, passed: true}}
+cleanup: {policy: always, retain_on_failure: true}
