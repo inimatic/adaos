@@ -16,7 +16,7 @@ from jsonschema import Draft202012Validator, ValidationError
 from adaos.services.ui_capabilities import validate_webui_capabilities
 
 from .prototype_context import prototype_state_requirements, prototype_requirement_inventory
-from .prototype_stage import automation_obligations
+from .prototype_stage import automation_obligations, PROTOTYPE_STAGE_CONTRACT
 from .prototype_contracts import STATE_PROOF_RULES
 from .workflow import BuilderWorkflowError
 
@@ -742,13 +742,21 @@ def semantic_prototype_candidate_contract(*, version: str = "v1") -> dict[str, A
     return copy.deepcopy(_validator(filename).schema)
 
 
-def semantic_prototype_provider_contract(*, version: str = "v1") -> dict[str, Any]:
+def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru")) -> dict[str, Any]:
     """Return the candidate schema projected to the provider strict subset."""
 
     contract = semantic_prototype_candidate_contract(version=version)
+    requested_locales = list(dict.fromkeys(locales))
+    if not requested_locales or set(requested_locales) - {"en", "ru"}:
+        raise ValueError("Prototype locales must be a nonempty subset of en, ru")
+    text_schema = contract["$defs"]["localizedText"]
+    text_schema.pop("anyOf", None)
+    text_schema["required"] = requested_locales
+    text_schema["properties"] = {locale: text_schema["properties"][locale] for locale in requested_locales}
     if version == "v2":
         contract["required"].append("automation_requirements")
         contract["$defs"]["view"]["required"].append("surface")
+        contract["$defs"]["view"]["required"].append("media")
     unsupported_validation_keywords = {
         "maxItems",
         "maxLength",
@@ -801,12 +809,14 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
     contract = semantic_prototype_candidate_contract(version="v2")
     return {
         "contract": SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA,
+        "stage": copy.deepcopy(PROTOTYPE_STAGE_CONTRACT),
         "limits": {
             key: {name: value for name, value in descriptor.items() if name in {"minItems", "maxItems"}}
             for key, descriptor in contract["properties"].items() if descriptor.get("type") == "array"
         },
         "records_per_resource": contract["$defs"]["resource"]["properties"]["records"]["maxItems"],
         "fixture_values": {
+            "number": "JSON number, e.g. 12.5, not the string \"12.5\"; optional missing values use null",
             "attachment": "one string reference, or null when optional; never an array",
             "attachments": "array of string references, [] when empty; never a scalar string",
             "multi_choice": "unique array of option.value; never labels",
@@ -814,10 +824,14 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             "record_order": "values follow fields order exactly; include each field once",
         },
         "relationships": contract["$defs"]["relationship"]["properties"]["to_field_ref"]["description"],
+        "modeling": "Use separate resources for independently editable repeated concepts, including links. Every resource has a collection; prefix field IDs with its concept. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
+        "coverage": "Use the Brief required_references once each. Bind local mutations to their command and owning view/resource. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs, not just views. Search uses field_ref=null; filters target choice, short_text or date, never multi_choice. Bind business-rule deferral to a job or residual requirement, not an operation.",
         "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
         "state_rules": "Every proof belongs to a collection view. min_items=1 means at least one matching fixture. query_empty needs literal equality predicates addressable by that view's filter controls. Empty proofs need an explicit empty_state. Predicate fields must be visible. A required quantity is not proof of achieved quantity; show an explicit illustrative result when business computation is pending.",
         "interactions": "Reuse local CRUD, selectors, query controls, confirmation and field guards. Commands belong to an editor; each resource needs its own collection. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure.",
+        "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references are sample://image, sample://video and sample://unavailable. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading. Illustrative collection statuses never replace the viewer.",
         "ux_recommendations": {
+            "layout": "layout=flow stacks regions; split/focus_detail places primary beside supporting on desktop, stacked on mobile; grid groups equal-priority regions. region_role is actual placement: primary for the main task, supporting for selected details or secondary work, actions for a footer. Putting every view in primary creates one long column even in split. Prefer one primary collection and contextual details; reserve flow for genuinely linear work. Supporting is a real region, not merely a label.",
             "editor_surface": "Use surface=modal for a short focused create/edit task, side_sheet when surrounding context matters, inline for a persistent work area. Collections and details stay inline. The compiler owns openers, selection, form hydration, save/error and dismissal. No surface is mandatory for acceptance.",
             "progressive_disclosure": "Keep the main screen focused on the user's primary job. Put secondary fields in details and consider an on-demand editor instead of showing every form at once. Do not add hypothetical features or multiply views only to look complete.",
         },
@@ -930,8 +944,7 @@ def _mapped_candidate_ref(
 def _candidate_localized_text(value: Mapping[str, Any], *, key: str) -> dict[str, str]:
     return {
         "key": _canonical_candidate_identifier(key, namespace="text"),
-        "en": str(value["en"]),
-        "ru": str(value["ru"]),
+        **{locale: str(value[locale]) for locale in ("en", "ru") if locale in value},
     }
 
 
@@ -956,6 +969,10 @@ def _materialize_candidate_localization_keys(candidate: dict[str, Any]) -> None:
             option_id = _canonical_candidate_identifier(
                 option.get("value"), namespace="option"
             )
+            raw_value = str(option.get("value"))
+            if raw_value != option_id:
+                # Lossy ASCII slugs must not collapse distinct Unicode values.
+                option_id += "." + hashlib.sha256(raw_value.encode("utf-8")).hexdigest()[:16]
             option_key = f"field.{field_id}.option.{option_id}"
             if option_key in option_keys:
                 _fail(
@@ -1009,7 +1026,7 @@ def _canonicalize_semantic_prototype_candidate(
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     candidate = copy.deepcopy(dict(value))
     try:
-        Draft202012Validator(semantic_prototype_provider_contract()).validate(
+        Draft202012Validator(semantic_prototype_provider_contract(locales=_text_locales(candidate["title"]))).validate(
             candidate
         )
     except ValidationError as exc:
@@ -1515,9 +1532,28 @@ def _localized(
     value: Mapping[str, Any], dictionaries: dict[str, dict[str, str]]
 ) -> tuple[str, dict[str, str]]:
     key = str(value["key"])
-    dictionaries["en"][key] = str(value["en"])
-    dictionaries["ru"][key] = str(value["ru"])
-    return str(value["en"]), {"key": key, "fallback": str(value["en"])}
+    locales = tuple(locale for locale in dictionaries if locale in value)
+    if not locales:
+        _fail(f"text {key!r} has no requested locale")
+    for locale in locales:
+        dictionaries[locale][key] = str(value[locale])
+    fallback = str(value[locales[0]])
+    return fallback, {"key": key, "fallback": fallback}
+
+
+def _text_locales(value: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(locale for locale in ("en", "ru") if locale in value)
+
+
+def _choice_display(field: Mapping[str, Any], dictionaries: dict[str, dict[str, str]]) -> dict[str, str]:
+    if field["value_type"] not in {"choice", "multi_choice"}:
+        return {}
+    prefix = f"value.{field['id']}."
+    for option in field.get("options") or []:
+        for locale in dictionaries:
+            if locale in option["label"]:
+                dictionaries[locale][prefix + str(option["value"])] = str(option["label"][locale])
+    return {"valueI18nPrefix": prefix}
 
 
 def _condition_expression(condition: Mapping[str, Any]) -> str:
@@ -1563,7 +1599,7 @@ def _compile_semantic_prototype_v1(
     document = _validate_semantic_prototype_v1(
         value, brief=brief, require_primary=require_primary
     )
-    dictionaries: dict[str, dict[str, str]] = {"en": {}, "ru": {}}
+    dictionaries: dict[str, dict[str, str]] = {locale: {} for locale in _text_locales(document["title"])}
     resource = dict(document["resource"])
     fields = {str(item["id"]): dict(item) for item in resource["fields"]}
     commands = {str(item["id"]): dict(item) for item in document["commands"]}
@@ -1757,6 +1793,7 @@ def _compile_semantic_prototype_v1(
                             "key": field_id,
                             "label": label,
                             "label_i18n": label_i18n,
+                            **_choice_display(fields[field_id], dictionaries),
                         }
                     )
                     source_map.setdefault(f"field:{field_id}", []).append(
@@ -1803,6 +1840,7 @@ def _compile_semantic_prototype_v1(
                         ),
                     }
                     meta_index = len(widget["inputs"]["meta"])
+                    meta.update(_choice_display(fields[field_id], dictionaries))
                     widget["inputs"]["meta"].append(meta)
                     source_map.setdefault(f"field:{field_id}", []).append(
                         f"ui.application.desktop.pageSchema.widgets.@{view_id}.inputs.meta.{meta_index}"
@@ -1846,7 +1884,7 @@ def _compile_semantic_prototype_v1(
             for field_id in view["field_refs"]:
                 label, label_i18n = _localized(fields[field_id]["label"], dictionaries)
                 widget["inputs"]["fields"].append(
-                    {"id": field_id, "label": label, "label_i18n": label_i18n}
+                    {"id": field_id, "label": label, "label_i18n": label_i18n, **_choice_display(fields[field_id], dictionaries)}
                 )
                 source_map.setdefault(f"field:{field_id}", []).append(
                     f"ui.application.desktop.pageSchema.widgets.@{view_id}.inputs.fields.@{field_id}"
@@ -1928,8 +1966,8 @@ def _compile_semantic_prototype_v1(
                 }:
                     confirmation = {
                         "key": f"{command['label']['key']}.confirmation",
-                        "en": f"Confirm {command['label']['en']}?",
-                        "ru": f"Подтвердить «{command['label']['ru']}»?",
+                        **({"en": f"Confirm {command['label']['en']}?"} if "en" in command["label"] else {}),
+                        **({"ru": f"Подтвердить «{command['label']['ru']}»?"} if "ru" in command["label"] else {}),
                     }
                 if isinstance(confirmation, Mapping):
                     confirmation_message, confirmation_message_i18n = _localized(
@@ -2028,7 +2066,7 @@ def _compile_semantic_prototype_v1(
             "areas": [
                 {
                     "id": region_role,
-                    "role": "main" if region_role == "primary" else "auxiliary",
+                    "role": {"primary": "main", "supporting": "aux", "actions": "footer"}[region_role],
                 }
                 for region_role in ("primary", "supporting", "actions")
                 if region_role in region_roles
@@ -2173,9 +2211,10 @@ def _canonicalize_semantic_prototype_candidate_v2(
     for view in candidate.get("views") or []:
         if isinstance(view, dict):
             view.setdefault("surface", "inline")
+            view.setdefault("media", None)
     try:
         Draft202012Validator(
-            semantic_prototype_provider_contract(version="v2")
+            semantic_prototype_provider_contract(version="v2", locales=_text_locales(candidate["title"]))
         ).validate(candidate)
     except ValidationError as exc:
         path = ".".join(str(item) for item in exc.absolute_path)
@@ -2227,7 +2266,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             "layout": candidate["layout"],
             "resource": copy.deepcopy(resource),
             "views": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface"}}
+                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface", "media"}}
                 for item in resource_views
             ],
             "commands": copy.deepcopy(resource_commands),
@@ -2286,6 +2325,10 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 normalized_view["presentation"] = expected_presentation
             normalized_view["resource_ref"] = normalized_resource_id
             normalized_view["surface"] = raw_view.get("surface", "inline")
+            normalized_view["media"] = {
+                key: field_ids.get(str(ref), _canonical_candidate_identifier(ref, namespace="field")) if ref else None
+                for key, ref in raw_view["media"].items()
+            } if raw_view.get("media") else None
             view_ids[str(raw_view.get("id") or "")] = str(normalized_view["id"])
             for raw_control, normalized_control in zip(
                 raw_view.get("query_controls") or [],
@@ -2619,7 +2662,7 @@ def _lower_semantic_prototype_candidate_v2(
                 "layout": candidate["layout"],
                 "resource": copy.deepcopy(resource),
                 "views": [
-                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface"}}
+                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface", "media"}}
                     for item in views
                 ],
                 "commands": copy.deepcopy(commands),
@@ -2634,7 +2677,7 @@ def _lower_semantic_prototype_candidate_v2(
         )
         lowered_resources.append(dict(lowered["resource"]))
         for original, view in zip(views, lowered["views"], strict=True):
-            lowered_views.append({**dict(view), "resource_ref": resource_id, "surface": original.get("surface", "inline")})
+            lowered_views.append({**dict(view), "resource_ref": resource_id, "surface": original.get("surface", "inline"), "media": copy.deepcopy(original.get("media"))})
         lowered_commands.extend(dict(item) for item in lowered["commands"])
         for original, state in zip(states, lowered["representative_states"], strict=True):
             lowered_states.append(
@@ -2912,6 +2955,29 @@ def _semantic_v2_model_findings(
             for item in state.get("filters") or []
             if isinstance(item, Mapping)
         ]
+        fields = {str(field["id"]): field for field in resource["fields"]}
+        for predicate_index, predicate in enumerate(filters):
+            field = fields.get(str(predicate["field_ref"]))
+            other_ref = predicate.get("compare_field_ref")
+            other = fields.get(str(other_ref)) if other_ref else None
+            detail = ""
+            if field is None or (other_ref and other is None):
+                detail = "predicate references a field absent from this resource"
+            elif field["value_type"] == "multi_choice":
+                detail = "predicates on multi_choice fields are unsupported"
+            elif other and other["value_type"] != field["value_type"]:
+                detail = "predicate compares incompatible field types"
+            elif predicate["operator"] in {"lt", "lte", "gt", "gte"} and field["value_type"] not in {"date", "number"}:
+                detail = "range predicate requires a date or number field"
+            elif not other and not _field_value_is_valid(field, predicate.get("value")):
+                detail = "predicate literal must match the field type and exact option.value"
+            if detail:
+                findings.append({
+                    "code": "semantic.state_predicate_invalid",
+                    "path": f"$.representative_states[{state_index}].filters[{predicate_index}]",
+                    "semantic_refs": [f"state:{state_id}", f"view:{state['view_ref']}"],
+                    "detail": f"state {state_id!r}, field {predicate['field_ref']!r}: {detail}",
+                })
         minimum = int(state.get("min_items") or 0)
         maximum = (
             int(state["max_items"])
@@ -3069,7 +3135,7 @@ def _validate_semantic_prototype_v2(
             "layout": copy.deepcopy(document["layout"]),
             "resource": copy.deepcopy(resource),
             "views": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface"}}
+                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface", "media"}}
                 for item in resource_views
             ],
             "commands": [
@@ -3353,7 +3419,33 @@ def _compile_editor_surfaces(
             for refs in source_map.values():
                 refs[:] = [ref.replace(old, new) if ref == old or ref.startswith(old + ".") else ref for ref in refs]
         if toolbar["inputs"]["buttons"]:
-            widgets.append(toolbar)
+            collections = [item for item in document["views"] if item["resource_ref"] == view["resource_ref"] and item["role"] == "collection"]
+            details = [item for item in document["views"] if item["resource_ref"] == view["resource_ref"] and item["role"] == "details"]
+            edit_views = [item for item in document["views"] if item["resource_ref"] == view["resource_ref"] and item["role"] == "editor" and any(command["kind"] != "create" and command["view_ref"] == item["id"] for command in document["commands"])]
+            if surface != "inline" and any(button["id"] == "edit" for button in toolbar["inputs"]["buttons"]):
+                if details:
+                    for detail_view in details:
+                        detail_widget = next(widget for widget in widgets if widget["id"] == detail_view["id"])
+                        detail_widget.setdefault("actions", []).append({
+                            "on": f"click:edit-{view['id']}", "label": editor["title"], "label_i18n": editor["title_i18n"],
+                            "type": "openModal", "params": {"modalId": modal_id},
+                            "enabledIf": f"$state.{selection} !== ''",
+                        })
+                elif len(edit_views) == 1:
+                    for collection_view in collections:
+                        collection_widget = next(widget for widget in widgets if widget["id"] == collection_view["id"])
+                        collection_widget["actions"].append({"on": "select", "type": "openModal", "params": {"modalId": modal_id}})
+                if details or (collections and len(edit_views) == 1):
+                    toolbar["inputs"]["buttons"] = [button for button in toolbar["inputs"]["buttons"] if button["id"] != "edit"]
+                    toolbar["actions"] = [action for action in toolbar["actions"] if action["on"] != "click:edit"]
+            if not toolbar["inputs"]["buttons"]:
+                continue
+            if collections:
+                first = next(widget for widget in widgets if widget["id"] == collections[0]["id"])
+                toolbar["area"] = first["area"]
+                widgets.insert(widgets.index(first), toolbar)
+            else:
+                widgets.append(toolbar)
 
 
 def _compile_semantic_prototype_v2(
@@ -3366,7 +3458,7 @@ def _compile_semantic_prototype_v2(
     resources = {str(item["id"]): dict(item) for item in document["resources"]}
     views = {str(item["id"]): dict(item) for item in document["views"]}
     commands = {str(item["id"]): dict(item) for item in document["commands"]}
-    dictionaries: dict[str, dict[str, str]] = {"en": {}, "ru": {}}
+    dictionaries: dict[str, dict[str, str]] = {locale: {} for locale in _text_locales(document["title"])}
     title, title_i18n = _localized(document["title"], dictionaries)
     widgets: list[dict[str, Any]] = []
     initial_state: dict[str, Any] = {}
@@ -3395,7 +3487,7 @@ def _compile_semantic_prototype_v2(
             "layout": copy.deepcopy(document["layout"]),
             "resource": copy.deepcopy(resource),
             "views": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface"}}
+                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface", "media"}}
                 for item in resource_views
             ],
             "commands": [
@@ -3476,7 +3568,7 @@ def _compile_semantic_prototype_v2(
             "areas": [
                 {
                     "id": region_role,
-                    "role": "main" if region_role == "primary" else "auxiliary",
+                    "role": {"primary": "main", "supporting": "aux", "actions": "footer"}[region_role],
                 }
                 for region_role in ("primary", "supporting", "actions")
                 if region_role in region_roles
@@ -3502,6 +3594,8 @@ def _compile_semantic_prototype_v2(
         "ui": {"application": {"desktop": {"pageSchema": page_schema}}},
     }
     _compile_editor_surfaces(document, webui, source_map, dictionaries)
+    from .semantic_media import compile_media
+    compile_media(document, webui, prototype_resources, source_map)
     for check in state_checks:
         check["observable_runtime_refs"] = copy.deepcopy(source_map.get(f"state:{check['state_id']}") or [])
     try:

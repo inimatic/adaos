@@ -109,6 +109,36 @@ def test_ru_builder_authoring_is_not_an_application_create_operation() -> None:
     assert brief["principal_jobs"] == []
 
 
+def test_ru_actor_and_loading_state_do_not_invent_mutating_operations() -> None:
+    brief = compile_prototype_brief('Создай приложение для редактора. Редактор должен открывать файл. Покажи загрузку и недоступный файл.')
+    assert {item["kind"] for item in brief["operations"]} == {"inspect", "list"}
+    assert brief["information_requirements"] == []
+    assert all(item["statement"] != "Редактор должен" for item in brief["principal_jobs"])
+    for instruction in ("Загрузи файл", "Прикрепить фото", "Позволь загружать документы"):
+        assert compile_prototype_brief(instruction)["information_requirements"]
+
+
+def test_attachment_capture_does_not_match_comment_about_an_image() -> None:
+    for statement in ("Добавить замечание: текст, время в секундах или описание области изображения.", "Add a note about the image."):
+        assert not compile_prototype_brief(statement)["information_requirements"]
+
+
+def test_explicit_exclusions_are_preserved_without_operations_or_automation_debt() -> None:
+    from adaos.services.builder.prototype_context import compile_prototype_model_context
+    statement = "Покажи записи. Отправка сообщений наружу пока не требуется."
+    brief = compile_prototype_brief(statement)
+    assert [item["kind"] for item in brief["operations"]] == ["list"]
+    assert brief["exclusions"][0]["statement"] == "Отправка сообщений наружу пока не требуется"
+    assert brief["problem"]["value"] == statement
+    context = compile_prototype_model_context(brief, compact=True)
+    assert context["exclusions"]
+    assert all("Отправка" not in item["statement"] for item in context["required_references"])
+    assert merge_prototype_briefs(brief, compile_prototype_brief("Open a record."))["exclusions"]
+    brief = compile_prototype_brief("Show records but uploads are not required.")
+    assert [item["kind"] for item in brief["operations"]] == ["list"]
+    assert brief["exclusions"][0]["statement"] == "uploads are not required"
+
+
 def test_brief_drives_generic_capabilities_without_internal_prompt_terms() -> None:
     selection = selected_ui_capabilities(
         "Team members need to scan work, open one item, add a request, "

@@ -386,6 +386,18 @@ the same semantic gap. Do not create product-named components.
   card with a filename is not proof that the requested inspection works.
   Verify actual assets or report a capability/fixture gap; keep missing browser
   probe support separate from model and renderer failures.
+- [ ] `[must]` Unify literal dotted-field and nested-path lookup across lists,
+  tables, details, command payloads and Core Prototype queries. Add cross-layer
+  round-trip fixtures, including empty collections and delayed locale loading.
+  The context-engineering cohort exposed valid generated field IDs losing values
+  in display and submission; prompting the model to avoid these IDs is not a fix.
+
+Media progress (2026-09-11): Client `6b242dc` adds a generic native image/video/audio
+preview to `item.details`, table image cells, and delayed-dictionary refresh for
+collection choice labels. Catalog 2.2.0 and semantic v2 declare media field
+bindings; compiler lowering, attribution-bearing local media samples and
+wide/compact playback/error probes exist. The 69 focused component tests pass.
+This qualifies the viewer, not complete application behavior or all C2 contracts.
 - [ ] `[should]` Keep development archetypes and component fixtures visible;
   keep the sealed prompt-autonomy set unavailable to generation and tuning.
 - [ ] `[could]` Add map/spatial, scanner/camera capture, richer offline draft,

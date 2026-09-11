@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -78,7 +79,7 @@ def prototype_requirement_inventory(brief: Mapping[str, Any]) -> list[dict[str, 
     return inventory
 
 
-def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
+def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[str, Any]:
     """Remove persistence metadata and raw-statement duplication from a brief.
 
     The full content-addressed brief remains the source of truth. This slice is
@@ -141,7 +142,7 @@ def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(value.get("interpretation"), Mapping)
         else {}
     )
-    return {
+    context = {
         "schema": MODEL_CONTEXT_SCHEMA,
         "stage_contract": copy.deepcopy(PROTOTYPE_STAGE_CONTRACT),
         "brief_ref": str(value.get("brief_id") or ""),
@@ -169,6 +170,42 @@ def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
             }
         ),
     }
+    if not compact:
+        return context
+    # Statements appear once; typed annotations reference the same exact IDs.
+    context["schema"] = "adaos.builder.prototype_model_context.v2"
+    context["exclusions"] = _statements(value.get("exclusions"))
+    context["exclusion_policy"] = "Explicit exclusions are not implementation requirements or Automation obligations. Do not add UI, gaps or deferred work for them."
+    context.pop("stage_contract")
+    context.pop("primary_jobs")
+    context.pop("residual_requirements")
+    for group in ("operations", "information_requirements", "collection_requirements"):
+        for item in context[group]:
+            item.pop("statement", None)
+            item.pop("source_clause", None)
+            if isinstance(item.get("target"), Mapping) and item["target"].get("state") == "unknown":
+                item.pop("target")
+            if item.get("authority") == "unknown":
+                item.pop("authority")
+            for key in list(item):
+                if item[key] is None:
+                    item.pop(key)
+    context["coverage_policy"] = "Bind every required_references id or report an explicit gap. Shared semantic refs are valid; emit each requirement id once."
+    return context
+
+
+def prototype_output_locales(instruction: str, *, locale: str, existing: list[str] = ()) -> tuple[str, ...]:
+    """Choose authoring languages without making a translation request implicit."""
+    language = locale.lower().replace("_", "-").split("-")[0]
+    if language not in {"en", "ru"}:
+        language = "en"
+    text = instruction.casefold()
+    bilingual = bool(re.search(r"\b(?:en|english|английск\w*)\b", text)
+                     and re.search(r"\b(?:ru|russian|русск\w*)\b", text))
+    requested = {language, *(item for item in existing if item in {"en", "ru"})}
+    if bilingual:
+        requested.update(("en", "ru"))
+    return tuple(item for item in ("en", "ru") if item in requested)
 
 
 __all__ = [
@@ -176,4 +213,5 @@ __all__ = [
     "compile_prototype_model_context",
     "prototype_state_requirements",
     "prototype_requirement_inventory",
+    "prototype_output_locales",
 ]

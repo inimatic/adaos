@@ -98,7 +98,7 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"\b(?:(?:edit(?:s|ed|ing)?|updat(?:e|es|ed|ing)|"
             r"chang(?:e|es|ed|ing)|mark(?:s|ed|ing)?)\b|"
-            r"(?:редакт|измен|отмет|перенос)\w*\b)",
+            r"(?:редактир|измен|отмет|перенос)\w*\b)",
             re.IGNORECASE,
         ),
     ),
@@ -107,12 +107,14 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 _READ_OPERATIONS = {"list", "inspect", "search", "filter", "sort"}
 _CAPTURE_ATTACHMENT_PATTERN = re.compile(
-    r"\b(?:(?:attach|upload|add|capture)\w*.{0,80}(?:photos?|images?|pictures?|files?|attachments?|documents?)|"
+    r"\b(?:(?:attach|upload)\w*[^.!?;\n]{0,80}(?:photos?|images?|pictures?|files?|attachments?|documents?)|"
+    r"(?:add|capture)\w*\s+(?:(?!(?:to|about|for|of)\b)\w+\s+){0,3}(?:photos?|images?|pictures?|files?|attachments?|documents?)|"
     r"(?:photos?|images?|pictures?|files?|attachments?|documents?).{0,40}(?:attach|upload)\w*|"
-    r"(?:\u043f\u0440\u0438\u043b\u043e\u0436|\u0437\u0430\u0433\u0440\u0443\u0437|\u0434\u043e\u0431\u0430\u0432)\w*.{0,80}"
+    r"добав\w*\s+(?:\w+\s+)?(?:(?:\w+,\s*){0,3}\w+\s+и\s+)?(?:фото\w*|изображени\w*|снимок|файл\w*|вложени\w*|документ\w*)|"
+    r"(?:прилож(?:ить|и|ите)|прикреп\w*|загруз(?:ить|и|ите|им|ят|ишь|ит)|загруж(?:ать|ает|ают|ай|айте))\b[^.!?;\n]{0,80}"
     r"(?:\u0444\u043e\u0442\u043e|\u0438\u0437\u043e\u0431\u0440\u0430\u0436|\u0441\u043d\u0438\u043c\u043e\u043a|\u0444\u0430\u0439\u043b|\u0432\u043b\u043e\u0436\u0435\u043d|\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442)\w*|"
     r"(?:\u0444\u043e\u0442\u043e|\u0438\u0437\u043e\u0431\u0440\u0430\u0436|\u0441\u043d\u0438\u043c\u043e\u043a|\u0444\u0430\u0439\u043b|\u0432\u043b\u043e\u0436\u0435\u043d|\u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442)\w*.{0,40}"
-    r"(?:\u043f\u0440\u0438\u043b\u043e\u0436|\u0437\u0430\u0433\u0440\u0443\u0437)\w*)\b",
+    r"(?:прилож(?:ить|и|ите)|прикреп\w*|загруз(?:ить|и|ите|им|ят|ишь|ит)|загруж(?:ать|ает|ают|ай|айте)))\b",
     re.IGNORECASE,
 )
 _REPEATED_COLLECTION_PATTERN = re.compile(
@@ -160,6 +162,28 @@ _JOB_SEPARATOR_PATTERN = re.compile(
     r"и\s+затем|затем|и|или|либо|а\s+затем|а)\b",
     re.IGNORECASE,
 )
+
+_EXCLUSION_END_PATTERN = re.compile(
+    r"\b(?:не\s+(?:нужн\w*|требу\w*)|not\s+(?:needed|required|necessary))\s*$", re.IGNORECASE
+)
+
+
+def _explicit_exclusions(statement: str) -> tuple[str, list[dict[str, Any]]]:
+    """Keep explicit scope exclusions as evidence, not required implementation work."""
+    chars = list(statement)
+    exclusions = []
+    for clause, start, end in _clauses(statement):
+        if not _EXCLUSION_END_PATTERN.search(clause):
+            continue
+        contrasts = list(re.finditer(r"\b(?:but|но)\s+", clause, re.IGNORECASE))
+        if contrasts:
+            offset = contrasts[-1].end()
+            start += offset
+            clause = clause[offset:]
+        exclusions.append({"id": f"exclusion:{len(exclusions) + 1:02d}", "statement": clause,
+                           "evidence": [f"intent.statement#char={start}:{end}"], "confidence": 1.0})
+        chars[start:end] = " " * (end - start)
+    return "".join(chars), exclusions
 
 
 def _digest(value: Any) -> str:
@@ -256,6 +280,10 @@ def _operation_mentions(
     for _start, _end, _priority, kind, match in sorted(
         selected, key=lambda item: item[0]
     ):
+        if (kind == "create" and match.group(0).lower() in {"record", "records"}
+            and mentions and mentions[-1][0] in _READ_OPERATIONS
+            and not _JOB_SEPARATOR_PATTERN.search(clause, mentions[-1][1].end(), match.start())):
+            continue
         if mentions and mentions[-1][0] == kind:
             previous = mentions[-1][1]
             if not _JOB_SEPARATOR_PATTERN.search(
@@ -586,6 +614,7 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
     )
     _validate("builder.intent.v1.schema.json", captured)
     statement = str(captured["statement"])
+    statement, exclusions = _explicit_exclusions(statement)
     operations, jobs = _extract_operations(statement)
     information_requirements = _extract_information_requirements(statement)
     collection_requirements = _extract_collection_requirements(statement)
@@ -622,12 +651,13 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
         "intent_ref": captured["intent_id"],
         "intent_digest": captured["digest"],
         "problem": _knowledge(
-            "known", statement, evidence=["intent.statement"], confidence=1.0
+            "known", str(captured["statement"]), evidence=["intent.statement"], confidence=1.0
         ),
         "outcome": _knowledge("unknown"),
         "actors": _knowledge("unknown"),
         "principal_jobs": jobs,
         "residual_requirements": residual_requirements,
+        "exclusions": exclusions,
         "entities": _knowledge("unknown"),
         "information_requirements": information_requirements,
         "collection_requirements": collection_requirements,
@@ -799,6 +829,7 @@ def merge_prototype_briefs(*values: Mapping[str, Any]) -> dict[str, Any]:
         "residual_requirements": _merge_requirement_list(
             briefs, "residual_requirements", "residual"
         ),
+        "exclusions": _merge_requirement_list(briefs, "exclusions", "exclusion"),
         "entities": _merge_known_field(briefs, ("entities",)),
         "information_requirements": _merge_requirement_list(
             briefs, "information_requirements", "information"

@@ -109,3 +109,24 @@ def test_context_preserves_coordinated_operation_context_without_guessing_target
     assert "person" in operations[0]["source_clause"]
     assert "shift" in operations[0]["source_clause"]
     assert operations[0]["target"]["state"] == "unknown"
+
+
+def test_compact_context_preserves_exact_inventory_without_repeated_statements() -> None:
+    brief = intent.compile_brief("Assign or remove a person from a shift. Search records.")
+    full = prototype.model_context(brief)
+    compact = prototype.model_context(brief, compact=True)
+    assert compact["schema"].endswith(".v2")
+    assert compact["required_references"] == full["required_references"]
+    assert "stage_contract" not in compact
+    assert "primary_jobs" not in compact
+    assert all("statement" not in item for item in compact["operations"])
+    assert "source_clause" not in compact["operations"][0]
+    assert full["operations"][0]["source_clause"]
+    assert len(json.dumps(compact)) < len(json.dumps(full))
+
+
+def test_output_locales_default_to_current_language_and_preserve_explicit_translations() -> None:
+    assert prototype.output_locales("Show a queue", locale="ru-RU") == ("ru",)
+    assert prototype.output_locales("Make it bilingual EN/RU", locale="en") == ("en", "ru")
+    assert prototype.output_locales("На русском и английском", locale="ru") == ("en", "ru")
+    assert prototype.output_locales("Show a queue", locale="ru", existing=["en"]) == ("en", "ru")

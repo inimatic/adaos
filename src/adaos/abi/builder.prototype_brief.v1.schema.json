@@ -43,6 +43,11 @@
       "items": { "$ref": "#/$defs/evidencedStatement" }
     },
     "entities": { "$ref": "#/$defs/knowledgeField" },
+    "exclusions": {
+      "type": "array",
+      "description": "Explicit user scope exclusions; not required work or Automation debt.",
+      "items": { "$ref": "#/$defs/evidencedStatement" }
+    },
     "information_requirements": {
       "type": "array",
       "items": { "$ref": "#/$defs/informationRequirement" }

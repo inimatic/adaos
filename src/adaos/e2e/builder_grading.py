@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "11"
+PROTOTYPE_GRADER_VERSION = "12"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -91,7 +91,7 @@ Grade only the supplied evaluation artifact against the supplied user turns and 
 Acceptance stage is PROTOTYPE, not automation or release readiness. Under
 /webui/ui/application/desktop/pageSchema/meta/builder/automation_requirements the
 compiler preserves pending business rules and integrations with the original Brief
-statement, prototype_refs, en/ru disclosure and a testable Automation acceptance.
+statement, prototype_refs, requested-locale disclosure and a testable Automation acceptance.
 For such a rule, supported at this stage requires BOTH visible representative
 evidence in /webui or /prototype_resources AND this explicit pending obligation
 matching the requested outcome. Cite both. This means demonstrated and deferred,
@@ -127,6 +127,13 @@ displayed, and a generic submit action proves only the state update it explicitl
 declares. They do not prove row editing, filtering, selection, navigation, file
 attachment, validation, or lifecycle transitions. Mutating jobs need both an
 available control and an executable action or binding that consumes its value.
+For media viewing, a filename, URL text, attachment input or ordinary item.details
+fields do not prove a viewer. item.details renders actual media only with inputs.mediaKey
+(image/video/audio, optional mediaKindKey and mediaPosterKey) or an image with imageKey.
+Cite that explicit binding and its selected record/source. A table image column or
+list imageKey can show covers but does not by itself prove video playback. Loading and
+unavailable states must belong to the actual viewer, not merely an unrelated status
+field. No second language is required unless the user explicitly requested it.
 Each rubric item supplies a statement plus optional acceptance and exclusions. Apply
 its acceptance literally and do not import an excluded concern from another item.
 Every supported or partial verdict must cite one or more existing RFC 6901 JSON

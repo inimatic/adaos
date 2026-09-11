@@ -1320,7 +1320,7 @@ def evaluate_ui_request(
         expected_operations = set(requirements.get("operation_kinds") or [])
         if "create" in brief_operations:
             expected_operations.add("create")
-        if brief_operations & {"update", "assign", "transition", "archive"}:
+        if brief_operations & {"update", "transition", "archive"}:
             expected_operations.add("update")
         if "delete" in brief_operations:
             expected_operations.add("delete")
@@ -1353,6 +1353,28 @@ def evaluate_ui_request(
             and all(isinstance(item, Mapping) for item in prototype_resources)
             else []
         )
+        assignment_ok = "update" in actual_operations
+        resource_runtime_types = {item.get("resource_ref"): item.get("resource_type") for item in resource_sidecars}
+        for _, page in _page_schemas(webui):
+            relationships = dict(dict(page.get("meta") or {}).get("builder") or {}).get("relationships") or []
+            for relation in relationships:
+                if not isinstance(relation, Mapping):
+                    continue
+                target = resource_runtime_types.get(relation.get("from_resource_ref"))
+                for _, form_page in _page_schemas(webui):
+                    for widget in form_page.get("widgets") or []:
+                        if widget.get("type") != "ui.form":
+                            continue
+                        editable_fields = {field.get("id") for field in dict(widget.get("inputs") or {}).get("fields") or [] if not field.get("disabled")}
+                        if relation.get("from_field_ref") not in editable_fields:
+                            continue
+                        assignment_ok |= any(action.get("target") == target and action in resource_actions and dict(action.get("params") or {}).get("operation_id") == "create" for action in widget.get("actions") or [])
+        if "assign" in brief_operations:
+            postconditions.append({
+                "id": "resource.assignment_operation", "ok": assignment_ok,
+                "expected": "update a selected record or create a relationship through an editable reference field",
+                "actual": sorted(actual_operations),
+            })
         sidecar_resource_types = {
             str(item.get("resource_type") or "").strip()
             for item in resource_sidecars

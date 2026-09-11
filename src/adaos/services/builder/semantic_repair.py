@@ -26,6 +26,7 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
         "semantic.state_fixture_mismatch", "semantic.state_proof_hidden",
         "semantic.state_proof_invalid", "semantic.state_query_unreachable",
         "semantic.state_empty_view_missing",
+        "semantic.state_predicate_invalid",
     }
     if not findings or any(item.get("code") not in state_codes for item in findings):
         return None
@@ -38,7 +39,8 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
     views = [view for view in candidate["views"] if view["id"] in view_ids]
     if len(views) != len(view_ids):
         return None
-    available = semantic_prototype_provider_contract(version="v2")["$defs"]
+    locales = tuple(locale for locale in ("en", "ru") if locale in candidate["title"])
+    available = semantic_prototype_provider_contract(version="v2", locales=locales)["$defs"]
     definitions: dict[str, Any] = {}
 
     def include(name: str) -> None:
@@ -68,7 +70,7 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
         "base_sha256": digest,
         "allowed_state_ids": [state["id"] for state in states],
         "allowed_view_ids": [view["id"] for view in views],
-        "task": "Return only replacement states for the reported failures and optional related views. Fixtures, commands, bindings and all other states are immutable. First identify the intended state in the original user request and Brief, then choose its proof and counts. A populated condition requires matching records and a visible predicate; do not turn it into an empty state to bypass a mismatch. Empty dataset and zero query matches are different proofs; use either only when it demonstrates the requested meaning. Views may change only empty_state, field_refs or query_controls. Preserve all other properties. An unchanged view need not be returned.",
+        "task": "Return only changed states and/or related views that resolve every reported failure. Unchanged states and views need not be returned: a view-only change can repair a state's visibility or query reachability. Fixtures, commands, bindings and all other states are immutable. First identify the intended state in the original user request and Brief, then choose its proof and counts. A populated condition requires matching records and a visible predicate; do not turn it into an empty state to bypass a mismatch. Empty dataset and zero query matches are different proofs; use either only when it demonstrates the requested meaning. Views may change only empty_state, field_refs or query_controls. Preserve all other properties. The merged candidate is fully validated after this patch.",
         "output_schema": {
             "type": "object", "additionalProperties": False,
             "required": ["schema", "base_sha256", "states", "views"],
@@ -87,20 +89,21 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
     plan = prepare_state_repair(candidate, findings)
     if plan is None:
         raise BuilderWorkflowError("state repair is not applicable to these findings")
+    repair = copy.deepcopy(dict(repair))
+    for view in repair.get("views") or []:
+        view.setdefault("media", None)
     Draft202012Validator(plan["output_schema"]).validate(repair)
     result = copy.deepcopy(dict(candidate))
     for key, target, allowed in (("states", "representative_states", plan["allowed_state_ids"]), ("views", "views", plan["allowed_view_ids"])):
         replacements = {item["id"]: copy.deepcopy(dict(item)) for item in repair[key]}
         if len(replacements) != len(repair[key]) or not set(replacements).issubset(allowed):
             raise BuilderWorkflowError("repair contains duplicate or out-of-scope identities")
-        if key == "states" and set(replacements) != set(allowed):
-            raise BuilderWorkflowError("repair must address every reported state")
         for index, original in enumerate(result[target]):
             replacement = replacements.get(original["id"])
             if replacement is None:
                 continue
             if key == "views":
-                original = {**original, "surface": original.get("surface", "inline")}
+                original = {**original, "surface": original.get("surface", "inline"), "media": original.get("media")}
                 immutable = set(original) | set(replacement)
                 immutable -= {"empty_state", "field_refs", "query_controls"}
                 if any(original.get(name) != replacement.get(name) for name in immutable):

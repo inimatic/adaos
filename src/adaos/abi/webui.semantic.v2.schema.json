@@ -123,7 +123,7 @@
         "statement": { "type": "string", "minLength": 1 },
         "disclosure": {
           "type": "object", "additionalProperties": false,
-          "required": ["en", "ru"],
+          "anyOf": [{ "required": ["en"] }, { "required": ["ru"] }],
           "properties": {
             "en": { "type": "string", "minLength": 1, "maxLength": 500 },
             "ru": { "type": "string", "minLength": 1, "maxLength": 500 }
@@ -136,7 +136,8 @@
     "localizedText": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "en", "ru"],
+      "required": ["key"],
+      "anyOf": [{ "required": ["en"] }, { "required": ["ru"] }],
       "properties": {
         "key": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
         "en": { "type": "string", "minLength": 1, "maxLength": 500 },
@@ -268,6 +269,7 @@
         "id": { "$ref": "#/$defs/id" },
         "resource_ref": { "$ref": "#/$defs/id" },
         "role": { "enum": ["collection", "details", "editor"] },
+        "media": { "anyOf": [{ "$ref": "#/$defs/media" }, { "type": "null" }] },
         "region_role": { "enum": ["primary", "supporting", "actions"] },
         "surface": { "enum": ["inline", "modal", "side_sheet"] },
         "presentation": { "enum": ["list", "table", "cards"] },
@@ -330,6 +332,15 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/id" }
         }
+      }
+    },
+    "media": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_field_ref", "kind_field_ref", "poster_field_ref"],
+      "properties": {
+        "source_field_ref": { "$ref": "#/$defs/id" },
+        "kind_field_ref": { "type": ["string", "null"] },
+        "poster_field_ref": { "type": ["string", "null"] }
       }
     },
     "command": {

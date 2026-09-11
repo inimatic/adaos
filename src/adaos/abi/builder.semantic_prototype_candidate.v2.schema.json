@@ -61,7 +61,7 @@
     "localizedText": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["en", "ru"],
+      "anyOf": [{ "required": ["en"] }, { "required": ["ru"] }],
       "properties": {
         "en": { "type": "string", "minLength": 1, "maxLength": 500 },
         "ru": { "type": "string", "minLength": 1, "maxLength": 500 }
@@ -228,6 +228,7 @@
           "type": "string", "enum": ["inline", "modal", "side_sheet"],
           "description": "Editor surface. Collections and details use inline. Choose modal for a short focused edit, side_sheet for contextual editing, inline for persistent work; this is a design choice, not a quality gate."
         },
+        "media": { "anyOf": [{ "$ref": "#/$defs/media" }, { "type": "null" }] },
         "presentation": {
           "anyOf": [
             { "type": "string", "enum": ["list", "table", "cards"] },
@@ -244,6 +245,16 @@
           "anyOf": [{ "$ref": "#/$defs/emptyState" }, { "type": "null" }]
         }
       }
+    },
+    "media": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_field_ref", "kind_field_ref", "poster_field_ref"],
+      "properties": {
+        "source_field_ref": { "$ref": "#/$defs/id" },
+        "kind_field_ref": { "type": ["string", "null"] },
+        "poster_field_ref": { "type": ["string", "null"] }
+      },
+      "description": "Details: render image/video/audio from a declared source field, with optional kind (image/video/audio) and poster fields. Collections: show source as a cover image. Null means text-only; a filename alone is not a viewer."
     },
     "guard": {
       "type": "object",

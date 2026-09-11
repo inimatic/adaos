@@ -69,14 +69,19 @@ def candidate_status(
     )
 
 
-def model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
+def model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[str, Any]:
     """Return the bounded generation-stage view of a full Prototype Brief."""
 
     from adaos.services.builder.prototype_context import (
         compile_prototype_model_context,
     )
 
-    return compile_prototype_model_context(brief)
+    return compile_prototype_model_context(brief, compact=compact)
+
+
+def output_locales(instruction: str, *, locale: str, existing: list[str] = ()) -> tuple[str, ...]:
+    from adaos.services.builder.prototype_context import prototype_output_locales
+    return prototype_output_locales(instruction, locale=locale, existing=existing)
 
 
 def merge_briefs(*briefs: Mapping[str, Any]) -> dict[str, Any]:
@@ -165,14 +170,14 @@ def semantic_candidate_contract(*, version: str = "v1") -> dict[str, Any]:
     return semantic_prototype_candidate_contract(version=version)
 
 
-def semantic_provider_contract(*, version: str = "v1") -> dict[str, Any]:
+def semantic_provider_contract(*, version: str = "v1", locales: tuple[str, ...] = ("en", "ru")) -> dict[str, Any]:
     """Return the OpenAI strict-subset projection of the model contract."""
 
     from adaos.services.builder.semantic_prototype import (
         semantic_prototype_provider_contract,
     )
 
-    return semantic_prototype_provider_contract(version=version)
+    return semantic_prototype_provider_contract(version=version, locales=locales)
 
 
 def semantic_generation_guidance() -> dict[str, Any]:
@@ -242,6 +247,7 @@ __all__ = [
     "composition_slice",
     "automation_handoff",
     "model_context",
+    "output_locales",
     "merge_briefs",
     "normalize_semantic_candidate",
     "semantic_candidate_contract",

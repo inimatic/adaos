@@ -28,7 +28,7 @@ PROTOTYPE_STAGE_CONTRACT = {
         "required": [
             "exact Brief job or residual requirement_ref with a prototype binding",
             "visible state or interaction illustrating the intended outcome",
-            "en/ru disclosure of what is simulated or not enforced",
+            "disclosure in the requested UI locales of what is simulated or not enforced",
             "testable acceptance condition for Automation, including failure behavior",
         ],
         "not_allowed": "deferring supported UI interactions or claiming simulated rules are enforced",

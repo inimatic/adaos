@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "2.1.2",
+  "catalog_version": "2.2.0",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -158,7 +158,7 @@
       "data_shape": { "kind": "collection" },
       "events": ["select", "click:<buttonId>"],
       "responsive": { "desktop": "tabular", "compact": "bounded horizontal overflow" },
-      "limitations": ["Image cells and free-form HTML are not supported."],
+      "limitations": ["Free-form HTML is not supported."],
       "postconditions": ["Declared columns map to rendered cells in declaration order.", "columns[*].sortable=true enables local sorting before pagination; inputs.sort={key,direction} selects the initial order. Sorting is unavailable for server-paginated data. kind=datetime formats an ISO timestamp in the active locale and local timezone.", "Page size and declared filter modes persist within the active subnet, page scope and widget identity. inputs.preferences=false disables persistence; inputs.preferences.filterStateKeys adds explicit scalar filter modes. Search, selection, records and cursors are not persisted. inputs.refresh=true adds a targeted datasource reload button."]
     },
     {
@@ -190,7 +190,7 @@
       "title": "Selected item details",
       "summary": "A readable field projection for one selected or bound record.",
       "aliases": { "en": ["details", "record", "selected item"], "ru": ["детали", "запись", "выбранный элемент"] },
-      "manifest": { "widget_type": "item.details", "canonical_value_i18n": "inputs.fields[*].valueI18nPrefix" },
+      "manifest": { "widget_type": "item.details", "canonical_value_i18n": "inputs.fields[*].valueI18nPrefix", "media": "inputs.mediaKey binds an image/video/audio source on the selected record. Optional mediaKindKey selects image, video or audio; mediaPosterKey binds a poster. Native controls, loading, unavailable and empty states are provided. A filename field without mediaKey is not a viewer." },
       "data_shape": { "kind": "record_or_keyed_records" },
       "events": ["click:<actionId>"],
       "responsive": { "desktop": "detail surface", "compact": "detail surface" },

@@ -1223,7 +1223,7 @@ Prompt-autonomy admission targets:
 - `p90` requires at most one targeted repair;
 - at least 80% of primary user tasks pass compact and wide browser probes;
 - no false claim of a real effect, binding, authority, or supported component;
-- EN/RU key-set, long-content, and accessibility gates pass for every admitted
+- requested-locale completeness, long-content, and accessibility gates pass for every admitted
   Prototype.
 
 ### Context Engineering Qualification (2026-09-11)
@@ -1236,10 +1236,10 @@ the prompt against that false-positive gate or copy a domain solution into Core.
 - [ ] `[must]` Align model-visible capabilities with compiled behavior: layout
   placement, collection selection/details/editor entry, and real media viewing.
   Separate compiler defects from model errors before requesting a repair.
-- [ ] `[must]` Use one authoritative requirement inventory, a stable cacheable
+- [x] `[must]` Use one authoritative requirement inventory, a stable cacheable
   contract prefix, and stage-specific dynamic facts. Eliminate repeated prose
   without hiding type, effect, relationship, or acceptance constraints.
-- [ ] `[must]` Permit repairs to related views without echoing unchanged states;
+- [x] `[must]` Permit repairs to related views without echoing unchanged states;
   collect independent predicate/type findings before defining repair scope.
 - [ ] `[must]` Generate the user's current locale by default, retaining stable
   localization keys and scenario-owned assets. Explicit multilingual requests
@@ -1251,9 +1251,32 @@ the prompt against that false-positive gate or copy a domain solution into Core.
 - [ ] `[must]` Repeat all eight development archetypes after the diagnostic
   fixes; require executable browser tasks, not merely successful compilation.
   A single 8/8 run is not a stability or held-out autonomy claim.
-- [ ] `[must]` Remove pre-comparison owned test developments using provenance
+- [x] `[must]` Remove pre-comparison owned test developments using provenance
   and checked paths. Keep both low/high comparison cohorts, ordinary user
   applications, source archives and historical evaluation evidence intact.
+
+Qualification progress: `context-media-paired-low-20260911-02` passed all four
+development attempts (short 2/2, detailed 2/2). Each prompt needed one repair
+across its two attempts. Pipeline ranges were 138-181 seconds (short) and
+128-183 seconds (detailed); this sample does not establish a speed or accuracy
+advantage from elaboration. The preceding paired run failed both detailed
+attempts because excluded functionality became mandatory and descriptive image
+text became an upload requirement. Exact original instructions remain in the
+revised context; exclusions are separately evidenced, not Automation obligations.
+
+The retained media browser evidence proves native video playback, loaded images
+and unavailable-file states on 1440px and 390px viewports. The command probe
+also exercised status transitions and persisted comments. Probe cleanup initially
+called an undeclared delete operation; that is a stand defect, not a generation
+failure. Generated test records are explicitly retained where deletion is not
+part of the application's declared operations. Full eight-archetype browser
+qualification remains open: the next cohort exposed dotted-field lookup defects
+in Client and incomplete collection-binding diagnostics in Core.
+
+Cleanup receipts under `e2e/artifacts/builder/cleanup-before-effort-low-provider-max-20260911-01*`
+record 174 archived local test developments removed, with all 16 last low/high
+comparison applications preserved. Ordinary applications and historical run
+evidence were not removed. Later diagnostic developments remain searchable.
 
 Engineering basis: [OpenAI text-generation guidance](https://developers.openai.com/api/docs/guides/text),
 [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), and

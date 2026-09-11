@@ -130,7 +130,8 @@
     "localizedText": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "en", "ru"],
+      "required": ["key"],
+      "anyOf": [{ "required": ["en"] }, { "required": ["ru"] }],
       "properties": {
         "key": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
         "en": { "type": "string", "minLength": 1, "maxLength": 500 },

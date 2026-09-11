@@ -535,6 +535,45 @@ invention remains a model/user decision.
 
 ## Component Contract And Client Growth
 
+### Locale And Interaction Policy
+
+An initial Prototype uses the user's current language. Stable localization
+keys and scenario-owned `assets/i18n/<locale>.json` remain part of compilation;
+generating a second language is not an implicit requirement. An explicit
+multilingual request or an existing authored translation set expands the output
+locale contract. Template title translations are not evidence that the user
+requested a bilingual application. Locale merging must never discard authored
+messages merely because another language lacks the same key. Completeness is
+validated for requested output locales, independently of storage preservation.
+
+Surface choice remains a reversible model decision, guided by generic UX
+recommendations rather than a mandatory layout. A short edit can use a modal;
+context-sensitive work can use a side sheet. Collection selection opens the
+single editor directly when there is no details view; otherwise selection
+reveals details and editing starts there. The compiler owns selection ordering,
+form hydration, save/error, dismissal and responsive region placement. An
+independent footer full of duplicate editor-open buttons is not necessary.
+
+Media requires an explicit binding to a renderer capability. A filename or a
+details property list is not a viewer. Image/video/audio loading and unavailable
+states must be observed on the actual viewer; collection fixture predicates
+alone cannot prove them. Built-in generic samples may provide reproducible
+offline preview data, with attribution and no domain-specific application logic.
+
+Lexical interpretation is fallible: actor names and display-state nouns must
+not become mandatory mutation or attachment-capture operations. The original
+user statement remains available alongside derived references. Qualifying a
+relationship assignment must allow creation of a link as well as updating a
+foreign key; a fixed CRUD verb mapping is not an outcome model.
+
+Explicit exclusions carry their original evidence separately from required
+outcomes. They must not become mandatory interactions, capability gaps or
+Automation debt. Diagnostics should report all independently checkable binding
+constraints together, so a repair does not discover one missing edge per call.
+Literal field identifiers and nested data paths must have consistent resolution
+across compilation, resource queries, display and command payloads; a supported
+identifier cannot render correctly in one widget and disappear in another.
+
 Every Builder-visible Client component must publish one versioned component
 contract beside its implementation. The contract is the source for Builder
 retrieval, Core validation, Client registration, documentation, fixtures, and

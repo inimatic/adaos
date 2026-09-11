@@ -471,7 +471,7 @@ def test_semantic_model_contract_is_strict_and_bounded() -> None:
             for child in node:
                 assert_strict(child)
 
-    assert_strict(contract)
+    assert_strict(semantic_prototype_provider_contract())
     assert contract["properties"]["resource"]["properties"]["records"][
         "maxItems"
     ] == 6
@@ -947,6 +947,19 @@ def test_semantic_model_candidate_derives_stable_localization_keys() -> None:
 
     assert first["locale_dictionaries"] == second["locale_dictionaries"]
     assert "field.result.option.issue" in first["locale_dictionaries"]["en"]
+
+
+def test_option_localization_keys_preserve_distinct_non_ascii_values() -> None:
+    from adaos.services.builder.semantic_prototype import _materialize_candidate_localization_keys
+
+    _, semantic = _fixture()
+    candidate = _candidate(semantic)
+    field = candidate["resource"]["fields"][0]
+    field["options"] = [{"value": value, "label": {"ru": value}} for value in ("Видео", "Изображение", "A B", "A-B")]
+    _materialize_candidate_localization_keys(candidate)
+    keys = [option["label"]["key"] for option in field["options"]]
+    assert len(set(keys)) == 4
+    assert [option["value"] for option in field["options"]] == ["Видео", "Изображение", "A B", "A-B"]
 
 
 def test_semantic_prototype_compiles_to_valid_webui_with_source_maps() -> None:
@@ -1743,6 +1756,114 @@ def test_compiler_contract_failure_is_not_a_model_repair(monkeypatch) -> None:
     assert caught.value.findings[0]["code"] == "semantic.compiler_contract_invalid"
 
 
+def test_view_only_state_repair_does_not_require_unchanged_state_echo() -> None:
+    brief, semantic = _multi_resource_fixture()
+    view = semantic["views"][0]
+    state = semantic["representative_states"][0]
+    state["proof"] = {"kind": "query_empty", "visible_field_refs": ["title"]}
+    state["filters"] = [{"field_ref": "title", "operator": "eq", "value": "No matching record"}]
+    candidate = _multi_resource_candidate(semantic)
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    findings = caught.value.findings
+    plan = prototype_sdk.prepare_state_repair(candidate, findings)
+    replacement = copy.deepcopy(candidate["views"][0])
+    replacement["surface"] = "inline"
+    replacement["query_controls"] = [{"id": "title-filter", "kind": "filter", "field_ref": "title", "label": {"en": "Title", "ru": "Название"}}]
+    repaired = prototype_sdk.apply_state_repair(candidate, {
+        "schema": "adaos.builder.state_repair.v1", "base_sha256": plan["base_sha256"],
+        "states": [], "views": [replacement],
+    }, findings)
+    assert repaired["representative_states"] == candidate["representative_states"]
+    compile_semantic_prototype_candidate(repaired, brief=brief)
+
+
+def test_all_invalid_state_predicates_are_reported_before_repair_scope() -> None:
+    brief, semantic = _multi_resource_fixture()
+    state = semantic["representative_states"][0]
+    state.update(min_items=1, max_items=None, proof={"kind": "field_predicate", "visible_field_refs": ["result"]},
+                 filters=[{"field_ref": "result", "operator": "eq", "value": "unknown-first"}])
+    second = copy.deepcopy(state)
+    second.update(id="second-invalid", filters=[{"field_ref": "result", "operator": "eq", "value": "unknown-second"}])
+    semantic["representative_states"].append(second)
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    invalid = [item for item in caught.value.findings if item["code"] == "semantic.state_predicate_invalid"]
+    assert len(invalid) == 2
+
+
+def test_assignment_can_create_a_relationship_but_not_an_unrelated_record() -> None:
+    from adaos.services.ui_capabilities import evaluate_ui_request
+    _, semantic = _multi_resource_fixture()
+    editor = next(view for view in semantic["views"] if view["role"] == "editor")
+    editor["field_refs"].append("work_owner_id")
+    for command in semantic["commands"]:
+        command["kind"] = "create"
+        command.setdefault("input_field_refs", []).append("work_owner_id")
+    compiled = compile_semantic_prototype(semantic)
+    request = "Show items and assign their owner."
+    accepted = evaluate_ui_request(request, compiled["webui"], prototype_resources=compiled["prototype_resources"])
+    assert next(item for item in accepted["postconditions"] if item["id"] == "resource.assignment_operation")["ok"]
+    page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    form = next(widget for widget in page["widgets"] if widget["type"] == "ui.form")
+    form["inputs"]["fields"] = [field for field in form["inputs"]["fields"] if field["id"] != "work_owner_id"]
+    rejected = evaluate_ui_request(request, compiled["webui"], prototype_resources=compiled["prototype_resources"])
+    assert not next(item for item in rejected["postconditions"] if item["id"] == "resource.assignment_operation")["ok"]
+
+
+def test_compiled_regions_use_client_placement_roles() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["layout"]["pattern"] = "focus_detail"
+    semantic["views"][0]["region_role"] = "primary"
+    semantic["views"][1]["region_role"] = "supporting"
+    compiled = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    areas = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["layout"]["areas"]
+    assert {item["id"]: item["role"] for item in areas}["supporting"] == "aux"
+    assert all(item["role"] in {"main", "aux", "footer"} for item in areas)
+
+
+@pytest.mark.parametrize("locale", ["en", "ru"])
+def test_single_locale_candidate_keeps_keys_without_fabricating_translations(locale) -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+
+    def keep_language(node):
+        if isinstance(node, dict):
+            if "en" in node and "ru" in node:
+                node.pop("ru" if locale == "en" else "en")
+            for child in node.values():
+                keep_language(child)
+        elif isinstance(node, list):
+            for child in node:
+                keep_language(child)
+
+    keep_language(candidate)
+    editor = next(view for view in candidate["views"] if view["role"] == "editor")
+    editor["surface"] = "modal"
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert set(compiled["locale_dictionaries"]) == {locale}
+    assert compiled["locale_dictionaries"][locale]
+    assert compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["title"] == candidate["title"][locale]
+    provider = semantic_prototype_provider_contract(version="v2", locales=(locale,))
+    assert provider["$defs"]["localizedText"]["required"] == [locale]
+    assert set(provider["$defs"]["localizedText"]["properties"]) == {locale}
+
+
+def test_media_binding_renders_actual_media_and_resolves_only_explicit_samples() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    details = next(view for view in candidate["views"] if view["role"] == "details")
+    details["media"] = {"source_field_ref": "evidence", "kind_field_ref": None, "poster_field_ref": None}
+    resource = candidate["resources"][0]
+    index = next(i for i, field in enumerate(resource["fields"]) if field["id"] == "evidence")
+    resource["records"][0]["values"][index] = "sample://image"
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    widget = next(w for w in compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["widgets"] if w["id"] == details["id"])
+    assert widget["inputs"]["mediaKey"] == "evidence"
+    assert compiled["prototype_resources"][0]["records"][0]["evidence"] == "/assets/prototype/sample-image.jpg"
+    assert candidate["resources"][0]["records"][0]["values"][index] == "sample://image"
+
+
 def test_query_empty_proof_has_no_records_and_requires_a_reachable_filter() -> None:
     brief, semantic = _multi_resource_fixture()
     view = semantic["views"][0]
@@ -1932,6 +2053,11 @@ def test_semantic_v2_editor_surface_preserves_commands_and_source_map(surface, p
     assert all(widget["id"] != editor["id"] for widget in application["desktop"]["pageSchema"]["widgets"])
     assert all("ui.application.modals." in ref for ref in result["source_map"][f"view:{editor['id']}"])
     assert any(widget["id"] == f"open-{editor['id']}" for widget in application["desktop"]["pageSchema"]["widgets"])
+    widgets = application["desktop"]["pageSchema"]["widgets"]
+    opener = next(widget for widget in widgets if widget["id"] == f"open-{editor['id']}")
+    assert [button["id"] for button in opener["inputs"]["buttons"]] == ["new"]
+    details = next(widget for widget in widgets if widget["type"] == "item.details")
+    assert any(action["type"] == "openModal" for action in details["actions"])
     assert result["locale_dictionaries"]["ru"]["prototype.editor.new"] == "Добавить"
     from jsonschema import ValidationError
     import adaos.services.builder.semantic_prototype as compiler
