@@ -267,3 +267,35 @@ def test_brief_does_not_treat_russian_record_noun_as_create_operation() -> None:
     )
 
     assert [item["kind"] for item in brief["operations"]] == ["search", "inspect"]
+
+
+def test_brief_preserves_unclassified_explicit_requirements() -> None:
+    statement = (
+        "Make the first version usable now. We need to record income and expenses; "
+        "see the current balance and category totals; compare this month with the "
+        "previous month; set monthly category limits."
+    )
+
+    brief = compile_prototype_brief(statement)
+
+    assert [item["statement"] for item in brief["residual_requirements"]] == [
+        "see the current balance and category totals",
+        "compare this month with the previous month",
+        "set monthly category limits",
+    ]
+    for requirement in brief["residual_requirements"]:
+        offsets = requirement["evidence"][0].removeprefix(
+            "intent.statement#char="
+        )
+        start, end = (int(value) for value in offsets.split(":"))
+        assert statement[start:end] == requirement["statement"]
+
+
+def test_brief_excludes_russian_prototype_authoring_directive() -> None:
+    brief = compile_prototype_brief(
+        "Покажи рабочую первую версию. Пользователь сравнивает варианты."
+    )
+
+    assert [item["statement"] for item in brief["residual_requirements"]] == [
+        "Пользователь сравнивает варианты"
+    ]

@@ -67,3 +67,18 @@ def test_model_context_keeps_attachment_capture_without_renderer_terms() -> None
         }
     ]
     assert "fileUpload" not in json.dumps(context)
+
+
+def test_model_context_keeps_residual_requirements_addressable() -> None:
+    brief = intent.compile_brief(
+        "Record expenses; compare this month with the previous month."
+    )
+
+    context = prototype.model_context(brief)
+
+    assert context["residual_requirements"] == [
+        {
+            "id": "residual:01",
+            "statement": "compare this month with the previous month",
+        }
+    ]

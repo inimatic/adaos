@@ -111,6 +111,7 @@ def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
         for item in value.get("collection_requirements") or []
         if isinstance(item, Mapping)
     ]
+    residual_requirements = _statements(value.get("residual_requirements"))
     interpretation = (
         value.get("interpretation")
         if isinstance(value.get("interpretation"), Mapping)
@@ -121,6 +122,7 @@ def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
         "brief_ref": str(value.get("brief_id") or ""),
         "brief_digest": str(value.get("digest") or ""),
         "primary_jobs": jobs,
+        "residual_requirements": residual_requirements,
         "operations": operations,
         "information_requirements": information_requirements,
         "collection_requirements": collection_requirements,

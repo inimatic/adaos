@@ -28,12 +28,19 @@ _AUTHORING_PATTERNS = (
         flags=re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?:show|produce|prepare)\b.{0,40}\b(?:first|initial)\s+(?:version|prototype)\b",
+        r"\b(?:show|produce|prepare|make|build)\b.{0,40}\b(?:first|initial)\s+"
+        r"(?:version|prototype)\b(?:\s+(?:usable|useful|practical|working))?(?:\s+now)?",
         flags=re.IGNORECASE,
     ),
     re.compile(
         r"\b(?:создай|создайте|сделай|сделайте|разработай|подготовь)\w*\b.{0,60}"
         r"\b(?:приложение|сценарий|интерфейс|прототип|экран|страницу)\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:покаж|сделай|сделайте|подготовь)\w*\b.{0,40}"
+        r"\b(?:перв\w*|рабоч\w*|содержательн\w*|пригодн\w*)\b.{0,24}"
+        r"\b(?:верси\w*|прототип\w*)\b",
         flags=re.IGNORECASE,
     ),
 )
@@ -403,6 +410,50 @@ def _extract_collection_requirements(statement: str) -> list[dict[str, Any]]:
     return requirements[:12]
 
 
+def _extract_residual_requirements(statement: str) -> list[dict[str, Any]]:
+    """Keep explicit clauses that deterministic interpretation cannot classify.
+
+    These are evidence-bearing requirements, not inferred domain concepts. A
+    later schema-constrained stage may classify them, but cannot silently drop
+    them while producing the Prototype.
+    """
+
+    requirements: list[dict[str, Any]] = []
+    for clause, clause_start, _clause_end in _clauses(statement):
+        authoring_spans = _authoring_spans(clause)
+        value = _without_spans(clause, authoring_spans)
+        if not value:
+            continue
+        value_start = clause.find(value)
+        if value_start < 0:
+            continue
+        if _operation_mentions(
+            clause,
+            [
+                *authoring_spans,
+                *(match.span() for match in _CAPTURE_ATTACHMENT_PATTERN.finditer(clause)),
+            ],
+        ):
+            continue
+        if _CAPTURE_ATTACHMENT_PATTERN.search(value):
+            continue
+        if _REPEATED_COLLECTION_PATTERN.search(value):
+            continue
+        if _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value):
+            continue
+        start = clause_start + value_start
+        end = start + len(value)
+        requirements.append(
+            {
+                "id": f"residual:{len(requirements) + 1:02d}",
+                "statement": value,
+                "evidence": [f"intent.statement#char={start}:{end}"],
+                "confidence": 1.0,
+            }
+        )
+    return requirements[:16]
+
+
 def _extract_representative_states(
     statement: str, jobs: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
@@ -541,6 +592,7 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
     operations, jobs = _extract_operations(statement)
     information_requirements = _extract_information_requirements(statement)
     collection_requirements = _extract_collection_requirements(statement)
+    residual_requirements = _extract_residual_requirements(statement)
     responsive = (
         _knowledge(
             "known",
@@ -578,6 +630,7 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
         "outcome": _knowledge("unknown"),
         "actors": _knowledge("unknown"),
         "principal_jobs": jobs,
+        "residual_requirements": residual_requirements,
         "entities": _knowledge("unknown"),
         "information_requirements": information_requirements,
         "collection_requirements": collection_requirements,

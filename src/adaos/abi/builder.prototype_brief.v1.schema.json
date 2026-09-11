@@ -37,6 +37,11 @@
       "type": "array",
       "items": { "$ref": "#/$defs/evidencedStatement" }
     },
+    "residual_requirements": {
+      "type": "array",
+      "description": "Exact user clauses that remain requirements but were not classified by deterministic interpretation.",
+      "items": { "$ref": "#/$defs/evidencedStatement" }
+    },
     "entities": { "$ref": "#/$defs/knowledgeField" },
     "information_requirements": {
       "type": "array",
