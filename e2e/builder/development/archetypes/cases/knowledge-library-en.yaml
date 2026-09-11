@@ -12,7 +12,7 @@ steps:
   - id: create
     type: builder.chat
     input:
-      text: Create a new application named "Team Library ${run_id}" for internal how-to articles and reference files.
+      text: Create a new application named "Team Library ${case_instance_id}" for internal how-to articles and reference files.
       auto_apply: true
       owns_created_draft: true
     expect:

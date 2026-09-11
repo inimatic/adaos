@@ -117,7 +117,11 @@ def _case(case_id: str = "case-en") -> dict[str, Any]:
 def test_runner_writes_schema_valid_bundle_and_resolves_step_input(
     tmp_path: Path,
 ) -> None:
-    suite = _write_suite(tmp_path / "definitions", cases=[_case()], repetitions=2)
+    case = _case()
+    case["steps"][0]["input"]["text"] = (
+        "Create app ${case_instance_id} for ${run_id}"
+    )
+    suite = _write_suite(tmp_path / "definitions", cases=[case], repetitions=2)
     executor = FixtureExecutor(
         {
             "first": {
@@ -152,6 +156,9 @@ def test_runner_writes_schema_valid_bundle_and_resolves_step_input(
     assert report["metrics"]["cached_input_tokens"] == 120
     assert report["metrics"]["output_tokens"] == 40
     assert executor.calls[1][1]["scenario_id"] == "scenario-created"
+    assert executor.calls[0][1]["text"].startswith("Create app e2e")
+    assert executor.calls[0][1]["text"].endswith("for fixture-run")
+    assert executor.calls[0][1]["text"] != executor.calls[2][1]["text"]
     assert len(executor.cleanup_calls) == 2
     bundle = Path(report["bundle_dir"])
     assert (
@@ -1199,6 +1206,8 @@ def test_visible_archetype_suite_uses_ordinary_prompts_without_internal_hints() 
             if step["type"] == "builder.chat"
         ).lower()
         assert chat_text
+        assert "${run_id}" not in chat_text
+        assert "${case_instance_id}" in chat_text
         assert not any(token in chat_text for token in prohibited)
 
 

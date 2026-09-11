@@ -12,7 +12,7 @@ steps:
   - id: create
     type: builder.chat
     input:
-      text: Создай новое приложение "Осмотр оборудования ${run_id}" для выездного техника.
+      text: Создай новое приложение "Осмотр оборудования ${case_instance_id}" для выездного техника.
       auto_apply: true
       owns_created_draft: true
     expect:

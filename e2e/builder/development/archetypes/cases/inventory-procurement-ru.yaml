@@ -12,7 +12,7 @@ steps:
   - id: create
     type: builder.chat
     input:
-      text: Создай новое приложение "Запасы и закупки ${run_id}" для небольшой мастерской.
+      text: Создай новое приложение "Запасы и закупки ${case_instance_id}" для небольшой мастерской.
       auto_apply: true
       owns_created_draft: true
     expect:

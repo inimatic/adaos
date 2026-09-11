@@ -12,7 +12,7 @@ steps:
   - id: create
     type: builder.chat
     input:
-      text: Create a new application named "Operations Queue ${run_id}" for a small support team that tracks incoming work.
+      text: Create a new application named "Operations Queue ${case_instance_id}" for a small support team that tracks incoming work.
       auto_apply: true
       owns_created_draft: true
     expect:

@@ -613,6 +613,7 @@ def _resolve_value(value: Any, context: Mapping[str, Any]) -> Any:
         return copy.deepcopy(resolved)
     replacements = {
         "${run_id}": str(context["run_id"]),
+        "${case_instance_id}": str(context["case_instance_id"]),
         "${case_id}": str(context["case_id"]),
         "${repetition}": str(context["repetition"]),
         "${locale}": str(context["locale"]),
@@ -1997,8 +1998,15 @@ class BuilderE2ERunner:
             f"e2e-{self.run_id}-{case['case_id']}-{repetition}",
             fallback=f"e2e-{self.run_id}-{repetition}",
         )
+        instance_seed = {
+            "run_id": self.run_id,
+            "case_id": case["case_id"],
+            "repetition": repetition,
+        }
+        case_instance_id = "e2e" + _digest(instance_seed).removeprefix("sha256:")[:12]
         context: dict[str, Any] = {
             "run_id": self.run_id,
+            "case_instance_id": case_instance_id,
             "case_id": case["case_id"],
             "repetition": repetition,
             "locale": case["locale"],

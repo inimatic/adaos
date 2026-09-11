@@ -17,7 +17,7 @@ steps:
   - id: create
     type: builder.chat
     input:
-      text: Create a new desktop scenario named "E2E Notes ${run_id}" for keeping short personal notes. Keep it in Prototype and do not publish it.
+      text: Create a new desktop scenario named "E2E Notes ${case_instance_id}" for keeping short personal notes. Keep it in Prototype and do not publish it.
       auto_apply: true
       owns_created_draft: true
     expect:

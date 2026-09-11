@@ -12,7 +12,7 @@ steps:
   - id: create
     type: builder.chat
     input:
-      text: Создай новое приложение "Проверка материалов ${run_id}" для редактора небольшой медиакоманды.
+      text: Создай новое приложение "Проверка материалов ${case_instance_id}" для редактора небольшой медиакоманды.
       auto_apply: true
       owns_created_draft: true
     expect:
