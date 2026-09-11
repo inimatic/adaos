@@ -2159,5 +2159,9 @@ def test_semantic_v2_does_not_allow_unbound_or_ui_deferrals(invalid: str) -> Non
         candidate["automation_requirements"] *= 2
     elif invalid == "hidden_evidence":
         binding["semantic_refs"] = [{"kind": "resource", "id": candidate["resources"][0]["id"]}]
-    with pytest.raises(BuilderWorkflowError, match="automation[_ ]requirement"):
+    with pytest.raises(BuilderWorkflowError, match="automation[_ ]requirement") as caught:
         compile_semantic_prototype_candidate(candidate, brief=brief)
+    if invalid == "ui_operation":
+        assert caught.value.findings[0]["code"] == "requirement.automation_reference_ineligible"
+        assert "Eligible refs:" in caught.value.findings[0]["detail"]
+        assert "statement" not in str(caught.value)

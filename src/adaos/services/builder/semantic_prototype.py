@@ -99,6 +99,25 @@ def _requirement_contract_findings(
     gaps = {item for item in gap_refs if item}
     required = _brief_requirement_ids(brief)
     findings: list[dict[str, Any]] = []
+    eligible_automation_refs = {
+        str(item["id"])
+        for group in ("principal_jobs", "residual_requirements")
+        for item in brief.get(group) or []
+    }
+    for index, obligation in enumerate(value.get("automation_requirements") or []):
+        reference = str(obligation.get("requirement_ref") or "")
+        if reference not in eligible_automation_refs:
+            findings.append({
+                "code": "requirement.automation_reference_ineligible",
+                "path": f"$.automation_requirements[{index}].requirement_ref",
+                "requirement_refs": [reference],
+                "detail": (
+                    f"automation requirement {reference!r} must reference an accepted "
+                    "job or residual requirement, not a UI operation. Preserve the "
+                    "operation's prototype binding; defer the related business job. "
+                    f"Eligible refs: {sorted(eligible_automation_refs)}"
+                ),
+            })
 
     overlap = sorted(bound & gaps)
     if overlap:

@@ -802,6 +802,44 @@ rendering and complete eight-case interaction coverage remain open.
   repeated fresh generations and complete user-task probes. A diagnostic subset
   or a union of best results across runs is not an eight-case baseline.
 
+Capacity follow-up `executable-surfaces-gpt5-low-12k-20260911-01` completed four
+previously failing cases: equipment passed; knowledge, volunteer and inventory
+failed. All provider responses completed, so increasing the measured ceiling
+removed truncation, not semantic failures. Knowledge again emitted stringified
+attachment arrays, then its whole-candidate repair lost a search binding.
+Volunteer and inventory exposed misleading lowering diagnostics: an ineligible
+Automation reference became an empty compiler-owned statement. Validation now
+reports the exact reference and eligible job/residual refs before that error,
+and initial context explicitly states the same boundary. Offline regressions
+pass; the corrected diagnostic has not yet qualified a fresh cohort.
+
+Input review also found a deeper acceptance risk in lexical Brief extraction:
+`open an article without losing their search` was split before the noun `search`,
+creating another mandatory search operation. `avoid overlapping assignments`
+was classified as assignment from a noun stem. These are not missing user
+instructions and must not be repaired by application-specific prompt rules.
+
+- [ ] `[must]` Replace promotion of ambiguous lexical mentions into mandatory
+  atomic jobs with provenance-preserving interpretation. Keep complete source
+  clauses, distinguish operation hypotheses from explicit required outcomes,
+  and validate polarity, noun/verb use and dependent clauses. Include ordinary
+  EN/RU paraphrases and ambiguous noun mentions in negative controls. Qualify the
+  interpretation and its acceptance effects before retuning generation.
+- [ ] `[must]` Extend bounded repairs to typed fixture-value and binding defects
+  with preservation checks, rather than rewriting the full valid candidate.
+  Prefer a schema constrained by the chosen data model; do not silently coerce
+  arbitrary strings into attachment arrays or invent an omitted operation.
+
+Local correction verification: 407 focused Core/Builder tests passed before the
+final diagnostic change; its focused suite adds 374 passing checks and the E2E
+diagnostic suite has 41 passing checks (overlapping suites, not an additive total).
+Client has 127 focused command/form/table/guard tests and an additional overlapping
+99-test modal/form/action run. `appointments-crud-settled-06` retains the wide/
+compact interaction and final-opacity screenshot proof. Builder source is
+checkpointed as `builder@0.2.113`, ProjectRelease
+`sha256:e245fff69078098198cb9863d852c4f32d948ea125ac6a8c4614087d81ca754e`.
+No test prototype or unqualified Builder revision is promoted to Workspace.
+
 
 Current correction evidence (2026-09-11): the eight visible rubrics now trace
 mandatory outcomes to their original user turns. Unrequested status confirmation,

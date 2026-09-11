@@ -415,6 +415,13 @@ an isolated verb is not a sufficient description. Unknown entities remain explic
 rather than being guessed by domain classifiers. Deterministic interpretation and
 model-selected design must have distinct provenance.
 
+Lexical mentions are interpretation evidence, not automatically mandatory
+operations. Noun mentions, negation and subordinate clauses can change their
+meaning. Preserve complete source clauses and expose uncertainty; do not turn
+an inferred action label into a hard acceptance item without a supported
+interpretation. The user's explicit outcome remains authoritative. Evaluation
+must include false-positive operation extraction, not only missing coverage.
+
 The generation contract, canonical compiler and runtime must agree on capacity,
 relationship identity versus display labels, attachment values, query filters and
 representative-state proof. Generic invariants are derived from executable
