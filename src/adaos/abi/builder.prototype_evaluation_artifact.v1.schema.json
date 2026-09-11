@@ -9,6 +9,17 @@
     "schema": {"const": "adaos.builder.prototype_evaluation_artifact.v1"},
     "project_ref": {"type": "string", "pattern": "^(project|scenario|skill):[A-Za-z0-9_.-]{1,160}$"},
     "revision": {"type": "string", "minLength": 1, "maxLength": 200},
+    "application": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["application_id", "publisher_ref", "visibility", "revision"],
+      "properties": {
+        "application_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+        "publisher_ref": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"},
+        "visibility": {"enum": ["private", "link", "public"]},
+        "revision": {"type": "integer", "minimum": 1}
+      }
+    },
     "webui": {"type": "object"},
     "prototype_resources": {
       "type": "array",

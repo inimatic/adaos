@@ -103,6 +103,33 @@ def _safe_token(value: str, *, fallback: str) -> str:
     return token[:120] or fallback
 
 
+def _evaluation_application_context(
+    context: Mapping[str, Any], *, project_ref: str
+) -> dict[str, Any]:
+    """Return revision-bound application governance emitted by the create step."""
+
+    outputs = dict(context.get("outputs") or {})
+    for output in reversed(list(outputs.values())):
+        if not isinstance(output, Mapping):
+            continue
+        operation = output.get("application_operation")
+        application = (
+            operation.get("application") if isinstance(operation, Mapping) else None
+        )
+        if not isinstance(application, Mapping):
+            continue
+        application_id = str(application.get("application_id") or "").strip()
+        if not application_id or f"project:{application_id}" != project_ref:
+            continue
+        return {
+            "application_id": application_id,
+            "publisher_ref": str(application.get("publisher_ref") or "").strip(),
+            "visibility": str(application.get("visibility") or "").strip(),
+            "revision": int(application.get("revision") or 0),
+        }
+    return {}
+
+
 def _generation_metadata(context: Mapping[str, Any]) -> dict[str, Any]:
     contract = str(context.get("generation_contract") or "webui.v1")
     return {
@@ -1068,15 +1095,21 @@ class CompatibilityBuilderExecutor:
             webui_digest=prototype_webui_digest(webui),
             resource_types=resource_types,
         )
+        application = _evaluation_application_context(
+            context, project_ref=project_ref
+        )
+        artifact_payload = {
+            "schema": "adaos.builder.prototype_evaluation_artifact.v1",
+            "project_ref": project_ref,
+            "revision": revision,
+            "webui": dict(webui),
+            "prototype_resources": resources,
+        }
+        if application:
+            artifact_payload["application"] = application
         artifact = validate_builder_e2e_record(
             "adaos.builder.prototype_evaluation_artifact.v1",
-            {
-                "schema": "adaos.builder.prototype_evaluation_artifact.v1",
-                "project_ref": project_ref,
-                "revision": revision,
-                "webui": dict(webui),
-                "prototype_resources": resources,
-            },
+            artifact_payload,
         )
         relative = (
             Path("evidence")

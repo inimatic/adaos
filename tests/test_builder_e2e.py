@@ -16,6 +16,7 @@ from adaos.e2e.builder import (
     BuilderE2ERunner,
     BuilderE2EUnavailable,
     SdkBuilderExecutor,
+    _evaluation_application_context,
     compare_builder_e2e_baseline,
     create_builder_e2e_baseline,
     load_builder_e2e_suite,
@@ -425,7 +426,7 @@ def test_baseline_remains_comparable_across_implementation_commits(
     assert comparison["reasons"] == []
     assert baseline["reference"]["adapter"] == "fixture.v1"
     assert baseline["cohort"]["grader_model"] == "gpt-4.1"
-    assert baseline["cohort"]["grader_version"] == "6"
+    assert baseline["cohort"]["grader_version"] == "7"
 
 
 def test_runner_rejects_undeclared_executor_adapter(tmp_path: Path) -> None:
@@ -567,8 +568,47 @@ def test_runner_injects_case_oracle_only_into_prototype_grade(tmp_path: Path) ->
     assert run_manifest["evaluation"]["prototype_grader"] == {
         "kind": "model",
         "model": "gpt-4.1",
-        "version": "6",
+        "version": "7",
     }
+
+
+def test_evaluation_application_context_is_project_scoped() -> None:
+    context = {
+        "outputs": {
+            "unrelated": {
+                "application_operation": {
+                    "application": {
+                        "application_id": "other",
+                        "publisher_ref": "subnet:sn_other",
+                        "visibility": "public",
+                        "revision": 2,
+                    }
+                }
+            },
+            "create": {
+                "application_operation": {
+                    "application": {
+                        "application_id": "target",
+                        "publisher_ref": "subnet:sn_owner",
+                        "visibility": "private",
+                        "revision": 1,
+                    }
+                }
+            },
+        }
+    }
+
+    assert _evaluation_application_context(
+        context, project_ref="project:target"
+    ) == {
+        "application_id": "target",
+        "publisher_ref": "subnet:sn_owner",
+        "visibility": "private",
+        "revision": 1,
+    }
+    assert not _evaluation_application_context(
+        context, project_ref="project:missing"
+    )
 
 
 def test_declared_retry_is_counted_and_first_attempt_is_retained(

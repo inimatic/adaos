@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "6"
+PROTOTYPE_GRADER_VERSION = "7"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -110,17 +110,18 @@ described in the reason; a sibling or nearby object is not evidence. Cite the ne
 containing object when a more specific property is not available in the enum.
 For an empty representative state, cite an explicit emptyState/state object or its
 containing widget; a query or filter object proves filtering, not empty-state rendering.
-For each prohibited behavior, use not_violated when the artifact does not implement the
-complete behavior, violated when an executable path implements or necessarily relies on
-the complete behavior, and unclear only when the artifact cannot decide it. A
-not_violated behavior needs no positive evidence. In particular, a direct mutation with
-no explicit confirmation control or policy violates a prohibition against an action
-without confirmation; an explicit confirmation means that prohibition is not violated.
-Silence must not be interpreted as hidden confirmation.
+For each prohibited behavior, use not_violated when the complete artifact does not
+implement the complete behavior, violated when an executable path or explicit artifact
+fact implements or necessarily relies on it, and unclear only when conflicting or
+partial evidence prevents a decision. Mere absence is not uncertainty: a violated
+verdict requires positive evidence, while not_violated needs none. In particular, a
+direct mutation with no explicit confirmation control or policy violates a prohibition
+against an action without confirmation; an explicit confirmation means that prohibition
+is not violated. Silence must not be interpreted as hidden confirmation.
 Judge the exact subject, action, object, field, and condition named by each assumption.
 Do not broaden one mutation into all mutations: an action that changes only an owner,
 for example, is not evidence about actions that change status. Evidence and reasoning
-for a present assumption must identify the same behavior named by that assumption;
+for a violated behavior must identify the same behavior named by that prohibition;
 unrelated or merely adjacent controls and actions are irrelevant.
 Be conservative: use unclear when evidence is insufficient. Return only the requested
 JSON object.
@@ -322,7 +323,7 @@ def _normalize_checks(
             if not _json_pointer_exists(artifact, pointer)
         ]
         if invalid_evidence or (
-            verdict in {"supported", "partial"} and not evidence
+            verdict in {"supported", "partial", "present"} and not evidence
         ):
             verdict = "unclear"
         results.append(
@@ -421,7 +422,7 @@ def grade_builder_prototype(
                 }
             },
             request_id=request_id,
-            prompt_cache_key="adaos-builder-e2e-prototype-grader-v6",
+            prompt_cache_key="adaos-builder-e2e-prototype-grader-v7",
             timeout=min(15.0, timeout_seconds),
         )
     )
