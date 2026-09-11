@@ -270,6 +270,12 @@ def _candidate(semantic: dict) -> dict:
                 "value": value,
                 "field_ref": compare_field_ref,
             }
+    for binding in candidate["requirement_bindings"]:
+        binding["semantic_refs"] = [
+            {"kind": kind, "id": identifier}
+            for semantic_ref in binding["semantic_refs"]
+            for kind, identifier in [semantic_ref.split(":", 1)]
+        ]
     return candidate
 
 
@@ -417,19 +423,20 @@ def test_semantic_model_candidate_canonicalizes_identifiers_and_references() -> 
             if operand["kind"] == "field":
                 operand["field_ref"] = field_ids[operand["field_ref"]]
     for binding in candidate["requirement_bindings"]:
-        normalized_refs: list[str] = []
+        normalized_refs: list[dict[str, str]] = []
         for semantic_ref in binding["semantic_refs"]:
-            kind, identifier = semantic_ref.split(":", 1)
+            kind = semantic_ref["kind"]
+            identifier = semantic_ref["id"]
             if kind == "resource":
-                normalized_refs.append(f"res:{identifier}")
+                normalized_refs.append({"kind": kind, "id": f"res:{identifier}"})
             elif kind == "field":
-                normalized_refs.append(field_ids[identifier])
+                normalized_refs.append({"kind": kind, "id": field_ids[identifier]})
             elif kind == "view":
-                normalized_refs.append(f"view:{view_ids[identifier]}")
+                normalized_refs.append({"kind": kind, "id": view_ids[identifier]})
             elif kind == "command":
-                normalized_refs.append(command_ids[identifier])
+                normalized_refs.append({"kind": kind, "id": command_ids[identifier]})
             elif kind == "state":
-                normalized_refs.append(f"state:{state_ids[identifier]}")
+                normalized_refs.append({"kind": kind, "id": state_ids[identifier]})
             else:
                 normalized_refs.append(semantic_ref)
         binding["semantic_refs"] = normalized_refs
@@ -939,11 +946,31 @@ def test_semantic_prototype_rejects_invalid_representative_record() -> None:
 
 def test_semantic_prototype_rejects_unproven_representative_state() -> None:
     brief, semantic = _fixture()
-    semantic["representative_states"][0]["filters"] = [
-        {"field_ref": "status", "operator": "eq", "value": "open"}
-    ]
+    semantic["representative_states"][0].update(
+        {
+            "filters": [
+                {"field_ref": "status", "operator": "eq", "value": "closed"}
+            ],
+            "min_items": 1,
+            "max_items": 1,
+        }
+    )
 
-    with pytest.raises(BuilderWorkflowError, match="expected 0..0.*found 1"):
+    with pytest.raises(BuilderWorkflowError, match="expected 1..1.*found 0"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_semantic_prototype_rejects_zero_minimum_for_filtered_state() -> None:
+    brief, semantic = _fixture()
+    semantic["representative_states"][0] = {
+        "id": "open",
+        "label": _text("work.state.open", "Open", "Открыто"),
+        "view_ref": "work-list",
+        "filters": [{"field_ref": "status", "operator": "eq", "value": "open"}],
+        "min_items": 0,
+    }
+
+    with pytest.raises(BuilderWorkflowError, match="requires min_items>=1"):
         validate_semantic_prototype(semantic, brief=brief)
 
 

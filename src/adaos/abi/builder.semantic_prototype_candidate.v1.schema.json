@@ -254,8 +254,17 @@
         "requirement_ref": { "type": "string", "minLength": 1 },
         "semantic_refs": {
           "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^(resource|field|view|query|command|state):[A-Za-z0-9_.:-]+$" }
+          "items": { "$ref": "#/$defs/semanticRef" }
         }
+      }
+    },
+    "semanticRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["resource", "field", "view", "query", "command", "state"] },
+        "id": { "$ref": "#/$defs/id" }
       }
     },
     "capabilityGap": {

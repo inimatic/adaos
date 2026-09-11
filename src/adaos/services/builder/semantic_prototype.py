@@ -387,6 +387,10 @@ def validate_semantic_prototype(
             _fail(
                 f"representative state {state_id!r} max_items is below min_items"
             )
+        if filters and minimum < 1:
+            _fail(
+                f"filtered representative state {state_id!r} requires min_items>=1"
+            )
         empty_fixture = not filters and minimum == 0 and maximum == 0
         if empty_fixture and not isinstance(views[view_ref].get("empty_state"), Mapping):
             _fail(
@@ -983,18 +987,13 @@ def _canonicalize_semantic_prototype_candidate(
         "command": command_ids,
         "state": state_ids,
     }
-    kind_aliases = {"res": "resource", "f": "field", "cmd": "command"}
     for binding_index, binding in enumerate(candidate["requirement_bindings"]):
         normalized_refs: list[str] = []
-        for ref_index, raw_ref_value in enumerate(binding["semantic_refs"]):
-            raw_ref = str(raw_ref_value or "").strip()
-            raw_kind, separator, raw_identifier = raw_ref.partition(":")
-            semantic_kind = kind_aliases.get(raw_kind, raw_kind)
-            identifiers = semantic_namespaces.get(semantic_kind)
-            if not separator or identifiers is None:
-                normalized_refs.append(raw_ref)
-                continue
-            identifier_candidates = (raw_ref, raw_identifier)
+        for ref_index, raw_ref in enumerate(binding["semantic_refs"]):
+            semantic_kind = str(raw_ref["kind"])
+            raw_identifier = str(raw_ref["id"] or "").strip()
+            identifiers = semantic_namespaces[semantic_kind]
+            identifier_candidates = (raw_identifier, f"{semantic_kind}:{raw_identifier}")
             canonical_identifier = next(
                 (
                     identifiers[item]
@@ -1007,12 +1006,13 @@ def _canonicalize_semantic_prototype_candidate(
                 ),
             )
             canonical_ref = f"{semantic_kind}:{canonical_identifier}"
-            if canonical_ref != raw_ref:
+            source_ref = f"{semantic_kind}:{raw_identifier}"
+            if canonical_ref != source_ref:
                 normalizations.append(
                     {
                         "kind": "candidate_semantic_reference",
                         "namespace": semantic_kind,
-                        "from": raw_ref,
+                        "from": source_ref,
                         "to": canonical_ref,
                         "target": (
                             f"$.requirement_bindings[{binding_index}].semantic_refs[{ref_index}]"
@@ -1029,19 +1029,10 @@ def _canonicalize_semantic_prototype_candidate(
     return candidate, normalizations
 
 
-def normalize_semantic_prototype_candidate(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Lower a strict provider candidate into the canonical semantic ABI."""
-
-    candidate, _ = _canonicalize_semantic_prototype_candidate(value)
-    try:
-        _validator("builder.semantic_prototype_candidate.v1.schema.json").validate(
-            candidate
-        )
-    except ValidationError as exc:
-        path = ".".join(str(item) for item in exc.absolute_path)
-        suffix = f" at {path}" if path else ""
-        _fail(f"{exc.message}{suffix}")
-
+def _lower_semantic_prototype_candidate(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    candidate = copy.deepcopy(dict(value))
     candidate["schema"] = SEMANTIC_PROTOTYPE_SCHEMA
     candidate["layout"] = {"pattern": candidate["layout"]}
     resource = dict(candidate["resource"])
@@ -1129,6 +1120,13 @@ def normalize_semantic_prototype_candidate(value: Mapping[str, Any]) -> dict[str
     return candidate
 
 
+def normalize_semantic_prototype_candidate(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Lower a strict provider candidate into the canonical semantic ABI."""
+
+    candidate, _ = _canonicalize_semantic_prototype_candidate(value)
+    return validate_semantic_prototype(_lower_semantic_prototype_candidate(candidate))
+
+
 def compile_semantic_prototype_candidate(
     value: Mapping[str, Any],
     *,
@@ -1138,7 +1136,7 @@ def compile_semantic_prototype_candidate(
     """Validate, lower, and compile one strict provider candidate."""
 
     candidate, normalizations = _canonicalize_semantic_prototype_candidate(value)
-    semantic_document = normalize_semantic_prototype_candidate(candidate)
+    semantic_document = _lower_semantic_prototype_candidate(candidate)
     result = compile_semantic_prototype(
         semantic_document,
         brief=brief,
