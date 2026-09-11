@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
@@ -1681,6 +1681,7 @@ class BuilderE2ERunner:
         run_id: str | None = None,
         resume: bool = False,
         executor: BuilderE2EStepExecutor | None = None,
+        progress: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> None:
         self.loaded = load_builder_e2e_suite(suite_path)
         self.repo_root = (repo_root or Path.cwd()).resolve()
@@ -1692,6 +1693,7 @@ class BuilderE2ERunner:
         self.output_root = Path(output_root).expanduser().resolve()
         self.bundle_dir = self.output_root / self.run_id
         self.resume = bool(resume)
+        self.progress = progress
         self.case_ids = tuple(str(item) for item in case_ids if str(item))
         self.tags = tuple(str(item) for item in tags if str(item))
         self.profile = str(profile or defaults.get("profile") or "generic").strip()
@@ -1744,6 +1746,14 @@ class BuilderE2ERunner:
                 f"{configured_adapter} != {executor.adapter_id}"
             )
         self.executor = executor
+
+    def _emit_progress(self, event: str, **fields: Any) -> None:
+        if self.progress is None:
+            return
+        try:
+            self.progress({"event": event, "run_id": self.run_id, **fields})
+        except Exception:
+            return
 
     def _selected_cases(self) -> list[dict[str, Any]]:
         known = {str(case["case_id"]): case for case in self.loaded.cases}
@@ -1828,6 +1838,11 @@ class BuilderE2ERunner:
         run_manifest_digest: str,
     ) -> dict[str, Any]:
         invocation_started = time.perf_counter()
+        self._emit_progress(
+            "case_started",
+            case_id=str(case["case_id"]),
+            repetition=repetition,
+        )
         checkpoint_path = self._checkpoint_path(case, repetition)
         started_at = _utc_now()
         elapsed_before_ms = 0.0
@@ -1929,6 +1944,14 @@ class BuilderE2ERunner:
             findings: list[dict[str, Any]] = []
             status = "failed"
             for attempt in range(first_attempt, max_attempts + 1):
+                self._emit_progress(
+                    "step_started",
+                    case_id=str(case["case_id"]),
+                    repetition=repetition,
+                    step_id=str(declaration["id"]),
+                    step_type=str(declaration["type"]),
+                    attempt=attempt,
+                )
                 active_step = {
                     "index": step_index,
                     "id": declaration["id"],
@@ -2046,6 +2069,16 @@ class BuilderE2ERunner:
                         ),
                         "findings": redact_value(findings),
                     }
+                )
+                self._emit_progress(
+                    "step_finished",
+                    case_id=str(case["case_id"]),
+                    repetition=repetition,
+                    step_id=str(declaration["id"]),
+                    step_type=str(declaration["type"]),
+                    attempt=attempt,
+                    status=status,
+                    duration_ms=attempt_results[-1]["duration_ms"],
                 )
                 if (
                     retry_category not in retry_on
@@ -2303,10 +2336,18 @@ class BuilderE2ERunner:
             input_attribution=input_attribution,
             cleanup=cleanup,
         )
+        self._emit_progress(
+            "case_finished",
+            case_id=str(case["case_id"]),
+            repetition=repetition,
+            status=status,
+            duration_ms=result["duration_ms"],
+        )
         return result
 
     def run(self) -> dict[str, Any]:
         selected = self._selected_cases()
+        self._emit_progress("run_started", case_count=len(selected))
         if self.bundle_dir.exists() and not self.resume:
             raise BuilderE2EError(
                 f"Builder E2E run bundle already exists: {self.bundle_dir}"
@@ -2493,6 +2534,11 @@ class BuilderE2ERunner:
             },
         )
         _write_json(self.bundle_dir / "report.json", report)
+        self._emit_progress(
+            "run_finished",
+            status=report["status"],
+            case_count=len(results),
+        )
         return {**report, "bundle_dir": str(self.bundle_dir)}
 
 

@@ -4,7 +4,7 @@ import json
 import asyncio
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import typer
 
@@ -698,6 +698,29 @@ def e2e(
     """Run a declarative Builder E2E suite or selected cases."""
     if resume and not run_id:
         raise typer.BadParameter("--resume requires --run-id")
+
+    def report_progress(event: Mapping[str, Any]) -> None:
+        kind = str(event.get("event") or "")
+        if kind == "step_started":
+            typer.echo(
+                f"[{event.get('case_id')}] {event.get('step_id')} "
+                f"({event.get('step_type')}) started",
+                err=True,
+            )
+        elif kind == "step_finished":
+            seconds = float(event.get("duration_ms") or 0) / 1000.0
+            typer.echo(
+                f"[{event.get('case_id')}] {event.get('step_id')} "
+                f"{event.get('status')} in {seconds:.2f}s",
+                err=True,
+            )
+        elif kind == "case_finished":
+            seconds = float(event.get("duration_ms") or 0) / 1000.0
+            typer.echo(
+                f"[{event.get('case_id')}] case {event.get('status')} in "
+                f"{seconds:.2f}s",
+                err=True,
+            )
     try:
         report = BuilderE2ERunner(
             suite,
@@ -710,6 +733,7 @@ def e2e(
             baseline_path=baseline,
             run_id=run_id,
             resume=resume,
+            progress=report_progress,
         ).run()
     except BuilderE2EError as exc:
         if json_output:

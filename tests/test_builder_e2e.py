@@ -161,6 +161,42 @@ def test_runner_writes_schema_valid_bundle_and_resolves_step_input(
     assert len(list((bundle / "cases" / "case-en").glob("*.json"))) == 2
 
 
+def test_runner_reports_case_and_step_progress_without_changing_results(
+    tmp_path: Path,
+) -> None:
+    suite = _write_suite(tmp_path / "definitions", cases=[_case()])
+    events: list[dict[str, Any]] = []
+    executor = FixtureExecutor(
+        {
+            "first": {"ok": True, "result": {"id": "scenario-created"}},
+            "second": {"ok": True},
+        }
+    )
+
+    report = BuilderE2ERunner(
+        suite,
+        output_root=tmp_path / "runs",
+        repo_root=tmp_path,
+        run_id="progress-run",
+        executor=executor,
+        progress=lambda event: events.append(dict(event)),
+    ).run()
+
+    assert report["status"] == "passed"
+    assert [event["event"] for event in events] == [
+        "run_started",
+        "case_started",
+        "step_started",
+        "step_finished",
+        "step_started",
+        "step_finished",
+        "case_finished",
+        "run_finished",
+    ]
+    assert events[3]["status"] == "passed"
+    assert events[3]["duration_ms"] >= 0
+
+
 def test_runner_counts_generation_usage_breakdown_once(tmp_path: Path) -> None:
     case = _case()
     case["steps"] = case["steps"][:1]
