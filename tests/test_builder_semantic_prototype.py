@@ -1724,6 +1724,42 @@ def test_semantic_v2_candidate_reports_record_and_state_defects_together() -> No
     assert "semantic.state_fixture_mismatch" in codes
 
 
+def test_semantic_v2_candidate_normalizes_presentation_derived_from_role() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    collection = next(
+        item for item in candidate["views"] if item["role"] == "collection"
+    )
+    editor = next(item for item in candidate["views"] if item["role"] == "editor")
+    collection["presentation"] = None
+    editor["presentation"] = "cards"
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    normalized_views = {
+        item["id"]: item for item in result["semantic_document"]["views"]
+    }
+    assert normalized_views[collection["id"]]["presentation"] == "list"
+    assert "presentation" not in normalized_views[editor["id"]]
+    assert [
+        item for item in result["normalizations"]
+        if item["kind"] == "view_presentation_for_role"
+    ] == [
+        {
+            "kind": "view_presentation_for_role",
+            "from": "None",
+            "to": "list",
+            "target": f"$.views.@{collection['id']}.presentation",
+        },
+        {
+            "kind": "view_presentation_for_role",
+            "from": "cards",
+            "to": "None",
+            "target": f"$.views.@{editor['id']}.presentation",
+        },
+    ]
+
+
 def test_semantic_v2_capability_gap_conservatively_overrides_binding() -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)

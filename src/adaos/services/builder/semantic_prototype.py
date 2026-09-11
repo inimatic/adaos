@@ -2149,6 +2149,23 @@ def _canonicalize_semantic_prototype_candidate_v2(
             resource_views, normalized["views"], strict=True
         ):
             normalized_view = dict(normalized_view)
+            role = str(normalized_view["role"])
+            presentation = normalized_view.get("presentation")
+            expected_presentation = (
+                presentation if role == "collection" and presentation else "list"
+            )
+            if role != "collection":
+                expected_presentation = None
+            if presentation != expected_presentation:
+                normalizations.append(
+                    {
+                        "kind": "view_presentation_for_role",
+                        "from": str(presentation),
+                        "to": str(expected_presentation),
+                        "target": f"$.views.@{raw_view.get('id')}.presentation",
+                    }
+                )
+                normalized_view["presentation"] = expected_presentation
             normalized_view["resource_ref"] = normalized_resource_id
             view_ids[str(raw_view.get("id") or "")] = str(normalized_view["id"])
             for raw_control, normalized_control in zip(
