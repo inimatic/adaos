@@ -387,11 +387,12 @@ def validate_semantic_prototype(
             _fail(
                 f"representative state {state_id!r} max_items is below min_items"
             )
-        if filters and minimum < 1:
+        if filters and minimum == 0 and maximum != 0:
             _fail(
-                f"filtered representative state {state_id!r} requires min_items>=1"
+                f"filtered representative state {state_id!r} with min_items=0 "
+                "requires max_items=0"
             )
-        empty_fixture = not filters and minimum == 0 and maximum == 0
+        empty_fixture = minimum == 0 and maximum == 0
         if empty_fixture and not isinstance(views[view_ref].get("empty_state"), Mapping):
             _fail(
                 f"representative state {state_id!r} requires an empty_state "
@@ -399,7 +400,7 @@ def validate_semantic_prototype(
             )
         matching_records = (
             []
-            if empty_fixture
+            if empty_fixture and not filters
             else _matching_state_records(resource["records"], filters)
         )
         count = len(matching_records)
@@ -684,52 +685,81 @@ def _mapped_candidate_ref(
     return canonical
 
 
-def _normalize_candidate_localization_keys(
-    value: Any,
-    *,
-    normalizations: list[dict[str, str]],
-    path: str = "$",
-    owners: dict[str, str] | None = None,
-) -> None:
-    if owners is None:
-        owners = {}
-    if isinstance(value, dict):
-        if {"key", "en", "ru"}.issubset(value):
-            raw = str(value.get("key") or "").strip()
-            canonical = _canonical_candidate_identifier(raw, namespace="text")
-            previous = owners.get(canonical)
-            if previous is not None and previous != raw:
+def _candidate_localized_text(value: Mapping[str, Any], *, key: str) -> dict[str, str]:
+    return {
+        "key": _canonical_candidate_identifier(key, namespace="text"),
+        "en": str(value["en"]),
+        "ru": str(value["ru"]),
+    }
+
+
+def _materialize_candidate_localization_keys(candidate: dict[str, Any]) -> None:
+    document_id = str(candidate["document_id"])
+    candidate["title"] = _candidate_localized_text(
+        candidate["title"], key=f"prototype.{document_id}.title"
+    )
+
+    resource = candidate["resource"]
+    resource_id = str(resource["id"])
+    resource["item_label"] = _candidate_localized_text(
+        resource["item_label"], key=f"resource.{resource_id}.item"
+    )
+    for field in resource["fields"]:
+        field_id = str(field["id"])
+        field["label"] = _candidate_localized_text(
+            field["label"], key=f"field.{field_id}.label"
+        )
+        option_keys: set[str] = set()
+        for option in field.get("options") or []:
+            option_id = _canonical_candidate_identifier(
+                option.get("value"), namespace="option"
+            )
+            option_key = f"field.{field_id}.option.{option_id}"
+            if option_key in option_keys:
                 _fail(
-                    f"candidate localization keys {previous!r} and {raw!r} "
-                    f"normalize to the same id {canonical!r}"
+                    f"candidate field {field_id!r} has option values with the "
+                    f"same localization key {option_key!r}"
                 )
-            owners[canonical] = raw
-            if canonical != raw:
-                value["key"] = canonical
-                normalizations.append(
-                    {
-                        "kind": "candidate_identifier",
-                        "namespace": "localized_text",
-                        "from": raw,
-                        "to": canonical,
-                        "target": f"{path}.key",
-                    }
+            option_keys.add(option_key)
+            option["label"] = _candidate_localized_text(
+                option["label"], key=option_key
+            )
+
+    for view in candidate["views"]:
+        view_id = str(view["id"])
+        view["title"] = _candidate_localized_text(
+            view["title"], key=f"view.{view_id}.title"
+        )
+        for control in view["query_controls"]:
+            control_id = str(control["id"])
+            control["label"] = _candidate_localized_text(
+                control["label"], key=f"query.{control_id}.label"
+            )
+        empty_state = view.get("empty_state")
+        if isinstance(empty_state, dict):
+            empty_state["title"] = _candidate_localized_text(
+                empty_state["title"], key=f"view.{view_id}.empty.title"
+            )
+            if isinstance(empty_state.get("detail"), dict):
+                empty_state["detail"] = _candidate_localized_text(
+                    empty_state["detail"], key=f"view.{view_id}.empty.detail"
                 )
-        for key, child in value.items():
-            _normalize_candidate_localization_keys(
-                child,
-                normalizations=normalizations,
-                path=f"{path}.{key}",
-                owners=owners,
+
+    for command in candidate["commands"]:
+        command_id = str(command["id"])
+        command["label"] = _candidate_localized_text(
+            command["label"], key=f"command.{command_id}.label"
+        )
+        if isinstance(command.get("confirmation"), dict):
+            command["confirmation"] = _candidate_localized_text(
+                command["confirmation"], key=f"command.{command_id}.confirmation"
             )
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            _normalize_candidate_localization_keys(
-                child,
-                normalizations=normalizations,
-                path=f"{path}[{index}]",
-                owners=owners,
-            )
+
+    for state in candidate["representative_states"]:
+        state_id = str(state["id"])
+        state["label"] = _candidate_localized_text(
+            state["label"], key=f"state.{state_id}.label"
+        )
 
 
 def _canonicalize_semantic_prototype_candidate(
@@ -748,6 +778,7 @@ def _canonicalize_semantic_prototype_candidate(
     normalizations: list[dict[str, str]] = []
     resource = candidate["resource"]
     fields = resource["fields"]
+    records = resource["records"]
     views = candidate["views"]
     commands = candidate["commands"]
     states = candidate["representative_states"]
@@ -769,6 +800,12 @@ def _canonicalize_semantic_prototype_candidate(
         namespace="field",
         normalizations=normalizations,
         targets=[f"$.resource.fields[{index}].id" for index in range(len(fields))],
+    )
+    record_ids = _candidate_identifier_map(
+        [record["id"] for record in records],
+        namespace="record",
+        normalizations=normalizations,
+        targets=[f"$.resource.records[{index}].id" for index in range(len(records))],
     )
     view_ids = _candidate_identifier_map(
         [view["id"] for view in views],
@@ -815,27 +852,8 @@ def _canonicalize_semantic_prototype_candidate(
                 normalizations=normalizations,
                 target=f"$.resource.fields[{index}].visible_when.field_ref",
             )
-    resource["identity_field_refs"] = [
-        _mapped_candidate_ref(
-            field_ref,
-            namespace="field",
-            identifiers=field_ids,
-            normalizations=normalizations,
-            target=f"$.resource.identity_field_refs[{index}]",
-        )
-        for index, field_ref in enumerate(resource["identity_field_refs"])
-    ]
-    for record_index, record in enumerate(resource["records"]):
-        for entry_index, entry in enumerate(record["values"]):
-            entry["field_ref"] = _mapped_candidate_ref(
-                entry["field_ref"],
-                namespace="field",
-                identifiers=field_ids,
-                normalizations=normalizations,
-                target=(
-                    f"$.resource.records[{record_index}].values[{entry_index}].field_ref"
-                ),
-            )
+    for record in records:
+        record["id"] = record_ids[str(record["id"]).strip()]
 
     runtime_state_ids: dict[str, str] = {}
     runtime_state_owners: dict[str, str] = {}
@@ -1022,10 +1040,7 @@ def _canonicalize_semantic_prototype_candidate(
             normalized_refs.append(canonical_ref)
         binding["semantic_refs"] = normalized_refs
 
-    _normalize_candidate_localization_keys(
-        candidate,
-        normalizations=normalizations,
-    )
+    _materialize_candidate_localization_keys(candidate)
     return candidate, normalizations
 
 
@@ -1036,6 +1051,7 @@ def _lower_semantic_prototype_candidate(
     candidate["schema"] = SEMANTIC_PROTOTYPE_SCHEMA
     candidate["layout"] = {"pattern": candidate["layout"]}
     resource = dict(candidate["resource"])
+    resource["identity_field_refs"] = ["id"]
     resource["fields"] = []
     for raw_field in candidate["resource"]["fields"]:
         field = dict(raw_field)
@@ -1047,10 +1063,25 @@ def _lower_semantic_prototype_candidate(
         if field.get("visible_when") is None:
             field.pop("visible_when", None)
         resource["fields"].append(field)
-    resource["records"] = [
-        _field_entries(record["values"], owner=f"resource record {index}")
-        for index, record in enumerate(candidate["resource"]["records"])
-    ]
+    field_ids = [str(field["id"]) for field in resource["fields"]]
+    resource["records"] = []
+    for index, record in enumerate(candidate["resource"]["records"]):
+        values = list(record["values"])
+        if len(values) != len(field_ids):
+            _fail(
+                f"resource record {index} has {len(values)} values for "
+                f"{len(field_ids)} fields"
+            )
+        record_id = str(record["id"])
+        lowered_record = dict(zip(field_ids, copy.deepcopy(values), strict=True))
+        declared_id = lowered_record.get("id")
+        if declared_id is not None and str(declared_id) != record_id:
+            _fail(
+                f"resource record {index} id value {declared_id!r} does not "
+                f"match fixture id {record_id!r}"
+            )
+        lowered_record["id"] = record_id
+        resource["records"].append(lowered_record)
     candidate["resource"] = resource
 
     views: list[dict[str, Any]] = []
@@ -1088,7 +1119,9 @@ def _lower_semantic_prototype_candidate(
             command["fixed_values"] = fixed_values
         else:
             command.pop("fixed_values", None)
-        if command.get("guard") is None:
+        if command.get("guard") is None or not command["guard"].get(
+            "require_nonempty"
+        ):
             command.pop("guard", None)
         commands.append(command)
     candidate["commands"] = commands

@@ -228,6 +228,8 @@ def _candidate(semantic: dict) -> dict:
     candidate = copy.deepcopy(semantic)
     candidate["schema"] = "adaos.builder.semantic_prototype_candidate.v1"
     candidate["layout"] = candidate["layout"]["pattern"]
+    candidate["resource"].pop("identity_field_refs")
+    field_ids = [field["id"] for field in candidate["resource"]["fields"]]
     for field in candidate["resource"]["fields"]:
         if field.get("value_type") == "attachment" and field.pop("multiple", False):
             field["value_type"] = "attachments"
@@ -236,10 +238,8 @@ def _candidate(semantic: dict) -> dict:
         field.setdefault("visible_when", None)
     candidate["resource"]["records"] = [
         {
-            "values": [
-                {"field_ref": field_ref, "value": value}
-                for field_ref, value in record.items()
-            ]
+            "id": record["id"],
+            "values": [record.get(field_id) for field_id in field_ids],
         }
         for record in candidate["resource"]["records"]
     ]
@@ -276,6 +276,18 @@ def _candidate(semantic: dict) -> dict:
             for semantic_ref in binding["semantic_refs"]
             for kind, identifier in [semantic_ref.split(":", 1)]
         ]
+
+    def strip_localization_keys(value: object) -> None:
+        if isinstance(value, dict):
+            if {"key", "en", "ru"}.issubset(value):
+                value.pop("key")
+            for child in value.values():
+                strip_localization_keys(child)
+        elif isinstance(value, list):
+            for child in value:
+                strip_localization_keys(child)
+
+    strip_localization_keys(candidate)
     return candidate
 
 
@@ -296,7 +308,7 @@ def test_semantic_model_contract_is_strict_and_bounded() -> None:
     assert_strict(contract)
     assert contract["properties"]["resource"]["properties"]["records"][
         "maxItems"
-    ] == 12
+    ] == 6
 
     provider_contract = semantic_prototype_provider_contract()
     unsupported_provider_keywords = {
@@ -343,9 +355,11 @@ def test_semantic_model_contract_is_strict_and_bounded() -> None:
         "type": "string",
         "enum": ["flow", "split", "grid", "focus_detail"],
     }
-    assert contract["properties"]["resource"]["properties"][
-        "identity_field_refs"
-    ]["uniqueItems"] is True
+    assert "identity_field_refs" not in contract["properties"]["resource"][
+        "properties"
+    ]
+    assert set(contract["$defs"]["localizedText"]["properties"]) == {"en", "ru"}
+    assert set(contract["$defs"]["record"]["properties"]) == {"id", "values"}
     assert contract["$defs"]["id"]["pattern"]
 
 
@@ -382,13 +396,6 @@ def test_semantic_model_candidate_canonicalizes_identifiers_and_references() -> 
         condition = field.get("visible_when")
         if condition is not None:
             condition["field_ref"] = field_ids[condition["field_ref"]]
-    candidate["resource"]["identity_field_refs"] = [
-        field_ids.get(field_ref, field_ref)
-        for field_ref in candidate["resource"]["identity_field_refs"]
-    ]
-    for record in candidate["resource"]["records"]:
-        for entry in record["values"]:
-            entry["field_ref"] = field_ids.get(entry["field_ref"], entry["field_ref"])
     for view in candidate["views"]:
         original = view["id"]
         view["id"] = view_ids[original]
@@ -440,8 +447,6 @@ def test_semantic_model_candidate_canonicalizes_identifiers_and_references() -> 
             else:
                 normalized_refs.append(semantic_ref)
         binding["semantic_refs"] = normalized_refs
-    candidate["title"]["key"] = "work:title"
-
     result = compile_semantic_prototype_candidate(candidate, brief=brief)
 
     document = result["semantic_document"]
@@ -451,7 +456,7 @@ def test_semantic_model_candidate_canonicalizes_identifiers_and_references() -> 
     assert document["views"][0]["id"] == "view.work-list"
     assert document["commands"][0]["id"] == "cmd.save"
     assert document["representative_states"][0]["id"] == "state.empty"
-    assert document["title"]["key"] == "work.title"
+    assert document["title"]["key"] == "prototype.proto.work-review.title"
     assert any(
         item["kind"] == "candidate_semantic_reference"
         for item in result["normalizations"]
@@ -556,15 +561,33 @@ def test_semantic_model_candidate_maps_attachment_cardinality_from_type() -> Non
     assert semantic_evidence["multiple"] is True
 
 
-def test_semantic_model_candidate_rejects_duplicate_record_field() -> None:
+def test_semantic_model_candidate_rejects_record_value_cardinality_mismatch() -> None:
     brief, semantic = _fixture()
     candidate = _candidate(semantic)
-    candidate["resource"]["records"][0]["values"].append(
-        {"field_ref": "title", "value": "Duplicate"}
-    )
+    candidate["resource"]["records"][0]["values"].append("Duplicate")
 
-    with pytest.raises(BuilderWorkflowError, match="repeats field 'title'"):
+    with pytest.raises(BuilderWorkflowError, match="6 values for 5 fields"):
         compile_semantic_prototype_candidate(candidate, brief=brief)
+
+
+def test_semantic_model_candidate_drops_guard_without_required_fields() -> None:
+    brief, semantic = _fixture()
+    candidate = _candidate(semantic)
+    candidate["commands"][1]["guard"]["require_nonempty"] = []
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    assert "guard" not in result["semantic_document"]["commands"][1]
+
+
+def test_semantic_model_candidate_derives_stable_localization_keys() -> None:
+    brief, semantic = _fixture()
+
+    first = compile_semantic_prototype_candidate(_candidate(semantic), brief=brief)
+    second = compile_semantic_prototype_candidate(_candidate(semantic), brief=brief)
+
+    assert first["locale_dictionaries"] == second["locale_dictionaries"]
+    assert "field.result.option.issue" in first["locale_dictionaries"]["en"]
 
 
 def test_semantic_prototype_compiles_to_valid_webui_with_source_maps() -> None:
@@ -960,7 +983,7 @@ def test_semantic_prototype_rejects_unproven_representative_state() -> None:
         validate_semantic_prototype(semantic, brief=brief)
 
 
-def test_semantic_prototype_rejects_zero_minimum_for_filtered_state() -> None:
+def test_semantic_prototype_rejects_unbounded_zero_minimum_for_filtered_state() -> None:
     brief, semantic = _fixture()
     semantic["representative_states"][0] = {
         "id": "open",
@@ -970,8 +993,26 @@ def test_semantic_prototype_rejects_zero_minimum_for_filtered_state() -> None:
         "min_items": 0,
     }
 
-    with pytest.raises(BuilderWorkflowError, match="requires min_items>=1"):
+    with pytest.raises(BuilderWorkflowError, match="requires max_items=0"):
         validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_semantic_prototype_accepts_exact_filtered_empty_state() -> None:
+    brief, semantic = _fixture()
+    semantic["representative_states"][0] = {
+        "id": "no-archived",
+        "label": _text("work.state.no_archived", "No archived", "Нет архивных"),
+        "view_ref": "work-list",
+        "filters": [
+            {"field_ref": "status", "operator": "eq", "value": "archived"}
+        ],
+        "min_items": 0,
+        "max_items": 0,
+    }
+
+    validated = validate_semantic_prototype(semantic, brief=brief)
+
+    assert validated["representative_states"][0]["id"] == "no-archived"
 
 
 def test_empty_fixture_requires_a_rendered_empty_state() -> None:

@@ -19,13 +19,9 @@
     "resource": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "identity_field_refs", "item_semantics", "item_label", "fields", "records"],
+      "required": ["id", "item_semantics", "item_label", "fields", "records"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "identity_field_refs": {
-          "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true,
-          "items": { "$ref": "#/$defs/id" }
-        },
         "item_semantics": { "type": "string", "minLength": 1, "maxLength": 240 },
         "item_label": { "$ref": "#/$defs/localizedText" },
         "fields": {
@@ -33,7 +29,7 @@
           "items": { "$ref": "#/$defs/field" }
         },
         "records": {
-          "type": "array", "maxItems": 12,
+          "type": "array", "maxItems": 6,
           "items": { "$ref": "#/$defs/record" }
         }
       }
@@ -73,9 +69,8 @@
     "localizedText": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "en", "ru"],
+      "required": ["en", "ru"],
       "properties": {
-        "key": { "$ref": "#/$defs/id" },
         "en": { "type": "string", "minLength": 1, "maxLength": 500 },
         "ru": { "type": "string", "minLength": 1, "maxLength": 500 }
       }
@@ -148,9 +143,10 @@
     "record": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["values"],
+      "required": ["id", "values"],
       "properties": {
-        "values": { "type": "array", "minItems": 1, "maxItems": 26, "items": { "$ref": "#/$defs/fieldEntry" } }
+        "id": { "$ref": "#/$defs/id" },
+        "values": { "type": "array", "minItems": 1, "maxItems": 24, "items": { "$ref": "#/$defs/fieldValue" } }
       }
     },
     "viewFilter": {
@@ -211,7 +207,7 @@
       "required": ["when", "require_nonempty"],
       "properties": {
         "when": { "$ref": "#/$defs/condition" },
-        "require_nonempty": { "type": "array", "minItems": 1, "maxItems": 12, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+        "require_nonempty": { "type": "array", "maxItems": 12, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
       }
     },
     "command": {
