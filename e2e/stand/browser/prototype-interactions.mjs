@@ -48,6 +48,8 @@ try {
         adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo' })) localStorage.setItem(key, value)
     }, { hub, token, subnet, webspace: preview.webspace_id })
     const page = await context.newPage()
+    page.setDefaultTimeout(30_000)
+    page.setDefaultNavigationTimeout(60_000)
     const sample = { layout, checks: [], errors: [], mutations: [] }
     report.samples.push(sample)
     page.on('pageerror', error => sample.errors.push(error.message))
@@ -66,10 +68,12 @@ try {
       }, scenario, { timeout: 60_000 })
       for (const { widget, modalId } of forms) {
         const update = widget.actions?.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'update')
-        const field = widget.inputs.fields?.find(field => ['shortText', 'longText'].includes(field.type) && update?.params?.payload?.[field.id] === `$event.values.${field.id}` && !field.visibleIf)
+        const editableField = field => update?.params?.payload?.[field.id] === `$event.values.${field.id}` && !field.visibleIf && !field.readOnly
+        const field = widget.inputs.fields?.find(field => ['shortText', 'longText'].includes(field.type) && editableField(field))
+          || widget.inputs.fields?.find(field => field.type === 'date' && editableField(field))
         const collection = widgets.find(item => ['ui.table', 'ui.list'].includes(item.type) && item.dataSource?.resourceType === update?.target)
         if (!update || !field || !collection) {
-          sample.checks.push({ editor: widget.id, status: 'not_exercised', reason: 'No supported text update and matching collection' })
+          sample.checks.push({ editor: widget.id, status: 'not_exercised', reason: 'No supported text/date update and matching collection' })
           continue
         }
         const row = host(collection.id).locator('tr.row-selectable, .collection-focus-item').first()
@@ -104,7 +108,7 @@ try {
         }
         if (modalId) {
           const count = sample.mutations.length
-          await input.fill(`cancelled-${layout}`)
+          await input.fill(field.type === 'date' ? '2099-12-29' : `cancelled-${layout}`)
           await page.locator('ion-modal').last().getByRole('button', { name: 'Close', exact: true }).click()
           await expect(form).toHaveCount(0)
           const opener = host(`open-${widget.id}`).locator('[data-command-id="edit"]')
@@ -114,7 +118,7 @@ try {
           if (sample.mutations.length !== count) throw new Error('Dismissing an editor caused a mutation')
           sample.checks.push({ editor: widget.id, status: 'passed', task: 'dismiss-without-save/restore-focus/reopen', surface: 'overlay' })
         }
-        const marker = `review-${checkpoint.run_id}-${layout}`
+        const marker = field.type === 'date' ? '2099-12-30' : `review-${checkpoint.run_id}-${layout}`
         await input.fill(marker)
         const button = form.locator(`[data-command-id=${JSON.stringify(update.id)}]`)
         await expect(button).toBeEnabled()
@@ -172,7 +176,7 @@ try {
         }
         if (modalId) await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
         await host(`open-${widget.id}`).locator('[data-command-id="new"]').click()
-        const createdMarker = `created-${checkpoint.run_id}-${layout}`
+        const createdMarker = field.type === 'date' ? '2099-12-31' : `created-${checkpoint.run_id}-${layout}`
         const originalValues = sample.conditionDebug.values
         for (const item of widget.inputs.fields) {
           const container = form.locator(`[data-webui-field-id=${JSON.stringify(item.id)}]`)
