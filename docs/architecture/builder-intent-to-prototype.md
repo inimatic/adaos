@@ -580,9 +580,27 @@ form-required inputs remain distinct from persistence constraints on drafts.
 Numeric zero and boolean false count as filled values. Fixed transition commands
 can use a read-only editor surface without inventing editable inputs.
 
+Simple record locks are a Prototype primitive, not invented business code.
+`resource.read_only_when` is evaluated against the stored record before update
+or delete; changing the draft cannot bypass the lock. The compiler supplies the
+matching `ui.form.readOnlyIf`, and the local resource provider enforces it.
+Durable authorization and recovery workflows still belong to Automation.
+
+Attachment fields store scoped references, not binary JSON or metadata pretending
+to be a file. Preview-owned content-addressed storage receives authenticated
+uploads with per-file and per-resource limits; forms retain the previous value
+on upload failure and wait before submission. Existing metadata-only forms remain
+compatible unless they explicitly opt into `fileStorage=prototype`. Details can
+download attachments or render sanitized Markdown, using shared Client renderers.
+These local guards do not imply the deferred Root malware-scan capability.
+
+State-only repair uses a patch contract: mutable view fields are transmitted,
+while ownership, title, surface and media remain immutable by construction.
+Legacy full-view repair responses remain replayable under their original schema.
+
 Evidence bindings close over declared command/view/resource ownership. Collection
 requirements can inherit a unique owned collection/editor; a search/filter can
-inherit its unique query control from a bound view. Ambiguity requires an explicit
+inherit its unique query control from a bound view or resource. Ambiguity requires an explicit
 binding. Closure never creates views, commands or business rules and is recorded
 in normalization evidence. Automation still requires a visible view/state, not
 a resource-only assertion. Request-specific provider enums constrain requirement

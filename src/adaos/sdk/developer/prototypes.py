@@ -317,6 +317,7 @@ def derive_record_resource_spec(
         "version": "0.0.0-prototype",
         "title": str(projections[0][0].get("title") or "Prototype records"),
         "description": "Disposable typed records for Builder Prototype review.",
+        "metadata": {"prototype_policy": copy.deepcopy(page.get("meta", {}).get("builder", {}).get("prototype_resource_policies", {}).get(resolved_resource_type, {}))},
         "authority": {
             "provider": "prototype",
             "binding": source_id,

@@ -378,6 +378,13 @@ def _validate_semantic_prototype_v1(
 
     resource = dict(document["resource"])
     fields = _unique(resource["fields"], "field")
+    condition = resource.get("read_only_when")
+    if isinstance(condition, Mapping):
+        if condition["field_ref"] not in fields:
+            _fail("resource read_only_when references an unknown field")
+        if condition["operator"] in {"equals", "not_equals"}:
+            if "value" not in condition or (condition["value"] is not None and not _field_value_is_valid(fields[condition["field_ref"]], condition["value"])):
+                _fail("resource read_only_when comparison requires a typed field value")
     views = _unique(document["views"], "view")
     query_controls: dict[str, dict[str, Any]] = {}
     for view in views.values():
@@ -418,6 +425,8 @@ def _validate_semantic_prototype_v1(
             _fail(f"non-attachment field {field['id']!r} cannot be multiple")
         if field.get("max_items") is not None and not field.get("multiple"):
             _fail(f"field {field['id']!r} requires multiple=true with max_items")
+        if field.get("display_format") == "markdown" and field["value_type"] != "long_text":
+            _fail("markdown display requires a long_text field")
         condition = field.get("visible_when")
         if isinstance(condition, Mapping):
             if condition["field_ref"] not in fields:
@@ -501,11 +510,12 @@ def _validate_semantic_prototype_v1(
                     "boolean",
                     "choice",
                     "date",
+                    "number",
                     "short_text",
                 }:
                     _fail(
                         f"filter query control {query_id!r} requires a boolean, "
-                        "choice, date, or short_text field"
+                        "choice, date, number, or short_text field"
                     )
 
     for state in states.values():
@@ -750,6 +760,8 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
     """Return the candidate schema projected to the provider strict subset."""
 
     contract = semantic_prototype_candidate_contract(version=version)
+    resource_schema = contract["$defs"]["resource"] if version == "v2" else contract["properties"]["resource"]
+    resource_schema["required"].append("read_only_when")
     requested_locales = list(dict.fromkeys(locales))
     if not requested_locales or set(requested_locales) - {"en", "ru"}:
         raise ValueError("Prototype locales must be a nonempty subset of en, ru")
@@ -841,8 +853,8 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "coverage": "Use the Brief required_references once each. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search uses field_ref=null; filters target choice, short_text or date, never multi_choice. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
         "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
         "state_rules": "Every proof belongs to a collection view. Count fixtures satisfying ALL of that state's predicates; states do not inherit other states' filters and a view.filter is a user-controlled value, not a fixed base predicate. min_items=1 means at least one match; min=max=0 means none. query_empty needs literal equality predicates addressable by that view's filter controls. Empty proofs need an explicit empty_state. Predicate fields must be visible. A required quantity is not proof of achieved quantity; show an explicit illustrative result when business computation is pending. Choose only proofs relevant to the request, not one of each kind.",
-        "interactions": "Reuse local CRUD, selectors, query controls, confirmation and field guards. Commands belong to an editor; each resource needs its own collection. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure.",
-        "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references are sample://image, sample://video and sample://unavailable. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading. Illustrative collection statuses never replace the viewer.",
+        "interactions": "Reuse local CRUD, selectors, query controls, confirmation and field guards. Commands belong to an editor; each resource needs its own collection. Foreign-key collections need a reachable relationship filter when the workflow requires inspecting one selected item's linked records; an unfiltered list of raw IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
+        "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references: sample://image, sample://video, sample://document (downloadable text), sample://unavailable. Do not invent local paths for files that do not exist. attachment/attachments fields capture real local bytes, store references and render download links in details; documents do not require mediaKey or an image viewer. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading.",
         "ux_recommendations": {
             "layout": "layout=flow stacks regions; split/focus_detail places primary beside supporting on desktop, stacked on mobile; grid groups equal-priority regions. region_role is actual placement: primary for the main task, supporting for selected details or secondary work, actions for a footer. Putting every view in primary creates one long column even in split. Prefer one primary collection and contextual details; reserve flow for genuinely linear work. Supporting is a real region, not merely a label.",
             "editor_surface": "Use surface=modal for a short focused create/edit task, side_sheet when surrounding context matters, inline for a persistent work area. Collections and details stay inline. The compiler owns openers, selection, form hydration, save/error and dismissal. No surface is mandatory for acceptance.",
@@ -1038,6 +1050,7 @@ def _canonicalize_semantic_prototype_candidate(
     value: Mapping[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     candidate = copy.deepcopy(dict(value))
+    candidate["resource"].setdefault("read_only_when", None)
     try:
         Draft202012Validator(semantic_prototype_provider_contract(locales=_text_locales(candidate["title"]))).validate(
             candidate
@@ -1113,6 +1126,11 @@ def _canonicalize_semantic_prototype_candidate(
 
     candidate["document_id"] = document_ids[str(candidate["document_id"]).strip()]
     resource["id"] = resource_ids[str(resource["id"]).strip()]
+    if isinstance(resource.get("read_only_when"), dict):
+        resource["read_only_when"]["field_ref"] = _mapped_candidate_ref(
+            resource["read_only_when"]["field_ref"], namespace="field", identifiers=field_ids,
+            normalizations=normalizations, target="$.resource.read_only_when.field_ref",
+        )
     for index, field in enumerate(fields):
         field["id"] = field_ids[str(field["id"]).strip()]
         condition = field.get("visible_when")
@@ -1360,10 +1378,15 @@ def _lower_semantic_prototype_candidate(
         _fail("candidate lowering requires an authoritative Prototype Brief")
     candidate["layout"] = {"pattern": candidate["layout"]}
     resource = dict(candidate["resource"])
+    if resource.get("read_only_when") is None:
+        resource.pop("read_only_when", None)
     resource["identity_field_refs"] = ["id"]
     resource["fields"] = []
     for raw_field in candidate["resource"]["fields"]:
         field = dict(raw_field)
+        if field["value_type"] == "markdown":
+            field["value_type"] = "long_text"
+            field["display_format"] = "markdown"
         if field["value_type"] == "attachments":
             field["value_type"] = "attachment"
             field["multiple"] = True
@@ -1617,6 +1640,8 @@ def _prototype_record_schema(resource: Mapping[str, Any]) -> dict[str, Any]:
         descriptor: dict[str, Any] = {"type": [scalar, "null"]}
         if kind == "multi_choice" or (kind == "attachment" and field.get("multiple")):
             descriptor = {"type": ["array", "null"], "items": {"type": "string"}}
+        if kind == "attachment":
+            (descriptor["items"] if field.get("multiple") else descriptor)["format"] = "adaos-attachment"
         if kind in {"choice", "multi_choice"} and field.get("options"):
             choices = [option["value"] for option in field["options"]]
             if kind == "multi_choice":
@@ -1792,8 +1817,8 @@ def _compile_semantic_prototype_v1(
                 ] = f"$state.{state_ref}"
             else:
                 input_type = (
-                    "date"
-                    if fields[str(control["field_ref"])]["value_type"] == "date"
+                    fields[str(control["field_ref"])]["value_type"]
+                    if fields[str(control["field_ref"])]["value_type"] in {"date", "number"}
                     else "text"
                 )
                 query_widget.update(
@@ -1927,7 +1952,7 @@ def _compile_semantic_prototype_v1(
             for field_id in view["field_refs"]:
                 label, label_i18n = _localized(fields[field_id]["label"], dictionaries)
                 widget["inputs"]["fields"].append(
-                    {"id": field_id, "label": label, "label_i18n": label_i18n, **_choice_display(fields[field_id], dictionaries)}
+                    {"id": field_id, "label": label, "label_i18n": label_i18n, **({"kind": "attachment"} if fields[field_id]["value_type"] == "attachment" else {"kind": "markdown"} if fields[field_id].get("display_format") == "markdown" else {}), **_choice_display(fields[field_id], dictionaries)}
                 )
                 source_map.setdefault(f"field:{field_id}", []).append(
                     f"ui.application.desktop.pageSchema.widgets.@{view_id}.inputs.fields.@{field_id}"
@@ -1935,6 +1960,8 @@ def _compile_semantic_prototype_v1(
         else:
             widget["type"] = "ui.form"
             widget["inputs"] = {"layout": "responsiveGrid", "fields": [], "buttons": [], "selectedStateKey": selection_ref}
+            if resource.get("read_only_when"):
+                widget["inputs"]["readOnlyIf"] = _condition_expression(resource["read_only_when"], fields)
             widget["dataSource"]["query"]["id"] = f"$state.{selection_ref}"
             for field_id in view["field_refs"]:
                 field = fields[field_id]
@@ -1952,6 +1979,8 @@ def _compile_semantic_prototype_v1(
                     rendered_field["multiple"] = True
                     if field.get("max_items") is not None:
                         rendered_field["maxFiles"] = int(field["max_items"])
+                if field["value_type"] == "attachment":
+                    rendered_field["fileStorage"] = "prototype"
                 if field.get("options"):
                     rendered_field["options"] = []
                     for option in field["options"]:
@@ -2124,6 +2153,7 @@ def _compile_semantic_prototype_v1(
                 "brief_ref": document["brief_ref"],
                 "capability_gaps": copy.deepcopy(document["capability_gaps"]),
                 "prototype_record_schemas": {resource_type: _prototype_record_schema(resource)},
+                "prototype_resource_policies": {resource_type: {"read_only_when": resource["read_only_when"]}} if resource.get("read_only_when") else {},
             }
         },
     }
@@ -2252,6 +2282,8 @@ def _canonicalize_semantic_prototype_candidate_v2(
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     candidate = copy.deepcopy(dict(value))
     candidate.setdefault("automation_requirements", [])
+    for resource in candidate.get("resources") or []:
+        resource.setdefault("read_only_when", None)
     for view in candidate.get("views") or []:
         if isinstance(view, dict):
             view.setdefault("surface", "inline")
@@ -2491,6 +2523,11 @@ def _canonicalize_semantic_prototype_candidate_v2(
         from_field_id = str(normalized_relationship["from_field_ref"])
         to_field_id = str(normalized_relationship["to_field_ref"])
         resources_by_id = {item["id"]: item for item in normalized_resources}
+        target_resource = resources_by_id.get(to_resource_id)
+        if target_resource and str(relationship["to_field_ref"]) == f"{relationship['to_resource_ref']}.id" and not any(field["id"] == to_field_id for field in target_resource["fields"]):
+            normalized_relationship["to_field_ref"] = "id"
+            normalizations.append({"kind": "qualified_record_identity", "from": to_field_id, "to": "id", "target": f"$.relationships[{len(normalized_relationships)}].to_field_ref"})
+            to_field_id = "id"
         reference_findings = []
         for side, resource_id, field_id in (
             ("from", from_resource_id, from_field_id), ("to", to_resource_id, to_field_id),
@@ -3590,6 +3627,10 @@ def _compile_semantic_prototype_v2(
             "builder": {
                 "semantic_source": SEMANTIC_PROTOTYPE_V2_SCHEMA,
                 "prototype_record_schemas": record_schemas,
+                "prototype_resource_policies": {
+                    _runtime_resource_type(resource_id, project_ref): {"read_only_when": resource["read_only_when"]}
+                    for resource_id, resource in resources.items() if resource.get("read_only_when")
+                },
                 "semantic_digest": _digest(document),
                 "brief_ref": document["brief_ref"],
                 "relationships": copy.deepcopy(document["relationships"]),

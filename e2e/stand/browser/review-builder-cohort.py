@@ -66,6 +66,7 @@ def main() -> int:
                "ADAOS_E2E_SUBNET_ID": args.subnet,
                "ADAOS_E2E_LOCALE": value["context"]["locale"],
                "ADAOS_E2E_SELECT_WIDGET": collection["id"] if collection else "",
+               "ADAOS_E2E_MEDIA_TESTS": environment.get("ADAOS_E2E_MEDIA_TESTS") or ("inspect" if details and details.get("inputs", {}).get("mediaKey") and collection else "0"),
                "ADAOS_E2E_OUTPUT": str(output.resolve())}
         print(f"[{case}] {args.probe} started", flush=True)
         result = subprocess.run(["node", str(Path(__file__).with_name(scripts[args.probe]))],

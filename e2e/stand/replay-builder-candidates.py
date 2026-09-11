@@ -30,8 +30,11 @@ def replay(run: Path) -> list[dict]:
             row = {"case": case, "attempt": attempt, "stage": artifact["stage"], "source": artifact["evidence_ref"]}
             try:
                 candidate = json.loads((run / artifact["evidence_ref"]).read_text(encoding="utf-8"))["structured_candidate"]
-                if candidate.get("schema") == "adaos.builder.state_repair.v1":
-                    candidate = apply_state_repair(base, candidate, findings)
+                if candidate.get("schema") in {"adaos.builder.state_repair.v1", "adaos.builder.state_repair.v2"}:
+                    original = next((attempt.get("validation", {}).get("findings") for attempt in generation.get("attempts", [])
+                                     if attempt.get("validation", {}).get("findings")), findings)
+                    candidate = apply_state_repair(base, candidate, original)
+                    row["repair_authority"] = "original_preflight_findings"
                 else:
                     base = candidate
                 compiled = compile_semantic_candidate(candidate, brief=brief)

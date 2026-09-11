@@ -1229,7 +1229,7 @@ def test_filter_query_control_requires_supported_field_type() -> None:
         {
             "id": "effort",
             "label": _text("work.field.effort", "Effort", "Трудоемкость"),
-            "value_type": "number",
+            "value_type": "long_text",
             "required": False,
             "editable": True,
         }
@@ -1238,7 +1238,7 @@ def test_filter_query_control_requires_supported_field_type() -> None:
 
     with pytest.raises(
         BuilderWorkflowError,
-        match="requires a boolean, choice, date, or short_text field",
+        match="requires a boolean, choice, date, number, or short_text field",
     ):
         validate_semantic_prototype(semantic, brief=brief)
 
@@ -1869,6 +1869,80 @@ def test_view_only_state_repair_does_not_require_unchanged_state_echo() -> None:
     }, findings)
     assert repaired["representative_states"] == candidate["representative_states"]
     compile_semantic_prototype_candidate(repaired, brief=brief)
+
+
+def test_state_repair_v2_cannot_echo_or_change_immutable_view_properties() -> None:
+    _, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    state = candidate["representative_states"][0]
+    findings = [{"code": "semantic.state_fixture_mismatch", "semantic_refs": [f"state:{state['id']}"]}]
+    plan = prototype_sdk.prepare_state_repair(candidate, findings)
+    properties = plan["output_schema"]["$defs"]["view"]["properties"]
+    assert set(properties) == {"id", "empty_state", "field_refs", "query_controls"}
+    view = next(view for view in candidate["views"] if view["id"] == state["view_ref"])
+    patch = {name: copy.deepcopy(view.get(name)) for name in properties}
+    patch["query_controls"] = []
+    repair = {"schema": "adaos.builder.state_repair.v2", "base_sha256": plan["base_sha256"], "states": [], "views": [patch]}
+    repaired = prototype_sdk.apply_state_repair(candidate, repair, findings)
+    updated = next(item for item in repaired["views"] if item["id"] == view["id"])
+    assert updated == {**view, **patch}
+    patch["resource_ref"] = ""
+    with pytest.raises(ValidationError):
+        prototype_sdk.apply_state_repair(candidate, repair, findings)
+
+
+def test_numeric_filter_compiles_to_number_input() -> None:
+    brief, semantic = _multi_resource_fixture()
+    resource = semantic["resources"][0]
+    number = {"id": "quantity", "label": _text("quantity", "Quantity", "Количество"), "value_type": "number", "editable": True, "required": False}
+    resource["fields"].append(number)
+    view = next(view for view in semantic["views"] if view["resource_ref"] == resource["id"] and view["role"] == "collection")
+    view["query_controls"] = [{"id": "number-filter", "kind": "filter", "field_ref": number["id"], "label": _text("quantity", "Quantity", "Количество")}]
+    compiled = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    widget = next(widget for widget in compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["widgets"] if widget["id"] == "query-number-filter")
+    assert widget["inputs"]["inputType"] == "number"
+
+
+def test_record_lock_and_attachment_capture_share_typed_provider_contracts() -> None:
+    from adaos.sdk.developer.prototypes import derive_record_resource_spec
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    resource = candidate["resources"][0]
+    resource["read_only_when"] = {"field_ref": "result", "operator": "equals", "value": "issue"}
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    form = next(widget for widget in page["widgets"] if widget["type"] == "ui.form")
+    assert form["inputs"]["readOnlyIf"] == '$state.result === "issue"'
+    attachment = next(field for field in form["inputs"]["fields"] if field["type"] == "fileUpload")
+    assert attachment["fileStorage"] == "prototype"
+    runtime = compiled["prototype_resources"][0]
+    specification = derive_record_resource_spec(compiled["webui"], runtime["records"], resource_type=runtime["resource_type"])
+    definition = specification["resource_definition"]
+    assert definition["metadata"]["prototype_policy"]["read_only_when"] == resource["read_only_when"]
+    assert definition["record_schema"]["properties"][attachment["id"]]["format"] == "adaos-attachment"
+
+
+def test_markdown_remains_typed_text_with_explicit_formatted_details() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    resource = candidate["resources"][0]
+    field = next(field for field in resource["fields"] if field["value_type"] == "long_text")
+    field["value_type"] = "markdown"
+    details = next(view for view in candidate["views"] if view["role"] == "details" and view["resource_ref"] == resource["id"])
+    if field["id"] not in details["field_refs"]:
+        details["field_refs"].append(field["id"])
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    widget = next(widget for widget in compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["widgets"] if widget["id"] == details["id"])
+    assert next(item for item in widget["inputs"]["fields"] if item["id"] == field["id"])["kind"] == "markdown"
+
+
+def test_qualified_record_identity_alias_is_unambiguous() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    relationship = candidate["relationships"][0]
+    relationship["to_field_ref"] = relationship["to_resource_ref"] + ".id"
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert any(item["kind"] == "qualified_record_identity" for item in compiled["normalizations"])
 
 
 def test_all_invalid_state_predicates_are_reported_before_repair_scope() -> None:

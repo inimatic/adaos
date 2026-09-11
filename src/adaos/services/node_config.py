@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import yaml
 from adaos.adapters.db.sqlite import durable_state_delete, durable_state_get, durable_state_put
 from adaos.services.agent_context import get_ctx, AgentContext  # type: ignore
+from adaos.services.artifact_pipeline.storage import atomic_write_bytes, mutation_lock
 from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL, canonical_zone_id, zone_public_base_url
 from adaos.services.node_runtime_state import (
     load_member_hub_token,
@@ -30,17 +31,14 @@ _log = logging.getLogger("adaos.node_config")
 
 
 def _write_text_atomically(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    tmp_path.write_text(text, encoding="utf-8")
-    try:
-        os.replace(tmp_path, path)
-    finally:
+    payload = text.encode("utf-8")
+    with mutation_lock(path.with_name(f".{path.name}.lock")):
         try:
-            if tmp_path.exists():
-                tmp_path.unlink()
-        except Exception:
+            if path.read_bytes() == payload:
+                return
+        except FileNotFoundError:
             pass
+        atomic_write_bytes(path, payload)
 
 
 def _load_node_yaml_payload(path: Path) -> dict[str, Any]:

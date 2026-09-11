@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -20,6 +21,33 @@ from adaos.services.node_runtime_state import (
     save_node_runtime_state,
 )
 from adaos.services.subnet_alias import load_subnet_alias
+
+
+def test_atomic_config_write_does_not_replace_identical_bytes(tmp_path, monkeypatch):
+    path = tmp_path / "node.yaml"
+    node_config_mod._write_text_atomically(path, "language: ru\n")
+    monkeypatch.setattr(node_config_mod, "atomic_write_bytes", lambda *_: pytest.fail("unchanged config was rewritten"))
+    node_config_mod._write_text_atomically(path, "language: ru\n")
+
+
+def test_atomic_config_write_retries_only_transient_replace(tmp_path, monkeypatch):
+    from adaos.services.artifact_pipeline import storage
+    path = tmp_path / "node.yaml"
+    path.write_bytes(b"previous\n")
+    replace = storage._replace_once
+    attempts = []
+
+    def transient(source, target):
+        attempts.append(target)
+        if len(attempts) == 1:
+            assert path.read_bytes() == b"previous\n"
+            raise PermissionError(13, "temporarily held by another reader")
+        replace(source, target)
+
+    monkeypatch.setattr(storage, "_replace_once", transient)
+    node_config_mod._write_text_atomically(path, "language: ru\n")
+    assert path.read_bytes() == b"language: ru\n"
+    assert len(attempts) == 2
 
 
 def _detached_config() -> NodeConfig:

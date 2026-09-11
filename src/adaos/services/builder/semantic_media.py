@@ -8,6 +8,7 @@ from .workflow import BuilderWorkflowError
 SAMPLE_MEDIA = {
     "sample://image": "/assets/prototype/sample-image.jpg",
     "sample://video": "/assets/prototype/sample-video.mp4",
+    "sample://document": "/assets/prototype/sample-document.txt",
     "sample://unavailable": "/assets/prototype/unavailable-media.mp4",
 }
 

@@ -75,12 +75,13 @@
         "id": { "$ref": "#/$defs/id" },
         "item_semantics": { "type": "string", "minLength": 1, "maxLength": 500 },
         "item_label": { "$ref": "#/$defs/localizedText" },
+        "read_only_when": { "anyOf": [{ "$ref": "#/$defs/condition" }, { "type": "null" }], "description": "Optional record lock evaluated on the stored record before update/delete, not on the edited draft. Null unless the request needs read-only records in a specific state. Creation remains allowed." },
         "fields": {
           "type": "array", "minItems": 1, "maxItems": 24,
           "items": { "$ref": "#/$defs/field" }
         },
         "records": {
-          "type": "array", "maxItems": 6,
+          "type": "array", "maxItems": 12,
           "items": { "$ref": "#/$defs/record" }
         }
       }
@@ -155,7 +156,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "label": { "$ref": "#/$defs/localizedText" },
-        "value_type": { "type": "string", "enum": ["short_text", "long_text", "number", "date", "boolean", "choice", "multi_choice", "attachment", "attachments"] },
+        "value_type": { "type": "string", "enum": ["short_text", "long_text", "markdown", "number", "date", "boolean", "choice", "multi_choice", "attachment", "attachments"] },
         "required": { "type": "boolean" },
         "editable": { "type": "boolean" },
         "options": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/option" } },

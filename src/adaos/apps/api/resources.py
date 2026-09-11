@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
 from adaos.apps.api.auth import require_token
 from adaos.services.resources import ResourceAccessDenied, ResourceConflict, ResourceWorkbenchService
+from adaos.services.resources.prototype import PrototypeResourceService
+from adaos.services.resources.prototype_attachments import MAX_ATTACHMENT_BYTES, PrototypeAttachmentStore
 
 
 router = APIRouter(tags=["resources"], dependencies=[Depends(require_token)])
@@ -14,6 +18,39 @@ router = APIRouter(tags=["resources"], dependencies=[Depends(require_token)])
 
 def _get_service() -> ResourceWorkbenchService:
     return ResourceWorkbenchService()
+
+
+def _get_attachment_store() -> PrototypeAttachmentStore:
+    return PrototypeAttachmentStore(PrototypeResourceService())
+
+
+@router.put("/prototypes/{resource_type}/attachments")
+async def upload_prototype_attachment(resource_type: str, request: Request, field_id: str, filename: str,
+                                      store: PrototypeAttachmentStore = Depends(_get_attachment_store)) -> dict:
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > MAX_ATTACHMENT_BYTES:
+            raise HTTPException(status_code=413, detail="attachment exceeds 10 MiB")
+        content.extend(chunk)
+    try:
+        return await run_in_threadpool(store.put, resource_type, field_id, filename, bytes(content))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="prototype resource not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/prototypes/{resource_type}/attachments/{digest}/{filename}")
+def download_prototype_attachment(resource_type: str, digest: str, filename: str,
+                                  store: PrototypeAttachmentStore = Depends(_get_attachment_store)) -> FileResponse:
+    try:
+        path, media_type = store.get(resource_type, digest, filename)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="prototype attachment not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(path, media_type=media_type, filename=filename,
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600"})
 
 
 class ResourceQueryRequest(BaseModel):

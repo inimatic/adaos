@@ -177,7 +177,9 @@
         "choice_field_types": ["select", "dropdown", "combobox", "singleChoice", "radio"],
         "invalid_field_types": ["checkbox", "selector", "input.selector"],
         "conditional_required": "Set required=true on the dependent field and use a string visibleIf expression such as $state.result === 'defect'. ui.form evaluates the expression against a snapshot that includes sibling form values and validates visible required fields before submit. Never use an object-shaped condition or synthesize errors with updateState.",
-        "record_editor": "A resourceQuery with query.id=$state.<selection> loads the selected record into local fields. Empty selection means create mode, not the first returned record. inputs.buttons[*].id dispatches only matching actions[*].id; multiple unrelated submit mutations must never execute together. Declared button enabledIf controls availability. closeOnSuccess dismisses the editor only after a successful command."
+        "record_editor": "A resourceQuery with query.id=$state.<selection> loads the selected record into local fields. Empty selection means create mode, not the first returned record. inputs.buttons[*].id dispatches only matching actions[*].id; multiple unrelated submit mutations must never execute together. Declared button enabledIf controls availability. closeOnSuccess dismisses the editor only after a successful command.",
+        "read_only_record": "inputs.readOnlyIf is evaluated against the stored selected record, not the draft or page state. The Prototype resource provider enforces the same declared read_only_when predicate before update/delete.",
+        "prototype_attachments": "fileUpload with fileStorage=prototype uploads bytes through the authenticated Preview resource endpoint and stores a string reference (or array for multiple=true). Submit waits for upload; failure retains the old value. Limits: 10 MiB/file, 64 MiB/resource. Without fileStorage, legacy forms collect metadata only."
       },
       "data_shape": { "kind": "record" },
       "events": ["submit", "validate", "save_draft", "reset", "change:<fieldId>"],

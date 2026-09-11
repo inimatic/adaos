@@ -48,6 +48,7 @@
         },
         "item_semantics": { "type": "string", "minLength": 1, "maxLength": 500 },
         "item_label": { "$ref": "#/$defs/localizedText" },
+        "read_only_when": { "$ref": "#/$defs/condition" },
         "fields": {
           "type": "array",
           "minItems": 1,
@@ -202,7 +203,8 @@
           "maxItems": 24,
           "items": { "$ref": "#/$defs/option" }
         },
-        "visible_when": { "$ref": "#/$defs/condition" }
+        "visible_when": { "$ref": "#/$defs/condition" },
+        "display_format": { "enum": ["markdown"] }
       }
     },
     "emptyState": {

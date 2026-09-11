@@ -32,8 +32,11 @@ def close_bindings(document: dict, brief: Mapping | None) -> list[dict]:
                     refs.add(candidates[0])
         kind = operations.get(binding["requirement_ref"], {}).get("kind")
         if kind in {"search", "filter"}:
-            queries = [f"query:{query['id']}" for ref in refs if ref in views
-                       for query in views[ref].get("query_controls", []) if query["kind"] == kind]
+            query_views = [views[ref] for ref in refs if ref in views]
+            if not query_views:
+                query_views = [view for view in views.values() if f"resource:{view['resource_ref']}" in refs]
+            queries = [f"query:{query['id']}" for view in query_views
+                       for query in view.get("query_controls", []) if query["kind"] == kind]
             if len(queries) == 1:
                 refs.add(queries[0])
         for ref in sorted(refs - explicit):

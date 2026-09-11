@@ -133,6 +133,18 @@ class PrototypeResourceService:
         if _digest(record_schema) != _digest(data_definition["record_schema"]):
             raise ValueError("prototype resource record_schema must equal prototype data record_schema")
         metadata = definition.get("metadata") if isinstance(definition.get("metadata"), Mapping) else {}
+        policy = metadata.get("prototype_policy") or {}
+        condition = policy.get("read_only_when")
+        if condition is not None:
+            Draft202012Validator({"$ref": "#/$defs/condition", "$defs": _schema("webui.semantic.v1.schema.json")["$defs"]}).validate(condition)
+            field = condition["field_ref"]
+            properties = record_schema.get("properties") or {}
+            if field not in properties:
+                raise ValueError("prototype read_only_when references an unknown record property")
+            if condition["operator"] in {"equals", "not_equals"}:
+                if "value" not in condition:
+                    raise ValueError("prototype read_only_when comparison requires a value")
+                Draft202012Validator(properties[field]).validate(condition["value"])
         definition["metadata"] = {
             **dict(metadata),
             "prototype": True,
@@ -348,6 +360,9 @@ class PrototypeResourceService:
                 (item for item in runtime.records if _record_id(item) == identifier),
                 None,
             )
+            condition = (definition.get("metadata", {}).get("prototype_policy") or {}).get("read_only_when")
+            if operation_kind in {"update", "delete"} and current is not None and condition and self._condition_matches(current, condition):
+                raise PrototypeResourceConflict("prototype record is read-only in its current state")
             if expected_revision is not None and operation_kind in {"update", "delete"}:
                 if current is None:
                     raise KeyError(identifier)
@@ -430,10 +445,28 @@ class PrototypeResourceService:
         atomic_write_json(self.registry_path, dict(registry))
 
     @staticmethod
+    def _condition_matches(record: Mapping[str, Any], condition: Mapping[str, Any]) -> bool:
+        value = _read_path(record, condition["field_ref"])
+        expected = condition.get("value")
+        operator = condition["operator"]
+        empty = value is None or value == "" or value == []
+        if operator in {"empty", "nonempty"}:
+            return empty if operator == "empty" else not empty
+        equal = isinstance(value, bool) == isinstance(expected, bool) and value == expected
+        return equal if operator == "equals" else not equal
+
+    @staticmethod
     def _filter_matches(record: Mapping[str, Any], key: str, expected: Any) -> bool:
+        def token(value: Any) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            return str(value).strip()
+
         values = expected if isinstance(expected, (list, tuple, set)) else [expected]
-        wanted = {_text(value) for value in values if _text(value)}
-        return not wanted or _text(_read_path(record, key)) in wanted
+        wanted = {token(value) for value in values if token(value)}
+        return not wanted or token(_read_path(record, key)) in wanted
 
     @staticmethod
     def _activity(

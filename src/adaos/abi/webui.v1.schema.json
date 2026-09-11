@@ -1935,6 +1935,7 @@
       "additionalProperties": true,
       "description": "Inputs for ui.form. This is the compatibility container for typed Google-Forms-like field declarations.",
       "properties": {
+        "readOnlyIf": { "type": "string", "description": "Evaluated against the loaded record, never the draft. Disables mutation controls and fields while selection is read-only. Provider must enforce the same policy." },
         "fields": {
           "type": "array",
           "items": { "$ref": "#/$defs/formField" }

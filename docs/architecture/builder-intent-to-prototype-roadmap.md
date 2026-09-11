@@ -1266,6 +1266,26 @@ the prompt against that false-positive gate or copy a domain solution into Core.
   model correctly uses it only as a relationship selector. Qualify a typed,
   observable lookup path before relaxing this constraint; do not fabricate UI
   or silently omit resource validation to increase the score.
+- [ ] `[must]` Qualify real attachment capture, not filename metadata: preserve
+  scalar/multiple value shape, store bytes in Preview-owned state, return a
+  durable scoped reference, reopen the content and reject failed uploads without
+  overwriting the previous value. Never put runtime attachments in Builder's
+  development SourceBundle or embed binary payloads in record JSON.
+- [x] `[must]` Expose simple command availability conditions in the semantic
+  contract, including archived read-only records. Pair local UI behavior with
+  truthful Automation debt for durable authorization; a status field alone is
+  not a prohibition on editing.
+- [x] `[must]` Preserve false/zero query operands and qualify numeric equality
+  filters. The second cohort found a false/zero-as-clear provider bug and an
+  unsupported numeric-filter failure appearing only after repair.
+- [x] `[must]` Remove redundant node.yaml writes and use the established atomic
+  replacement helper for real writes. A Windows sharing collision interrupted
+  creation in the second cohort; classify it as platform/stand, not model failure.
+- [x] `[must]` Replace full-view echoes in bounded state repair with mutable-only
+  view patches. Preserve immutable properties by construction and retain legacy
+  replay compatibility; qualify with fresh generation, not retrospective scores.
+- [ ] `[should]` Tie Prototype attachment reclamation to owned revision cleanup.
+  Per-resource storage is bounded; aggregate retention still needs lifecycle GC.
 
 Qualification progress: `context-media-paired-low-20260911-02` passed all four
 development attempts (short 2/2, detailed 2/2). Each prompt needed one repair
@@ -1297,6 +1317,26 @@ Cleanup receipts under `e2e/artifacts/builder/cleanup-before-effort-low-provider
 record 174 archived local test developments removed, with all 16 last low/high
 comparison applications preserved. Ordinary applications and historical run
 evidence were not removed. Later diagnostic developments remain searchable.
+
+`context-archetypes-low-20260911-02` completed 16 attempts: 10 passed, 6 failed.
+Operations, budget, inspections and volunteers passed twice; appointments and
+media once; library and procurement did not pass. One library creation failed
+before inference on a Windows config replacement. The remaining failures exposed
+numeric filters, immutable-property echoes, a missing record-lock primitive,
+relationship identity references and unfiltered linked-record inspection.
+Browser tasks proved operations, budget and inspection edit/save/reopen paths on
+both viewports, but not file-byte capture. Native media inspection must allow a
+legitimate empty field; only the explicit media fixture probe requires image,
+video playback and unavailable-file evidence together.
+
+The next batch supplies record locks, true scoped file storage, attachment links,
+sanitized Markdown fields, numeric query inputs and mutable-only repairs.
+Candidate fixtures admit up to 12 records per resource (previously 6): both budget
+attempts spent a repair solely because useful 8/9-record examples crossed an
+internal cap. This bounded capacity change is recorded in the contract digest;
+it is not a reduction of required outcomes or a claim of better UX.
+Automated Core/Client tests are prerequisites, not proof of eight-archetype
+autonomy. Full fresh-generation and browser qualification remain open.
 
 Engineering basis: [OpenAI text-generation guidance](https://developers.openai.com/api/docs/guides/text),
 [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), and

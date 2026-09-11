@@ -71,14 +71,14 @@ try {
           .locator('tr.row-selectable, .collection-focus-item').first().click()
         await page.locator('ada-details-widget .details-row').first().waitFor({ timeout: 15_000 })
       }
-      if (process.env.ADAOS_E2E_MEDIA_TESTS === '1') {
+      if (['1', 'inspect'].includes(process.env.ADAOS_E2E_MEDIA_TESTS)) {
         const rows = page.locator(`[data-webui-widget-id=${JSON.stringify(selectWidget)}]`)
           .locator('tr.row-selectable, .collection-focus-item')
         for (let index = 0; index < await rows.count(); index += 1) {
           await rows.nth(index).click()
           const viewer = page.locator('ada-media-preview').first()
           await viewer.waitFor()
-          await page.waitForFunction(() => ['ready', 'error'].includes(document.querySelector('ada-media-preview [data-media-state]')?.getAttribute('data-media-state')))
+          await page.waitForFunction(() => ['ready', 'error', 'empty'].includes(document.querySelector('ada-media-preview [data-media-state]')?.getAttribute('data-media-state')))
           const result = await viewer.evaluate(async element => {
             const media = element.querySelector('video,audio,img')
             const state = element.querySelector('[data-media-state]').getAttribute('data-media-state')
@@ -95,9 +95,9 @@ try {
           })
           mediaChecks.push({ row: index, ...result })
         }
-        if (!mediaChecks.some(item => item.kind === 'VIDEO' && item.currentTime > 0)
+        if (process.env.ADAOS_E2E_MEDIA_TESTS === '1' && (!mediaChecks.some(item => item.kind === 'VIDEO' && item.currentTime > 0)
           || !mediaChecks.some(item => item.kind === 'IMG' && item.naturalWidth > 0)
-          || !mediaChecks.some(item => item.state === 'error')) throw new Error('Image, playing video and unavailable-media coverage required')
+          || !mediaChecks.some(item => item.state === 'error'))) throw new Error('Image, playing video and unavailable-media coverage required')
       }
     } catch (error) { failure = error.message }
     const text = await page.locator('body').innerText()

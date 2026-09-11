@@ -518,21 +518,88 @@ def test_derive_generic_record_resource_spec_without_board() -> None:
             }
         },
     }
-
     spec = developer_prototypes.derive_resource_spec(
         webui, [{"id": "one", "title": "Inspect pump", "priority": 2}]
     )
-
     definition = spec["resource_definition"]
     assert definition["resource_type"] == "prototype.requests"
-    assert {item["id"] for item in definition["operations"]} == {
-        "list",
-        "show",
-        "create",
-    }
+    assert {item["id"] for item in definition["operations"]} == {"list", "show", "create"}
     assert {item["kind"] for item in definition["views"]} == {"list", "form"}
     assert spec["data_definition"]["seed"][0]["revision"] == 1
 
+
+def test_record_lock_uses_stored_record_and_cannot_be_cleared_in_patch(tmp_path):
+    service = PrototypeResourceService(state_dir=tmp_path)
+    bundle = _bundle()
+    bundle["resource_definition"]["metadata"] = {"prototype_policy": {"read_only_when": {"field_ref": "status", "operator": "equals", "value": "doing"}}}
+    resource_type = bundle["resource_definition"]["resource_type"]
+    service.materialize(bundle)
+    for operation in ("update", "delete"):
+        with pytest.raises(PrototypeResourceConflict, match="read-only"):
+            service.operate(resource_type, operation, record_id="two", payload={"status": "planned"})
+    service.operate(resource_type, "update", record_id="one", payload={"status": "doing"})
+    with pytest.raises(PrototypeResourceConflict, match="read-only"):
+        service.operate(resource_type, "update", record_id="one", payload={"status": "planned"})
+
+
+def test_attachment_bytes_round_trip_are_scoped_and_declared(tmp_path):
+    import hashlib
+    from adaos.services.resources.prototype_attachments import PrototypeAttachmentStore, MAX_ATTACHMENT_BYTES
+    service = PrototypeResourceService(state_dir=tmp_path)
+    bundle = _bundle()
+    for schema in (bundle["resource_definition"]["record_schema"], bundle["data_definition"]["record_schema"]):
+        schema["properties"]["photo"] = {"type": ["string", "null"], "format": "adaos-attachment"}
+    resource_type = bundle["resource_definition"]["resource_type"]
+    service.materialize(bundle)
+    store = PrototypeAttachmentStore(service)
+    content = b"\x89PNG\r\n\x1a\nexample-content"
+    receipt = store.put(resource_type, "photo", "photo.png", content)
+    assert receipt["sha256"] == hashlib.sha256(content).hexdigest()
+    path, mime = store.get(resource_type, receipt["sha256"], "photo.png")
+    assert path.read_bytes() == content
+    assert mime == "image/png"
+    service.operate(resource_type, "update", record_id="one", payload={"photo": receipt["ref"]})
+    assert service.query(resource_type, filters={"id": "one"}, search="", sort=None, limit=None)[0]["photo"] == receipt["ref"]
+    assert store.put(resource_type, "photo", "photo.png", content) == receipt
+    with pytest.raises(KeyError):
+        store.get("prototype.unknown", receipt["sha256"], "photo.png")
+    with pytest.raises(ValueError, match="declared attachment"):
+        store.put(resource_type, "title", "photo.png", content)
+    for filename in ("../photo.png", "..\\photo.png", "x\x00.png"):
+        with pytest.raises(ValueError, match="filename"):
+            store.put(resource_type, "photo", filename, content)
+    with pytest.raises(ValueError, match="10 MiB"):
+        store.put(resource_type, "photo", "large.png", b"x" * (MAX_ATTACHMENT_BYTES + 1))
+    assert store.get(resource_type, receipt["sha256"], "untrusted.svg")[1] == "application/octet-stream"
+
+
+def test_attachment_api_requires_auth_and_preserves_bytes(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from adaos.apps.api import resources, auth
+    from adaos.services.resources.prototype_attachments import PrototypeAttachmentStore
+    service = PrototypeResourceService(state_dir=tmp_path)
+    bundle = _bundle()
+    for schema in (bundle["resource_definition"]["record_schema"], bundle["data_definition"]["record_schema"]):
+        schema["properties"]["photo"] = {"type": ["string", "null"], "format": "adaos-attachment"}
+    resource_type = bundle["resource_definition"]["resource_type"]
+    service.materialize(bundle)
+    app = FastAPI()
+    app.include_router(resources.router, prefix="/api/resources")
+    app.dependency_overrides[resources._get_attachment_store] = lambda: PrototypeAttachmentStore(service)
+    monkeypatch.setattr(auth, "ensure_token", lambda token: None if token == "test-token" else (_ for _ in ()).throw(auth.HTTPException(401)))
+    with TestClient(app) as client:
+        url = f"/api/resources/prototypes/{resource_type}/attachments?field_id=photo&filename=test.png"
+        assert client.put(url, content=b"test").status_code == 401
+        headers = {"X-AdaOS-Token": "test-token"}
+        uploaded = client.put(url, content=b"test", headers=headers)
+        assert uploaded.status_code == 200
+        ref = uploaded.json()["ref"]
+        assert client.get(ref).status_code == 401
+        downloaded = client.get(ref, headers=headers)
+        assert downloaded.content == b"test"
+        assert downloaded.headers["x-content-type-options"] == "nosniff"
+        assert client.put(url, content=b"x" * (10 * 1024 * 1024 + 1), headers=headers).status_code == 413
 
 @pytest.mark.parametrize("component", ["ui.table", "collection.board"])
 def test_derived_filters_execute_without_leaking_across_resources(tmp_path: Path, component: str) -> None:
@@ -582,6 +649,13 @@ def test_resource_paths_prefer_literal_dotted_keys(path, expected) -> None:
     value = {"item.date": "flat", "item": {"date": "wrong"},
              "values": {"item.date": "nested-flat", "title": "nested"}}
     assert developer_prototypes._read_path(value, path) == expected
+
+
+@pytest.mark.parametrize("wanted,matching,other", [(False, False, True), (0, 0, 3), ("false", False, True)])
+def test_false_and_zero_are_real_query_filters_not_clear_signals(wanted, matching, other) -> None:
+    assert PrototypeResourceService._filter_matches({"value": matching}, "value", wanted)
+    assert not PrototypeResourceService._filter_matches({"value": other}, "value", wanted)
+    assert PrototypeResourceService._filter_matches({"value": other}, "value", "")
 
 
 def test_optional_numeric_prototype_field_accepts_explicit_empty_value() -> None:
