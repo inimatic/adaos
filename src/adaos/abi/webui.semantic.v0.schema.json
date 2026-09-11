@@ -111,8 +111,8 @@
         "title": { "type": "string" },
         "when": { "$ref": "#/$defs/viewAvailability" },
         "variant": { "type": "string" },
-        "source": { "$ref": "#/$defs/binding" },
-        "selection": { "$ref": "#/$defs/binding" },
+        "source": { "$ref": "#/$defs/dataBinding" },
+        "selection": { "$ref": "#/$defs/viewBinding" },
         "viewStateRef": { "type": "string" },
         "config": {
           "type": "object",
@@ -165,25 +165,54 @@
         }
       }
     },
-    "binding": {
+    "dataBinding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "ref"],
+      "required": ["kind"],
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["y", "stream", "view", "projection"]
+          "enum": ["y", "stream", "projection", "static", "skill"]
         },
         "ref": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "value": {},
+        "params": {
+          "type": "object",
+          "additionalProperties": true
+        },
         "scope": {
           "type": "string",
-          "enum": ["shared", "node", "local", "workspace"]
+          "enum": ["shared", "node", "optional-node", "local", "workspace"]
         },
         "nodeRef": { "type": "string" },
         "transport": {
           "type": "string",
           "enum": ["auto", "member", "hub"]
         }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "y" } } },
+          "then": { "anyOf": [{ "required": ["ref"] }, { "required": ["path"] }] }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["stream", "projection", "skill"] } } },
+          "then": { "required": ["ref"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "static" } } },
+          "then": { "required": ["value"] }
+        }
+      ]
+    },
+    "viewBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": { "const": "view" },
+        "ref": { "type": "string", "pattern": "^view:[A-Za-z0-9_.:-]+$" }
       }
     },
     "action": {
@@ -195,15 +224,12 @@
         "kind": {
           "type": "string",
           "enum": [
-            "emit",
             "open_modal",
             "navigate",
             "call_host",
             "set_view_state",
-            "patch_y",
             "invoke_skill_action",
-            "open_workspace",
-            "apply_review_change"
+            "open_workspace"
           ]
         },
         "trigger": { "type": "string", "minLength": 1 },

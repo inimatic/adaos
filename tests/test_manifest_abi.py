@@ -63,6 +63,7 @@ def _load_service_skill_schema() -> dict:
         "builder.ui_composition_slice.v1.schema.json",
         "builder.prototype_workflow_slice.v1.schema.json",
         "builder.prototype_handoff.v1.schema.json",
+        "webui.semantic.v0.schema.json",
         "webui.semantic.v1.schema.json",
     ],
 )
@@ -76,6 +77,46 @@ def test_workflow_validation_report_schema_is_valid_draft_2020_12() -> None:
     Draft202012Validator.check_schema(
         _load_schema("workflow.validation_report.v1.schema.json")
     )
+
+
+def test_semantic_v0_separates_data_and_view_binding_roles() -> None:
+    validator = Draft202012Validator(_load_schema("webui.semantic.v0.schema.json"))
+    payload = {
+        "id": "generic-surface",
+        "layout": {"pattern": "stack", "areas": [{"id": "main"}]},
+        "views": [
+            {
+                "id": "items",
+                "kind": "collection_grid",
+                "area": "main",
+                "source": {"kind": "projection", "ref": "projection:items"},
+                "selection": {"kind": "view", "ref": "view:selected_item"},
+                "actions": [
+                    {
+                        "ref": "action:open_details",
+                        "kind": "navigate",
+                        "trigger": "select",
+                        "target": "item_details",
+                    }
+                ],
+            }
+        ],
+    }
+
+    validator.validate(payload)
+
+    invalid_source = json.loads(json.dumps(payload))
+    invalid_source["views"][0]["source"] = {
+        "kind": "view",
+        "ref": "view:items",
+    }
+    with pytest.raises(ValidationError):
+        validator.validate(invalid_source)
+
+    invalid_action = json.loads(json.dumps(payload))
+    invalid_action["views"][0]["actions"][0]["kind"] = "patch_y"
+    with pytest.raises(ValidationError):
+        validator.validate(invalid_action)
 
 
 def test_workflow_definition_schema_resolves_transition_refs_from_abi_files() -> None:
