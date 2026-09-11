@@ -145,6 +145,17 @@ def test_project_manifest_lists_by_profile_and_resolves_entrypoint(
     }
 
 
+def test_project_search_filters_before_limit_and_matches_unicode(project_space):
+    for project_id, title in [("aaa", "First"), ("zzz", "Пример [TEST]-20260911-uid")]:
+        value = _project(project_id, project_id)
+        value["catalog"]["title"] = title
+        compositions.create(value)
+    assert [item["id"] for item in compositions.list_projects(limit=1)] == ["aaa"]
+    assert [item["id"] for item in compositions.list_projects(query="ПРИМЕР", limit=1)] == ["zzz"]
+    assert [item["id"] for item in compositions.list_projects(query="20260911-uid", limit=1)] == ["zzz"]
+    assert compositions.list_projects(query="not present", limit=1) == []
+
+
 def test_project_delete_requires_exact_snapshot_and_primary_ownership(
     project_space,
 ) -> None:

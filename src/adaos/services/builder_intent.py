@@ -48,7 +48,7 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "search",
         re.compile(
-            r"\b(?:search|find|lookup|искать|найти|поиск|наход)\w*\b",
+            r"\b(?:search|lookup|искать|поиск)\w*\b",
             re.IGNORECASE,
         ),
     ),
@@ -57,7 +57,8 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "inspect",
         re.compile(
-            r"\b(?:inspect|open|view|review|see|scan|browse|откр|просмотр|просматр|изуч)\w*\b|"
+            r"\b(?:inspect|open|view|review|see|scan|browse|find|найти|наход|"
+            r"откр|просмотр|просматр|изуч)\w*\b|"
             r"\bпровер(?:ить|ять|яет|яют|ял|яла|яли|ь|ьте)\b",
             re.IGNORECASE,
         ),

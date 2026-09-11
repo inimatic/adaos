@@ -1929,6 +1929,46 @@ def test_semantic_v2_accepts_choice_foreign_key_to_string_identity() -> None:
     assert rendered_owner["type"] == "singleChoice"
 
 
+def test_semantic_v2_normalizes_choice_relationship_values_consistently() -> None:
+    brief, semantic = _multi_resource_fixture()
+    source, target = semantic["resources"]
+    owner = next(field for field in source["fields"] if field["id"] == "work_owner_id")
+    owner["value_type"] = "choice"
+    owner["options"] = []
+    for index, record in enumerate(target["records"], 1):
+        record["id"] = f"person:{index}"
+        source["records"][index - 1]["work_owner_id"] = record["id"]
+        owner["options"].append({"value": record["id"], "label": _text(f"person.{index}", record["person_name"], record["person_name"])})
+    source["fields"][0]["visible_when"] = {"field_ref": "work_owner_id", "operator": "equals", "value": "person:1"}
+    editor = next(view for view in semantic["views"] if view["role"] == "editor")
+    editor["field_refs"].append("work_owner_id")
+    command = semantic["commands"][0]
+    command.setdefault("fixed_values", {})["work_owner_id"] = "person:1"
+    command["guard"] = {"when": {"field_ref": "work_owner_id", "operator": "equals", "value": "person:1"}, "require_nonempty": [source["fields"][0]["id"]]}
+    collection = next(view for view in semantic["views"] if view["role"] == "collection" and view["resource_ref"] == source["id"])
+    collection["field_refs"].append("work_owner_id")
+    semantic["representative_states"].append({
+        "id": "owner-items", "label": _text("owner.items", "Owner items", "Записи владельца"),
+        "view_ref": collection["id"], "min_items": 1, "max_items": 1,
+        "proof": {"kind": "field_predicate", "visible_field_refs": ["work_owner_id"]},
+        "filters": [{"field_ref": "work_owner_id", "operator": "eq", "value": "person:1"}],
+    })
+    candidate = _multi_resource_candidate(semantic)
+    original = copy.deepcopy(candidate)
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert candidate == original
+    document = result["semantic_document"]
+    resource = document["resources"][0]
+    assert [record["work_owner_id"] for record in resource["records"]] == ["person.1", "person.2"]
+    owner = next(field for field in resource["fields"] if field["id"] == "work_owner_id")
+    assert [option["value"] for option in owner["options"]] == ["person.1", "person.2"]
+    assert resource["fields"][0]["visible_when"]["value"] == "person.1"
+    assert document["commands"][0]["fixed_values"]["work_owner_id"] == "person.1"
+    assert document["commands"][0]["guard"]["when"]["value"] == "person.1"
+    assert document["representative_states"][-1]["filters"][0]["value"] == "person.1"
+    assert result["normalizations"]
+
+
 def test_semantic_v2_reports_incompatible_relationship_type() -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)

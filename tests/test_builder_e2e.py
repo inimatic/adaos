@@ -48,6 +48,25 @@ def test_artifact_writers_keep_unicode_readable_in_plain_and_compressed_json(tmp
     assert summary["content_bytes"] == len(raw.encode("utf-8"))
 
 
+def test_checkpoint_replace_failure_preserves_complete_previous_artifact(tmp_path, monkeypatch) -> None:
+    from adaos.e2e.builder import _write_json
+    from adaos.services.artifact_pipeline import storage
+
+    path = tmp_path / "checkpoint.json"
+    _write_json(path, {"message": "Предыдущий результат"})
+    previous = path.read_bytes()
+    previous_paths = set(tmp_path.iterdir())
+
+    def fail_replace(*args):
+        raise PermissionError("simulated sharing violation")
+
+    monkeypatch.setattr(storage, "replace_with_retry", fail_replace)
+    with pytest.raises(PermissionError):
+        _write_json(path, {"message": "Новый результат"})
+    assert path.read_bytes() == previous
+    assert set(tmp_path.iterdir()) == previous_paths
+
+
 class FixtureExecutor:
     adapter_id = "fixture.v1"
 

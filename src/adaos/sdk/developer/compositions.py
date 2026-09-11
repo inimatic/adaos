@@ -442,18 +442,29 @@ def get(project_id: str) -> dict[str, Any]:
 
 
 def list_projects(
-    *, profile: str | None = None, limit: int = 500
+    *, profile: str | None = None, query: str | None = None, limit: int = 500
 ) -> list[dict[str, Any]]:
     parent = _root_parent()
     if not parent.is_dir():
         return []
     result: list[dict[str, Any]] = []
     maximum = max(1, min(int(limit), 5000))
+    needle = str(query or "").strip().casefold()
     for manifest_path in sorted(
         parent.glob("*/project.yaml"), key=lambda item: item.parent.name.lower()
     ):
         project = _read(manifest_path)
         if profile and str(profile) not in set(project.get("profiles") or []):
+            continue
+        searchable = " ".join(
+            str(value or "")
+            for value in (
+                project["id"],
+                project["catalog"].get("title"),
+                project["catalog"].get("description"),
+            )
+        ).casefold()
+        if needle and needle not in searchable:
             continue
         primary = next(
             (

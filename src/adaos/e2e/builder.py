@@ -23,6 +23,7 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
 from adaos.e2e.stand import redact_value
+from adaos.services.artifact_pipeline.storage import atomic_write_bytes
 
 
 SUITE_SCHEMA = "adaos.builder.e2e_suite.v1"
@@ -181,11 +182,8 @@ def validate_builder_e2e_record(name: str, value: Mapping[str, Any]) -> dict[str
 
 
 def _write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    payload = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    atomic_write_bytes(path, payload.encode("utf-8"))
 
 
 def _compact_step_output(

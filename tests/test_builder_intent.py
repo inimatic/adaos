@@ -281,12 +281,12 @@ def test_public_builder_sdk_exposes_brief_compilation() -> None:
     assert brief["constraints"]["locale"]["value"] == "en"
 
 
-def test_brief_recognizes_generic_russian_search_and_update_inflections() -> None:
+def test_brief_keeps_finding_an_item_independent_of_a_text_search_control() -> None:
     brief = compile_prototype_brief(
         "Пользователь находит нужный элемент и переносит его на другую дату."
     )
 
-    assert [item["kind"] for item in brief["operations"]] == ["search", "update"]
+    assert [item["kind"] for item in brief["operations"]] == ["inspect", "update"]
 
 
 def test_brief_does_not_treat_russian_record_noun_as_create_operation() -> None:
@@ -294,7 +294,25 @@ def test_brief_does_not_treat_russian_record_noun_as_create_operation() -> None:
         "Пользователь находит нужную запись и просматривает ее содержание."
     )
 
-    assert [item["kind"] for item in brief["operations"]] == ["search", "inspect"]
+    assert [item["kind"] for item in brief["operations"]] == ["inspect", "inspect"]
+
+
+def test_finding_an_outcome_does_not_require_text_search() -> None:
+    for statement in (
+        "Find available time and view the schedule.",
+        "Find the cheapest item and filter by category.",
+        "Находить свободное время и просматривать расписание.",
+        "Найти подходящий элемент и фильтровать по категории.",
+    ):
+        brief = compile_prototype_brief(statement)
+        assert "inspect" in {item["kind"] for item in brief["operations"]}
+        assert "search" not in {item["kind"] for item in brief["operations"]}
+
+
+def test_explicit_search_remains_a_supported_operation() -> None:
+    for statement in ("Search items by title.", "Поиск элементов по названию."):
+        brief = compile_prototype_brief(statement)
+        assert "search" in {item["kind"] for item in brief["operations"]}
 
 
 def test_brief_preserves_unclassified_explicit_requirements() -> None:

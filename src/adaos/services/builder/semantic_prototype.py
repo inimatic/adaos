@@ -2099,6 +2099,42 @@ def _unique_v2_ids(values: Sequence[Mapping[str, Any]], label: str) -> None:
         seen.add(identifier)
 
 
+def _normalize_relationship_identity_literals(
+    *, resource: dict[str, Any], field_ref: str, target_ids: Mapping[str, str],
+    commands: Sequence[dict[str, Any]], states: Sequence[dict[str, Any]],
+    normalizations: list[dict[str, str]],
+) -> None:
+    # Record identity normalization must preserve every typed use of the foreign key.
+    def normalize(container: dict[str, Any], path: str) -> None:
+        original = container.get("value")
+        normalized = target_ids.get(original) if isinstance(original, str) else None
+        if normalized is not None and normalized != original:
+            container["value"] = normalized
+            normalizations.append({"kind": "relationship_identity_value", "from": original,
+                                   "to": normalized, "target": path})
+
+    for field_index, field in enumerate(resource["fields"]):
+        path = f"$.resources.@{resource['id']}.fields[{field_index}]"
+        if field["id"] == field_ref:
+            for option_index, option in enumerate(field.get("options") or []):
+                normalize(option, f"{path}.options[{option_index}].value")
+        condition = field.get("visible_when")
+        if condition and condition.get("field_ref") == field_ref:
+            normalize(condition, f"{path}.visible_when.value")
+    for index, command in enumerate(commands):
+        for entry_index, entry in enumerate(command.get("fixed_values") or []):
+            if entry["field_ref"] == field_ref:
+                normalize(entry, f"$.commands[{index}].fixed_values[{entry_index}].value")
+        condition = (command.get("guard") or {}).get("when")
+        if condition and condition.get("field_ref") == field_ref:
+            normalize(condition, f"$.commands[{index}].guard.when.value")
+    for index, state in enumerate(states):
+        for predicate_index, predicate in enumerate(state["filters"]):
+            operand = predicate["operand"]
+            if predicate["field_ref"] == field_ref and operand["kind"] == "value":
+                normalize(operand, f"$.representative_states[{index}].filters[{predicate_index}].operand.value")
+
+
 def _canonicalize_semantic_prototype_candidate_v2(
     value: Mapping[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
@@ -2404,11 +2440,12 @@ def _canonicalize_semantic_prototype_candidate_v2(
                     }
                 )
                 normalized_relationship["to_field_ref"] = "id"
+        if normalized_relationship["to_field_ref"] == "id":
             for record_index, record in enumerate(
                 from_resource.get("records") or []
             ):
                 original = record["values"][from_field_index]
-                normalized_id = target_ids.get(original)
+                normalized_id = target_ids.get(original) if isinstance(original, str) else None
                 if normalized_id is None or normalized_id == original:
                     continue
                 record["values"][from_field_index] = normalized_id
@@ -2423,6 +2460,11 @@ def _canonicalize_semantic_prototype_candidate_v2(
                         ),
                     }
                 )
+            _normalize_relationship_identity_literals(
+                resource=from_resource, field_ref=from_field_id, target_ids=target_ids,
+                commands=normalized_commands, states=normalized_states,
+                normalizations=normalizations,
+            )
         normalized_relationships.append(normalized_relationship)
     _unique_v2_ids(normalized_relationships, "relationship")
 
