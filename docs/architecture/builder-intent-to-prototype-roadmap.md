@@ -695,6 +695,31 @@ Prompt-autonomy admission targets:
 
 ## R9. Cutover And Cleanup
 
+Promotion evidence (2026-09-11): the pre-promotion comparison found no
+Workspace-only product capability that needed to be carried forward. The four
+Workspace-only helpers were shopping-list, todo-list, and Applications-specific
+localization heuristics; DEV replaces them with generic semantic and
+localization processing. Scenario and SDK differences outside Builder logic
+were version-only. DEV component tests and the functional-parity suite passed
+before checkpointing. The exact checkpoint produced scenario `builder@0.2.83`,
+`builder_skill@0.3.163`, and `builder_sdk_control_skill@0.1.107`; ProjectRelease
+`builder@0.2.106` has digest
+`sha256:d65a27b619ea3ef25a030f25e3fe308b5b7da2fbcfff7ad9b4359128e88d0358`.
+Trial `builder-0-2-106-9128e88d0358` materialized under `.adaos/trials`, was
+accepted against the retained test and E2E evidence, and promoted into
+WorkspaceLock revision 45. Reload and health receipts matched all three exact
+component versions. This proves the local DEV -> beta -> Workspace mechanism;
+it does not by itself satisfy the prompt-autonomy gate above.
+
+The three-component checkpoint took 41.7 seconds. Its largest phase was the
+Builder skill at about 24.0 seconds: 8.0 seconds local validation, 4.7 seconds
+package validation, 3.2 seconds Root upload, and 7.1 seconds local receipt
+write. The observed delay is therefore distributed work, not evidence for a
+shorter timeout. Preflight also reported declared `max_request_hz` and
+invalidation-tag policies that are not yet executed exactly by several
+Builder SDK reads and mutations. They remain visible follow-up defects rather
+than being suppressed for promotion.
+
 - [ ] `[must]` Shadow-run the new route beside the legacy path on retained and
   held-out prompts without changing the user-visible Prototype.
 - [ ] `[must]` Compare quality, user-task success, cost, latency, repairs,
@@ -712,6 +737,10 @@ Prompt-autonomy admission targets:
   Applications qualification, cumulative recipe phases, and text JSON repair.
 - [ ] `[should]` Archive compatibility fixtures and migration telemetry after
   the supported rollback window.
+- [ ] `[should]` Make every Builder SDK data route execute its declared request
+  frequency and invalidation-tag policy, then turn the current preflight
+  warnings into a promotion gate. Measure validation, Root transfer, and local
+  receipt persistence independently before optimizing checkpoint latency.
 
 Exit gate: an ordinary user can reach a relevant, executable, accepted
 Prototype without understanding AdaOS internals, and the evidence demonstrates
