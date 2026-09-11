@@ -60,6 +60,24 @@ def prototype_state_requirements(brief: Mapping[str, Any]) -> list[dict[str, str
     return requirements
 
 
+def prototype_requirement_inventory(brief: Mapping[str, Any]) -> list[dict[str, str]]:
+    """The same exact requirement inventory is used by the model and compiler."""
+    inventory = [
+        {**item, "kind": kind}
+        for group, kind in (
+            ("principal_jobs", "job"), ("residual_requirements", "residual"),
+            ("operations", "operation"), ("information_requirements", "information"),
+            ("collection_requirements", "collection"),
+        )
+        for item in _statements(brief.get(group))
+    ]
+    inventory.extend(
+        {**item, "kind": "representative_state"}
+        for item in prototype_state_requirements(brief) if item.get("id")
+    )
+    return inventory
+
+
 def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
     """Remove persistence metadata and raw-statement duplication from a brief.
 
@@ -92,11 +110,15 @@ def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
     operations = [
         {
             key: copy.deepcopy(item.get(key))
-            for key in ("id", "kind", "statement", "effect_scope", "authority")
+            for key in ("id", "kind", "statement", "source_clause", "target", "effect_scope", "authority")
         }
         for item in value.get("operations") or []
         if isinstance(item, Mapping)
     ]
+    for operation in operations:
+        operation["related_job_refs"] = [
+            item["id"] for item in jobs if item["statement"] == operation["statement"]
+        ]
     information_requirements = [
         {
             key: copy.deepcopy(item.get(key))
@@ -124,6 +146,9 @@ def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
         "stage_contract": copy.deepcopy(PROTOTYPE_STAGE_CONTRACT),
         "brief_ref": str(value.get("brief_id") or ""),
         "brief_digest": str(value.get("digest") or ""),
+        "required_references": prototype_requirement_inventory(value),
+        "coverage_policy": "Every required_references id needs a binding or explicit gap. Related jobs and operations may share semantic refs; neither binding replaces the other.",
+        "knowledge_policy": "facts are admitted knowledge; unknowns are not omissions in the request. Infer a suitable entity/view design from the original user request, but do not present design choices as user-confirmed facts or external authority.",
         "primary_jobs": jobs,
         "residual_requirements": residual_requirements,
         "operations": operations,
@@ -150,4 +175,5 @@ __all__ = [
     "MODEL_CONTEXT_SCHEMA",
     "compile_prototype_model_context",
     "prototype_state_requirements",
+    "prototype_requirement_inventory",
 ]

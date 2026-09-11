@@ -5,9 +5,27 @@ description: Visible development case for a dense operational queue and detail w
 locale: en
 tags: [visible, operations, master-detail]
 requirements:
-  primary_jobs: [triage work, inspect details, assign ownership, change status]
-  representative_states: [empty, populated, filtered, overdue]
-prohibited_assumptions: [all work is public, status changes require no confirmation]
+  primary_jobs:
+    - statement: triage work
+      acceptance: Visible work items expose status, priority, owner and due date for scanning.
+      exclusions: [A board, dashboard or automatic prioritization is not required.]
+    - statement: inspect details
+      acceptance: Select an item and see its details while the queue remains available.
+    - statement: add a request
+      acceptance: A create action consumes values from an accessible editor.
+    - statement: assign ownership
+      acceptance: An edit or assignment action saves the chosen owner on the target item.
+    - statement: change status
+      acceptance: A working action or editor can set New, In progress, Blocked and Done.
+      exclusions: [Confirmation of status changes was not requested.]
+  representative_states:
+    - statement: empty
+      acceptance: An explicit empty-queue surface is renderable.
+    - statement: populated
+      acceptance: Realistic work fixtures are visible in the queue.
+    - statement: overdue
+      acceptance: A visible item illustrates an overdue state; a live clock or automatic escalation is not required at Prototype stage.
+prohibited_assumptions: []
 steps:
   - id: create
     type: builder.chat

@@ -10,6 +10,14 @@ from typing import Any
 PROTOTYPE_STAGE_CONTRACT = {
     "stage": "prototype",
     "acceptance": "interactive_preview_not_production_readiness",
+    "design_freedom": {
+        "goal": "smallest useful working interpretation of the user's request, not an exhaustive application",
+        "required": "explicit requested outcomes and constraints, plus the controls needed to make those outcomes work",
+        "choices": "unspecified fields, layout, navigation and detail level are model design choices, not missing user requirements",
+        "quality": "simplicity, richness and polish are non-blocking review dimensions unless explicitly requested or necessary for usability",
+        "clarification": "ask about ambiguity that changes the primary outcome or authority; leave reversible design choices to a working first prototype and human review",
+        "limits": "do not add screens or requirements to fill the output budget; do not omit explicit outcomes to minimize output",
+    },
     "executable_now": [
         "collection browsing, selection and detail disclosure",
         "supported local CRUD, search, filters and field validation",

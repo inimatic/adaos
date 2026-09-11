@@ -320,7 +320,7 @@ def _extract_operations(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     operations: list[dict[str, Any]] = []
     jobs: list[dict[str, Any]] = []
-    seen_operations: set[str] = set()
+    seen_operations: set[tuple[str, str]] = set()
     for clause, clause_start, _clause_end in _clauses(statement):
         authoring_spans = _authoring_spans(clause)
         operation_exclusion_spans = [
@@ -330,9 +330,8 @@ def _extract_operations(
         mentions = _operation_mentions(clause, operation_exclusion_spans)
         if not mentions:
             continue
-        for job_statement, job_start, job_end in _atomic_job_spans(
-            clause, mentions, authoring_spans
-        ):
+        job_spans = _atomic_job_spans(clause, mentions, authoring_spans)
+        for job_statement, job_start, job_end in job_spans:
             jobs.append(
                 {
                     "id": f"job:{len(jobs) + 1:02d}",
@@ -344,23 +343,20 @@ def _extract_operations(
                     "confidence": 0.95,
                 }
             )
-        for kind, _pattern in _OPERATION_PATTERNS:
-            match = next(
-                (candidate for candidate_kind, candidate in mentions if candidate_kind == kind),
-                None,
-            )
-            if match is None:
+        for (kind, match), (job_statement, job_start, job_end) in zip(mentions, job_spans, strict=True):
+            identity = (kind, job_statement)
+            if identity in seen_operations:
                 continue
-            if kind in seen_operations:
-                continue
-            seen_operations.add(kind)
-            operation_start = clause_start + match.start()
-            operation_end = clause_start + match.end()
+            seen_operations.add(identity)
+            kind_count = sum(item["kind"] == kind for item in operations)
+            operation_start = clause_start + job_start
+            operation_end = clause_start + job_end
             operations.append(
                 {
-                    "id": f"operation:{kind}",
+                    "id": f"operation:{kind}" + (f":{kind_count + 1}" if kind_count else ""),
                     "kind": kind,
-                    "statement": match.group(0),
+                    "statement": job_statement,
+                    "source_clause": clause,
                     "target": _knowledge("unknown"),
                     "effect_scope": "read" if kind in _READ_OPERATIONS else "prototype",
                     "authority": "allowed" if kind in _READ_OPERATIONS else "unknown",

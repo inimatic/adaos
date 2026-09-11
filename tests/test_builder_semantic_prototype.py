@@ -1660,6 +1660,43 @@ def test_semantic_v2_provider_candidate_compiles_through_public_sdk() -> None:
     )
 
 
+def test_generation_guidance_matches_capacity_and_executable_state_contract() -> None:
+    from adaos.services.builder.semantic_prototype import semantic_prototype_generation_guidance, semantic_prototype_contract
+    from adaos.services.builder.prototype_contracts import STATE_PROOF_RULES
+    guidance = semantic_prototype_generation_guidance()
+    candidate = semantic_prototype_candidate_contract(version="v2")
+    canonical = semantic_prototype_contract(version="v2")
+    for group in ("resources", "relationships", "views", "commands"):
+        assert guidance["limits"][group]["maxItems"] == canonical["properties"][group]["maxItems"]
+    assert set(guidance["state_proofs"]) == set(candidate["$defs"]["stateProof"]["properties"]["kind"]["enum"]) == set(STATE_PROOF_RULES)
+    assert "array" in guidance["fixture_values"]["attachments"]
+    assert "record.id" in guidance["relationships"]
+
+
+def test_candidate_capacity_is_enforced_after_provider_projection() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    candidate["resources"] = candidate["resources"] * 5
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert caught.value.findings[0]["code"] == "semantic.candidate_bounds"
+    assert caught.value.findings[0]["path"] == "$.resources"
+
+
+def test_query_empty_proof_has_no_records_and_requires_a_reachable_filter() -> None:
+    brief, semantic = _multi_resource_fixture()
+    view = semantic["views"][0]
+    view["query_controls"] = [{"id": "title-filter", "kind": "filter", "field_ref": "title", "label": _text("filter.title", "Title", "Название")}]
+    state = semantic["representative_states"][0]
+    state["proof"] = {"kind": "query_empty", "visible_field_refs": ["title"]}
+    state["filters"] = [{"field_ref": "title", "operator": "eq", "value": "No matching record"}]
+    result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    assert result["representative_state_checks"][0]["proof"]["kind"] == "query_empty"
+    view["query_controls"] = []
+    with pytest.raises(BuilderWorkflowError, match="matching equality filter controls"):
+        compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+
+
 def test_semantic_v2_rejects_state_proof_for_hidden_fields() -> None:
     brief, semantic = _multi_resource_fixture()
     semantic["representative_states"][0]["proof"] = {
@@ -1913,6 +1950,18 @@ def test_semantic_v2_reports_broken_relationship_fixture() -> None:
     assert "semantic.relationship_target_missing" in {
         item["code"] for item in captured.value.findings
     }
+
+
+@pytest.mark.parametrize("key", ["from_resource_ref", "to_resource_ref", "from_field_ref", "to_field_ref"])
+def test_semantic_v2_reports_missing_relationship_reference_before_normalizing(key: str) -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    candidate["relationships"][0][key] = "missing"
+    with pytest.raises(BuilderWorkflowError) as captured:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert any(item["code"] == "semantic.relationship_reference_missing"
+               and item["path"] == f"$.relationships[0].{key}"
+               for item in captured.value.findings)
 
 
 def _automation_requirement(requirement_ref: str) -> dict:

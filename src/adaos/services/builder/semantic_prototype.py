@@ -15,8 +15,9 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from adaos.services.ui_capabilities import validate_webui_capabilities
 
-from .prototype_context import prototype_state_requirements
+from .prototype_context import prototype_state_requirements, prototype_requirement_inventory
 from .prototype_stage import automation_obligations
+from .prototype_contracts import STATE_PROOF_RULES
 from .workflow import BuilderWorkflowError
 
 
@@ -318,25 +319,7 @@ def _normalize_candidate_choice_fixtures(
 
 
 def _brief_requirement_ids(brief: Mapping[str, Any]) -> set[str]:
-    result: set[str] = set()
-    for key in (
-        "principal_jobs",
-        "residual_requirements",
-        "information_requirements",
-        "collection_requirements",
-        "operations",
-    ):
-        result.update(
-            str(item.get("id") or "")
-            for item in brief.get(key) or []
-            if isinstance(item, Mapping) and str(item.get("id") or "")
-        )
-    result.update(
-        str(item["id"])
-        for item in prototype_state_requirements(brief)
-        if str(item.get("id") or "")
-    )
-    return result
+    return {item["id"] for item in prototype_requirement_inventory(brief)}
 
 
 def _semantic_refs(
@@ -785,6 +768,41 @@ def semantic_prototype_provider_contract(*, version: str = "v1") -> dict[str, An
 
     project(contract)
     return contract
+
+
+def semantic_prototype_generation_guidance() -> dict[str, Any]:
+    contract = semantic_prototype_candidate_contract(version="v2")
+    return {
+        "contract": SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA,
+        "limits": {
+            key: {name: value for name, value in descriptor.items() if name in {"minItems", "maxItems"}}
+            for key, descriptor in contract["properties"].items() if descriptor.get("type") == "array"
+        },
+        "records_per_resource": contract["$defs"]["resource"]["properties"]["records"]["maxItems"],
+        "fixture_values": {
+            "attachment": "one string reference, or null when optional; never an array",
+            "attachments": "array of string references, [] when empty; never a scalar string",
+            "multi_choice": "unique array of option.value; never labels",
+            "choice": "one option.value; never a translated label",
+            "record_order": "values follow fields order exactly; include each field once",
+        },
+        "relationships": contract["$defs"]["relationship"]["properties"]["to_field_ref"]["description"],
+        "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
+        "state_rules": "Every proof belongs to a collection view. min_items=1 means at least one matching fixture. query_empty needs literal equality predicates addressable by that view's filter controls. Empty proofs need an explicit empty_state. Predicate fields must be visible. A required quantity is not proof of achieved quantity; show an explicit illustrative result when business computation is pending.",
+        "interactions": "Reuse local CRUD, selectors, query controls, confirmation and field guards. Commands belong to an editor; each resource needs its own collection. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure.",
+    }
+
+
+def _validate_candidate_bounds(candidate: Mapping[str, Any]) -> None:
+    # Provider projection omits these keywords; Core still enforces authoring limits.
+    errors = _validator("builder.semantic_prototype_candidate.v2.schema.json").iter_errors(candidate)
+    findings = [
+        {"code": "semantic.candidate_bounds", "path": "$" + "".join(f"[{part}]" if isinstance(part, int) else f".{part}" for part in error.absolute_path),
+         "detail": f"{error.validator}={error.validator_value}, actual length={len(error.instance)}"}
+        for error in errors if error.validator in {"minItems", "maxItems", "maxLength", "uniqueItems"}
+    ]
+    if findings:
+        raise SemanticPrototypeValidationError(findings)
 
 
 def _field_entries(
@@ -2089,6 +2107,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
         _fail(f"{exc.message}{suffix}")
 
     resources = [dict(item) for item in candidate.get("resources") or []]
+    _validate_candidate_bounds(candidate)
     if not resources:
         _fail("candidate requires at least one resource")
     raw_views = [dict(item) for item in candidate.get("views") or []]
@@ -2307,12 +2326,27 @@ def _canonicalize_semantic_prototype_candidate_v2(
         to_resource_id = str(normalized_relationship["to_resource_ref"])
         from_field_id = str(normalized_relationship["from_field_ref"])
         to_field_id = str(normalized_relationship["to_field_ref"])
-        from_resource = next(
-            item for item in normalized_resources if item["id"] == from_resource_id
-        )
-        to_resource = next(
-            item for item in normalized_resources if item["id"] == to_resource_id
-        )
+        resources_by_id = {item["id"]: item for item in normalized_resources}
+        reference_findings = []
+        for side, resource_id, field_id in (
+            ("from", from_resource_id, from_field_id), ("to", to_resource_id, to_field_id),
+        ):
+            resource = resources_by_id.get(resource_id)
+            field_exists = resource is not None and (
+                (side == "to" and field_id == "id")
+                or any(field["id"] == field_id for field in resource["fields"])
+            )
+            if resource is None or not field_exists:
+                key = f"{side}_{'resource' if resource is None else 'field'}_ref"
+                reference_findings.append({
+                    "code": "semantic.relationship_reference_missing",
+                    "path": f"$.relationships[{len(normalized_relationships)}].{key}",
+                    "detail": f"relationship {normalized_relationship['id']} references missing {key}: {normalized_relationship[key]}",
+                })
+        if reference_findings:
+            raise SemanticPrototypeValidationError(reference_findings)
+        from_resource = resources_by_id[from_resource_id]
+        to_resource = resources_by_id[to_resource_id]
         target_id_map = record_ids_by_resource.get(to_resource_id, {})
         target_ids = {
             **target_id_map,
@@ -2954,30 +2988,28 @@ def _validate_semantic_prototype_v2(
             if field_ref
         }
         proof_kind = str(proof["kind"])
-        if proof_kind == "collection_empty":
-            if filters or int(state["min_items"]) != 0 or state.get("max_items") != 0:
-                _fail(
-                    f"representative state {state['id']!r} collection_empty proof "
-                    "requires filters=[], min_items=0, and max_items=0"
-                )
-        elif proof_kind == "collection_items":
-            if int(state["min_items"]) < 1:
-                _fail(
-                    f"representative state {state['id']!r} collection_items proof "
-                    "requires min_items>=1"
-                )
-        else:
-            if not filters or int(state["min_items"]) < 1:
-                _fail(
-                    f"representative state {state['id']!r} field_predicate proof "
-                    "requires filters and min_items>=1"
-                )
+        rule = STATE_PROOF_RULES[proof_kind]
+        if ((rule["filters"] == "none" and filters)
+            or (rule["filters"] == "required" and not filters)
+            or int(state["min_items"]) < rule["min_items"]
+            or ("max_items" in rule and (state.get("max_items") != rule["max_items"] or state["min_items"] != rule["min_items"]))):
+            _fail(f"representative state {state['id']!r} {proof_kind} proof requires {rule}")
+        if rule.get("visible_predicates"):
             missing_visible = sorted(predicate_fields - visible_fields)
             if missing_visible:
                 _fail(
                     f"representative state {state['id']!r} does not expose "
                     f"predicate fields {missing_visible}"
                 )
+        if rule.get("query_controls"):
+            control_fields = {
+                str(control.get("field_ref")) for control in view.get("query_controls") or []
+                if control.get("kind") == "filter"
+            }
+            if not predicate_fields.issubset(control_fields) or any(
+                item["operator"] != "eq" or item.get("compare_field_ref") for item in filters
+            ):
+                _fail(f"representative state {state['id']!r} query_empty requires matching equality filter controls")
 
     query_controls = {
         str(control["id"]): dict(control)

@@ -1547,6 +1547,39 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
 
     adapter_id = "sdk.v1"
 
+    def execute(self, step_type: str, inputs: Mapping[str, Any], context: Mapping[str, Any]) -> Mapping[str, Any]:
+        result = dict(super().execute(step_type, inputs, context))
+        if step_type == "scenario.validate" and result.get("ok") and context.get("retain_test_projects"):
+            result["review_preview"] = self._prepare_review_preview(result["scenario_id"], context)
+        return result
+
+    def _prepare_review_preview(self, scenario_id: str, context: Mapping[str, Any]) -> dict[str, Any]:
+        from adaos.sdk.builder import preview
+        from adaos.services.agent_context import get_ctx
+
+        if os.getenv("ENV_TYPE", "").strip().lower() != "dev":
+            raise BuilderE2EError("retained test previews require ENV_TYPE=dev")
+        creation = next((item for item in context["outputs"].values()
+                         if item.get("scenario_id") == scenario_id and item.get("draft_id")), None)
+        if creation is None:
+            raise BuilderE2EError("test preview must belong to this run's created draft")
+        root = Path(get_ctx().paths.dev_scenarios_dir()).resolve()
+        scenario_root = (root / scenario_id).resolve()
+        if scenario_root.parent != root:
+            raise BuilderE2EError("invalid retained test scenario path")
+        revision = (scenario_root / "ui_revisions" / "current.txt").read_text(encoding="utf-8").strip()
+        webspace_id = str(dict(creation.get("dev_runtime_refresh") or {}).get("webspace_id") or "")
+        if not webspace_id:
+            raise BuilderE2EError("created draft has no explicit preview webspace")
+        owner = preview.ensure_dev_webspace_via_owner(scenario_id, requested_id=webspace_id)
+        if not (owner.get("ok") and owner.get("accepted") and owner.get("source_mode") == "dev" and owner.get("webspace_id") == webspace_id):
+            raise BuilderE2EError("retained preview owner did not acknowledge development scope")
+        materialized = preview.materialize_revision_via_owner(webspace_id, scenario_id=scenario_id, revision=revision)
+        if not materialized.get("ok"):
+            raise BuilderE2EError("retained test preview materialization failed")
+        return {"webspace_id": webspace_id, "scenario_id": scenario_id, "revision": revision,
+                "stage": "prototype", "test": True, "owner": owner, "materialization": materialized}
+
     def _chat(
         self, inputs: Mapping[str, Any], context: Mapping[str, Any]
     ) -> Mapping[str, Any]:
@@ -1842,6 +1875,13 @@ class BuilderE2ERunner:
         self.output_root = Path(output_root).expanduser().resolve()
         self.bundle_dir = self.output_root / self.run_id
         self.resume = bool(resume)
+        self.retain_test_projects = bool(defaults.get("retain_test_projects", False))
+        if self.retain_test_projects and (os.getenv("ENV_TYPE", "").strip().lower() != "dev"
+                                         or self.loaded.suite["cohort"] != "development"):
+            raise BuilderE2EError("retained test projects require a development suite and ENV_TYPE=dev")
+        self.review_date = stamp[:8]
+        if self.resume and (self.bundle_dir / "run.json").is_file():
+            self.review_date = str(_load_document(self.bundle_dir / "run.json")["started_at"]).replace("-", "")[:8]
         self.progress = progress
         self.case_ids = tuple(str(item) for item in case_ids if str(item))
         self.tags = tuple(str(item) for item in tags if str(item))
@@ -2005,9 +2045,12 @@ class BuilderE2ERunner:
             "repetition": repetition,
         }
         case_instance_id = "e2e" + _digest(instance_seed).removeprefix("sha256:")[:12]
+        if self.retain_test_projects:
+            case_instance_id = f"[TEST]-{self.review_date}-{case_instance_id}"
         context: dict[str, Any] = {
             "run_id": self.run_id,
             "case_instance_id": case_instance_id,
+            "retain_test_projects": self.retain_test_projects,
             "case_id": case["case_id"],
             "repetition": repetition,
             "locale": case["locale"],
@@ -2395,11 +2438,20 @@ class BuilderE2ERunner:
             input_attribution=input_attribution,
         )
 
-        cleanup: Mapping[str, Any] | None = None
+        cleanup: Mapping[str, Any] | None = (
+            {
+                "status": "retained_for_review", "test": True, "stage": "prototype",
+                "name_suffix": context["case_instance_id"],
+                "owned_artifacts": context.get("owned_artifacts", []),
+                "previews": [output["review_preview"] for output in full_outputs
+                             if output.get("review_preview")],
+                "acceptance": "not_approved",
+            } if self.retain_test_projects else None
+        )
         cleanup_options = dict(case.get("cleanup") or {})
         cleanup_policy = str(cleanup_options.get("policy") or "never")
         retain_failure = bool(cleanup_options.get("retain_on_failure"))
-        should_cleanup = not (retain_failure and status != "passed") and (
+        should_cleanup = not self.retain_test_projects and not (retain_failure and status != "passed") and (
             cleanup_policy == "always"
             or (cleanup_policy == "on-success" and status == "passed")
         )
@@ -2539,6 +2591,9 @@ class BuilderE2ERunner:
                 "generation_contract": self.generation_contract,
                 "repetitions": self.repetitions,
                 "browser": self.browser,
+                "review": {"retain_test_projects": self.retain_test_projects,
+                           "date": self.review_date if self.retain_test_projects else None,
+                           "stage": "prototype", "publication": "none"},
                 "evaluation": {
                     "prototype_grader": {
                         "kind": "model",
@@ -2599,6 +2654,7 @@ class BuilderE2ERunner:
                 "repetitions",
                 "browser",
                 "evaluation",
+                "review",
                 "cases",
                 "selection",
                 "input_attribution",

@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "10"
+PROTOTYPE_GRADER_VERSION = "11"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -98,6 +98,16 @@ matching the requested outcome. Cite both. This means demonstrated and deferred,
 NOT implemented or safe for real use. Never treat a fixture status as computed.
 Supported CRUD, selection, detail disclosure, search, filters and field validation
 still require working declarative controls; an obligation cannot excuse their absence.
+Evaluate a minimum useful working interpretation, not an exhaustive imagined product.
+The user request is normally shorter than a design specification. Unspecified layout,
+field counts, screen counts, workflow detail and visual richness are design choices,
+not missing requirements. A simple working design and a richer working design can both
+pass. Do not demand an automatic optimizer, a dashboard or a specific component when
+a simpler interactive path satisfies the requested outcome. Judge explicit requested
+outcomes and the controls necessary for them, not hypothetical professional features.
+Do not add obligations from common domain conventions. Rubric acceptance clarifies the
+user request; it must not silently enlarge it. Detail and polish belong to separate
+human quality review and cannot compensate for broken controls or block a working path.
 Silently omitted requirements, unsupported claims and bare capability gaps fail.
 For prohibited real-world behavior, an explicitly disclosed unimplemented rule with
 an acceptance test and visible conflict/failure example is not a claim of safety;
@@ -472,7 +482,7 @@ def grade_builder_prototype(
                 }
             },
             request_id=request_id,
-            prompt_cache_key="adaos-builder-e2e-prototype-grader-v9",
+            prompt_cache_key=f"adaos-builder-e2e-prototype-grader-v{PROTOTYPE_GRADER_VERSION}",
             timeout=min(15.0, timeout_seconds),
         )
     )

@@ -5,9 +5,28 @@ description: Visible development case for search, facets, documents, and detail 
 locale: en
 tags: [visible, knowledge, search]
 requirements:
-  primary_jobs: [find article, inspect details, add article, revise article]
-  representative_states: [empty library, search results, no results, archived article]
-prohibited_assumptions: [archived content is editable, every attachment can be previewed]
+  primary_jobs:
+    - statement: find article
+      acceptance: Working word search and topic, owner and status filters expose matching articles.
+    - statement: inspect details
+      acceptance: Selecting an article reveals its formatted content and attachments while retaining the search surface or state.
+      exclusions: [Every attachment format need not have an embedded preview.]
+    - statement: add article
+      acceptance: A create action saves a draft from entered article values.
+    - statement: revise and publish article
+      acceptance: An existing draft can be edited, saved and changed to published with executable actions.
+  representative_states:
+    - statement: empty library
+      acceptance: An empty-library state is renderable.
+    - statement: search results
+      acceptance: Matching article fixtures are accessible through the search surface.
+    - statement: no results
+      acceptance: A query can show no matching records with a visible empty-results message.
+    - statement: archived read-only article
+      acceptance: An archived article is visibly inspectable without an enabled mutation path for that article.
+prohibited_assumptions:
+  - statement: archived content is editable
+    acceptance: An executable mutation path for an archived article violates the requested read-only state. Editing an active draft is unrelated.
 steps:
   - id: create
     type: builder.chat

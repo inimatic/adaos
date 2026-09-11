@@ -105,6 +105,66 @@ be able to:
 The objective is not one-shot generation. It is the minimum effective sequence
 of deterministic and model-assisted steps for the request at hand.
 
+### Minimum Working Interpretation
+
+A short user request is not a complete implementation specification. Builder
+may choose a simple or richer design without treating unspecified detail as
+missing requirements. The first objective is a useful, executable Prototype,
+not the most detailed application that fits the output budget.
+
+Acceptance and quality review are separate:
+
+- Acceptance checks explicit requested outcomes and constraints, the controls
+  necessary to make them work, supported runtime behavior and honest stage
+  disclosures. Broken controls and silently omitted requested behavior fail.
+- Quality review discusses relevance, simplicity, richness, density, polish
+  and alternative design choices. These do not block acceptance unless the
+  request explicitly makes them necessary or a defect prevents actual use.
+- An evaluator must not invent domain conventions, extra screens, exact field
+  counts, automatic optimization or a preferred component as acceptance criteria.
+  Every mandatory product criterion must be traceable to the request or to a
+  separately declared platform safety/runtime invariant.
+- Material ambiguity affecting the primary outcome or authority can require
+  clarification. Reversible layout and detail choices should normally reach
+  a working first Prototype for human review, not an exhaustive questionnaire.
+
+User acceptance of the interpretation is distinct from technical validation.
+Passing technical gates does not prove satisfaction with unspecified design
+choices. Human feedback becomes the next explicit revision request. Future
+requirements discovery and context guidance may increase detail, but are not
+prerequisites for the minimum working Prototype gate. A failed generation must
+be reported as failed, never relabeled as working to promise a guarantee.
+
+### UX Guidance And Feedback Memory
+
+Planned, not a prerequisite for the current small-Prototype correction:
+
+- Platform safety and runtime invariants remain enforced policy. Neither a
+  preference nor an inferred UX convention may override them.
+- Builder may carry a small, versioned, domain-neutral set of UX golden rules
+  as recommendations. Rules describe applicable conditions, rationale and
+  alternatives, not mandatory layouts or additional product functionality.
+  For example, consequential cancellation may warrant confirmation or an
+  undo path; a harmless reversible change need not gain another dialog.
+- Project requirements remain explicit and attributable. A user-requested
+  confirmation is mandatory even when confirmation is otherwise only guidance.
+- Feedback can propose project-scoped preferences. Reuse across applications
+  requires user confirmation of the wider scope; a one-off correction must
+  not become a global rule. Do not infer private user preferences from external
+  Dev Tickets or other publishers' examples.
+- Each reusable preference records source feedback, owner/scope, applicability,
+  confidence, confirmation state, version and supersession/deletion. The user
+  can inspect, correct and forget it. New explicit instructions override older
+  preferences; unresolved material conflicts are surfaced, not silently merged.
+- Context includes only relevant, attributed recommendations. Keep the small
+  stable rule catalog cacheable and retrieve scoped preferences separately.
+  Record what influenced generation. No mutable user memory may leak into a
+  clean evaluation cohort or its mandatory rubric.
+
+Golden rules are promoted by reviewed cross-domain evidence, not by one failed
+generation. Optional quality evaluation and human feedback measure their effect
+on usability, added interactions, cost and latency before broad adoption.
+
 ## Architectural Constraints
 
 1. **The user contract is outcome-oriented.** Internal phase names, ABI paths,

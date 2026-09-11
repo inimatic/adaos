@@ -11,12 +11,16 @@ requirements:
     - statement: fill shift
       acceptance: An executable create-assignment path lets the coordinator choose a shift and a volunteer.
       exclusions: [Overlap prevention is graded separately.]
+    - statement: remove a person from a shift
+      acceptance: An executable action removes the selected assignment without deleting the volunteer from the roster.
     - statement: contact volunteer
       acceptance: Contact fields are absent from the volunteer collection and available in a selected volunteer details surface.
       exclusions: [A persisted reveal flag or contact mutation is not required.]
     - statement: find coverage gap
       acceptance: A visible per-shift gap, remaining-capacity, or coverage-status value is sufficient; an aggregate dashboard is not required.
   representative_states:
+    - statement: no volunteers
+      acceptance: An explicit empty-volunteer collection state is renderable.
     - statement: unfilled shifts
       acceptance: At least one visible shift fixture explicitly has an unfilled or coverage-gap state.
       exclusions: [An empty assignment collection alone is insufficient.]

@@ -322,7 +322,7 @@
       "additionalProperties": false,
       "required": ["kind", "visible_field_refs"],
       "properties": {
-        "kind": { "enum": ["collection_empty", "collection_items", "field_predicate"] },
+        "kind": { "enum": ["collection_empty", "collection_items", "field_predicate", "query_empty"] },
         "visible_field_refs": {
           "type": "array",
           "maxItems": 8,

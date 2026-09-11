@@ -105,6 +105,8 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
         assert "Acceptance stage is PROTOTYPE" in messages[0]["content"]
         assert "an obligation cannot excuse their absence" in messages[0]["content"]
         assert "Do not broaden one mutation into all mutations" in messages[0]["content"]
+        assert "not an exhaustive imagined product" in messages[0]["content"]
+        assert "cannot compensate for broken controls or block a working path" in messages[0]["content"]
         payload = json.loads(messages[1]["content"])
         assert payload["evidence_pointers"] == ["/ui", "/ui/control"]
         assert payload["rubric"]["primary_jobs"] == [
@@ -128,7 +130,7 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
             "unclear",
         ]
         assert "Mere absence is not uncertainty" in messages[0]["content"]
-        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v9"
+        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v11"
         return {"job_id": "job-1", "_client": {"base_url": "https://root"}}
 
     def wait(job_id, **kwargs):

@@ -374,6 +374,23 @@ as sufficient evidence and keep independent concerns separate, but it cannot
 enter Builder generation, capability retrieval, repair, or routing. This
 allows precise evaluation without teaching the candidate the held-out answer.
 
+The minimum-working policy in grader v11 makes unspecified detail a design
+choice, not a missing requirement. Mandatory rubric items must be attributable
+to the user request or separately declared platform invariants. For example,
+an unsolicited confirmation dialog is UX guidance, whereas explicitly requested
+confirmation is a requirement. Simple and richer working interpretations may
+both pass. Design richness and polish belong to separate human quality review,
+not a hidden score threshold. The eight visible rubrics are corrected without
+changing their user prompts; comparison to older rubric versions is diagnostic,
+not a matched baseline comparison.
+
+Calibration must include valid simple/richer alternatives and broken-control
+negative probes. Agent-authored probes are engineering regression evidence,
+not user-labeled gold data or proof of grader accuracy. User review remains
+necessary for ambiguous interpretations. This follows the recommendation to
+calibrate automated evaluation with human feedback in
+[OpenAI evaluation best practices](https://developers.openai.com/api/docs/guides/evaluation-best-practices).
+
 The visible development suite now contains eight ordinary EN/RU archetype
 cases. They contain no component IDs, recipe names, AdaOS paths, or internal
 implementation phases. A `builder.wait` step binds to the case webspace and,

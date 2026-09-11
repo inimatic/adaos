@@ -6,6 +6,17 @@
   "additionalProperties": false,
   "required": ["schema", "run_id", "suite", "adapter", "profile", "cases", "environment", "input_attribution", "started_at"],
   "properties": {
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["retain_test_projects", "date", "stage", "publication"],
+      "properties": {
+        "retain_test_projects": {"type": "boolean"},
+        "date": {"type": ["string", "null"], "pattern": "^[0-9]{8}$"},
+        "stage": {"const": "prototype"},
+        "publication": {"const": "none"}
+      }
+    },
     "schema": {"const": "adaos.builder.e2e_run.v1"},
     "run_id": {"type": "string", "minLength": 1, "maxLength": 160},
     "suite": {"type": "object", "required": ["suite_id", "version", "digest", "cohort"]},

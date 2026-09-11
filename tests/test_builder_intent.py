@@ -83,6 +83,7 @@ def test_brief_preserves_ru_operations_after_authoring_prefix_in_same_clause() -
         "create",
         "assign",
         "transition",
+        "transition",
     ]
     assert [item["statement"] for item in brief["principal_jobs"]] == [
         "для учета заявок: добавлять",
@@ -276,7 +277,7 @@ def test_public_builder_sdk_exposes_brief_compilation() -> None:
     captured = intent_sdk.capture("List entries and filter them.", locale="en")
     brief = intent_sdk.compile_brief(captured)
 
-    assert [item["kind"] for item in brief["operations"]] == ["filter", "list"]
+    assert [item["kind"] for item in brief["operations"]] == ["list", "filter"]
     assert brief["constraints"]["locale"]["value"] == "en"
 
 

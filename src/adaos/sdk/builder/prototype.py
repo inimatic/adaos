@@ -163,6 +163,12 @@ def semantic_provider_contract(*, version: str = "v1") -> dict[str, Any]:
     return semantic_prototype_provider_contract(version=version)
 
 
+def semantic_generation_guidance() -> dict[str, Any]:
+    """Return versioned generic invariants from the executable Core contracts."""
+    from adaos.services.builder.semantic_prototype import semantic_prototype_generation_guidance
+    return semantic_prototype_generation_guidance()
+
+
 def start_data_runtime(definition: Mapping[str, Any]):
     from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
 
@@ -228,6 +234,7 @@ __all__ = [
     "normalize_semantic_candidate",
     "semantic_candidate_contract",
     "semantic_contract",
+    "semantic_generation_guidance",
     "semantic_provider_contract",
     "start_data_runtime",
     "submit_request",

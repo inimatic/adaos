@@ -57,12 +57,13 @@
         "type": "object",
         "additionalProperties": false,
         "required": ["id", "kind", "statement", "target", "effect_scope", "authority", "evidence"],
-        "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "kind": {
-            "enum": ["list", "inspect", "search", "filter", "sort", "create", "update", "assign", "transition", "delete", "archive", "other"]
-          },
-          "statement": { "type": "string", "minLength": 1 },
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "kind": {
+              "enum": ["list", "inspect", "search", "filter", "sort", "create", "update", "assign", "transition", "delete", "archive", "other"]
+            },
+            "statement": { "type": "string", "minLength": 1 },
+            "source_clause": { "type": "string", "minLength": 1 },
           "target": { "$ref": "#/$defs/knowledgeField" },
           "effect_scope": { "enum": ["read", "prototype", "external", "unknown"] },
           "authority": { "enum": ["allowed", "denied", "unknown"] },

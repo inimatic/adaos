@@ -35,11 +35,14 @@ contract consistency, generation context and minimal visibility in existing Buil
 
 ### Current Iteration Checklist
 
-- [ ] `[must]` Calibrate the eight development archetypes' outcome/state/exclusion
+- [x] `[must]` Separate minimum-working acceptance from non-blocking design
+  quality. Unspecified richness, screen count and domain conventions must not
+  become mandatory criteria; preserve explicit outcomes and runtime invariants.
+- [x] `[must]` Calibrate the eight development archetypes' outcome/state/exclusion
   criteria against exact user requests; retain positive and negative grader probes.
-- [ ] `[must]` Align candidate/canonical capacity, attachment, relationship and
+- [x] `[must]` Align candidate/canonical capacity, attachment, relationship and
   representative-state contracts with cross-domain executable regression tests.
-- [ ] `[must]` Supply an exact required-reference inventory, contextual operations
+- [x] `[must]` Supply an exact required-reference inventory, contextual operations
   and an executable-contract-derived invariant catalog to generation and repair.
 - [ ] `[must]` Retain dev-only test applications in Builder with searchable
   `[TEST]` and date/unique suffix; prepare the exact revision's owner-managed preview.
@@ -681,6 +684,34 @@ Targets may change only from retained matched evaluation, not timeout tuning.
 
 ## R8. Evaluation, Browser Review, And User Experience
 
+Current correction evidence (2026-09-11): the eight visible rubrics now trace
+mandatory outcomes to their original user turns. Unrequested status confirmation,
+role systems, automatic slot optimization and production aggregation were removed
+from the Prototype gate; requested cancellation confirmation, read-only state and
+conditional comment checks remain required. User prompts are unchanged.
+
+Grader v11 live calibration at
+`e2e/artifacts/builder/grader-minimum-v11-20260911-02` agreed with all four
+engineering labels: minimal and richer browse passed, executable update passed,
+missing update failed. Both full requests and grades are retained. This checks a
+narrow acceptance boundary, not general accuracy or user satisfaction. An earlier
+`-01` attempt used pytest's temporary node identity and was denied before model
+execution; live probes now require an explicitly configured enrolled dev node.
+Reproduce with `ADAOS_E2E_LIVE_GRADER=1`, `ADAOS_E2E_LIVE_BASE_DIR=<node base>`,
+and a fresh `ADAOS_E2E_CALIBRATION_OUTPUT`, then run
+`pytest tests/test_builder_e2e_grader_calibration.py`. Offline, four fixture checks
+run and the live probes are skipped.
+
+Local verification before the GPT-5 cohort: 128 context/compiler/runner/grader
+tests and 278 DEV Builder tests pass. Candidate capacity follows the existing
+canonical limits (8 resources, 16 relationships/views, 24 commands); generation
+guidance is derived from that ABI, not separate prompt constants. Exact record
+identity and attachment value forms are explained; missing relationship refs
+produce typed findings. A `query_empty` proof requires zero matching fixtures
+and an exposed matching filter. Repeated operations retain their object-bearing
+source clause instead of collapsing into one bare verb. All of these mechanisms
+still need live model and browser outcome measurement below.
+
 Stage-boundary correction (2026-09-11):
 
 - [x] `[must]` Put Prototype versus Automation evidence expectations in the
@@ -842,6 +873,19 @@ This is development evidence, not a clean baseline or a prompt-autonomy pass.
   one weighted score hide a hard-gate failure.
 - [ ] `[should]` Capture sanitized failure patterns and accepted fixes as an
   evaluation corpus; promotion into generic rules requires cross-domain proof.
+- [ ] `[should]` After the minimum-working gate, curate a small versioned set of
+  domain-neutral UX golden rules as recommendations with applicability,
+  rationale and alternatives. Keep explicit user requirements and enforced
+  platform safety policy separate from optional UX quality preferences.
+- [ ] `[should]` Evaluate rules on paired simple/richer prototypes and user
+  reviews; measure usefulness and interaction cost, not just detail counts.
+  An unsolicited convention must not become a hidden mandatory grader item.
+- [ ] `[could]` Add inspectable project-scoped feedback memory with provenance,
+  confirmation, supersession and forgetting. Require confirmation before reuse
+  across applications; isolate users/subnets and keep evaluation cohorts clean.
+- [ ] `[could]` Retrieve relevant confirmed preferences by stage and request,
+  with attribution and token accounting, instead of appending all feedback to
+  every generation prompt. Report conflicts with current explicit instructions.
 - [ ] `[could]` Compare two design candidates only for high-value ambiguous
   layout decisions and within an explicit additional budget.
 

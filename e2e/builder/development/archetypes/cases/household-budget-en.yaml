@@ -5,9 +5,31 @@ description: Visible development case for money, computed values, and period com
 locale: en
 tags: [visible, finance, dashboard]
 requirements:
-  primary_jobs: [record transaction, review monthly balance, compare categories, track limits]
-  representative_states: [new month, within budget, over budget]
-prohibited_assumptions: [currency can be omitted, totals may be hard-coded]
+  primary_jobs:
+    - statement: record transaction
+      acceptance: An accessible editor saves income or expense with date, category, person, amount, currency and note.
+    - statement: review balance and category totals
+      acceptance: Visible balance and per-category totals use representative data. If not computed, they disclose the simulation and preserve the pending calculation requirement for Automation.
+      exclusions: [Live aggregation is not a Prototype requirement; static totals must not be claimed as computed.]
+    - statement: compare this month with the previous month
+      acceptance: Both months' labeled amounts can be inspected and compared, including their currency.
+      exclusions: [Charts, percentage calculations and a dedicated comparison screen are optional.]
+    - statement: set monthly category limits
+      acceptance: A working editor can save limits associated with a month and category.
+    - statement: see exceeded limits
+      acceptance: A visible over-limit example and pending Automation calculation obligation suffice when the limit comparison is not computed.
+  representative_states:
+    - statement: new month
+      acceptance: An empty new-month state is explicitly renderable.
+    - statement: within budget
+      acceptance: A visible category fixture illustrates spending within its monthly limit.
+    - statement: over budget
+      acceptance: A visible category fixture clearly identifies spending above its limit.
+prohibited_assumptions:
+  - statement: currency can be omitted
+    acceptance: Monetary values requested by the user need visible currency context; a shared currency label is sufficient.
+  - statement: simulated totals are presented as live computed totals
+    acceptance: Disclosed fixtures with a pending calculation obligation are allowed at Prototype stage. A claim of live computation without a matching implementation is a violation.
 steps:
   - id: create
     type: builder.chat

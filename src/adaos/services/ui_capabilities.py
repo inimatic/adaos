@@ -569,11 +569,11 @@ def qualify_ui_request(
         return result
     intent = capture_intent(request)
     prototype_brief = compile_prototype_brief(intent)
-    brief_operation_kinds = [
+    brief_operation_kinds = list(dict.fromkeys(
         str(item.get("kind") or "")
         for item in prototype_brief.get("operations") or []
         if isinstance(item, Mapping) and str(item.get("kind") or "")
-    ]
+    ))
     brief_information_kinds = sorted(
         {
             str(item.get("kind") or "").strip()

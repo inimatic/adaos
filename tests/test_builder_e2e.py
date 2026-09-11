@@ -80,6 +80,7 @@ def _write_suite(
     *,
     cases: list[dict[str, Any]],
     repetitions: int = 1,
+    retain_test_projects: bool = False,
 ) -> Path:
     case_refs: list[str] = []
     for case in cases:
@@ -100,6 +101,7 @@ def _write_suite(
             "generation_contract": "webui.v1",
             "repetitions": repetitions,
             "browser": "off",
+            "retain_test_projects": retain_test_projects,
         },
     }
     path = root / "suite.yaml"
@@ -187,6 +189,71 @@ def test_runner_writes_schema_valid_bundle_and_resolves_step_input(
         == "passed"
     )
     assert len(list((bundle / "cases" / "case-en").glob("*.json"))) == 2
+
+
+@pytest.mark.parametrize("env_type,cohort", [("", "development"), ("prod", "development"), ("dev", "sealed-held-out")])
+def test_retained_projects_require_dev_environment_and_development_cohort(tmp_path, monkeypatch, env_type, cohort):
+    monkeypatch.setenv("ENV_TYPE", env_type)
+    suite = _write_suite(tmp_path / "definitions", cases=[_case()], retain_test_projects=True)
+    document = yaml.safe_load(suite.read_text(encoding="utf-8"))
+    document["cohort"] = cohort
+    suite.write_text(yaml.safe_dump(document), encoding="utf-8")
+    with pytest.raises(BuilderE2EError, match="development suite and ENV_TYPE=dev"):
+        BuilderE2ERunner(suite, output_root=tmp_path / "runs", repo_root=tmp_path,
+                         executor=FixtureExecutor({}))
+
+
+@pytest.mark.parametrize("valid", [True, False])
+def test_retained_projects_are_searchable_and_not_cleaned_or_approved(tmp_path, monkeypatch, valid):
+    monkeypatch.setenv("ENV_TYPE", "dev")
+    case = _case()
+    case["steps"][0]["input"]["text"] = 'Create "Example ${case_instance_id}"'
+    suite = _write_suite(tmp_path / "definitions", cases=[case], retain_test_projects=True)
+    executor = FixtureExecutor({"first": {"ok": True, "result": {"id": "created"}},
+                                "second": {"ok": valid}})
+    report = BuilderE2ERunner(suite, output_root=tmp_path / "runs", repo_root=tmp_path,
+                              run_id="retained", executor=executor).run()
+    manifest = json.loads((Path(report["bundle_dir"]) / "run.json").read_text(encoding="utf-8"))
+    result = json.loads((Path(report["bundle_dir"]) / report["case_results"][0]).read_text(encoding="utf-8"))
+    assert f'[TEST]-{manifest["review"]["date"]}-e2e' in executor.calls[0][1]["text"]
+    assert executor.cleanup_calls == []
+    assert result["cleanup"]["status"] == "retained_for_review"
+    assert result["cleanup"]["acceptance"] == "not_approved"
+    assert result["status"] == ("passed" if valid else "failed")
+    resumed = BuilderE2ERunner(suite, output_root=tmp_path / "runs", repo_root=tmp_path,
+                               run_id="retained", executor=executor, resume=True).run()
+    assert resumed == report
+    assert len(executor.calls) == 2
+
+
+def test_retained_preview_requires_created_draft_and_owner_ack(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from adaos.sdk.builder import preview
+    from adaos.services import agent_context
+
+    monkeypatch.setenv("ENV_TYPE", "dev")
+    revisions = tmp_path / "sample" / "ui_revisions"
+    revisions.mkdir(parents=True)
+    (revisions / "current.txt").write_text("proto-2", encoding="utf-8")
+    monkeypatch.setattr(agent_context, "get_ctx", lambda: SimpleNamespace(
+        paths=SimpleNamespace(dev_scenarios_dir=lambda: tmp_path)))
+    context = {"outputs": {"create": {"scenario_id": "sample", "draft_id": "draft-1",
+               "dev_runtime_refresh": {"webspace_id": "dev-sample"}}}}
+    ack = {"ok": True, "accepted": True, "source_mode": "dev", "webspace_id": "dev-sample"}
+    monkeypatch.setattr(preview, "ensure_dev_webspace_via_owner", lambda *args, **kwargs: ack)
+    materializations = []
+    monkeypatch.setattr(preview, "materialize_revision_via_owner",
+                        lambda *args, **kwargs: materializations.append((args, kwargs)) or {"ok": True})
+    executor = SdkBuilderExecutor(repo_root=tmp_path)
+    result = executor._prepare_review_preview("sample", context)
+    assert result["revision"] == "proto-2"
+    assert materializations[0] == (("dev-sample",), {"scenario_id": "sample", "revision": "proto-2"})
+    ack["source_mode"] = "workspace"
+    with pytest.raises(BuilderE2EError, match="acknowledge development scope"):
+        executor._prepare_review_preview("sample", context)
+    assert len(materializations) == 1
+    with pytest.raises(BuilderE2EError, match="this run's created draft"):
+        executor._prepare_review_preview("unrelated", context)
 
 
 def test_runner_reports_case_and_step_progress_without_changing_results(
@@ -490,7 +557,7 @@ def test_baseline_remains_comparable_across_implementation_commits(
     assert comparison["reasons"] == []
     assert baseline["reference"]["adapter"] == "fixture.v1"
     assert baseline["cohort"]["grader_model"] == "gpt-4.1"
-    assert baseline["cohort"]["grader_version"] == "10"
+    assert baseline["cohort"]["grader_version"] == "11"
 
 
 def test_runner_rejects_undeclared_executor_adapter(tmp_path: Path) -> None:
@@ -637,7 +704,7 @@ def test_runner_injects_case_oracle_only_into_prototype_grade(tmp_path: Path) ->
     assert run_manifest["evaluation"]["prototype_grader"] == {
         "kind": "model",
         "model": "gpt-4.1",
-            "version": "10",
+        "version": "11",
     }
 
 

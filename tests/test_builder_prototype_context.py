@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from adaos.sdk.builder import intent, prototype
+from adaos.services.builder.semantic_prototype import _brief_requirement_ids
 
 
 def test_model_context_keeps_semantics_without_repeating_full_intent() -> None:
@@ -84,3 +85,27 @@ def test_model_context_keeps_residual_requirements_addressable() -> None:
             "statement": "compare this month with the previous month",
         }
     ]
+
+
+def test_context_and_compiler_share_exact_requirement_inventory() -> None:
+    brief = prototype.merge_briefs(
+        intent.compile_brief("Create a new application for a small team."),
+        intent.compile_brief("Edit a request and edit its owner. Search records; show empty results."),
+    )
+    context = prototype.model_context(brief)
+    assert {item["id"] for item in context["required_references"]} == _brief_requirement_ids(brief)
+    edits = [item for item in context["operations"] if item["kind"] == "update"]
+    assert len(edits) == 2
+    assert edits[0]["statement"] != edits[1]["statement"]
+    assert all(item["related_job_refs"] for item in edits)
+    assert all(item["source_clause"] == "Edit a request and edit its owner" for item in edits)
+    assert all(item["target"]["state"] == "unknown" for item in edits)
+
+
+def test_context_preserves_coordinated_operation_context_without_guessing_target() -> None:
+    context = prototype.model_context(intent.compile_brief("Assign or remove a person from a shift."))
+    operations = context["operations"]
+    assert len(operations) == 2
+    assert "person" in operations[0]["source_clause"]
+    assert "shift" in operations[0]["source_clause"]
+    assert operations[0]["target"]["state"] == "unknown"
