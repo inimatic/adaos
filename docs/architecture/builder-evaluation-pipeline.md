@@ -600,8 +600,30 @@ Fresh run `sdk-semantic-v2-20260911-13` completed generation with one call in
 24.3 seconds, using 607 fresh, 2,304 cached, and 3,192 output tokens. Grading
 took 6.25 seconds with 7,497 fresh input and 724 output tokens. All cited
 pointers existed; all four jobs and all three representative states passed.
-The overall score was 0.925, but the hard gate correctly failed on the one
-remaining `unclear` prohibited assumption: a declared overlap-enforcement gap
-is not evidence that the executable assignment path prevents overlap. This is
-the intended distinction between a useful prototype, an honest capability
-gap, and an admitted autonomous pass.
+The historical score was 0.925 and the v9 hard gate failed on overlap
+enforcement. Subsequent stage review found this gate demanded Automation
+evidence at Prototype time. Grader v10 requires a visible demonstration plus
+a structured, disclosed and preserved Automation obligation for such business
+rules; it still rejects missing supported interactions and true platform gaps.
+The old artifacts and verdict remain unchanged; they do not contain the new
+obligation contract and cannot silently become a passing baseline.
+
+### Stage-Aware Review (2026-09-11)
+
+Semantic-v2 generation now has an explicit Prototype acceptance contract.
+`automation_requirements` annotates an existing job/residual binding, rather
+than excusing missing UI contracts. Core preserves the original statement,
+pending status and evidence references through Prototype acceptance into
+Automation request checks. The grader version is part of cohort compatibility.
+
+E2E writers store non-ASCII text directly in UTF-8, including compressed step
+evidence. Existing mutable checkpoints were reformatted without changing JSON
+values. Historical hashed model I/O, reports and evidence remain unchanged;
+provider output strings remain exact, even if the provider itself escaped text.
+
+`e2e/stand/browser/prototype-review.mjs` captures the actual Client at wide and
+compact viewports with scenario identity and browser errors. It requires
+explicit local scope/token and `ENV_TYPE=dev`; prepare the dev webspace through
+the owning runtime before opening it. Its screenshots are evidence, not an
+automatic verdict or a Trial promotion. The dedicated latest-run-only
+`adaos_tests` scenario is planned in R8 of the Builder roadmap.

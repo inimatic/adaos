@@ -102,6 +102,8 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
 
     def submit(messages, **kwargs):
         assert recorded
+        assert "Acceptance stage is PROTOTYPE" in messages[0]["content"]
+        assert "an obligation cannot excuse their absence" in messages[0]["content"]
         assert "Do not broaden one mutation into all mutations" in messages[0]["content"]
         payload = json.loads(messages[1]["content"])
         assert payload["evidence_pointers"] == ["/ui", "/ui/control"]

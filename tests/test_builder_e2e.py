@@ -27,6 +27,27 @@ from adaos.services.builder.llm_input_attribution import (
 )
 
 
+def test_artifact_writers_keep_unicode_readable_in_plain_and_compressed_json(tmp_path) -> None:
+    from adaos.e2e.builder import _compact_step_output, _write_json
+    from adaos.e2e.stand import _json_write
+
+    message = "Конструктор обновил прототип"
+    for writer in (_write_json, _json_write):
+        path = tmp_path / "readable.json"
+        writer(path, {"message": message})
+        assert message in path.read_text(encoding="utf-8")
+        assert "\\u041a" not in path.read_text(encoding="utf-8")
+    value = {"message": message, "payload": message * 4000}
+    summary, relative = _compact_step_output(
+        value, bundle_dir=tmp_path, case_id="unicode", repetition=1, step_id="design"
+    )
+    assert relative
+    raw = gzip.decompress((tmp_path / relative).read_bytes()).decode("utf-8")
+    assert message in raw
+    assert json.loads(raw) == value
+    assert summary["content_bytes"] == len(raw.encode("utf-8"))
+
+
 class FixtureExecutor:
     adapter_id = "fixture.v1"
 
@@ -469,7 +490,7 @@ def test_baseline_remains_comparable_across_implementation_commits(
     assert comparison["reasons"] == []
     assert baseline["reference"]["adapter"] == "fixture.v1"
     assert baseline["cohort"]["grader_model"] == "gpt-4.1"
-    assert baseline["cohort"]["grader_version"] == "9"
+    assert baseline["cohort"]["grader_version"] == "10"
 
 
 def test_runner_rejects_undeclared_executor_adapter(tmp_path: Path) -> None:
@@ -616,7 +637,7 @@ def test_runner_injects_case_oracle_only_into_prototype_grade(tmp_path: Path) ->
     assert run_manifest["evaluation"]["prototype_grader"] == {
         "kind": "model",
         "model": "gpt-4.1",
-            "version": "9",
+            "version": "10",
     }
 
 

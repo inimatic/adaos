@@ -658,16 +658,64 @@ Targets may change only from retained matched evaluation, not timeout tuning.
 
 ## R8. Evaluation, Browser Review, And User Experience
 
+Stage-boundary correction (2026-09-11):
+
+- [x] `[must]` Put Prototype versus Automation evidence expectations in the
+  generation context, semantic-v2 contract, and independent grader v10.
+- [x] `[must]` Preserve pending business-rule/integration requirements with
+  exact Brief references, visible prototype bindings, bilingual disclosure and
+  testable Automation acceptance. Carry them through Prototype acceptance into
+  Automation checks. Do not allow UI-operation deferral or silent omission.
+- [x] `[must]` Write persisted E2E JSON and compressed step evidence as readable
+  UTF-8 (`ensure_ascii=False`). Do not alter historical evidence hashes.
+- [ ] `[must]` Prove obligation closure using executable success/failure tests
+  at Automation/Trial gates; merely copying acceptance text is not enforcement.
+- [ ] `[must]` Measure large-prototype planning separately: dependency graph,
+  stable cross-slice identities, scoped context, resumability, unaffected-binding
+  preservation and integrated browser tasks. Do not infer scalability from one
+  small schema-constrained response.
+- [ ] `[must]` Cover the reusable local CRUD substrate and primitive automation
+  with browser probes: create/select/edit/delete, required fields, confirmation,
+  search/filter, local guard, state update and navigation; report unsupported
+  joins, computed values and cross-record rules separately.
+
+### AdaOS Tests Review Workbench
+
+Decision: plan a dedicated scenario instead of publishing unfinished prototypes
+as ordinary beta applications. Until implemented, review uses retained E2E
+artifacts and explicit development previews. This is not a Trial approval.
+
+- [ ] `[must]` Implement a dev-only `adaos_tests` scenario. Enforce
+  `ENV_TYPE=dev` on the node at creation, listing and opening, not only in Client.
+  No ordinary user desktop icons or marketplace entries.
+- [ ] `[must]` Project only the latest run into the workbench; retain immutable
+  historical run evidence outside that projection. Use a generation/run token
+  and atomic switch so late results from an older run cannot repopulate it.
+  Delete only projection-owned materialization, never a user's development.
+- [ ] `[must]` Show each case's explicit stage, model, run/revision, result,
+  preview, wide/compact screenshots, pending obligations and error diagnosis.
+  A failed or unavailable preview must not silently show a prior revision.
+- [ ] `[must]` Mark samples `test`; add `beta` only after a genuine Trial gate.
+  Capture human verdict and notes against exact source and renderer digests.
+- [ ] `[should]` Add run/baseline comparison, replay of one case, scenario
+  selector and EN/RU switch. Keep launch privileges and budgets node-controlled.
+- [ ] `[could]` Add a bounded screenshot reviewer after deterministic/browser
+  checks and translate renderer shortcomings into owning-layer Dev Tickets.
+
+### Current Evaluation
+
 Evaluation progress (2026-09-11): grader v9 keeps its Structured Output schema
 byte-stable and supplies candidate-specific evidence pointers in the dynamic
 payload instead of embedding them as a schema enum. Rubric entries may carry
 explicit `statement`, `acceptance`, and `exclusions`; the runner injects them
 only after candidate generation, so they cannot leak into Builder context.
 Run `sdk-semantic-v2-20260911-13` cited only existing pointers, supported all
-four primary jobs and all three states, and scored 0.925. The hard gate
-correctly remained red because the runtime exposed no executable overlap guard
-and the candidate declared that capability gap. This is calibrated development
-evidence, not a clean baseline or a prompt-autonomy pass.
+four primary jobs and all three states, and scored 0.925. The historical hard gate
+remained red because it required an executable overlap guard. Review found that
+this mixed Prototype and Automation acceptance. Grader v10 distinguishes a
+demonstrated, disclosed, preserved Automation obligation from a platform gap.
+The old run is not retroactively a pass: it lacks the new structured obligation.
+This is development evidence, not a clean baseline or a prompt-autonomy pass.
 
 - [ ] `[must]` Run R8 evidence through `adaos builder e2e` so local, CI, and
   release evaluation use the same resolved run manifest, stages, graders, and

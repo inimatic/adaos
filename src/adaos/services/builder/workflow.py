@@ -1981,6 +1981,7 @@ class BuilderWorkflowService:
         from adaos.services.builder.prototype_acceptance import (
             admit_prototype_acceptance,
         )
+        from adaos.services.builder.prototype_stage import prototype_automation_requirements
 
         change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
         if change is None:
@@ -2011,6 +2012,7 @@ class BuilderWorkflowService:
             expected_revision=revision,
             expected_webui_digest=webui_digest,
             expected_prototype_resources=self._prototype_resource_evidence(snapshots),
+            expected_automation_requirements=prototype_automation_requirements(webui),
         )
 
     def accept_prototype(
@@ -2070,6 +2072,10 @@ class BuilderWorkflowService:
             visual_checks=visual_checks,
             prototype_records=prototype_records,
             prototype_resources=self._prototype_resource_evidence(snapshots),
+            prototype_resource_snapshots=[
+                item for item in snapshots
+                if str(item.get("resource_type") or "").startswith("prototype.")
+            ],
             locale_dictionaries=locale_dictionaries,
         )
         governed_state = str(_mapping(current.get("governed")).get("state") or "").strip()

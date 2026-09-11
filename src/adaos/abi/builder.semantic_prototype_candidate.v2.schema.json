@@ -38,6 +38,10 @@
       "type": "array", "maxItems": 64,
       "items": { "$ref": "#/$defs/requirementBinding" }
     },
+    "automation_requirements": {
+      "type": "array", "maxItems": 32,
+      "items": { "$ref": "#/$defs/automationRequirement" }
+    },
     "capability_gaps": {
       "type": "array", "maxItems": 32,
       "items": { "$ref": "#/$defs/capabilityGap" }
@@ -297,6 +301,17 @@
       "properties": {
         "kind": { "type": "string", "enum": ["resource", "relationship", "field", "view", "query", "command", "state"] },
         "id": { "$ref": "#/$defs/id" }
+      }
+    },
+    "automationRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirement_ref", "reason", "disclosure", "acceptance"],
+      "properties": {
+        "requirement_ref": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "enum": ["business_rule", "external_integration"] },
+        "disclosure": { "$ref": "#/$defs/localizedText" },
+        "acceptance": { "type": "string", "minLength": 1, "maxLength": 1000 }
       }
     },
     "capabilityGap": {

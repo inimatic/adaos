@@ -6,6 +6,8 @@ import copy
 from collections.abc import Mapping
 from typing import Any
 
+from .prototype_stage import PROTOTYPE_STAGE_CONTRACT
+
 
 MODEL_CONTEXT_SCHEMA = "adaos.builder.prototype_model_context.v1"
 
@@ -119,6 +121,7 @@ def compile_prototype_model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
     )
     return {
         "schema": MODEL_CONTEXT_SCHEMA,
+        "stage_contract": copy.deepcopy(PROTOTYPE_STAGE_CONTRACT),
         "brief_ref": str(value.get("brief_id") or ""),
         "brief_digest": str(value.get("digest") or ""),
         "primary_jobs": jobs,

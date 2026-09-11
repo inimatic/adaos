@@ -16,6 +16,7 @@ from jsonschema import Draft202012Validator, ValidationError
 from adaos.services.ui_capabilities import validate_webui_capabilities
 
 from .prototype_context import prototype_state_requirements
+from .prototype_stage import automation_obligations
 from .workflow import BuilderWorkflowError
 
 
@@ -743,6 +744,8 @@ def semantic_prototype_provider_contract(*, version: str = "v1") -> dict[str, An
     """Return the candidate schema projected to the provider strict subset."""
 
     contract = semantic_prototype_candidate_contract(version=version)
+    if version == "v2":
+        contract["required"].append("automation_requirements")
     unsupported_validation_keywords = {
         "maxItems",
         "maxLength",
@@ -2075,6 +2078,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
     value: Mapping[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     candidate = copy.deepcopy(dict(value))
+    candidate.setdefault("automation_requirements", [])
     try:
         Draft202012Validator(
             semantic_prototype_provider_contract(version="v2")
@@ -2460,6 +2464,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             "representative_states": normalized_states,
             "requirement_bindings": retained_bindings,
             "capability_gaps": capability_gaps,
+            "automation_requirements": copy.deepcopy(candidate["automation_requirements"]),
         },
         normalizations,
     )
@@ -2532,6 +2537,10 @@ def _lower_semantic_prototype_candidate_v2(
         "representative_states": lowered_states,
         "requirement_bindings": copy.deepcopy(candidate["requirement_bindings"]),
         "capability_gaps": copy.deepcopy(candidate["capability_gaps"]),
+        "automation_requirements": [
+            {key: copy.deepcopy(item[key]) for key in ("requirement_ref", "reason", "disclosure", "acceptance", "statement")}
+            for item in automation_obligations(candidate, brief)
+        ],
     }
 
 
@@ -2994,6 +3003,25 @@ def _validate_semantic_prototype_v2(
         if unknown_refs:
             _fail(f"requirement {requirement_ref!r} has unresolved refs {unknown_refs}")
         bindings[requirement_ref] = semantic_refs
+    pending_refs: set[str] = set()
+    for item in document.get("automation_requirements") or []:
+        requirement_ref = str(item["requirement_ref"])
+        if requirement_ref in pending_refs:
+            _fail(f"duplicate automation requirement {requirement_ref!r}")
+        pending_refs.add(requirement_ref)
+        if not requirement_ref.startswith(("job:", "residual:")):
+            _fail("automation requirements may only defer jobs or residual requirements, not UI contracts")
+        if not any(ref.startswith(("view:", "state:")) for ref in bindings.get(requirement_ref, set())):
+            _fail(f"automation requirement {requirement_ref!r} needs a visible prototype binding")
+        if brief is not None:
+            eligible = {
+                str(entry.get("id"))
+                for group in ("principal_jobs", "residual_requirements")
+                for entry in brief.get(group) or []
+            }
+            if requirement_ref not in eligible:
+                _fail(f"automation requirement {requirement_ref!r} is not an accepted job or residual requirement")
+
     gap_refs = [str(item["requirement_ref"]) for item in document["capability_gaps"]]
     if len(set(gap_refs)) != len(gap_refs):
         _fail("duplicate capability gap requirement_ref")
@@ -3302,6 +3330,8 @@ def _compile_semantic_prototype_v2(
                 "brief_ref": document["brief_ref"],
                 "relationships": copy.deepcopy(document["relationships"]),
                 "capability_gaps": copy.deepcopy(document["capability_gaps"]),
+                "acceptance_stage": "prototype",
+                "automation_requirements": automation_obligations(document, brief),
             }
         },
     }
@@ -3376,6 +3406,7 @@ def _compile_semantic_prototype_v2(
         "requirement_runtime_map": requirement_map,
         "binding_expansions": binding_expansions,
         "capability_gaps": copy.deepcopy(document["capability_gaps"]),
+        "automation_requirements": automation_obligations(document, brief),
         "validation": validation,
     }
     if len(prototype_resources) == 1:

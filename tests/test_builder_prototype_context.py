@@ -17,6 +17,8 @@ def test_model_context_keeps_semantics_without_repeating_full_intent() -> None:
     assert context["schema"] == "adaos.builder.prototype_model_context.v1"
     assert context["brief_ref"] == brief["brief_id"]
     assert context["brief_digest"] == brief["digest"]
+    assert context["stage_contract"]["stage"] == "prototype"
+    assert context["stage_contract"]["acceptance"] == "interactive_preview_not_production_readiness"
     assert "problem" not in context
     assert statement not in json.dumps(context)
     assert context["state_requirements"] == [

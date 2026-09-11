@@ -196,7 +196,37 @@ The normal routes are:
 | `D0 deterministic` | rename, move, toggle a declared option | Resolve stable refs and apply a typed semantic operation; no model. |
 | `D1 bounded edit` | add one known view or revise one interaction | Retrieve a local semantic slice, generate one typed candidate, validate. |
 | `D2 design` | create a new surface or materially change its workflow | Compile/review the brief, retrieve capabilities, produce semantic design, compile and evaluate. |
-| `D3 capability gap` | behavior has no admitted component or provider contract | Stop Prototype approximation, record the gap, and offer a governed Automation/Core path. |
+| `D3 capability gap` | the required prototype has no admitted component or provider contract | Stop unsupported Prototype approximation, record the gap, and offer a governed Automation/Core path. |
+
+### Stage-Specific Acceptance
+
+Prototype acceptance is not application readiness. The same user requirement
+has different evidence obligations at different stages; it must not disappear
+because its final business behavior cannot run in the declarative preview.
+
+- Supported local CRUD, selection, details, search/filter and field validation
+  must work in Prototype. A label or a pending obligation cannot replace them.
+- Business rules and external integrations may be represented by realistic,
+  visible states and interactions in Prototype. The semantic document retains
+  `automation_requirements`: exact Brief job/residual reference, reason,
+  EN/RU disclosure, and a testable future acceptance condition. The existing
+  requirement binding points to the visible demonstration. Core copies the
+  original statement and marks it `pending_automation`; the model cannot mark
+  it implemented. Routine deferred business logic is not a platform gap.
+- A true `capability_gap` prevents the required prototype representation and
+  remains a blocker. Silence, an unbound obligation, hidden fixtures, or a
+  claim of real enforcement without executable evidence do not pass.
+- Prototype review exposes pending obligations to the human. Digested
+  acceptance carries them into Automation context and acceptance checks.
+  Automation must implement and test success and failure behavior; screenshots,
+  fixtures and disclosures alone cannot satisfy those checks. Trial/release
+  readiness requires the separate implementation and verification gates.
+
+The generation-stage context includes this boundary before inference. The
+independent grader applies the same stage policy, while case-specific rubrics
+remain unavailable to the generation model. Grader v10 supersedes v9's mixed
+Prototype/production overlap gate. Previous run evidence stays immutable and
+is not silently reclassified as a passing baseline.
 
 Units may be skipped, repeated, or split. Repetition must be caused by a typed
 validation finding or an explicit user revision, not by a hard-coded phase

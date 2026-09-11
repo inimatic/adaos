@@ -222,13 +222,13 @@ def _visual_checks() -> list[dict]:
     ]
 
 
-def _acceptance() -> dict:
+def _acceptance(webui: dict | None = None) -> dict:
     return build_prototype_acceptance(
         acceptance_id="prototype-acceptance-1",
         project_ref="project:kanban",
         change_id="change-kanban",
         revision="003",
-        webui=_webui(),
+        webui=webui or _webui(),
         request=(
             "Create a Kanban board with filters and drag and drop. "
             "Allow users to create, edit, and delete cards."
@@ -236,6 +236,7 @@ def _acceptance() -> dict:
         reviewer={"id": "agent:codex", "kind": "agent", "delegated_by": "user:owner"},
         behavior_checks=_behavior_checks(),
         visual_checks=_visual_checks(),
+        prototype_records=[{"id": "card-1", "title": "Prepare venue", "status": "planned"}],
         accepted_at="2026-09-04T00:00:00+00:00",
     )
 
@@ -255,6 +256,45 @@ def test_build_and_admit_prototype_acceptance() -> None:
     assert admitted["deterministic_evaluation"]["ok"] is True
 
 
+def test_acceptance_keeps_pending_rules_for_automation_and_does_not_mark_them_done() -> None:
+    from adaos.services.builder.prototype_stage import automation_acceptance_checks
+
+    webui = _webui()
+    obligation = {
+        "requirement_ref": "job:01", "reason": "business_rule",
+        "statement": "Enforce completion policy",
+        "acceptance": "Reject invalid completion and preserve the saved record.",
+        "disclosure": {"en": "Rule not enforced yet.", "ru": "Правило пока не исполняется."},
+        "prototype_refs": ["view:tasks"], "status": "pending_automation",
+        "brief_ref": "brief:" + "a" * 24, "brief_digest": "sha256:" + "a" * 64,
+    }
+    webui["ui"]["application"]["desktop"]["pageSchema"]["meta"] = {
+        "builder": {"automation_requirements": [obligation]}
+    }
+    acceptance = _acceptance(webui)
+    assert acceptance["acceptance_stage"] == "prototype"
+    assert acceptance["automation_requirements"] == [obligation]
+    assert "Reject invalid completion" in automation_acceptance_checks(acceptance)[0]
+    assert "fixtures or disclosure alone do not pass" in automation_acceptance_checks(acceptance)[0]
+
+    with pytest.raises(BuilderWorkflowError, match="automation requirements"):
+        admit_prototype_acceptance(
+            acceptance, expected_project_ref="project:kanban",
+            expected_change_id="change-kanban", expected_revision="003",
+            expected_webui_digest=acceptance["webui_digest"],
+            expected_automation_requirements=[{**obligation, "acceptance": "Changed rule"}],
+        )
+
+
+def test_acceptance_does_not_excuse_a_true_platform_gap() -> None:
+    webui = _webui()
+    webui["ui"]["application"]["desktop"]["pageSchema"]["meta"] = {
+        "builder": {"capability_gaps": [{"requirement_ref": "job:01", "code": "unsupported_view"}]}
+    }
+    with pytest.raises(BuilderWorkflowError, match="platform capability gaps"):
+        _acceptance(webui)
+
+
 def test_acceptance_requires_non_drag_move_evidence() -> None:
     checks = [item for item in _behavior_checks() if item["id"] != "board.move.alternative"]
 
@@ -272,6 +312,7 @@ def test_acceptance_requires_non_drag_move_evidence() -> None:
             reviewer={"id": "agent:codex", "kind": "agent"},
             behavior_checks=checks,
             visual_checks=_visual_checks(),
+            prototype_records=[{"id": "card-1", "title": "Prepare venue", "status": "planned"}],
         )
 
 

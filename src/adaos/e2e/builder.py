@@ -183,7 +183,7 @@ def validate_builder_e2e_record(name: str, value: Mapping[str, Any]) -> dict[str
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(value, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
@@ -198,7 +198,7 @@ def _compact_step_output(
 ) -> tuple[dict[str, Any], str | None]:
     redacted = redact_value(dict(output))
     raw = (
-        json.dumps(redacted, ensure_ascii=True, indent=2, sort_keys=True).encode(
+        json.dumps(redacted, ensure_ascii=False, indent=2, sort_keys=True).encode(
             "utf-8"
         )
         + b"\n"
@@ -241,7 +241,7 @@ def _compact_step_output(
         if key not in redacted:
             continue
         value = redacted[key]
-        encoded = json.dumps(value, ensure_ascii=True, sort_keys=True).encode("utf-8")
+        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
         if len(encoded) <= 4_096:
             summary[key] = value
     digest = "sha256:" + hashlib.sha256(raw).hexdigest()

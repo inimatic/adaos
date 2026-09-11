@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "9"
+PROTOTYPE_GRADER_VERSION = "10"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -88,6 +88,21 @@ _MODEL_RESULT_SCHEMA: dict[str, Any] = {
 
 _SYSTEM_PROMPT = """You are an independent evaluator of an AdaOS declarative UI prototype.
 Grade only the supplied evaluation artifact against the supplied user turns and rubric.
+Acceptance stage is PROTOTYPE, not automation or release readiness. Under
+/webui/ui/application/desktop/pageSchema/meta/builder/automation_requirements the
+compiler preserves pending business rules and integrations with the original Brief
+statement, prototype_refs, en/ru disclosure and a testable Automation acceptance.
+For such a rule, supported at this stage requires BOTH visible representative
+evidence in /webui or /prototype_resources AND this explicit pending obligation
+matching the requested outcome. Cite both. This means demonstrated and deferred,
+NOT implemented or safe for real use. Never treat a fixture status as computed.
+Supported CRUD, selection, detail disclosure, search, filters and field validation
+still require working declarative controls; an obligation cannot excuse their absence.
+Silently omitted requirements, unsupported claims and bare capability gaps fail.
+For prohibited real-world behavior, an explicitly disclosed unimplemented rule with
+an acceptance test and visible conflict/failure example is not a claim of safety;
+evaluate the prototype-stage rubric, not production enforcement. Never excuse a
+prototype that explicitly presents the prohibited behavior as valid or safe.
 The artifact contains executable WebUI under /webui and exact revision-bound local
 Prototype records under /prototype_resources. Records may prove representative data
 states, but they do not prove an interaction unless /webui exposes the required
@@ -157,6 +172,7 @@ def _evidence_pointers(artifact: Mapping[str, Any]) -> list[str]:
         "validation",
         "visibleWhen",
         "capability_gaps",
+        "automation_requirements",
     }
 
     def visit(value: Any, pointer: str) -> None:

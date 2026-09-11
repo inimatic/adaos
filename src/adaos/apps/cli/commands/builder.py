@@ -616,7 +616,7 @@ def draft(
         descriptor_changes=_read_json_arg(descriptor_changes),
     )
     if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=True, indent=2))
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
         return
     draft_payload = result["draft"]
     typer.echo(f"draft_id: {draft_payload['draft_id']}")
@@ -639,7 +639,7 @@ def preview(
     service = BuilderWorkspaceService.from_context()
     result = service.preview(draft_id=draft_id, approval_profile=approval_profile)
     if json_output:
-        typer.echo(json.dumps(result, ensure_ascii=True, indent=2))
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
         return
     preview_payload = result["preview"]
     summary = preview_payload.get("summary") or {}
@@ -740,7 +740,7 @@ def e2e(
             typer.echo(
                 json.dumps(
                     {"status": "inconclusive", "error": str(exc)},
-                    ensure_ascii=True,
+                    ensure_ascii=False,
                     indent=2,
                 )
             )
@@ -748,7 +748,7 @@ def e2e(
             typer.secho(f"Builder E2E configuration failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(2) from exc
     if json_output:
-        typer.echo(json.dumps(report, ensure_ascii=True, indent=2))
+        typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         summary = report["summary"]
         typer.echo(f"run_id: {report['run_id']}")

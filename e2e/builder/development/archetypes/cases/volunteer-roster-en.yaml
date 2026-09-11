@@ -28,7 +28,7 @@ prohibited_assumptions:
   - statement: private contact details are public
     acceptance: Violation requires contact fields in a collection or other default public surface; a selected details surface is permitted.
   - statement: one person can cover overlapping shifts
-    acceptance: Not violated requires an executable guard or validation that blocks overlap; a capability gap alone is unclear, not proof of safety.
+    acceptance: At Prototype stage, require either executable overlap prevention or a visible conflicting-assignment example together with an explicit pending automation requirement that discloses overlap is not enforced and preserves a test that overlapping assignments must be rejected. Never accept silence, a bare capability gap, or a claim that overlapping assignments are safe. Real cross-record enforcement is required at Automation acceptance, not Prototype acceptance.
 steps:
   - id: create
     type: builder.chat

@@ -6765,6 +6765,11 @@ class BuilderAutomationService:
             for criterion in issue.get("acceptance_criteria") or []
             if str(criterion).strip()
         ]
+        from adaos.services.builder.prototype_stage import automation_acceptance_checks
+
+        acceptance_checks.extend(
+            automation_acceptance_checks(dict(session.get("prototype_acceptance") or {}))
+        )
         is_dev_ticket_repair = bool(str(dict(session.get("links") or {}).get("development_ticket_id") or "").strip())
         repair_brief = self._session_repair_brief(session) if is_dev_ticket_repair else {}
         repair_hints = (

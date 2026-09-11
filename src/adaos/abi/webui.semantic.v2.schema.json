@@ -95,6 +95,10 @@
         }
       }
     },
+    "automation_requirements": {
+      "type": "array", "maxItems": 32,
+      "items": { "$ref": "#/$defs/automationRequirement" }
+    },
     "capability_gaps": {
       "type": "array",
       "items": {
@@ -110,6 +114,24 @@
     }
   },
   "$defs": {
+    "automationRequirement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requirement_ref", "reason", "disclosure", "acceptance"],
+      "properties": {
+        "requirement_ref": { "type": "string", "minLength": 1 },
+        "reason": { "enum": ["business_rule", "external_integration"] },
+        "statement": { "type": "string", "minLength": 1 },
+        "disclosure": {
+          "type": "object", "additionalProperties": false,
+          "required": ["en", "ru"],
+          "properties": {
+            "en": { "type": "string", "minLength": 1, "maxLength": 500 },
+            "ru": { "type": "string", "minLength": 1, "maxLength": 500 }
+          }
+        },
+        "acceptance": { "type": "string", "minLength": 1, "maxLength": 1000 }
+      }
+    },
     "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
     "localizedText": {
       "type": "object",

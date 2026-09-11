@@ -1913,3 +1913,53 @@ def test_semantic_v2_reports_broken_relationship_fixture() -> None:
     assert "semantic.relationship_target_missing" in {
         item["code"] for item in captured.value.findings
     }
+
+
+def _automation_requirement(requirement_ref: str) -> dict:
+    return {
+        "requirement_ref": requirement_ref,
+        "reason": "business_rule",
+        "disclosure": {"en": "The rule is illustrated, not enforced.", "ru": "Правило показано, но не исполняется."},
+        "acceptance": "Reject invalid completion without changing the saved record; allow a valid completion.",
+    }
+
+
+def test_semantic_v2_preserves_automation_obligation_without_claiming_implementation() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    ref = brief["principal_jobs"][0]["id"]
+    candidate["automation_requirements"] = [_automation_requirement(ref)]
+    next(item for item in candidate["requirement_bindings"] if item["requirement_ref"] == ref)["semantic_refs"] = [
+        {"kind": "view", "id": candidate["views"][0]["id"]}
+    ]
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+    obligation = result["automation_requirements"][0]
+    assert obligation["status"] == "pending_automation"
+    assert obligation["statement"] == brief["principal_jobs"][0]["statement"]
+    assert obligation["brief_digest"] == brief["digest"]
+    assert obligation["prototype_refs"]
+    meta = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"]
+    assert meta["acceptance_stage"] == "prototype"
+    assert meta["automation_requirements"] == result["automation_requirements"]
+    replay = compile_semantic_prototype(result["semantic_document"])
+    assert replay["automation_requirements"][0]["statement"] == obligation["statement"]
+
+
+@pytest.mark.parametrize("invalid", ["missing_binding", "duplicate", "ui_operation", "hidden_evidence"])
+def test_semantic_v2_does_not_allow_unbound_or_ui_deferrals(invalid: str) -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    ref = brief["principal_jobs"][0]["id"]
+    if invalid == "ui_operation":
+        ref = brief["operations"][0]["id"]
+    candidate["automation_requirements"] = [_automation_requirement(ref)]
+    binding = next(item for item in candidate["requirement_bindings"] if item["requirement_ref"] == ref)
+    binding["semantic_refs"] = [{"kind": "view", "id": candidate["views"][0]["id"]}]
+    if invalid == "missing_binding":
+        candidate["automation_requirements"][0]["requirement_ref"] = "job:missing"
+    elif invalid == "duplicate":
+        candidate["automation_requirements"] *= 2
+    elif invalid == "hidden_evidence":
+        binding["semantic_refs"] = [{"kind": "resource", "id": candidate["resources"][0]["id"]}]
+    with pytest.raises(BuilderWorkflowError, match="automation[_ ]requirement"):
+        compile_semantic_prototype_candidate(candidate, brief=brief)

@@ -102,7 +102,7 @@ def _inline_secret_paths(value: Any, prefix: str = "") -> list[str]:
 
 def _json_write(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _command_text(args: list[str], cwd: Path) -> str | None:
@@ -548,9 +548,9 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(args.config)
         manifest = StandRunner(config, output_root=args.output_root, run_id=args.run_id).run(with_browser=args.browser)
     except Exception as exc:
-        print(json.dumps({"result": "inconclusive", "category": "runner_unavailable", "detail": str(exc)}, ensure_ascii=True))
+        print(json.dumps({"result": "inconclusive", "category": "runner_unavailable", "detail": str(exc)}, ensure_ascii=False))
         return 2
-    print(json.dumps({"result": manifest["result"], "run_id": manifest["run_id"], "bundle": str(args.output_root)}, ensure_ascii=True))
+    print(json.dumps({"result": manifest["result"], "run_id": manifest["run_id"], "bundle": str(args.output_root)}, ensure_ascii=False))
     return 0 if manifest["result"] == "passed" else 1 if manifest["result"] == "failed" else 2
 
 

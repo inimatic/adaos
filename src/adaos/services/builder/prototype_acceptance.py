@@ -15,6 +15,7 @@ from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.ui_capabilities import evaluate_ui_request
 
 from .workflow import BuilderWorkflowError
+from .prototype_stage import prototype_automation_requirements, prototype_builder_metadata
 
 
 PROTOTYPE_ACCEPTANCE_SCHEMA = "adaos.builder.prototype_acceptance.v1"
@@ -120,16 +121,20 @@ def build_prototype_acceptance(
     visual_checks: Sequence[Mapping[str, Any]],
     prototype_records: Sequence[Mapping[str, Any]] | None = None,
     prototype_resources: Sequence[Mapping[str, Any]] | None = None,
+    prototype_resource_snapshots: Sequence[Mapping[str, Any]] | None = None,
     locale_dictionaries: Mapping[str, Mapping[str, Any]] | None = None,
     accepted_at: str | None = None,
 ) -> dict[str, Any]:
     """Build acceptance only after deterministic, behavioral, and visual checks pass."""
 
     _validate("webui.v1.schema.json", webui, label="prototype WebUI")
+    if prototype_builder_metadata(webui).get("capability_gaps"):
+        raise BuilderWorkflowError("prototype acceptance has unresolved platform capability gaps")
     evaluation = evaluate_ui_request(
         request,
         webui,
         prototype_records=prototype_records,
+        prototype_resources=prototype_resource_snapshots,
         locale_dictionaries=locale_dictionaries,
     )
     if not bool(evaluation.get("ok")):
@@ -160,6 +165,8 @@ def build_prototype_acceptance(
         "request_digest": canonical_payload_digest({"request": str(request)}),
         "reviewer": copy.deepcopy(dict(reviewer)),
         "decision": "accepted",
+        "acceptance_stage": "prototype",
+        "automation_requirements": prototype_automation_requirements(webui),
         "deterministic_evaluation": copy.deepcopy(dict(evaluation)),
         "prototype_resources": [
             copy.deepcopy(dict(item)) for item in prototype_resources or [] if isinstance(item, Mapping)
@@ -185,6 +192,7 @@ def admit_prototype_acceptance(
     expected_revision: str,
     expected_webui_digest: str,
     expected_prototype_resources: Sequence[Mapping[str, Any]] | None = None,
+    expected_automation_requirements: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Verify immutable acceptance identity before crossing the Automation gate."""
 
@@ -219,6 +227,10 @@ def admit_prototype_acceptance(
             raise BuilderWorkflowError("prototype acceptance is stale: prototype_resources")
     if not bool(dict(acceptance.get("deterministic_evaluation") or {}).get("ok")):
         raise BuilderWorkflowError("prototype acceptance contains a failed deterministic evaluation")
+    if expected_automation_requirements is not None and canonical_payload_digest(
+        acceptance.get("automation_requirements") or []
+    ) != canonical_payload_digest(list(expected_automation_requirements)):
+        raise BuilderWorkflowError("prototype acceptance lost or changed automation requirements")
     return acceptance
 
 
