@@ -133,10 +133,18 @@ _WORKFLOW_STATES_PATTERNS = (
 )
 _REPRESENTATIVE_STATE_SIGNAL_PATTERN = re.compile(
     r"\b(?:empty|no|none|without|unassigned|unfinished|incomplete|draft|completed?|"
-    r"blocked|disabled|loading|offline|error|failed?|forbid|prevent|"
+    r"blocked|disabled|loading|offline|error|failed?|forbid|prevent|overdue|late|"
+    r"conflict|unavailable|busy|"
     r"пуст\w*|нет|без|неназнач\w*|не\s+назнач\w*|незаверш\w*|чернов\w*|"
     r"заверш\w*|заблокир\w*|недоступ\w*|загруз\w*|офлайн\w*|ошиб\w*|"
-    r"неуспеш\w*|запрет\w*|нельзя)\b",
+    r"неуспеш\w*|запрет\w*|нельзя|просроч\w*|конфликт\w*|занят\w*)\b",
+    re.IGNORECASE,
+)
+_NON_STATE_CONTINUITY_PATTERN = re.compile(
+    r"\bwithout\s+(?:losing|leaving|closing|hiding|resetting)\b|"
+    r"\b(?:keep|preserve|retain)\w*\s+(?:the\s+)?(?:queue|list|context|selection)\b|"
+    r"\b(?:\u043d\u0435\s+\u0442\u0435\u0440\u044f|\u0431\u0435\u0437\s+\u043f\u043e\u0442\u0435\u0440\u0438|\u0441\u043e\u0445\u0440\u0430\u043d)\w*.{0,24}"
+    r"(?:\u043e\u0447\u0435\u0440\u0435\u0434|\u0441\u043f\u0438\u0441\u043e\u043a|\u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442|\u0432\u044b\u0431\u043e\u0440)\w*\b",
     re.IGNORECASE,
 )
 _JOB_SEPARATOR_PATTERN = re.compile(
@@ -398,45 +406,75 @@ def _extract_collection_requirements(statement: str) -> list[dict[str, Any]]:
 def _extract_representative_states(
     statement: str, jobs: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
+    values: list[str] = []
+    seen: set[str] = set()
+
+    def append(value: str) -> None:
+        normalized = str(value or "").strip(" \t\r\n,;:-.!?")
+        key = normalized.casefold()
+        if normalized and key not in seen:
+            seen.add(key)
+            values.append(normalized)
+
     for pattern in _WORKFLOW_STATES_PATTERNS:
-        match = pattern.search(statement)
-        if not match:
-            continue
-        raw = match.group("states")
-        values = [
-            item.strip(" \t\r\n,;:-")
-            for item in re.split(r",|\band\b|\bи\b", raw, flags=re.IGNORECASE)
-            if item.strip(" \t\r\n,;:-")
-        ]
-        if len(values) >= 2:
-            return _knowledge(
-                "known", values[:12], evidence=["intent.statement"], confidence=0.9
-            )
+        for match in pattern.finditer(statement):
+            raw = match.group("states")
+            states = [
+                item.strip(" \t\r\n,;:-")
+                for item in re.split(r",|\band\b|\bи\b", raw, flags=re.IGNORECASE)
+                if item.strip(" \t\r\n,;:-")
+            ]
+            if len(states) >= 2:
+                for state in states:
+                    append(state)
+
     state_jobs = [
         str(item.get("statement") or "")
         for item in jobs or []
         if _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(
             str(item.get("statement") or "")
         )
-    ]
-    if state_jobs:
-        return _knowledge(
-            "known",
-            list(dict.fromkeys(state_jobs))[:12],
-            evidence=["intent.statement"],
-            confidence=0.8,
+        and not _NON_STATE_CONTINUITY_PATTERN.search(
+            str(item.get("statement") or "")
         )
-    state_clauses = []
+        and not any(
+            pattern.search(str(item.get("statement") or ""))
+            for pattern in _WORKFLOW_STATES_PATTERNS
+        )
+    ]
+    for state_job in state_jobs:
+        append(state_job)
+
     for clause, _start, _end in _clauses(statement):
         value = _without_spans(clause, _authoring_spans(clause))
-        if value and _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value):
-            state_clauses.append(value)
-    if state_clauses:
+        if not value or not _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value):
+            continue
+        if any(state_job in value for state_job in state_jobs):
+            continue
+        if any(pattern.search(value) for pattern in _WORKFLOW_STATES_PATTERNS):
+            continue
+        signals = list(_REPRESENTATIVE_STATE_SIGNAL_PATTERN.finditer(value))
+        split_values: list[str] = []
+        if len(signals) > 1:
+            for signal, following in zip(signals, signals[1:]):
+                separators = list(
+                    _JOB_SEPARATOR_PATTERN.finditer(
+                        value, signal.end(), following.start()
+                    )
+                )
+                if separators:
+                    split_values.append(value[signal.start() : separators[-1].start()])
+            if split_values:
+                split_values.append(value[signals[-1].start() :])
+        for state_value in split_values or [value]:
+            append(state_value)
+
+    if values:
         return _knowledge(
             "known",
-            list(dict.fromkeys(state_clauses))[:12],
+            values[:12],
             evidence=["intent.statement"],
-            confidence=0.8,
+            confidence=0.9 if len(values) >= 2 else 0.8,
         )
     return _knowledge("unknown")
 

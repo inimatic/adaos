@@ -141,8 +141,27 @@ def test_brief_preserves_implicit_lifecycle_and_exception_states() -> None:
             "Show an empty queue and prevent completion without an owner",
         ],
         "evidence": ["intent.statement"],
-        "confidence": 0.8,
+        "confidence": 0.9,
     }
+
+
+def test_brief_combines_workflow_and_later_explicit_visual_states() -> None:
+    brief = compile_prototype_brief(
+        "Move work through New, In progress, Blocked and Done. "
+        "Include realistic examples and clear empty and overdue states."
+    )
+
+    assert brief["representative_states"]["value"] == [
+        "New",
+        "In progress",
+        "Blocked",
+        "Done",
+        "empty",
+        "overdue states",
+    ]
+    assert "open one item without losing the queue" not in brief[
+        "representative_states"
+    ]["value"]
 
 
 def test_brief_preserves_explicit_attachment_capture_in_en_and_ru() -> None:
