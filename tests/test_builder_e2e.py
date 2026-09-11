@@ -978,7 +978,15 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
                             }
                         ],
                         "candidate_artifacts": [
-                            {"stage": "primary", "path": "candidate.primary.json"}
+                            {
+                                "kind": "raw_model_output",
+                                "stage": "primary",
+                                "path": "candidate.primary.json",
+                                "sha256": "candidate-artifact-sha",
+                                "response_sha256": "response-sha",
+                                "candidate_sha256": "semantic-sha",
+                                "structured": True,
+                            }
                         ],
                     },
                     "telemetry": {
@@ -1031,7 +1039,17 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
     evidence_path = tmp_path / "bundle" / result["evidence_ref"]
     assert json.loads(evidence_path.read_text(encoding="utf-8"))[
         "candidate_artifacts"
-    ] == [{"path": "candidate.primary.json", "stage": "primary"}]
+    ] == [
+        {
+            "candidate_sha256": "semantic-sha",
+            "kind": "raw_model_output",
+            "path": "candidate.primary.json",
+            "response_sha256": "response-sha",
+            "sha256": "candidate-artifact-sha",
+            "stage": "primary",
+            "structured": True,
+        }
+    ]
 
 
 def test_runner_injects_case_webspace_into_builder_wait(tmp_path: Path) -> None:

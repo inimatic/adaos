@@ -315,7 +315,16 @@ def _compact_generation_diagnostic(journal: Mapping[str, Any]) -> dict[str, Any]
     candidates = [
         {
             key: copy.deepcopy(item.get(key))
-            for key in ("stage", "path", "sha256", "webui_digest")
+            for key in (
+                "kind",
+                "stage",
+                "path",
+                "sha256",
+                "webui_digest",
+                "response_sha256",
+                "candidate_sha256",
+                "structured",
+            )
             if item.get(key) not in (None, "")
         }
         for item in result.get("candidate_artifacts") or []
