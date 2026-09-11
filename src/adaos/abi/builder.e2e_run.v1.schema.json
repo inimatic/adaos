@@ -11,7 +11,7 @@
     "suite": {"type": "object", "required": ["suite_id", "version", "digest", "cohort"]},
     "adapter": {"type": "string", "minLength": 1},
     "profile": {"type": "string", "minLength": 1},
-    "generation_contract": {"enum": ["webui.v1", "semantic.v1"]},
+    "generation_contract": {"enum": ["webui.v1", "semantic.v1", "semantic.v2"]},
     "repetitions": {"type": "integer", "minimum": 1},
     "browser": {"enum": ["auto", "on", "off"]},
     "evaluation": {

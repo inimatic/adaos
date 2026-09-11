@@ -24,7 +24,7 @@
       "properties": {
         "adapter": {"enum": ["legacy_dev_chat.v1", "sdk.v1", "fixture.v1"]},
         "profile": {"type": "string", "maxLength": 80},
-        "generation_contract": {"enum": ["webui.v1", "semantic.v1"]},
+        "generation_contract": {"enum": ["webui.v1", "semantic.v1", "semantic.v2"]},
         "repetitions": {"type": "integer", "minimum": 1, "maximum": 20},
         "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 1800},
         "browser": {"enum": ["auto", "on", "off"]},

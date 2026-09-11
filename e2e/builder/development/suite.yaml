@@ -10,7 +10,7 @@ case_refs:
 defaults:
   adapter: sdk.v1
   profile: generic
-  generation_contract: semantic.v1
+  generation_contract: semantic.v2
   repetitions: 1
   timeout_seconds: 300
   browser: "off"

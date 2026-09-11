@@ -57,6 +57,7 @@ _LOWER_IS_BETTER = {
 _GENERATION_OUTPUT_MODES = {
     "webui.v1": {"full_webui", "jsonl_patch_v1", "json_patch_batch_v1"},
     "semantic.v1": {"semantic_v1"},
+    "semantic.v2": {"semantic_v2"},
 }
 
 
@@ -134,7 +135,7 @@ def _generation_metadata(context: Mapping[str, Any]) -> dict[str, Any]:
     contract = str(context.get("generation_contract") or "webui.v1")
     return {
         "builder_e2e_generation_contract": contract,
-        "builder_semantic_compiler": contract == "semantic.v1",
+        "builder_semantic_compiler": contract.startswith("semantic."),
     }
 
 
@@ -1864,7 +1865,7 @@ class BuilderE2ERunner:
             raise BuilderE2EError("browser must be auto, on, or off")
         if self.generation_contract not in _GENERATION_OUTPUT_MODES:
             raise BuilderE2EError(
-                "generation_contract must be webui.v1 or semantic.v1"
+                "generation_contract must be webui.v1, semantic.v1, or semantic.v2"
             )
         self.baseline_path = (
             Path(baseline_path).expanduser().resolve() if baseline_path else None

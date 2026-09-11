@@ -511,8 +511,11 @@ def test_runner_constructs_public_sdk_adapter(tmp_path: Path) -> None:
     assert isinstance(runner.executor, SdkBuilderExecutor)
 
 
+@pytest.mark.parametrize("generation_contract", ["semantic.v1", "semantic.v2"])
 def test_sdk_adapter_routes_declared_generation_contract(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    generation_contract: str,
 ) -> None:
     from adaos.sdk.builder import prototype
 
@@ -533,12 +536,14 @@ def test_sdk_adapter_routes_declared_generation_contract(
             "case_id": "queue",
             "repetition": 1,
             "locale": "en",
-            "generation_contract": "semantic.v1",
+            "generation_contract": generation_contract,
         },
     )
 
     assert result["ok"] is True
-    assert captured["metadata"]["builder_e2e_generation_contract"] == "semantic.v1"
+    assert captured["metadata"]["builder_e2e_generation_contract"] == (
+        generation_contract
+    )
     assert captured["metadata"]["builder_semantic_compiler"] is True
 
 
