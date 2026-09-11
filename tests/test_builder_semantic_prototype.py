@@ -1569,3 +1569,36 @@ def test_semantic_v2_rejects_ambiguous_field_namespaces() -> None:
 
     with pytest.raises(BuilderWorkflowError, match="duplicate field id"):
         validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_semantic_v2_candidate_reports_record_and_state_defects_together() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    result_field_index = next(
+        index
+        for index, field in enumerate(candidate["resources"][0]["fields"])
+        if field["id"] == "result"
+    )
+    candidate["resources"][0]["records"][0]["values"][result_field_index] = (
+        "INVALID"
+    )
+    candidate["representative_states"][0]["proof"] = {
+        "kind": "field_predicate",
+        "visible_field_refs": ["status"],
+    }
+    candidate["representative_states"][0]["filters"] = [
+        {
+            "field_ref": "status",
+            "operator": "eq",
+            "operand": {"kind": "value", "value": "missing", "field_ref": None},
+        }
+    ]
+    candidate["representative_states"][0]["min_items"] = 1
+    candidate["representative_states"][0]["max_items"] = None
+
+    with pytest.raises(BuilderWorkflowError) as captured:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    codes = {item["code"] for item in captured.value.findings}
+    assert "semantic.record_value_invalid" in codes
+    assert "semantic.state_fixture_mismatch" in codes

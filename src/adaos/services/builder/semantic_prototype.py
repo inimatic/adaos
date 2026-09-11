@@ -201,6 +201,28 @@ def _matching_state_records(
     ]
 
 
+def _field_value_is_valid(field: Mapping[str, Any], field_value: Any) -> bool:
+    kind = str(field["value_type"])
+    if kind == "attachment" and field.get("multiple"):
+        valid = isinstance(field_value, list) and all(
+            isinstance(item, str) for item in field_value
+        )
+        if valid and field.get("max_items") is not None:
+            valid = len(field_value) <= int(field["max_items"])
+        return valid
+    if kind in {"short_text", "long_text", "date", "attachment"}:
+        return isinstance(field_value, str)
+    if kind == "boolean":
+        return isinstance(field_value, bool)
+    if kind == "number":
+        return isinstance(field_value, (int, float)) and not isinstance(
+            field_value, bool
+        )
+    return any(
+        option["value"] == field_value for option in field.get("options") or []
+    )
+
+
 def _brief_requirement_ids(brief: Mapping[str, Any]) -> set[str]:
     result: set[str] = set()
     for key in (
@@ -341,27 +363,7 @@ def _validate_semantic_prototype_v1(
                 continue
             field_value = record[field_id]
             kind = str(field["value_type"])
-            if kind == "attachment" and field.get("multiple"):
-                valid = isinstance(field_value, list) and all(
-                    isinstance(item, str) for item in field_value
-                )
-                if valid and field.get("max_items") is not None:
-                    valid = len(field_value) <= int(field["max_items"])
-            else:
-                valid = (
-                    isinstance(field_value, str)
-                    if kind in {"short_text", "long_text", "date", "attachment"}
-                    else isinstance(field_value, bool)
-                    if kind == "boolean"
-                    else isinstance(field_value, (int, float))
-                    and not isinstance(field_value, bool)
-                    if kind == "number"
-                    else any(
-                        option["value"] == field_value
-                        for option in field.get("options") or []
-                    )
-                )
-            if not valid:
+            if not _field_value_is_valid(field, field_value):
                 _fail(
                     f"resource record {record_id!r} has invalid {kind} value for "
                     f"field {field_id!r}"
@@ -2278,6 +2280,146 @@ def _lower_semantic_prototype_candidate_v2(
     }
 
 
+def _semantic_v2_model_findings(
+    document: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Collect independent model-correctable defects before fail-fast compile."""
+
+    findings: list[dict[str, Any]] = []
+    resources = {
+        str(item.get("id") or ""): dict(item)
+        for item in document.get("resources") or []
+        if isinstance(item, Mapping)
+    }
+    views = {
+        str(item.get("id") or ""): dict(item)
+        for item in document.get("views") or []
+        if isinstance(item, Mapping)
+    }
+    views_by_resource = {
+        resource_id: [
+            view
+            for view in views.values()
+            if str(view.get("resource_ref") or "") == resource_id
+        ]
+        for resource_id in resources
+    }
+    for resource_index, (resource_id, resource) in enumerate(resources.items()):
+        resource_views = views_by_resource[resource_id]
+        if not resource_views:
+            findings.append(
+                {
+                    "code": "semantic.resource_view_missing",
+                    "path": f"$.resources[{resource_index}]",
+                    "semantic_refs": [f"resource:{resource_id}"],
+                    "detail": f"resource {resource_id!r} has no inspectable view",
+                }
+            )
+        elif not any(view.get("role") == "collection" for view in resource_views):
+            findings.append(
+                {
+                    "code": "semantic.resource_collection_missing",
+                    "path": f"$.resources[{resource_index}]",
+                    "semantic_refs": [f"resource:{resource_id}"],
+                    "detail": f"resource {resource_id!r} requires a collection view",
+                }
+            )
+        fields = {
+            str(item.get("id") or ""): dict(item)
+            for item in resource.get("fields") or []
+            if isinstance(item, Mapping)
+        }
+        for record_index, record in enumerate(resource.get("records") or []):
+            if not isinstance(record, Mapping):
+                continue
+            record_id = str(record.get("id") or record_index)
+            for field_id, field in fields.items():
+                if field_id not in record or record[field_id] is None:
+                    continue
+                if _field_value_is_valid(field, record[field_id]):
+                    continue
+                findings.append(
+                    {
+                        "code": "semantic.record_value_invalid",
+                        "path": (
+                            f"$.resources[{resource_index}].records"
+                            f"[{record_index}].{field_id}"
+                        ),
+                        "semantic_refs": [
+                            f"resource:{resource_id}",
+                            f"field:{field_id}",
+                        ],
+                        "detail": (
+                            f"resource record {record_id!r} has invalid "
+                            f"{field['value_type']} value for field {field_id!r}"
+                        ),
+                    }
+                )
+
+    for state_index, state in enumerate(document.get("representative_states") or []):
+        if not isinstance(state, Mapping):
+            continue
+        state_id = str(state.get("id") or state_index)
+        view = views.get(str(state.get("view_ref") or ""))
+        if view is None:
+            continue
+        resource = resources.get(str(view.get("resource_ref") or ""))
+        if resource is None:
+            continue
+        filters = [
+            dict(item)
+            for item in state.get("filters") or []
+            if isinstance(item, Mapping)
+        ]
+        minimum = int(state.get("min_items") or 0)
+        maximum = (
+            int(state["max_items"])
+            if state.get("max_items") is not None
+            else None
+        )
+        empty_fixture = not filters and minimum == 0 and maximum == 0
+        matching_records = (
+            []
+            if empty_fixture
+            else _matching_state_records(resource.get("records") or [], filters)
+        )
+        count = len(matching_records)
+        if count < minimum or (maximum is not None and count > maximum):
+            expected_range = (
+                f">={minimum}" if maximum is None else f"{minimum}..{maximum}"
+            )
+            findings.append(
+                {
+                    "code": "semantic.state_fixture_mismatch",
+                    "path": f"$.representative_states[{state_index}]",
+                    "semantic_refs": [
+                        f"state:{state_id}",
+                        f"view:{state.get('view_ref')}",
+                    ],
+                    "detail": (
+                        f"representative state {state_id!r} expected "
+                        f"{expected_range} matching records but found {count}"
+                    ),
+                }
+            )
+        proof = state.get("proof") if isinstance(state.get("proof"), Mapping) else {}
+        visible_fields = {str(item) for item in proof.get("visible_field_refs") or []}
+        hidden = sorted(visible_fields - set(view.get("field_refs") or []))
+        if hidden:
+            findings.append(
+                {
+                    "code": "semantic.state_proof_hidden",
+                    "path": f"$.representative_states[{state_index}].proof",
+                    "semantic_refs": [f"state:{state_id}"],
+                    "detail": (
+                        f"representative state {state_id!r} claims fields not "
+                        f"visible in view {view.get('id')!r}: {hidden}"
+                    ),
+                }
+            )
+    return findings
+
+
 def _validate_semantic_prototype_v2(
     value: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -2798,6 +2940,11 @@ def compile_semantic_prototype_candidate(
         semantic_document = _lower_semantic_prototype_candidate_v2(
             candidate, brief=brief
         )
+        model_findings = _semantic_v2_model_findings(semantic_document)
+        if model_findings or requirement_findings:
+            raise SemanticPrototypeValidationError(
+                [*model_findings, *requirement_findings]
+            )
         normalizations.append(
             {
                 "kind": "authoritative_brief_provenance",
@@ -2812,6 +2959,8 @@ def compile_semantic_prototype_candidate(
             project_ref=project_ref,
         )
     except BuilderWorkflowError as exc:
+        if isinstance(exc, SemanticPrototypeValidationError):
+            raise
         prefix = "invalid semantic Prototype: "
         detail = str(exc)
         if detail.startswith(prefix):
@@ -2839,8 +2988,6 @@ def compile_semantic_prototype_candidate(
             if str(item.get("detail") or "") != detail
         )
         raise SemanticPrototypeValidationError(findings) from exc
-    if requirement_findings:
-        raise SemanticPrototypeValidationError(requirement_findings)
     result["semantic_document"] = semantic_document
     result["normalizations"] = normalizations
     return result
