@@ -1226,6 +1226,42 @@ Prompt-autonomy admission targets:
 - EN/RU key-set, long-content, and accessibility gates pass for every admitted
   Prototype.
 
+### Context Engineering Qualification (2026-09-11)
+
+The next development experiment holds GPT-5 `low` and its explicit output
+budget constant. Media review is the first diagnostic case: its previous
+property-only viewer passed grading without rendering media. Do not optimize
+the prompt against that false-positive gate or copy a domain solution into Core.
+
+- [ ] `[must]` Align model-visible capabilities with compiled behavior: layout
+  placement, collection selection/details/editor entry, and real media viewing.
+  Separate compiler defects from model errors before requesting a repair.
+- [ ] `[must]` Use one authoritative requirement inventory, a stable cacheable
+  contract prefix, and stage-specific dynamic facts. Eliminate repeated prose
+  without hiding type, effect, relationship, or acceptance constraints.
+- [ ] `[must]` Permit repairs to related views without echoing unchanged states;
+  collect independent predicate/type findings before defining repair scope.
+- [ ] `[must]` Generate the user's current locale by default, retaining stable
+  localization keys and scenario-owned assets. Explicit multilingual requests
+  and existing translations remain authoritative; never label copied text as
+  a translation. Verify both EN and RU single-locale paths and the bilingual path.
+- [ ] `[must]` Compare the unchanged short media request with a moderately
+  elaborated request describing the same outcomes, without ABI vocabulary or
+  privileged solution hints. Preserve model I/O, timings and browser evidence.
+- [ ] `[must]` Repeat all eight development archetypes after the diagnostic
+  fixes; require executable browser tasks, not merely successful compilation.
+  A single 8/8 run is not a stability or held-out autonomy claim.
+- [ ] `[must]` Remove pre-comparison owned test developments using provenance
+  and checked paths. Keep both low/high comparison cohorts, ordinary user
+  applications, source archives and historical evaluation evidence intact.
+
+Engineering basis: [OpenAI text-generation guidance](https://developers.openai.com/api/docs/guides/text),
+[prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), and
+[Anthropic context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).
+Apply their guidance as testable hypotheses: sufficient high-signal context,
+consistent contracts, representative evaluations and stable prefixes, not a
+promise that shorter prompts alone produce reliable software.
+
 ## R9. Cutover And Cleanup
 
 Promotion evidence (2026-09-11): the pre-promotion comparison found no
