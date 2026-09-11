@@ -696,3 +696,21 @@ The diagnostic helper `e2e/stand/replay-builder-state-repair.py` replays one
 retained request with an explicit matching `--checkpoint` and `--effort` into
 a fresh output directory; `--response` validates a retained response without
 another model call. Neither route edits the test application or its old verdict.
+
+`e2e/stand/compare-builder-effort.py LOW_RUN HIGH_RUN NEW_OUTPUT` builds a
+UTF-8 JSON/Markdown comparison from retained evidence without new model calls.
+It checks matching case digests, grader, primary schema and stable messages,
+and actual model/effort/capacity on primary and repair requests. Optional
+`--subnet-id` and `--client-url` add local links to admitted retained previews.
+Pipeline times include validation/materialization/grading; model execution
+includes repairs. Input includes cached tokens, and output includes reasoning.
+Grader consumption is reported separately. One repetition and one ordered
+low/high pair are diagnostic, not a statistical qualification.
+
+The read-only browser review accepts `ADAOS_E2E_LOCALE=en|ru` and optional
+`ADAOS_E2E_SELECT_WIDGET` to inspect a selected collection item and its details.
+It records actual image/media elements rather than inferring rendering from
+attachment fields. A successful screenshot probe still does not establish
+media task success; inspect loaded assets and the requested user interaction.
+The interaction probe supports text/date update fields; other combinations
+remain `not_exercised` rather than model failures.

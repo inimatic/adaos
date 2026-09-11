@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "2.1.1",
+  "catalog_version": "2.1.2",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -159,7 +159,7 @@
       "events": ["select", "click:<buttonId>"],
       "responsive": { "desktop": "tabular", "compact": "bounded horizontal overflow" },
       "limitations": ["Image cells and free-form HTML are not supported."],
-      "postconditions": ["Declared columns map to rendered cells in declaration order.", "columns[*].sortable=true enables local sorting before pagination; inputs.sort={key,direction} selects the initial order. Sorting is unavailable for server-paginated data. kind=datetime formats an ISO timestamp in the active locale and local timezone."]
+      "postconditions": ["Declared columns map to rendered cells in declaration order.", "columns[*].sortable=true enables local sorting before pagination; inputs.sort={key,direction} selects the initial order. Sorting is unavailable for server-paginated data. kind=datetime formats an ISO timestamp in the active locale and local timezone.", "Page size and declared filter modes persist within the active subnet, page scope and widget identity. inputs.preferences=false disables persistence; inputs.preferences.filterStateKeys adds explicit scalar filter modes. Search, selection, records and cursors are not persisted. inputs.refresh=true adds a targeted datasource reload button."]
     },
     {
       "id": "ui.form",

@@ -755,11 +755,16 @@ hidden fields to mutation payloads; focused Client tests now total 127.
 - [x] `[must]` Compare explicit GPT-5 reasoning profiles on the same eight
   prompts before fixing a cost/latency default. Record requested and actual
   options; never attribute a profile change to context engineering alone.
-- [x] `[must]` Complete all independent state-proof findings before repair;
+- [ ] `[must]` Complete all independent state-proof findings before repair;
   query reachability failures must not remain hidden behind fixture mismatches.
   Proof rules, hidden predicates, unreachable queries and missing empty views
   now share the validation/diagnostic implementation. Patch schemas include only
   reachable definitions; regression tests cover digest and unrelated-view edits.
+  Reopened after the model-capacity high inventory run: two malformed choice
+  operands existed in the original response, but only the populated-state
+  mismatch reached repair. Its correct scoped patch then hit an unreported
+  empty-state choice error. Aggregate canonicalization, type and proof findings
+  together before fixing the permitted repair scope.
 - [ ] `[must]` Reduce state-repair input to affected evidence, typed fields,
   readable fixture values and affected Brief requirements; retain full original
   input/output for audit. Qualify preservation and meaning, not only patch size.
@@ -864,6 +869,40 @@ compact interaction and final-opacity screenshot proof. Builder source is
 checkpointed as `builder@0.2.113`, ProjectRelease
 `sha256:e245fff69078098198cb9863d852c4f32d948ea125ac6a8c4614087d81ca754e`.
 No test prototype or unqualified Builder revision is promoted to Workspace.
+
+### Model-Capacity Effort Comparison
+
+- [x] `[must]` Repeat all eight visible cases with GPT-5 `low` and `high` at
+  the same explicit 128,000-token provider maximum. Inspect actual primary and
+  repair requests and keep the normal user's defaults unchanged.
+- [x] `[should]` Retain a reproducible comparison of per-case model/pipeline
+  times, fresh/cached input, total/reasoning output, repairs and verdicts, with
+  links to admitted DEV previews and separate qualitative findings.
+
+Runs `effort-low-provider-max-20260911-01` and
+`effort-high-provider-max-20260911-01` completed without provider truncation or
+timeouts. Cases, primary schema, stable context and grader match; the comparison
+helper checks those inputs. Low passed 6/8, high 5/8. First candidates compiled
+4/8 and 5/8 respectively; these are not task-success rates. Model calls total
+12/11, output 79,508/193,965, reasoning 32,576/152,384 and non-reasoning output
+46,932/41,581. Median full-case time is 138.09/250.72 seconds; total model
+execution is 925.20/1,992.91 seconds. Largest individual response is
+8,605/29,627 output tokens, well below the experiment ceiling.
+
+Evidence and per-application interpretation:
+`e2e/artifacts/builder/effort-comparison-20260911-01/comparison.md` and
+`qualitative-review.md`. All eleven admitted prototypes have wide/compact
+captures. Matched queue, appointments and budget probes pass selected edit,
+save, reopen, restore and overlay dismissal on both layouts; unsupported
+create/delete combinations remain explicitly untested. The high queue initially
+exceeded the text-only probe's coverage; an added date-field probe passes,
+without changing the prototype or counting an unsupported probe as model failure.
+
+Do not select high as the universal default from this run. It improves some
+first candidates and business-rule disclosure, but shared acceptance/repair
+defects dominate several failures and grader v11 has a browser-proven media
+false positive. Neither cohort qualifies autonomous prototyping. This is one
+development-sample comparison, not a sealed baseline or repeated reliability proof.
 
 
 Current correction evidence (2026-09-11): the eight visible rubrics now trace
