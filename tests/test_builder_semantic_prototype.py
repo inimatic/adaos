@@ -1113,9 +1113,55 @@ def test_filter_query_control_requires_supported_field_type() -> None:
     semantic["views"][0]["query_controls"][1]["field_ref"] = "effort"
 
     with pytest.raises(
-        BuilderWorkflowError, match="requires a choice, date, or short_text field"
+        BuilderWorkflowError,
+        match="requires a boolean, choice, date, or short_text field",
     ):
         validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_boolean_filter_compiles_to_typed_tristate_selector() -> None:
+    brief, semantic = _fixture()
+    semantic["resource"]["fields"].append(
+        {
+            "id": "requires_attention",
+            "label": _text(
+                "work.field.requires_attention",
+                "Requires attention",
+                "Требует внимания",
+            ),
+            "value_type": "boolean",
+            "required": True,
+            "editable": True,
+        }
+    )
+    semantic["resource"]["records"][0]["requires_attention"] = True
+    semantic["resource"]["records"][1]["requires_attention"] = False
+    semantic["views"][0]["query_controls"] = [
+        {
+            "id": "attention-filter",
+            "kind": "filter",
+            "label": _text(
+                "work.filter.requires_attention",
+                "Requires attention",
+                "Требует внимания",
+            ),
+            "field_ref": "requires_attention",
+        }
+    ]
+
+    result = compile_semantic_prototype(semantic, brief=brief)
+
+    page = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    control = page["widgets"][0]
+    assert control["type"] == "input.selector"
+    assert [item["value"] for item in control["inputs"]["options"]] == [
+        "",
+        True,
+        False,
+    ]
+    assert page["widgets"][1]["dataSource"]["query"]["filters"] == {
+        "requires_attention": "$state.query_attention_filter"
+    }
 
 
 def test_short_text_filter_compiles_to_native_text_input() -> None:

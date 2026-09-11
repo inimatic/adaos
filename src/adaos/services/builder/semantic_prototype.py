@@ -473,13 +473,14 @@ def _validate_semantic_prototype_v1(
                         f"{field_ref!r}"
                     )
                 if fields[field_ref]["value_type"] not in {
+                    "boolean",
                     "choice",
                     "date",
                     "short_text",
                 }:
                     _fail(
-                        f"filter query control {query_id!r} requires a choice, "
-                        "date, or short_text field"
+                        f"filter query control {query_id!r} requires a boolean, "
+                        "choice, date, or short_text field"
                     )
 
     for state in states.values():
@@ -1572,7 +1573,10 @@ def _compile_semantic_prototype_v1(
                     }
                 )
                 widget["dataSource"]["query"]["search"] = f"$state.{state_ref}"
-            elif fields[str(control["field_ref"])]["value_type"] == "choice":
+            elif fields[str(control["field_ref"])]["value_type"] in {
+                "boolean",
+                "choice",
+            }:
                 field = fields[str(control["field_ref"])]
                 all_label, all_label_i18n = _localized(
                     {
@@ -1589,7 +1593,27 @@ def _compile_semantic_prototype_v1(
                         "label_i18n": all_label_i18n,
                     }
                 ]
-                for option in field.get("options") or []:
+                field_options = list(field.get("options") or [])
+                if field["value_type"] == "boolean":
+                    field_options = [
+                        {
+                            "value": True,
+                            "label": {
+                                "key": f"{control['label']['key']}.yes",
+                                "en": "Yes",
+                                "ru": "Да",
+                            },
+                        },
+                        {
+                            "value": False,
+                            "label": {
+                                "key": f"{control['label']['key']}.no",
+                                "en": "No",
+                                "ru": "Нет",
+                            },
+                        },
+                    ]
+                for option in field_options:
                     option_label, option_label_i18n = _localized(
                         option["label"], dictionaries
                     )
