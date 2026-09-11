@@ -1972,6 +1972,54 @@ def test_collection_empty_is_a_fixture_of_the_same_populated_resource() -> None:
     assert compiled["source_map"]["state:empty-example"][0].endswith(".inputs.emptyText")
 
 
+def test_typed_fixture_arrays_do_not_interpret_text_or_malformed_values() -> None:
+    from adaos.services.builder.semantic_prototype import _normalize_candidate_fixture_values
+    fields = [{"value_type": "attachments"}, {"value_type": "multi_choice", "options": [{"value": "a", "label": {"en": "Alpha"}}]}, {"value_type": "short_text"}]
+    records = [{"values": ['["sample://document"]', '["Alpha"]', '[]']},
+               {"values": ['[]', '[1]', '["unchanged"]']}, {"values": ['not json', '{"a":1}', '001']}]
+    changes = []
+    _normalize_candidate_fixture_values(fields=fields, records=records, path="$.records", normalizations=changes)
+    assert [record["values"] for record in records] == [
+        [["sample://document"], ["a"], '[]'], [[], '[1]', '["unchanged"]'], ['not json', '{"a":1}', '001'],
+    ]
+    assert [change["kind"] for change in changes].count("typed_json_array") == 3
+    assert changes[2]["kind"] == "localized_choice_value"
+
+
+@pytest.mark.parametrize("role", ["details", "editor"])
+def test_field_predicate_can_be_observed_in_selected_record_views(role: str) -> None:
+    brief, semantic = _multi_resource_fixture()
+    view = next(view for view in semantic["views"] if view["role"] == role)
+    if "result" not in view["field_refs"]:
+        view["field_refs"].append("result")
+    state = copy.deepcopy(semantic["representative_states"][0])
+    state.update(id="record-state", view_ref=view["id"], min_items=1, max_items=None,
+                 filters=[{"field_ref": "result", "operator": "eq", "value": "issue"}],
+                 proof={"kind": "field_predicate", "visible_field_refs": ["result"]})
+    semantic["representative_states"].append(state)
+    compiled = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    check = next(check for check in compiled["representative_state_checks"] if check["state_id"] == "record-state")
+    assert check["fixture_mode"] == "selected_record"
+    assert check["matching_record_ids"]
+    assert compiled["source_map"]["state:record-state"]
+
+
+def test_state_view_errors_are_included_in_first_pass_findings() -> None:
+    brief, semantic = _multi_resource_fixture()
+    editor = next(view for view in semantic["views"] if view["role"] == "editor")
+    first = copy.deepcopy(semantic["representative_states"][0])
+    first.update(id="empty-editor", view_ref=editor["id"], filters=[], min_items=0, max_items=0,
+                 proof={"kind": "collection_empty", "visible_field_refs": []})
+    semantic["representative_states"].append(first)
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    codes = {item["code"] for item in caught.value.findings}
+    assert "semantic.state_view_role_invalid" in codes
+    from adaos.services.builder.semantic_prototype import _semantic_v2_model_findings
+    semantic["representative_states"][-1]["view_ref"] = "absent"
+    assert "semantic.state_view_missing" in {item["code"] for item in _semantic_v2_model_findings(semantic)}
+
+
 def test_all_invalid_state_predicates_are_reported_before_repair_scope() -> None:
     brief, semantic = _multi_resource_fixture()
     state = semantic["representative_states"][0]

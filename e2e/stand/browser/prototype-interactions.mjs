@@ -54,6 +54,8 @@ try {
     const sample = { layout, checks: [], errors: [], mutations: [] }
     report.samples.push(sample)
     page.on('pageerror', error => sample.errors.push(error.message))
+    page.on('crash', () => sample.errors.push('Browser page crashed'))
+    page.on('close', () => { if (!sample.completed) sample.errors.push('Browser page closed before completion') })
     page.on('request', request => {
       if (new URL(request.url()).pathname === '/api/resources/operate') {
         const body = request.postDataJSON()
@@ -279,9 +281,14 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}-complete.png`), fullPage: true })
     } catch (error) {
       sample.failure = error.message
-      sample.text = await page.locator('body').innerText()
-      await page.screenshot({ path: path.join(output, `${layout}-failure.png`), fullPage: true })
-    } finally { await context.close() }
+      sample.text = await page.locator('body').innerText({ timeout: 2000 }).catch(error => `Diagnostics unavailable: ${error.message}`)
+      await page.screenshot({ path: path.join(output, `${layout}-failure.png`), fullPage: true, timeout: 5000 })
+        .catch(error => { sample.diagnosticFailure = error.message })
+    } finally {
+      sample.completed = true
+      await fs.writeFile(path.join(output, 'review.json'), JSON.stringify(report, null, 2) + '\n', 'utf8')
+      await context.close()
+    }
   }
 } finally { await browser.close() }
 report.passed = report.samples.length === 2 && report.samples.every(sample => !sample.failure && !sample.errors.length)

@@ -313,6 +313,21 @@ def _normalize_candidate_fixture_values(
             kind = str(field.get("value_type") or "")
             original = values[field_index]
             normalization_kind = "localized_choice_value"
+            if kind in {"attachments", "multi_choice"} and isinstance(original, str):
+                try:
+                    decoded = json.loads(original)
+                except ValueError:
+                    decoded = None
+                if not isinstance(decoded, list) or not all(isinstance(item, str) for item in decoded):
+                    continue
+                values[field_index] = decoded
+                normalizations.append({
+                    "kind": "typed_json_array",
+                    "from": json.dumps(original, ensure_ascii=False),
+                    "to": json.dumps(decoded, ensure_ascii=False),
+                    "target": f"{path}[{record_index}].values[{field_index}]",
+                })
+                original = decoded
             if kind == "choice":
                 normalized, changed = _candidate_choice_value(field, original)
             elif kind == "multi_choice" and isinstance(original, list):
@@ -381,6 +396,7 @@ def _validate_semantic_prototype_v1(
     *,
     brief: Mapping[str, Any] | None = None,
     require_primary: bool = True,
+    record_state_ids: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Validate schema, references, and accepted-requirement coverage."""
 
@@ -537,7 +553,8 @@ def _validate_semantic_prototype_v1(
     for state in states.values():
         state_id = str(state["id"])
         view_ref = str(state["view_ref"])
-        if view_ref not in views or views[view_ref]["role"] != "collection":
+        allowed_roles = {"collection", "details", "editor"} if state_id in record_state_ids else {"collection"}
+        if view_ref not in views or views[view_ref]["role"] not in allowed_roles:
             _fail(
                 f"representative state {state_id!r} requires a collection view_ref"
             )
@@ -1677,11 +1694,12 @@ def _compile_semantic_prototype_v1(
     brief: Mapping[str, Any] | None = None,
     project_ref: str | None = None,
     require_primary: bool = True,
+    record_state_ids: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Compile a validated semantic document into canonical Prototype artifacts."""
 
     document = _validate_semantic_prototype_v1(
-        value, brief=brief, require_primary=require_primary
+        value, brief=brief, require_primary=require_primary, record_state_ids=record_state_ids
     )
     dictionaries: dict[str, dict[str, str]] = {locale: {} for locale in _text_locales(document["title"])}
     resource = dict(document["resource"])
@@ -2134,7 +2152,7 @@ def _compile_semantic_prototype_v1(
                 "matching_record_count": len(matching_records),
                 "min_items": minimum,
                 "max_items": maximum,
-                "fixture_mode": "empty" if empty_fixture else "filtered_records",
+                "fixture_mode": "empty" if empty_fixture else "selected_record" if views[view_ref]["role"] != "collection" else "filtered_records",
                 "ok": True,
             }
         )
@@ -2829,6 +2847,8 @@ def _state_proof_findings(
     }
     kind = str(proof["kind"])
     rule = STATE_PROOF_RULES[kind]
+    if view["role"] not in rule["view_roles"]:
+        add("semantic.state_view_role_invalid", f"{kind} proof requires a view with role in {rule['view_roles']}")
     if ((rule["filters"] == "none" and filters)
         or (rule["filters"] == "required" and not filters)
         or int(state["min_items"]) < rule["min_items"]
@@ -3044,6 +3064,12 @@ def _semantic_v2_model_findings(
         state_id = str(state.get("id") or state_index)
         view = views.get(str(state.get("view_ref") or ""))
         if view is None:
+            findings.append({
+                "code": "semantic.state_view_missing",
+                "path": f"$.representative_states[{state_index}].view_ref",
+                "semantic_refs": [f"state:{state_id}"],
+                "detail": f"representative state {state_id!r} references unknown view {state.get('view_ref')!r}",
+            })
             continue
         resource = resources.get(str(view.get("resource_ref") or ""))
         if resource is None:
@@ -3252,7 +3278,8 @@ def _validate_semantic_prototype_v2(
             "capability_gaps": [],
         }
         _validate_semantic_prototype_v1(
-            slice_document, brief=None, require_primary=False
+            slice_document, brief=None, require_primary=False,
+            record_state_ids=frozenset(str(item["id"]) for item in states.values() if item["proof"]["kind"] == "field_predicate"),
         )
 
     for index, state in enumerate(states.values()):
@@ -3577,6 +3604,7 @@ def _compile_semantic_prototype_v2(
             brief=None,
             project_ref=project_ref,
             require_primary=False,
+            record_state_ids=frozenset(str(item["id"]) for item in resource_states if item["proof"]["kind"] == "field_predicate"),
         )
         page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
         record_schemas.update(page["meta"]["builder"]["prototype_record_schemas"])

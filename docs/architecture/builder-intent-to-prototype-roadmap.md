@@ -1266,7 +1266,7 @@ the prompt against that false-positive gate or copy a domain solution into Core.
   model correctly uses it only as a relationship selector. Qualify a typed,
   observable lookup path before relaxing this constraint; do not fabricate UI
   or silently omit resource validation to increase the score.
-- [ ] `[must]` Qualify real attachment capture, not filename metadata: preserve
+- [x] `[must]` Qualify real attachment capture, not filename metadata: preserve
   scalar/multiple value shape, store bytes in Preview-owned state, return a
   durable scoped reference, reopen the content and reject failed uploads without
   overwriting the previous value. Never put runtime attachments in Builder's
@@ -1286,6 +1286,10 @@ the prompt against that false-positive gate or copy a domain solution into Core.
   replay compatibility; qualify with fresh generation, not retrospective scores.
 - [ ] `[should]` Tie Prototype attachment reclamation to owned revision cleanup.
   Per-resource storage is bounded; aggregate retention still needs lifecycle GC.
+- [ ] `[must]` Replace frozen relationship fixture enums with typed live lookup
+  options and runtime reference validation. Creating a related record must make
+  it selectable without regenerating the Prototype; reject dangling references.
+  Qualify create-related/select/save/reopen across unrelated archetypes.
 
 Qualification progress: `context-media-paired-low-20260911-02` passed all four
 development attempts (short 2/2, detailed 2/2). Each prompt needed one repair
@@ -1351,8 +1355,27 @@ probe limitation, not as either a working edit path or a generation failure.
   visibility bindings alongside the other first-pass findings.
 - [x] `[must]` Normalize only unambiguous typed JSON fixture scalars with retained
   original evidence; reject unit/timecode interpretations and text-ID coercion.
-- [ ] `[must]` Qualify empty render fixtures separately from real mutations and
+- [x] `[must]` Qualify empty render fixtures separately from real mutations and
   repeat library/media generation under the corrected state context.
+- [x] `[must]` Permit field-predicate evidence in selected-record details/editors,
+  keeping collection-specific proof kinds strict. Decode exact typed JSON arrays
+  with original evidence rather than spending a repair on unambiguous quoting.
+
+`context-state-low-20260912-01` passed 3/4 attempts: library 1/2, media 2/2.
+The remaining library failure exposed a valid details-state rejected as if every
+proof required a collection. Its first response also encoded attachment arrays
+as JSON strings. These have separate compiler/normalization regressions; fresh
+eight-archetype qualification is still required. The passing library uses one
+populated collection rather than duplicate sample resources.
+
+Library browser tasks now prove modal cancel/focus restore, edit/save/reopen,
+and actual file upload/save/reopen/download with identical SHA-256 bytes on
+1440px and 390px viewports. The first captures hung when a Client file list
+recreated attachment components on each Angular render; stable item tracking
+fixed the unchanged generated artifact. Earlier captures remain failures, not
+rewritten passes. Procurement empty-response fixtures passed both viewports
+separately from its real create/status-transition command tests. These results
+qualify the named primitives, not every workflow or polished layout.
 
 Engineering basis: [OpenAI text-generation guidance](https://developers.openai.com/api/docs/guides/text),
 [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), and

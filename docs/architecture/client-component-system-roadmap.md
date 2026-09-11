@@ -407,6 +407,22 @@ tests passed (83), with 15 expression tests rerun after the final correction.
 The unchanged appointments candidate passed browser edit/save/reopen on both
 viewports after the path fix. This is not complete application qualification.
 
+Primitive progress (2026-09-12): Client `388b014` adds stored-record read-only
+conditions, authenticated Prototype attachment upload/download, and sanitized
+Markdown details. Follow-up stable tracking of file references fixes a repeated
+Angular component-creation loop on opening a populated attachment form. Library
+browser tasks on 1440px/390px prove upload/save/reopen/download byte equality,
+modal dismissal and edit round trips; the generated source was not hand-patched.
+- [x] `[must]` Qualify durable attachment references and transfer failures with
+  provider tests and browser byte-level evidence, not filename-only fixtures.
+- [ ] `[must]` Add generic live resource-backed form options with invalidation,
+  loading/error states and preserved drafts. Compile relationship selectors to
+  current records, not seed-time enums; qualify newly created related records.
+- [ ] `[should]` Group collection search/filters into responsive tool regions.
+  The current library still spends much of its first viewport on stacked
+  full-width filters. This is shared Client/compiler UX debt, not evidence that
+  the model ignored a working layout primitive.
+
 Exit gate: each new primitive improves matched task outcomes without adding
 domain branches or regressing Client conformance, bundle, or latency gates.
 

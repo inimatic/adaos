@@ -605,9 +605,16 @@ retaining normal seeded records. Browser receipts distinguish intercepted empty
 responses from real provider-backed mutations. This follows the separation of
 [UI state fixtures and interaction tests](https://storybook.js.org/docs/writing-stories/mocking-data-and-modules/mocking-network-requests),
 without adding Storybook or a second runtime to Builder.
+`field_predicate` can be observed in a collection, selected-record details or
+an editor. Its receipt identifies matching records and a selected-record fixture
+when appropriate. Collection-empty and query-empty proofs still require an
+actual collection. Proof/view compatibility is part of the shared model-visible
+rules and first-pass diagnostics, not a hidden late compiler restriction.
 
 Normalization may decode an exact JSON scalar string according to its declared
-number/boolean type and map an optional empty scalar to null. It must preserve
+number/boolean type and map an optional empty scalar to null. Exact JSON arrays
+of strings may likewise be decoded for attachments/multiple choices only.
+Plain text, malformed JSON, object arrays and CSV are not reinterpreted. It must preserve
 raw model evidence, record each conversion, and never infer units, parse a timecode
 as seconds, or rewrite textual identifiers. Validation still rejects ambiguous
 or incompatible values; another model call is not needed merely to remove quotes
