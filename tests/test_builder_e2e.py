@@ -944,6 +944,14 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
     artifact_root = tmp_path / "scenario"
     journal_dir = artifact_root / "llm_jobs"
     journal_dir.mkdir(parents=True)
+    (journal_dir / "root-job.request.json").write_text(
+        json.dumps({"messages": [{"role": "user", "content": "full input"}]}),
+        encoding="utf-8",
+    )
+    (artifact_root / "candidate.primary.json").write_text(
+        json.dumps({"response": "full output", "candidate": {"views": []}}),
+        encoding="utf-8",
+    )
     (journal_dir / "root-job.json").write_text(
         json.dumps(
             {
@@ -951,6 +959,7 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
                 "job_id": "root-job",
                 "related_ids": ["local-job", "root-job"],
                 "status": "succeeded",
+                "input_artifact": {"path": "llm_jobs/root-job.request.json"},
                 "diagnostic": {
                     "repair_attempted": True,
                     "result": {
@@ -1042,6 +1051,10 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
     ] == [
         {
             "candidate_sha256": "semantic-sha",
+            "evidence_ref": (
+                "evidence/model-io/equipment-attempt-01/root-job/"
+                "candidate.primary.json"
+            ),
             "kind": "raw_model_output",
             "path": "candidate.primary.json",
             "response_sha256": "response-sha",
@@ -1050,6 +1063,14 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
             "structured": True,
         }
     ]
+    assert {
+        item["kind"]
+        for item in result["generation_diagnostic"]["model_io_artifacts"]
+    } == {"terminal", "request", "raw_model_output"}
+    assert all(
+        (tmp_path / "bundle" / reference).is_file()
+        for reference in result["evidence_refs"]
+    )
 
 
 def test_runner_injects_case_webspace_into_builder_wait(tmp_path: Path) -> None:

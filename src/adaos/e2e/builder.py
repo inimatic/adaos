@@ -352,6 +352,100 @@ def _compact_generation_diagnostic(journal: Mapping[str, Any]) -> dict[str, Any]
     }
 
 
+def _retain_generation_model_io(
+    journal: Mapping[str, Any],
+    *,
+    terminal_path: Path,
+    bundle_dir: Path,
+    case_id: str,
+    repetition: int,
+) -> list[dict[str, Any]]:
+    """Retain redacted, complete model I/O before temporary project cleanup."""
+
+    artifact_root = terminal_path.parent.parent.resolve()
+    diagnostic = (
+        journal.get("diagnostic")
+        if isinstance(journal.get("diagnostic"), Mapping)
+        else {}
+    )
+    result = (
+        diagnostic.get("result")
+        if isinstance(diagnostic.get("result"), Mapping)
+        else {}
+    )
+    sources: list[tuple[str, str, Path]] = [
+        (
+            "terminal",
+            terminal_path.relative_to(artifact_root).as_posix(),
+            terminal_path,
+        )
+    ]
+    input_artifact = (
+        journal.get("input_artifact")
+        if isinstance(journal.get("input_artifact"), Mapping)
+        else {}
+    )
+    input_path = str(input_artifact.get("path") or "").strip()
+    if input_path:
+        sources.append(("request", input_path, artifact_root / input_path))
+    for candidate in result.get("candidate_artifacts") or []:
+        if not isinstance(candidate, Mapping):
+            continue
+        source_path = str(candidate.get("path") or "").strip()
+        if source_path:
+            sources.append(
+                (
+                    str(candidate.get("kind") or "candidate"),
+                    source_path,
+                    artifact_root / source_path,
+                )
+            )
+
+    evidence_dir = (
+        Path("evidence")
+        / "model-io"
+        / (
+            f"{_safe_token(case_id, fallback='case')}-"
+            f"attempt-{repetition:02d}"
+        )
+        / _safe_token(str(journal.get("job_id") or "job"), fallback="job")
+    )
+    retained: list[dict[str, Any]] = []
+    seen: set[Path] = set()
+    for kind, source_path, unresolved in sources:
+        try:
+            source = unresolved.expanduser().resolve()
+            source.relative_to(artifact_root)
+        except (OSError, ValueError):
+            continue
+        if source in seen or not source.is_file():
+            continue
+        seen.add(source)
+        try:
+            payload = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        redacted = redact_value(payload)
+        relative = evidence_dir / source.name
+        target = bundle_dir / relative
+        _write_json(target, redacted)
+        source_bytes = source.read_bytes()
+        evidence_bytes = target.read_bytes()
+        retained.append(
+            {
+                "kind": kind,
+                "source_path": Path(source_path).as_posix(),
+                "source_sha256": "sha256:"
+                + hashlib.sha256(source_bytes).hexdigest(),
+                "evidence_ref": relative.as_posix(),
+                "evidence_sha256": "sha256:"
+                + hashlib.sha256(evidence_bytes).hexdigest(),
+                "content_redacted": payload != redacted,
+            }
+        )
+    return retained
+
+
 def _run_command(args: Sequence[str], cwd: Path, *, timeout: float = 5.0) -> str | None:
     try:
         completed = subprocess.run(
@@ -931,6 +1025,27 @@ class CompatibilityBuilderExecutor:
                     }
                     bundle_dir = str(context.get("bundle_dir") or "").strip()
                     if bundle_dir:
+                        retained = _retain_generation_model_io(
+                            journal,
+                            terminal_path=terminal_path,
+                            bundle_dir=Path(bundle_dir),
+                            case_id=str(context.get("case_id") or "case"),
+                            repetition=int(context.get("repetition") or 1),
+                        )
+                        if retained:
+                            generation_diagnostic["model_io_artifacts"] = retained
+                            evidence_by_source = {
+                                str(item["source_path"]): str(item["evidence_ref"])
+                                for item in retained
+                            }
+                            for candidate in generation_diagnostic.get(
+                                "candidate_artifacts", []
+                            ):
+                                source_path = str(candidate.get("path") or "")
+                                if source_path in evidence_by_source:
+                                    candidate["evidence_ref"] = evidence_by_source[
+                                        source_path
+                                    ]
                         relative = (
                             Path("evidence")
                             / "generation"
@@ -944,6 +1059,10 @@ class CompatibilityBuilderExecutor:
                             redact_value(generation_diagnostic),
                         )
                         response["evidence_ref"] = relative.as_posix()
+                        response["evidence_refs"] = [
+                            relative.as_posix(),
+                            *(str(item["evidence_ref"]) for item in retained),
+                        ]
                     return response
             if terminal_path is None:
                 response = self._session(
@@ -2135,6 +2254,10 @@ class BuilderE2ERunner:
             evidence = str(output.get("evidence_ref") or "").strip()
             if evidence:
                 evidence_refs.append(evidence)
+            for evidence_item in output.get("evidence_refs") or []:
+                evidence_item = str(evidence_item or "").strip()
+                if evidence_item:
+                    evidence_refs.append(evidence_item)
             full_outputs.append(copy.deepcopy(output))
             persisted_output, persisted_evidence = _compact_step_output(
                 output,
