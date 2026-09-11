@@ -23,7 +23,7 @@ const widgets = application.desktop.pageSchema.widgets
 const forms = [
   ...widgets.filter(widget => widget.type === 'ui.form').map(widget => ({ widget })),
   ...Object.entries(application.modals || {}).flatMap(([modalId, modal]) =>
-    (modal.pageSchema?.widgets || []).filter(widget => widget.type === 'ui.form').map(widget => ({ widget, modalId }))),
+    (modal.schema?.widgets || []).filter(widget => widget.type === 'ui.form').map(widget => ({ widget, modalId }))),
 ]
 const token = process.env.ADAOS_E2E_HUB_TOKEN
 const subnet = process.env.ADAOS_E2E_SUBNET_ID
@@ -75,7 +75,7 @@ try {
         const row = host(collection.id).locator('tr.row-selectable, .collection-focus-item').first()
         await expect(row).toBeVisible({ timeout: 30_000 })
         await row.click()
-        if (modalId) await host(`open-${widget.id}`).getByRole('button', { name: widget.title, exact: true }).click()
+        if (modalId) await host(`open-${widget.id}`).locator('[data-command-id="edit"]').click()
         const form = host(widget.id)
         const input = form.locator(`[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}]`).locator('input, textarea').or(form.locator(`input[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}], textarea[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}]`)).first()
         await expect(input).toBeVisible({ timeout: 15_000 })
@@ -101,7 +101,7 @@ try {
         if (!mutation?.record || mutation.payload[field.id] !== marker) throw new Error('Wrong record or payload was submitted')
         if (modalId) {
           await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
-          await host(`open-${widget.id}`).getByRole('button', { name: widget.title, exact: true }).click()
+          await host(`open-${widget.id}`).locator('[data-command-id="edit"]').click()
         } else await page.reload({ waitUntil: 'domcontentloaded' })
         // Re-open and verify the persisted value, not merely the edited DOM.
         if (!modalId) {

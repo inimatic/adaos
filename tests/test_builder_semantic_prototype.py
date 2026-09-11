@@ -1895,7 +1895,8 @@ def test_semantic_v2_editor_surface_preserves_commands_and_source_map(surface, p
     application = result["webui"]["ui"]["application"]
     modal = application["modals"][f"editor-{editor['id']}"]
     assert modal["presentation"]["kind"] == presentation
-    form = modal["pageSchema"]["widgets"][0]
+    assert "pageSchema" not in modal
+    form = modal["schema"]["widgets"][0]
     assert form["inputs"]["closeOnSuccess"] is True
     assert {button["id"] for button in form["inputs"]["buttons"]} == {action["id"] for action in form["actions"]}
     assert all("selected_" in action["enabledIf"] for action in form["actions"])
@@ -1903,6 +1904,11 @@ def test_semantic_v2_editor_surface_preserves_commands_and_source_map(surface, p
     assert all("ui.application.modals." in ref for ref in result["source_map"][f"view:{editor['id']}"])
     assert any(widget["id"] == f"open-{editor['id']}" for widget in application["desktop"]["pageSchema"]["widgets"])
     assert result["locale_dictionaries"]["ru"]["prototype.editor.new"] == "Добавить"
+    from jsonschema import ValidationError
+    import adaos.services.builder.semantic_prototype as compiler
+    modal["pageSchema"] = modal.pop("schema")
+    with pytest.raises(ValidationError):
+        compiler._validator("webui.v1.schema.json").validate(result["webui"])
 
 
 def test_semantic_v2_relationship_identity_compiles_editor_selector() -> None:

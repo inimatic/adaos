@@ -3308,7 +3308,7 @@ def _compile_editor_surfaces(
         commands = [command for command in document["commands"] if command["view_ref"] == view["id"]]
         toolbar: dict[str, Any] = {
             "id": f"open-{view['id']}", "area": view["region_role"], "type": "ui.actions",
-            "inputs": {"buttons": []}, "actions": [],
+            "inputs": {"variant": "adaptiveToolbar", "buttons": []}, "actions": [],
         }
         if any(command["kind"] == "create" for command in commands):
             label, label_i18n = _localized({"key": "prototype.editor.new", "en": "New", "ru": "Добавить"}, dictionaries)
@@ -3326,10 +3326,10 @@ def _compile_editor_surfaces(
             application.setdefault("modals", {})[modal_id] = {
                 "title": editor["title"], "title_i18n": editor["title_i18n"],
                 "presentation": {"kind": "sideSheet" if surface == "side_sheet" else "modal"},
-                "pageSchema": {"id": modal_id, "layout": {"type": "stack", "areas": [{"id": "main"}]}, "widgets": [editor]},
+                "schema": {"id": modal_id, "layout": {"type": "stack", "areas": [{"id": "main"}]}, "widgets": [editor]},
             }
             old = f"ui.application.desktop.pageSchema.widgets.@{view['id']}"
-            new = f"ui.application.modals.{modal_id}.pageSchema.widgets.@{view['id']}"
+            new = f"ui.application.modals.{modal_id}.schema.widgets.@{view['id']}"
             for refs in source_map.values():
                 refs[:] = [ref.replace(old, new) if ref == old or ref.startswith(old + ".") else ref for ref in refs]
         if toolbar["inputs"]["buttons"]:

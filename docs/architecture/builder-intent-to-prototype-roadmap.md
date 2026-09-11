@@ -729,6 +729,15 @@ now preserves unrelated data and receives an explicit patch context/schema.
 Compiler defects are classified separately and do not trigger model repair.
 The complete raw input/output evidence is retained; a fresh run is required.
 
+Run `executable-surfaces-gpt5-20260911-02` then stopped at the first modal
+contract blocker: the compiler emitted `pageSchema` instead of the established
+modal `schema`. This is a platform defect, not model failure. The ABI now rejects
+that misspelling, modal query validation inherits desktop selection defaults,
+and offline replay through the actual Builder parser passes. The scoped repair
+also over-emphasized empty-proof examples; its context now starts from the
+requested state's meaning and forbids substituting emptiness for a populated
+condition. These fixes require another fresh cohort, not relabelling `-02`.
+
 
 Current correction evidence (2026-09-11): the eight visible rubrics now trace
 mandatory outcomes to their original user turns. Unrequested status confirmation,

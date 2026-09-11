@@ -41,7 +41,7 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
         "base_sha256": digest,
         "allowed_state_ids": [state["id"] for state in states],
         "allowed_view_ids": [view["id"] for view in views],
-        "task": "Return only replacement states for the reported failures and optional related views. Fixtures, commands, bindings and all other states are immutable. A collection_empty proof can test an empty dataset without removing populated fixtures; use filters=[], min_items=0, max_items=0 and an empty_state on its collection. Use query_empty only for a real reachable filter matching zero fixtures. Views may change only empty_state, field_refs or query_controls. Preserve the original user meaning and all other properties. An unchanged view need not be returned.",
+        "task": "Return only replacement states for the reported failures and optional related views. Fixtures, commands, bindings and all other states are immutable. First identify the intended state in the original user request and Brief, then choose its proof and counts. A populated condition requires matching records and a visible predicate; do not turn it into an empty state to bypass a mismatch. Empty dataset and zero query matches are different proofs; use either only when it demonstrates the requested meaning. Views may change only empty_state, field_refs or query_controls. Preserve all other properties. An unchanged view need not be returned.",
         "output_schema": {
             "type": "object", "additionalProperties": False,
             "required": ["schema", "base_sha256", "states", "views"],

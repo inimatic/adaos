@@ -898,7 +898,10 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(item, Mapping)
     }
     findings: list[dict[str, Any]] = []
-    for schema_path, page in _page_schemas(webui):
+    schemas = _page_schemas(webui)
+    desktop_state = next((page.get("initialState") for path, page in schemas if path == "ui.application.desktop.pageSchema"), {})
+    shared_initial_state = desktop_state if isinstance(desktop_state, Mapping) else {}
+    for schema_path, page in schemas:
         layout = page.get("layout") if isinstance(page.get("layout"), Mapping) else {}
         layout_type = str(layout.get("type") or "").strip()
         if layout_type not in {
@@ -923,6 +926,8 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(page.get("initialState"), Mapping)
             else {}
         )
+        if schema_path.startswith("ui.application.modals."):
+            initial_state = {**shared_initial_state, **initial_state}
         for index, widget in enumerate(widgets):
             if not isinstance(widget, Mapping):
                 continue

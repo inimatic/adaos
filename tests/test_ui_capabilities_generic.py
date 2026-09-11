@@ -43,6 +43,23 @@ def _empty_webui() -> dict:
     }
 
 
+def test_modal_resource_query_inherits_desktop_selection_defaults() -> None:
+    webui = _empty_webui()
+    application = webui["ui"]["application"]
+    page = application["desktop"]["pageSchema"]
+    page["initialState"] = {"selected_item": ""}
+    application["modals"] = {"editor": {"schema": {
+        "id": "editor", "layout": page["layout"],
+        "widgets": [{"id": "details", "type": "item.details", "area": "main",
+                     "dataSource": {"kind": "resourceQuery", "resourceType": "prototype.items", "query": {"id": "$state.selected_item"}}}],
+    }}}
+    assert validate_webui_capabilities(webui)["ok"] is True
+    page["initialState"] = {}
+    result = validate_webui_capabilities(webui)
+    assert result["ok"] is False
+    assert any(item["code"] == "ui.resource_query.state_uninitialized" for item in result["findings"])
+
+
 def test_generic_catalog_contains_no_subject_recipe() -> None:
     catalog = ui_capability_catalog()
 

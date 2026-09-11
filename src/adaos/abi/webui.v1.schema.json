@@ -959,6 +959,7 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
+        "pageSchema": false,
         "title": { "type": "string" },
         "implements": {
           "oneOf": [
