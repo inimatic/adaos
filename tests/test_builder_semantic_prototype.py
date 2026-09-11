@@ -6,6 +6,7 @@ import re
 import pytest
 
 from adaos.sdk.builder import prototype as prototype_sdk
+from adaos.sdk.developer import prototypes as developer_prototypes
 from adaos.services.builder.semantic_prototype import (
     compile_semantic_prototype_candidate,
     compile_semantic_prototype,
@@ -258,6 +259,146 @@ def _candidate(semantic: dict) -> dict:
             view["empty_state"].setdefault("detail", None)
         for control in view["query_controls"]:
             control.setdefault("field_ref", None)
+    for command in candidate["commands"]:
+        command.setdefault("confirmation", None)
+        command["fixed_values"] = [
+            {"field_ref": field_ref, "value": value}
+            for field_ref, value in command.get("fixed_values", {}).items()
+        ]
+        command.setdefault("guard", None)
+        if command["guard"] is not None:
+            command["guard"]["when"].setdefault("value", None)
+    for state in candidate["representative_states"]:
+        state.setdefault("max_items", None)
+        for predicate in state["filters"]:
+            compare_field_ref = predicate.pop("compare_field_ref", None)
+            value = predicate.pop("value", None)
+            predicate["operand"] = {
+                "kind": "field" if compare_field_ref is not None else "value",
+                "value": value,
+                "field_ref": compare_field_ref,
+            }
+    for binding in candidate["requirement_bindings"]:
+        binding["semantic_refs"] = [
+            {"kind": kind, "id": identifier}
+            for semantic_ref in binding["semantic_refs"]
+            for kind, identifier in [semantic_ref.split(":", 1)]
+        ]
+
+    def strip_localization_keys(value: object) -> None:
+        if isinstance(value, dict):
+            if {"key", "en", "ru"}.issubset(value):
+                value.pop("key")
+            for child in value.values():
+                strip_localization_keys(child)
+        elif isinstance(value, list):
+            for child in value:
+                strip_localization_keys(child)
+
+    strip_localization_keys(candidate)
+    return candidate
+
+
+def _multi_resource_fixture() -> tuple[dict, dict]:
+    brief, work = _fixture()
+    work_resource = copy.deepcopy(work.pop("resource"))
+    work_resource["fields"].append(
+        {
+            "id": "work_owner_id",
+            "label": _text("work.field.owner", "Owner", "Ответственный"),
+            "value_type": "short_text",
+            "required": True,
+            "editable": True,
+        }
+    )
+    work_resource["records"][0]["work_owner_id"] = "person-1"
+    work_resource["records"][1]["work_owner_id"] = "person-2"
+    work["schema"] = "adaos.webui.semantic.v2"
+    work["resources"] = [
+        work_resource,
+        {
+            "id": "people",
+            "identity_field_refs": ["id"],
+            "item_semantics": "One record is one independently inspectable person.",
+            "item_label": _text("people.item", "Person", "Человек"),
+            "fields": [
+                {
+                    "id": "person_name",
+                    "label": _text("people.name", "Name", "Имя"),
+                    "value_type": "short_text",
+                    "required": True,
+                    "editable": False,
+                },
+                {
+                    "id": "person_phone",
+                    "label": _text("people.phone", "Phone", "Телефон"),
+                    "value_type": "short_text",
+                    "required": False,
+                    "editable": False,
+                },
+            ],
+            "records": [
+                {"id": "person-1", "person_name": "Alex", "person_phone": "+1"},
+                {"id": "person-2", "person_name": "Sam", "person_phone": "+2"},
+            ],
+        },
+    ]
+    work["relationships"] = [
+        {
+            "id": "work_owner",
+            "from_resource_ref": "work_items",
+            "from_field_ref": "work_owner_id",
+            "to_resource_ref": "people",
+            "to_field_ref": "id",
+            "cardinality": "many_to_one",
+        }
+    ]
+    for view in work["views"]:
+        view["resource_ref"] = "work_items"
+    work["views"].append(
+        {
+            "id": "people-list",
+            "resource_ref": "people",
+            "role": "collection",
+            "region_role": "supporting",
+            "presentation": "table",
+            "title": _text("people.list", "People", "Люди"),
+            "field_refs": ["person_name", "person_phone"],
+        }
+    )
+    work["representative_states"][0]["proof"] = {
+        "kind": "collection_empty",
+        "visible_field_refs": [],
+    }
+    return brief, work
+
+
+def _multi_resource_candidate(semantic: dict) -> dict:
+    candidate = copy.deepcopy(semantic)
+    candidate["schema"] = "adaos.builder.semantic_prototype_candidate.v2"
+    candidate.pop("brief_ref")
+    candidate.pop("brief_digest")
+    candidate["layout"] = candidate["layout"]["pattern"]
+    for resource in candidate["resources"]:
+        resource.pop("identity_field_refs")
+        field_ids = [field["id"] for field in resource["fields"]]
+        for field in resource["fields"]:
+            field.setdefault("options", [])
+            field.setdefault("visible_when", None)
+        resource["records"] = [
+            {
+                "id": record["id"],
+                "values": [record.get(field_id) for field_id in field_ids],
+            }
+            for record in resource["records"]
+        ]
+    for view in candidate["views"]:
+        view.setdefault("presentation", None)
+        view.setdefault("filter", None)
+        view.setdefault("query_controls", [])
+        view.setdefault("empty_state", None)
+        if view["empty_state"] is not None:
+            view["empty_state"].setdefault("detail", None)
     for command in candidate["commands"]:
         command.setdefault("confirmation", None)
         command["fixed_values"] = [
@@ -1351,4 +1492,80 @@ def test_semantic_prototype_requires_a_primary_view_region() -> None:
         view["region_role"] = "supporting"
 
     with pytest.raises(BuilderWorkflowError, match="view in the primary region"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_semantic_v2_compiles_independent_resources_and_relationships() -> None:
+    brief, semantic = _multi_resource_fixture()
+
+    result = compile_semantic_prototype(semantic, brief=brief, project_ref="project:test")
+
+    assert [item["resource_ref"] for item in result["prototype_resources"]] == [
+        "work_items",
+        "people",
+    ]
+    assert {item["resource_type"] for item in result["prototype_resources"]} == {
+        "prototype.project.test.work_items",
+        "prototype.project.test.people",
+    }
+    page = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    assert page["meta"]["builder"]["semantic_source"] == "adaos.webui.semantic.v2"
+    assert page["meta"]["builder"]["relationships"][0]["id"] == "work_owner"
+    assert result["representative_state_checks"][0]["proof"]["kind"] == (
+        "collection_empty"
+    )
+    specs = developer_prototypes.derive_resource_specs(
+        result["webui"], result["prototype_resources"]
+    )
+    assert {
+        item["resource_definition"]["resource_type"] for item in specs
+    } == {
+        "prototype.project.test.work_items",
+        "prototype.project.test.people",
+    }
+
+
+def test_semantic_v2_provider_candidate_compiles_through_public_sdk() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+
+    result = prototype_sdk.compile_semantic_candidate(
+        candidate, brief=brief, project_ref="project:test"
+    )
+
+    assert result["semantic_document"]["schema"] == "adaos.webui.semantic.v2"
+    assert len(result["prototype_resources"]) == 2
+    assert prototype_sdk.semantic_provider_contract(version="v2")["$id"] == (
+        "adaos.builder.semantic_prototype_candidate.v2"
+    )
+
+
+def test_semantic_v2_rejects_state_proof_for_hidden_fields() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["representative_states"][0]["proof"] = {
+        "kind": "field_predicate",
+        "visible_field_refs": ["comment"],
+    }
+    semantic["representative_states"][0]["filters"] = [
+        {"field_ref": "comment", "operator": "eq", "value": "Outside tolerance"}
+    ]
+    semantic["representative_states"][0]["min_items"] = 1
+    semantic["representative_states"][0].pop("max_items")
+
+    with pytest.raises(BuilderWorkflowError, match="claims fields not visible"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
+def test_semantic_v2_rejects_ambiguous_field_namespaces() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["resources"][1]["fields"][0]["id"] = "title"
+    semantic["resources"][1]["records"][0]["title"] = semantic["resources"][1][
+        "records"
+    ][0].pop("person_name")
+    semantic["resources"][1]["records"][1]["title"] = semantic["resources"][1][
+        "records"
+    ][1].pop("person_name")
+    semantic["views"][-1]["field_refs"][0] = "title"
+
+    with pytest.raises(BuilderWorkflowError, match="duplicate field id"):
         validate_semantic_prototype(semantic, brief=brief)

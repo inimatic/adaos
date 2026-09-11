@@ -1,0 +1,351 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.webui.semantic.v2",
+  "title": "AdaOS Builder multi-resource semantic Prototype document",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "document_id",
+    "brief_ref",
+    "brief_digest",
+    "title",
+    "layout",
+    "resources",
+    "relationships",
+    "views",
+    "commands",
+    "representative_states",
+    "requirement_bindings",
+    "capability_gaps"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.webui.semantic.v2" },
+    "document_id": { "$ref": "#/$defs/id" },
+    "brief_ref": { "type": "string", "pattern": "^brief:[a-f0-9]{24}$" },
+    "brief_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "title": { "$ref": "#/$defs/localizedText" },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern"],
+      "properties": {
+        "pattern": { "enum": ["flow", "split", "grid", "focus_detail"] }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/resource" }
+    },
+    "relationships": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/relationship" }
+    },
+    "views": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/view" }
+    },
+    "commands": {
+      "type": "array",
+      "maxItems": 24,
+      "items": { "$ref": "#/$defs/command" }
+    },
+    "representative_states": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label", "view_ref", "proof", "filters", "min_items"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "label": { "$ref": "#/$defs/localizedText" },
+          "view_ref": { "$ref": "#/$defs/id" },
+          "proof": { "$ref": "#/$defs/stateProof" },
+          "filters": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/statePredicate" }
+          },
+          "min_items": { "type": "integer", "minimum": 0 },
+          "max_items": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "requirement_bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement_ref", "semantic_refs"],
+        "properties": {
+          "requirement_ref": { "type": "string", "minLength": 1 },
+          "semantic_refs": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^(resource|relationship|field|view|query|command|state):[A-Za-z0-9_.:-]+$"
+            }
+          }
+        }
+      }
+    },
+    "capability_gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement_ref", "code", "detail"],
+        "properties": {
+          "requirement_ref": { "type": "string", "minLength": 1 },
+          "code": { "type": "string", "minLength": 1 },
+          "detail": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+    "localizedText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "en", "ru"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+        "en": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "ru": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "identity_field_refs", "item_semantics", "item_label", "fields", "records"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "identity_field_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "item_semantics": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "item_label": { "$ref": "#/$defs/localizedText" },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 40,
+          "items": { "$ref": "#/$defs/field" }
+        },
+        "records": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "type": "object" }
+        }
+      }
+    },
+    "relationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from_resource_ref", "from_field_ref", "to_resource_ref", "to_field_ref", "cardinality"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "from_resource_ref": { "$ref": "#/$defs/id" },
+        "from_field_ref": { "$ref": "#/$defs/id" },
+        "to_resource_ref": { "$ref": "#/$defs/id" },
+        "to_field_ref": { "$ref": "#/$defs/id" },
+        "cardinality": { "enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many"] }
+      }
+    },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "label"],
+      "properties": {
+        "value": { "type": ["string", "number", "boolean"] },
+        "label": { "$ref": "#/$defs/localizedText" }
+      }
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field_ref", "operator"],
+      "properties": {
+        "field_ref": { "$ref": "#/$defs/id" },
+        "operator": { "enum": ["equals", "not_equals", "nonempty", "empty"] },
+        "value": { "type": ["string", "number", "boolean", "null"] }
+      }
+    },
+    "statePredicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field_ref", "operator"],
+      "oneOf": [
+        {
+          "required": ["value"],
+          "not": { "required": ["compare_field_ref"] }
+        },
+        {
+          "required": ["compare_field_ref"],
+          "not": { "required": ["value"] }
+        }
+      ],
+      "properties": {
+        "field_ref": { "$ref": "#/$defs/id" },
+        "operator": { "enum": ["eq", "neq", "lt", "lte", "gt", "gte"] },
+        "value": { "type": ["string", "number", "boolean", "null"] },
+        "compare_field_ref": { "$ref": "#/$defs/id" }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "value_type", "required", "editable"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "$ref": "#/$defs/localizedText" },
+        "value_type": {
+          "enum": ["short_text", "long_text", "number", "date", "boolean", "choice", "attachment"]
+        },
+        "required": { "type": "boolean" },
+        "editable": { "type": "boolean" },
+        "multiple": { "type": "boolean" },
+        "max_items": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 24,
+          "items": { "$ref": "#/$defs/option" }
+        },
+        "visible_when": { "$ref": "#/$defs/condition" }
+      }
+    },
+    "emptyState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title"],
+      "properties": {
+        "title": { "$ref": "#/$defs/localizedText" },
+        "detail": { "$ref": "#/$defs/localizedText" }
+      }
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "resource_ref", "role", "region_role", "title", "field_refs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "resource_ref": { "$ref": "#/$defs/id" },
+        "role": { "enum": ["collection", "details", "editor"] },
+        "region_role": { "enum": ["primary", "supporting", "actions"] },
+        "presentation": { "enum": ["list", "table", "cards"] },
+        "title": { "$ref": "#/$defs/localizedText" },
+        "field_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "filter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field_ref", "state_ref"],
+          "properties": {
+            "field_ref": { "$ref": "#/$defs/id" },
+            "state_ref": { "$ref": "#/$defs/id" }
+          }
+        },
+        "query_controls": {
+          "type": "array",
+          "maxItems": 6,
+          "items": { "$ref": "#/$defs/queryControl" }
+        },
+        "empty_state": { "$ref": "#/$defs/emptyState" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "role": { "const": "collection" } } },
+          "then": { "required": ["presentation"] },
+          "else": { "not": { "required": ["presentation"] } }
+        }
+      ]
+    },
+    "queryControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["search", "filter"] },
+        "label": { "$ref": "#/$defs/localizedText" },
+        "field_ref": { "$ref": "#/$defs/id" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "filter" } } },
+          "then": { "required": ["field_ref"] }
+        }
+      ]
+    },
+    "stateProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "visible_field_refs"],
+      "properties": {
+        "kind": { "enum": ["collection_empty", "collection_items", "field_predicate"] },
+        "visible_field_refs": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "view_ref", "label", "input_field_refs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["create", "update", "transition", "delete"] },
+        "view_ref": {
+          "$ref": "#/$defs/id",
+          "description": "The single editor view that owns and renders this command."
+        },
+        "label": { "$ref": "#/$defs/localizedText" },
+        "confirmation": {
+          "$ref": "#/$defs/localizedText",
+          "description": "User-facing confirmation required before this mutating command is dispatched. Transition and delete commands default to confirmation in the v1 compiler when omitted."
+        },
+        "input_field_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "fixed_values": { "type": "object" },
+        "guard": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["when", "require_nonempty"],
+          "properties": {
+            "when": { "$ref": "#/$defs/condition" },
+            "require_nonempty": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/id" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

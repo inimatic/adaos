@@ -135,32 +135,32 @@ def normalize_semantic_candidate(
     return normalize_semantic_prototype_candidate(candidate, brief=brief)
 
 
-def semantic_contract() -> dict[str, Any]:
+def semantic_contract(*, version: str = "v1") -> dict[str, Any]:
     """Return the schema used for semantic Prototype generation."""
 
     from adaos.services.builder.semantic_prototype import semantic_prototype_contract
 
-    return semantic_prototype_contract()
+    return semantic_prototype_contract(version=version)
 
 
-def semantic_candidate_contract() -> dict[str, Any]:
+def semantic_candidate_contract(*, version: str = "v1") -> dict[str, Any]:
     """Return the strict schema supplied to the Prototype design model."""
 
     from adaos.services.builder.semantic_prototype import (
         semantic_prototype_candidate_contract,
     )
 
-    return semantic_prototype_candidate_contract()
+    return semantic_prototype_candidate_contract(version=version)
 
 
-def semantic_provider_contract() -> dict[str, Any]:
+def semantic_provider_contract(*, version: str = "v1") -> dict[str, Any]:
     """Return the OpenAI strict-subset projection of the model contract."""
 
     from adaos.services.builder.semantic_prototype import (
         semantic_prototype_provider_contract,
     )
 
-    return semantic_prototype_provider_contract()
+    return semantic_prototype_provider_contract(version=version)
 
 
 def start_data_runtime(definition: Mapping[str, Any]):

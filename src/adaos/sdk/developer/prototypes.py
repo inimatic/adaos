@@ -46,9 +46,10 @@ def _surface_widgets(webui: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 
 def _resource_query_widgets(
-    webui: Mapping[str, Any],
+    webui: Mapping[str, Any], *, resource_type: str | None = None
 ) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
     result: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
+    expected_resource_type = str(resource_type or "").strip()
     for widget in _surface_widgets(webui):
         data_source = (
             widget.get("dataSource")
@@ -57,8 +58,11 @@ def _resource_query_widgets(
         )
         if str(data_source.get("kind") or "") != "resourceQuery":
             continue
-        resource_type = str(data_source.get("resourceType") or "").strip()
-        if resource_type.startswith("prototype."):
+        current_resource_type = str(data_source.get("resourceType") or "").strip()
+        if current_resource_type.startswith("prototype.") and (
+            not expected_resource_type
+            or current_resource_type == expected_resource_type
+        ):
             result.append((widget, data_source))
     return result
 
@@ -161,10 +165,12 @@ def _activity(activity_id: str, operation: str, record_schema: Mapping[str, Any]
 def derive_record_resource_spec(
     webui: Mapping[str, Any],
     records: Sequence[Mapping[str, Any]],
+    *,
+    resource_type: str | None = None,
 ) -> dict[str, Any]:
     """Derive one typed local CRUD resource from generic resource projections."""
 
-    projections = _resource_query_widgets(webui)
+    projections = _resource_query_widgets(webui, resource_type=resource_type)
     resource_types = {
         str(data_source.get("resourceType") or "").strip()
         for _, data_source in projections
@@ -173,7 +179,7 @@ def derive_record_resource_spec(
         raise ValueError(
             "Prototype records require exactly one prototype resourceQuery resourceType"
         )
-    resource_type = next(iter(resource_types))
+    resolved_resource_type = next(iter(resource_types))
     normalized = [dict(item) for item in records if isinstance(item, Mapping)]
     if len(normalized) != len(records) or len(normalized) > 1000:
         raise ValueError("Prototype records must be a bounded object array")
@@ -198,7 +204,7 @@ def derive_record_resource_spec(
         actions = [item for item in widget.get("actions") or [] if isinstance(item, Mapping)]
         if not any(
             str(action.get("type") or "") == "resourceOperation"
-            and str(action.get("target") or "") == resource_type
+            and str(action.get("target") or "") == resolved_resource_type
             for action in actions
         ):
             continue
@@ -229,7 +235,7 @@ def derive_record_resource_spec(
         "additionalProperties": False,
     }
 
-    action_operations = _resource_action_operations(webui, resource_type)
+    action_operations = _resource_action_operations(webui, resolved_resource_type)
     mutable_operations = [
         operation
         for operation in ("create", "update", "delete", "reset")
@@ -255,7 +261,7 @@ def derive_record_resource_spec(
         for widget in _surface_widgets(webui)
         if any(
             str(action.get("type") or "") == "resourceOperation"
-            and str(action.get("target") or "") == resource_type
+            and str(action.get("target") or "") == resolved_resource_type
             for action in widget.get("actions") or []
             if isinstance(action, Mapping)
         )
@@ -279,10 +285,10 @@ def derive_record_resource_spec(
         ),
         item_id_key,
     )
-    source_id = resource_type.removeprefix("prototype.")
+    source_id = resolved_resource_type.removeprefix("prototype.")
     definition = {
         "schema": "adaos.resource.definition.v1",
-        "resource_type": resource_type,
+        "resource_type": resolved_resource_type,
         "version": "0.0.0-prototype",
         "title": str(projections[0][0].get("title") or "Prototype records"),
         "description": "Disposable typed records for Builder Prototype review.",
@@ -292,7 +298,7 @@ def derive_record_resource_spec(
             "writes": "local_reversible",
             "source_of_truth": "builder_preview",
         },
-        "record_schema_ref": f"inline:{resource_type}",
+        "record_schema_ref": f"inline:{resolved_resource_type}",
         "record_schema": record_schema,
         "query": {
             "default": str(projections[0][1].get("queryId") or "all"),
@@ -347,22 +353,41 @@ def derive_record_resource_spec(
 def derive_resource_spec(
     webui: Mapping[str, Any],
     records: Sequence[Mapping[str, Any]],
+    *,
+    resource_type: str | None = None,
 ) -> dict[str, Any]:
     """Derive the local Prototype resource for the selected generic projection."""
 
-    projections = _resource_query_widgets(webui)
+    projections = _resource_query_widgets(webui, resource_type=resource_type)
     if len(projections) == 1 and str(projections[0][0].get("type") or "") == "collection.board":
-        return derive_board_resource_spec(webui, records)
-    return derive_record_resource_spec(webui, records)
+        return derive_board_resource_spec(
+            webui, records, resource_type=resource_type
+        )
+    return derive_record_resource_spec(
+        webui, records, resource_type=resource_type
+    )
 
 
 def derive_board_resource_spec(
     webui: Mapping[str, Any],
     records: Sequence[Mapping[str, Any]],
+    *,
+    resource_type: str | None = None,
 ) -> dict[str, Any]:
     """Derive a typed local CRUD resource from one declarative board projection."""
 
-    boards = [item for item in _page_widgets(webui) if item.get("type") == "collection.board"]
+    boards = []
+    for item in _page_widgets(webui):
+        data_source = (
+            item.get("dataSource")
+            if isinstance(item.get("dataSource"), Mapping)
+            else {}
+        )
+        if item.get("type") != "collection.board":
+            continue
+        if resource_type and str(data_source.get("resourceType") or "") != resource_type:
+            continue
+        boards.append(item)
     if len(boards) != 1:
         raise ValueError("board Prototype resource requires exactly one collection.board")
     board = boards[0]
@@ -370,8 +395,8 @@ def derive_board_resource_spec(
     data_source = board.get("dataSource") if isinstance(board.get("dataSource"), Mapping) else {}
     if str(data_source.get("kind") or "") != "resourceQuery":
         raise ValueError("board Prototype resource requires dataSource.kind=resourceQuery")
-    resource_type = str(data_source.get("resourceType") or "").strip()
-    if not resource_type.startswith("prototype."):
+    resolved_resource_type = str(data_source.get("resourceType") or "").strip()
+    if not resolved_resource_type.startswith("prototype."):
         raise ValueError("board Prototype resourceType must start with 'prototype.'")
     lane_key = str(inputs.get("laneKey") or "").strip()
     title_key = str(inputs.get("titleKey") or "").strip()
@@ -424,7 +449,7 @@ def derive_board_resource_spec(
         for action in widget.get("actions") or []
         if isinstance(action, Mapping)
         and str(action.get("type") or "") == "resourceOperation"
-        and str(action.get("target") or "") == resource_type
+        and str(action.get("target") or "") == resolved_resource_type
     }
     operation_ids = ["list", "show"]
     operation_ids.extend(
@@ -449,10 +474,10 @@ def derive_board_resource_spec(
     activity_operations = ["list", "get"] + [
         item for item in operation_ids if item not in {"list", "show"}
     ]
-    source_id = resource_type.removeprefix("prototype.")
+    source_id = resolved_resource_type.removeprefix("prototype.")
     definition = {
         "schema": "adaos.resource.definition.v1",
-        "resource_type": resource_type,
+        "resource_type": resolved_resource_type,
         "version": "0.0.0-prototype",
         "title": str(board.get("title") or "Prototype records"),
         "description": "Disposable typed records for Builder Prototype review.",
@@ -462,7 +487,7 @@ def derive_board_resource_spec(
             "writes": "local_reversible",
             "source_of_truth": "builder_preview",
         },
-        "record_schema_ref": f"inline:{resource_type}",
+        "record_schema_ref": f"inline:{resolved_resource_type}",
         "record_schema": record_schema,
         "query": {
             "default": str(data_source.get("queryId") or "all"),
@@ -509,6 +534,39 @@ def derive_board_resource_spec(
         ],
     }
     return {"resource_definition": definition, "data_definition": data_definition}
+
+
+def derive_resource_specs(
+    webui: Mapping[str, Any],
+    resources: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Derive independently typed local resources from one compiled Prototype."""
+
+    normalized = [dict(item) for item in resources if isinstance(item, Mapping)]
+    if len(normalized) != len(resources) or len(normalized) > 8:
+        raise ValueError("prototype_resources must contain at most 8 objects")
+    resource_types: set[str] = set()
+    specs: list[dict[str, Any]] = []
+    for item in normalized:
+        resource_type = str(item.get("resource_type") or "").strip()
+        records = item.get("records")
+        if not resource_type.startswith("prototype."):
+            raise ValueError(
+                "prototype_resources resource_type must start with 'prototype.'"
+            )
+        if resource_type in resource_types:
+            raise ValueError(f"duplicate prototype resource_type {resource_type!r}")
+        if not isinstance(records, list):
+            raise ValueError("prototype_resources records must be an array")
+        resource_types.add(resource_type)
+        specs.append(
+            derive_resource_spec(
+                webui,
+                records,
+                resource_type=resource_type,
+            )
+        )
+    return specs
 
 
 def materialize_resources(
@@ -563,12 +621,14 @@ def materialize_resources(
 def validate_resource_spec(
     webui: Mapping[str, Any],
     records: Sequence[Mapping[str, Any]],
+    *,
+    resource_type: str | None = None,
 ) -> dict[str, Any]:
     """Derive and execute the side-effect-free validation used by materialization."""
 
     from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
 
-    spec = derive_resource_spec(webui, records)
+    spec = derive_resource_spec(webui, records, resource_type=resource_type)
     PrototypeDataRuntime.start(spec["data_definition"])
     return spec
 
@@ -577,6 +637,7 @@ __all__ = [
     "derive_board_resource_spec",
     "derive_record_resource_spec",
     "derive_resource_spec",
+    "derive_resource_specs",
     "materialize_resources",
     "validate_resource_spec",
 ]

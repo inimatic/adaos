@@ -23,6 +23,10 @@ SEMANTIC_PROTOTYPE_SCHEMA = "adaos.webui.semantic.v1"
 SEMANTIC_PROTOTYPE_CANDIDATE_SCHEMA = (
     "adaos.builder.semantic_prototype_candidate.v1"
 )
+SEMANTIC_PROTOTYPE_V2_SCHEMA = "adaos.webui.semantic.v2"
+SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA = (
+    "adaos.builder.semantic_prototype_candidate.v2"
+)
 SEMANTIC_COMPILE_RESULT_SCHEMA = "adaos.builder.semantic_compile_result.v1"
 _ABI_ROOT = Path(__file__).resolve().parents[2] / "abi"
 _FIELD_TYPES = {
@@ -36,7 +40,7 @@ _FIELD_TYPES = {
 }
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=8)
 def _validator(filename: str = "webui.semantic.v1.schema.json") -> Draft202012Validator:
     value = json.loads((_ABI_ROOT / filename).read_text(encoding="utf-8"))
     return Draft202012Validator(value)
@@ -238,8 +242,11 @@ def _semantic_refs(
     }
 
 
-def validate_semantic_prototype(
-    value: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None
+def _validate_semantic_prototype_v1(
+    value: Mapping[str, Any],
+    *,
+    brief: Mapping[str, Any] | None = None,
+    require_primary: bool = True,
 ) -> dict[str, Any]:
     """Validate schema, references, and accepted-requirement coverage."""
 
@@ -280,7 +287,7 @@ def validate_semantic_prototype(
     commands = _unique(document["commands"], "command")
     states = _unique(document["representative_states"], "state")
     region_roles = {str(view["region_role"]) for view in views.values()}
-    if "primary" not in region_roles:
+    if require_primary and "primary" not in region_roles:
         _fail("semantic Prototype requires at least one view in the primary region")
 
     for field in fields.values():
@@ -613,24 +620,28 @@ def validate_semantic_prototype(
     return document
 
 
-def semantic_prototype_contract() -> dict[str, Any]:
+def semantic_prototype_contract(*, version: str = "v1") -> dict[str, Any]:
     """Return the immutable model-facing semantic document contract."""
 
-    return copy.deepcopy(_validator().schema)
+    filename = "webui.semantic.v2.schema.json" if version == "v2" else "webui.semantic.v1.schema.json"
+    return copy.deepcopy(_validator(filename).schema)
 
 
-def semantic_prototype_candidate_contract() -> dict[str, Any]:
+def semantic_prototype_candidate_contract(*, version: str = "v1") -> dict[str, Any]:
     """Return the strict, bounded provider-output contract."""
 
-    return copy.deepcopy(
-        _validator("builder.semantic_prototype_candidate.v1.schema.json").schema
+    filename = (
+        "builder.semantic_prototype_candidate.v2.schema.json"
+        if version == "v2"
+        else "builder.semantic_prototype_candidate.v1.schema.json"
     )
+    return copy.deepcopy(_validator(filename).schema)
 
 
-def semantic_prototype_provider_contract() -> dict[str, Any]:
+def semantic_prototype_provider_contract(*, version: str = "v1") -> dict[str, Any]:
     """Return the candidate schema projected to the provider strict subset."""
 
-    contract = semantic_prototype_candidate_contract()
+    contract = semantic_prototype_candidate_contract(version=version)
     unsupported_validation_keywords = {
         "maxItems",
         "maxLength",
@@ -1270,18 +1281,18 @@ def _lower_semantic_prototype_candidate(
     return candidate
 
 
-def normalize_semantic_prototype_candidate(
+def _normalize_semantic_prototype_candidate_v1(
     value: Mapping[str, Any], *, brief: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Lower a strict provider candidate into the canonical semantic ABI."""
 
     candidate, _ = _canonicalize_semantic_prototype_candidate(value)
-    return validate_semantic_prototype(
+    return _validate_semantic_prototype_v1(
         _lower_semantic_prototype_candidate(candidate, brief=brief), brief=brief
     )
 
 
-def compile_semantic_prototype_candidate(
+def _compile_semantic_prototype_candidate_v1(
     value: Mapping[str, Any],
     *,
     brief: Mapping[str, Any],
@@ -1301,7 +1312,7 @@ def compile_semantic_prototype_candidate(
                 "target": "$.brief_ref|$.brief_digest",
             }
         )
-        result = compile_semantic_prototype(
+        result = _compile_semantic_prototype_v1(
             semantic_document,
             brief=brief,
             project_ref=project_ref,
@@ -1381,15 +1392,18 @@ def _guard_expression(guard: Mapping[str, Any]) -> str:
     return f"{inverse} || ({condition} && {requirement})"
 
 
-def compile_semantic_prototype(
+def _compile_semantic_prototype_v1(
     value: Mapping[str, Any],
     *,
     brief: Mapping[str, Any] | None = None,
     project_ref: str | None = None,
+    require_primary: bool = True,
 ) -> dict[str, Any]:
     """Compile a validated semantic document into canonical Prototype artifacts."""
 
-    document = validate_semantic_prototype(value, brief=brief)
+    document = _validate_semantic_prototype_v1(
+        value, brief=brief, require_primary=require_primary
+    )
     dictionaries: dict[str, dict[str, str]] = {"en": {}, "ru": {}}
     resource = dict(document["resource"])
     fields = {str(item["id"]): dict(item) for item in resource["fields"]}
@@ -1917,10 +1931,927 @@ def compile_semantic_prototype(
     }
 
 
+def _unique_v2_ids(values: Sequence[Mapping[str, Any]], label: str) -> None:
+    seen: set[str] = set()
+    for item in values:
+        identifier = str(item.get("id") or "")
+        if identifier in seen:
+            _fail(f"duplicate {label} id {identifier!r}")
+        seen.add(identifier)
+
+
+def _canonicalize_semantic_prototype_candidate_v2(
+    value: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    candidate = copy.deepcopy(dict(value))
+    try:
+        Draft202012Validator(
+            semantic_prototype_provider_contract(version="v2")
+        ).validate(candidate)
+    except ValidationError as exc:
+        path = ".".join(str(item) for item in exc.absolute_path)
+        suffix = f" at {path}" if path else ""
+        _fail(f"{exc.message}{suffix}")
+
+    resources = [dict(item) for item in candidate.get("resources") or []]
+    if not resources:
+        _fail("candidate requires at least one resource")
+    raw_views = [dict(item) for item in candidate.get("views") or []]
+    raw_commands = [dict(item) for item in candidate.get("commands") or []]
+    raw_states = [dict(item) for item in candidate.get("representative_states") or []]
+    normalizations: list[dict[str, str]] = []
+    normalized_resources: list[dict[str, Any]] = []
+    normalized_views: list[dict[str, Any]] = []
+    normalized_commands: list[dict[str, Any]] = []
+    normalized_states: list[dict[str, Any]] = []
+    resource_ids: dict[str, str] = {}
+    field_ids: dict[str, str] = {}
+    view_ids: dict[str, str] = {}
+    query_ids: dict[str, str] = {}
+    command_ids: dict[str, str] = {}
+    state_ids: dict[str, str] = {}
+
+    for resource_index, resource in enumerate(resources):
+        raw_resource_id = str(resource.get("id") or "")
+        resource_views = [
+            item
+            for item in raw_views
+            if str(item.get("resource_ref") or "") == raw_resource_id
+        ]
+        raw_view_id_set = {str(item.get("id") or "") for item in resource_views}
+        resource_commands = [
+            item
+            for item in raw_commands
+            if str(item.get("view_ref") or "") in raw_view_id_set
+        ]
+        resource_states = [
+            item
+            for item in raw_states
+            if str(item.get("view_ref") or "") in raw_view_id_set
+        ]
+        v1_candidate = {
+            "schema": SEMANTIC_PROTOTYPE_CANDIDATE_SCHEMA,
+            "document_id": candidate["document_id"],
+            "title": copy.deepcopy(candidate["title"]),
+            "layout": candidate["layout"],
+            "resource": copy.deepcopy(resource),
+            "views": [
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "resource_ref"}
+                for item in resource_views
+            ],
+            "commands": copy.deepcopy(resource_commands),
+            "representative_states": [
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "proof"}
+                for item in resource_states
+            ],
+            "requirement_bindings": [],
+            "capability_gaps": [],
+        }
+        normalized, slice_normalizations = _canonicalize_semantic_prototype_candidate(
+            v1_candidate
+        )
+        normalizations.extend(slice_normalizations)
+        normalized_resource = dict(normalized["resource"])
+        normalized_resource_id = str(normalized_resource["id"])
+        resource_ids[raw_resource_id] = normalized_resource_id
+        for raw_field, normalized_field in zip(
+            resource.get("fields") or [],
+            normalized_resource.get("fields") or [],
+            strict=True,
+        ):
+            field_ids[str(raw_field.get("id") or "")] = str(
+                normalized_field["id"]
+            )
+        normalized_resources.append(normalized_resource)
+
+        for raw_view, normalized_view in zip(
+            resource_views, normalized["views"], strict=True
+        ):
+            normalized_view = dict(normalized_view)
+            normalized_view["resource_ref"] = normalized_resource_id
+            view_ids[str(raw_view.get("id") or "")] = str(normalized_view["id"])
+            for raw_control, normalized_control in zip(
+                raw_view.get("query_controls") or [],
+                normalized_view.get("query_controls") or [],
+                strict=True,
+            ):
+                query_ids[str(raw_control.get("id") or "")] = str(
+                    normalized_control["id"]
+                )
+            normalized_views.append(normalized_view)
+
+        for raw_command, normalized_command in zip(
+            resource_commands, normalized["commands"], strict=True
+        ):
+            command_ids[str(raw_command.get("id") or "")] = str(
+                normalized_command["id"]
+            )
+            normalized_commands.append(dict(normalized_command))
+
+        for raw_state, normalized_state in zip(
+            resource_states, normalized["representative_states"], strict=True
+        ):
+            normalized_state = dict(normalized_state)
+            proof = copy.deepcopy(dict(raw_state["proof"]))
+            proof["visible_field_refs"] = [
+                field_ids.get(
+                    str(field_ref),
+                    _canonical_candidate_identifier(field_ref, namespace="field"),
+                )
+                for field_ref in proof.get("visible_field_refs") or []
+            ]
+            normalized_state["proof"] = proof
+            state_ids[str(raw_state.get("id") or "")] = str(normalized_state["id"])
+            normalized_states.append(normalized_state)
+
+        if resource_index:
+            normalizations[:] = [
+                item
+                for item in normalizations
+                if not (
+                    item.get("target") == "$.document_id"
+                    and item.get("kind") == "candidate_identifier"
+                )
+            ]
+
+    assigned_view_ids = {
+        str(item.get("id") or "")
+        for resource in resources
+        for item in raw_views
+        if str(item.get("resource_ref") or "") == str(resource.get("id") or "")
+    }
+    unassigned_views = sorted(
+        str(item.get("id") or "")
+        for item in raw_views
+        if str(item.get("id") or "") not in assigned_view_ids
+    )
+    if unassigned_views:
+        _fail(f"views reference unknown resources: {unassigned_views}")
+    assigned_command_ids = {
+        str(item.get("id") or "") for item in raw_commands if str(item.get("view_ref") or "") in view_ids
+    }
+    unassigned_commands = sorted(
+        str(item.get("id") or "")
+        for item in raw_commands
+        if str(item.get("id") or "") not in assigned_command_ids
+    )
+    if unassigned_commands:
+        _fail(f"commands reference unknown views: {unassigned_commands}")
+    assigned_state_ids = {
+        str(item.get("id") or "") for item in raw_states if str(item.get("view_ref") or "") in view_ids
+    }
+    unassigned_states = sorted(
+        str(item.get("id") or "")
+        for item in raw_states
+        if str(item.get("id") or "") not in assigned_state_ids
+    )
+    if unassigned_states:
+        _fail(f"representative states reference unknown views: {unassigned_states}")
+
+    for values, label in (
+        (normalized_resources, "resource"),
+        ([field for resource in normalized_resources for field in resource["fields"]], "field"),
+        (normalized_views, "view"),
+        ([control for view in normalized_views for control in view.get("query_controls") or []], "query control"),
+        (normalized_commands, "command"),
+        (normalized_states, "representative state"),
+    ):
+        _unique_v2_ids(values, label)
+
+    relationship_ids = _candidate_identifier_map(
+        [item.get("id") for item in candidate.get("relationships") or []],
+        namespace="relationship",
+        normalizations=normalizations,
+        targets=[
+            f"$.relationships[{index}].id"
+            for index in range(len(candidate.get("relationships") or []))
+        ],
+    )
+    normalized_relationships: list[dict[str, Any]] = []
+    for relationship in candidate.get("relationships") or []:
+        normalized_relationship = copy.deepcopy(dict(relationship))
+        normalized_relationship["id"] = relationship_ids[str(relationship["id"])]
+        for key, namespace in (
+            ("from_resource_ref", resource_ids),
+            ("to_resource_ref", resource_ids),
+            ("from_field_ref", field_ids),
+            ("to_field_ref", field_ids),
+        ):
+            raw_ref = str(relationship[key])
+            normalized_relationship[key] = namespace.get(
+                raw_ref,
+                _canonical_candidate_identifier(raw_ref, namespace=key),
+            )
+        normalized_relationships.append(normalized_relationship)
+    _unique_v2_ids(normalized_relationships, "relationship")
+
+    semantic_namespaces = {
+        "resource": resource_ids,
+        "relationship": relationship_ids,
+        "field": field_ids,
+        "view": view_ids,
+        "query": query_ids,
+        "command": command_ids,
+        "state": state_ids,
+    }
+    merged_bindings: list[dict[str, Any]] = []
+    bindings_by_requirement: dict[str, dict[str, Any]] = {}
+    for binding in candidate.get("requirement_bindings") or []:
+        normalized_refs: list[str] = []
+        for raw_ref in binding.get("semantic_refs") or []:
+            kind = str(raw_ref["kind"])
+            raw_identifier = str(raw_ref["id"])
+            identifiers = semantic_namespaces[kind]
+            canonical_identifier = identifiers.get(
+                raw_identifier,
+                identifiers.get(
+                    raw_identifier.removeprefix(f"{kind}:"),
+                    _canonical_candidate_identifier(raw_identifier, namespace=kind),
+                ),
+            )
+            normalized_refs.append(f"{kind}:{canonical_identifier}")
+        requirement_ref = str(binding["requirement_ref"])
+        existing = bindings_by_requirement.get(requirement_ref)
+        if existing is None:
+            existing = {
+                "requirement_ref": requirement_ref,
+                "semantic_refs": list(dict.fromkeys(normalized_refs)),
+            }
+            bindings_by_requirement[requirement_ref] = existing
+            merged_bindings.append(existing)
+        else:
+            existing["semantic_refs"] = list(
+                dict.fromkeys([*existing["semantic_refs"], *normalized_refs])
+            )
+
+    document_id = _canonical_candidate_identifier(
+        candidate["document_id"], namespace="prototype"
+    )
+    title = _candidate_localized_text(
+        candidate["title"], key=f"prototype.{document_id}.title"
+    )
+    return (
+        {
+            "schema": SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA,
+            "document_id": document_id,
+            "title": title,
+            "layout": candidate["layout"],
+            "resources": normalized_resources,
+            "relationships": normalized_relationships,
+            "views": normalized_views,
+            "commands": normalized_commands,
+            "representative_states": normalized_states,
+            "requirement_bindings": merged_bindings,
+            "capability_gaps": copy.deepcopy(candidate.get("capability_gaps") or []),
+        },
+        normalizations,
+    )
+
+
+def _lower_semantic_prototype_candidate_v2(
+    value: Mapping[str, Any], *, brief: Mapping[str, Any]
+) -> dict[str, Any]:
+    candidate = copy.deepcopy(dict(value))
+    lowered_resources: list[dict[str, Any]] = []
+    lowered_views: list[dict[str, Any]] = []
+    lowered_commands: list[dict[str, Any]] = []
+    lowered_states: list[dict[str, Any]] = []
+    for resource in candidate["resources"]:
+        resource_id = str(resource["id"])
+        views = [
+            item
+            for item in candidate["views"]
+            if str(item["resource_ref"]) == resource_id
+        ]
+        view_ids = {str(item["id"]) for item in views}
+        commands = [
+            item for item in candidate["commands"] if str(item["view_ref"]) in view_ids
+        ]
+        states = [
+            item
+            for item in candidate["representative_states"]
+            if str(item["view_ref"]) in view_ids
+        ]
+        lowered = _lower_semantic_prototype_candidate(
+            {
+                "schema": SEMANTIC_PROTOTYPE_CANDIDATE_SCHEMA,
+                "document_id": candidate["document_id"],
+                "title": copy.deepcopy(candidate["title"]),
+                "layout": candidate["layout"],
+                "resource": copy.deepcopy(resource),
+                "views": [
+                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "resource_ref"}
+                    for item in views
+                ],
+                "commands": copy.deepcopy(commands),
+                "representative_states": [
+                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "proof"}
+                    for item in states
+                ],
+                "requirement_bindings": [],
+                "capability_gaps": [],
+            },
+            brief=brief,
+        )
+        lowered_resources.append(dict(lowered["resource"]))
+        for original, view in zip(views, lowered["views"], strict=True):
+            lowered_views.append({**dict(view), "resource_ref": resource_id})
+        lowered_commands.extend(dict(item) for item in lowered["commands"])
+        for original, state in zip(states, lowered["representative_states"], strict=True):
+            lowered_states.append(
+                {**dict(state), "proof": copy.deepcopy(dict(original["proof"]))}
+            )
+    return {
+        "schema": SEMANTIC_PROTOTYPE_V2_SCHEMA,
+        "document_id": candidate["document_id"],
+        "brief_ref": str(brief.get("brief_id") or ""),
+        "brief_digest": str(brief.get("digest") or ""),
+        "title": copy.deepcopy(candidate["title"]),
+        "layout": {"pattern": candidate["layout"]},
+        "resources": lowered_resources,
+        "relationships": copy.deepcopy(candidate["relationships"]),
+        "views": lowered_views,
+        "commands": lowered_commands,
+        "representative_states": lowered_states,
+        "requirement_bindings": copy.deepcopy(candidate["requirement_bindings"]),
+        "capability_gaps": copy.deepcopy(candidate["capability_gaps"]),
+    }
+
+
+def _validate_semantic_prototype_v2(
+    value: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    document = copy.deepcopy(dict(value))
+    try:
+        _validator("webui.semantic.v2.schema.json").validate(document)
+    except ValidationError as exc:
+        path = ".".join(str(item) for item in exc.absolute_path)
+        suffix = f" at {path}" if path else ""
+        _fail(f"{exc.message}{suffix}")
+
+    resources = _unique(document["resources"], "resource")
+    relationships = _unique(document["relationships"], "relationship")
+    views = _unique(document["views"], "view")
+    commands = _unique(document["commands"], "command")
+    states = _unique(document["representative_states"], "state")
+    all_fields: dict[str, dict[str, Any]] = {}
+    for resource in resources.values():
+        for field in resource["fields"]:
+            field_id = str(field["id"])
+            if field_id in all_fields:
+                _fail(f"duplicate field id {field_id!r} across resources")
+            all_fields[field_id] = dict(field)
+    if not any(str(view["region_role"]) == "primary" for view in views.values()):
+        _fail("semantic Prototype requires at least one view in the primary region")
+
+    views_by_resource: dict[str, list[dict[str, Any]]] = {
+        resource_id: [] for resource_id in resources
+    }
+    for view in views.values():
+        resource_id = str(view["resource_ref"])
+        resource = resources.get(resource_id)
+        if resource is None:
+            _fail(f"view {view['id']!r} references unknown resource {resource_id!r}")
+        resource_fields = {str(item["id"]) for item in resource["fields"]}
+        unknown_fields = sorted(set(view["field_refs"]) - resource_fields)
+        if unknown_fields:
+            _fail(
+                f"view {view['id']!r} references fields outside resource "
+                f"{resource_id!r}: {unknown_fields}"
+            )
+        views_by_resource[resource_id].append(view)
+    for resource_id, resource_views in views_by_resource.items():
+        if not resource_views:
+            _fail(f"resource {resource_id!r} has no inspectable view")
+        if not any(str(item["role"]) == "collection" for item in resource_views):
+            _fail(f"resource {resource_id!r} requires a collection view")
+
+    for relationship in relationships.values():
+        for side in ("from", "to"):
+            resource_id = str(relationship[f"{side}_resource_ref"])
+            field_id = str(relationship[f"{side}_field_ref"])
+            resource = resources.get(resource_id)
+            if resource is None:
+                _fail(
+                    f"relationship {relationship['id']!r} references unknown "
+                    f"resource {resource_id!r}"
+                )
+            resource_fields = {str(item["id"]) for item in resource["fields"]}
+            if field_id not in resource_fields and field_id != "id":
+                _fail(
+                    f"relationship {relationship['id']!r} references field "
+                    f"{field_id!r} outside resource {resource_id!r}"
+                )
+
+    for resource_id, resource in resources.items():
+        resource_views = views_by_resource[resource_id]
+        view_ids = {str(item["id"]) for item in resource_views}
+        slice_document = {
+            "schema": SEMANTIC_PROTOTYPE_SCHEMA,
+            "document_id": document["document_id"],
+            "brief_ref": document["brief_ref"],
+            "brief_digest": document["brief_digest"],
+            "title": copy.deepcopy(document["title"]),
+            "layout": copy.deepcopy(document["layout"]),
+            "resource": copy.deepcopy(resource),
+            "views": [
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "resource_ref"}
+                for item in resource_views
+            ],
+            "commands": [
+                copy.deepcopy(item)
+                for item in commands.values()
+                if str(item["view_ref"]) in view_ids
+            ],
+            "representative_states": [
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "proof"}
+                for item in states.values()
+                if str(item["view_ref"]) in view_ids
+            ],
+            "requirement_bindings": [],
+            "capability_gaps": [],
+        }
+        _validate_semantic_prototype_v1(
+            slice_document, brief=None, require_primary=False
+        )
+
+    for state in states.values():
+        view = views[str(state["view_ref"])]
+        proof = dict(state["proof"])
+        visible_fields = set(proof["visible_field_refs"])
+        unknown_visible = sorted(visible_fields - set(view["field_refs"]))
+        if unknown_visible:
+            _fail(
+                f"representative state {state['id']!r} claims fields not visible "
+                f"in view {view['id']!r}: {unknown_visible}"
+            )
+        filters = [dict(item) for item in state.get("filters") or []]
+        predicate_fields = {
+            field_ref
+            for predicate in filters
+            for field_ref in (
+                str(predicate["field_ref"]),
+                str(predicate.get("compare_field_ref") or ""),
+            )
+            if field_ref
+        }
+        proof_kind = str(proof["kind"])
+        if proof_kind == "collection_empty":
+            if filters or int(state["min_items"]) != 0 or state.get("max_items") != 0:
+                _fail(
+                    f"representative state {state['id']!r} collection_empty proof "
+                    "requires filters=[], min_items=0, and max_items=0"
+                )
+        elif proof_kind == "collection_items":
+            if int(state["min_items"]) < 1:
+                _fail(
+                    f"representative state {state['id']!r} collection_items proof "
+                    "requires min_items>=1"
+                )
+        else:
+            if not filters or int(state["min_items"]) < 1:
+                _fail(
+                    f"representative state {state['id']!r} field_predicate proof "
+                    "requires filters and min_items>=1"
+                )
+            missing_visible = sorted(predicate_fields - visible_fields)
+            if missing_visible:
+                _fail(
+                    f"representative state {state['id']!r} does not expose "
+                    f"predicate fields {missing_visible}"
+                )
+
+    query_controls = {
+        str(control["id"]): dict(control)
+        for view in views.values()
+        for control in view.get("query_controls") or []
+    }
+    refs = {
+        *(f"resource:{identifier}" for identifier in resources),
+        *(f"relationship:{identifier}" for identifier in relationships),
+        *(f"field:{identifier}" for identifier in all_fields),
+        *(f"view:{identifier}" for identifier in views),
+        *(f"query:{identifier}" for identifier in query_controls),
+        *(f"command:{identifier}" for identifier in commands),
+        *(f"state:{identifier}" for identifier in states),
+    }
+    bindings: dict[str, set[str]] = {}
+    for binding in document["requirement_bindings"]:
+        requirement_ref = str(binding["requirement_ref"])
+        if requirement_ref in bindings:
+            _fail(f"duplicate requirement binding {requirement_ref!r}")
+        semantic_refs = {str(item) for item in binding["semantic_refs"]}
+        unknown_refs = sorted(semantic_refs - refs)
+        if unknown_refs:
+            _fail(f"requirement {requirement_ref!r} has unresolved refs {unknown_refs}")
+        bindings[requirement_ref] = semantic_refs
+    gap_refs = [str(item["requirement_ref"]) for item in document["capability_gaps"]]
+    if len(set(gap_refs)) != len(gap_refs):
+        _fail("duplicate capability gap requirement_ref")
+    gaps = set(gap_refs)
+    overlap = sorted(set(bindings) & gaps)
+    if overlap:
+        _fail(f"requirements cannot be both bound and capability gaps: {overlap}")
+
+    if brief is not None:
+        if document["brief_ref"] != brief.get("brief_id"):
+            _fail("brief_ref does not match the supplied Prototype Brief")
+        if document["brief_digest"] != brief.get("digest"):
+            _fail("brief_digest does not match the supplied Prototype Brief")
+        required = _brief_requirement_ids(brief)
+        missing = sorted(required - set(bindings) - gaps)
+        unexpected = sorted((set(bindings) | gaps) - required)
+        if missing:
+            _fail(f"accepted requirements have no semantic binding or gap: {missing}")
+        if unexpected:
+            _fail(f"semantic document references unknown requirements: {unexpected}")
+        for operation in brief.get("operations") or []:
+            if not isinstance(operation, Mapping):
+                continue
+            operation_id = str(operation.get("id") or "")
+            operation_kind = str(operation.get("kind") or "")
+            if operation_kind not in {"search", "filter"} or operation_id in gaps:
+                continue
+            matching_queries = {
+                f"query:{identifier}"
+                for identifier, control in query_controls.items()
+                if control["kind"] == operation_kind
+            }
+            if not bindings.get(operation_id, set()) & matching_queries:
+                _fail(
+                    f"{operation_kind} requirement {operation_id!r} must bind a "
+                    f"{operation_kind} query control"
+                )
+        for requirement in brief.get("collection_requirements") or []:
+            if not isinstance(requirement, Mapping):
+                continue
+            requirement_id = str(requirement.get("id") or "")
+            if not requirement_id or requirement_id in gaps:
+                continue
+            bound = bindings.get(requirement_id, set())
+            bound_resources = {
+                item.removeprefix("resource:")
+                for item in bound
+                if item.startswith("resource:")
+            }
+            bound_collection_views = [
+                views[item.removeprefix("view:")]
+                for item in bound
+                if item.startswith("view:")
+                and item.removeprefix("view:") in views
+                and views[item.removeprefix("view:")]["role"] == "collection"
+            ]
+            if not any(
+                str(view["resource_ref"]) in bound_resources
+                for view in bound_collection_views
+            ):
+                _fail(
+                    f"collection requirement {requirement_id!r} must bind a "
+                    "matching item resource and collection view"
+                )
+            if requirement.get("interaction") == "capture_each" and not any(
+                item.startswith("view:")
+                and item.removeprefix("view:") in views
+                and views[item.removeprefix("view:")]["role"] == "editor"
+                and str(views[item.removeprefix("view:")]["resource_ref"])
+                in bound_resources
+                for item in bound
+            ):
+                _fail(
+                    f"capture_each requirement {requirement_id!r} must bind a "
+                    "matching editor view"
+                )
+    return document
+
+
+def _merge_locale_dictionaries(
+    target: dict[str, dict[str, str]], source: Mapping[str, Any]
+) -> None:
+    for locale, raw_dictionary in source.items():
+        if not isinstance(raw_dictionary, Mapping):
+            continue
+        dictionary = target.setdefault(str(locale), {})
+        for key, raw_text in raw_dictionary.items():
+            text = str(raw_text)
+            if key in dictionary and dictionary[key] != text:
+                _fail(f"localization key {key!r} has conflicting values")
+            dictionary[str(key)] = text
+
+
+def _compile_semantic_prototype_v2(
+    value: Mapping[str, Any],
+    *,
+    brief: Mapping[str, Any] | None = None,
+    project_ref: str | None = None,
+) -> dict[str, Any]:
+    document = _validate_semantic_prototype_v2(value, brief=brief)
+    resources = {str(item["id"]): dict(item) for item in document["resources"]}
+    views = {str(item["id"]): dict(item) for item in document["views"]}
+    commands = {str(item["id"]): dict(item) for item in document["commands"]}
+    dictionaries: dict[str, dict[str, str]] = {"en": {}, "ru": {}}
+    title, title_i18n = _localized(document["title"], dictionaries)
+    widgets: list[dict[str, Any]] = []
+    initial_state: dict[str, Any] = {}
+    source_map: dict[str, list[str]] = {}
+    state_checks: list[dict[str, Any]] = []
+    prototype_resources: list[dict[str, Any]] = []
+
+    for resource_id, resource in resources.items():
+        resource_views = [
+            item
+            for item in document["views"]
+            if str(item["resource_ref"]) == resource_id
+        ]
+        view_ids = {str(item["id"]) for item in resource_views}
+        resource_states = [
+            item
+            for item in document["representative_states"]
+            if str(item["view_ref"]) in view_ids
+        ]
+        slice_document = {
+            "schema": SEMANTIC_PROTOTYPE_SCHEMA,
+            "document_id": document["document_id"],
+            "brief_ref": document["brief_ref"],
+            "brief_digest": document["brief_digest"],
+            "title": copy.deepcopy(document["title"]),
+            "layout": copy.deepcopy(document["layout"]),
+            "resource": copy.deepcopy(resource),
+            "views": [
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "resource_ref"}
+                for item in resource_views
+            ],
+            "commands": [
+                copy.deepcopy(item)
+                for item in document["commands"]
+                if str(item["view_ref"]) in view_ids
+            ],
+            "representative_states": [
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "proof"}
+                for item in resource_states
+            ],
+            "requirement_bindings": [],
+            "capability_gaps": [],
+        }
+        compiled = _compile_semantic_prototype_v1(
+            slice_document,
+            brief=None,
+            project_ref=project_ref,
+            require_primary=False,
+        )
+        page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+        widgets.extend(copy.deepcopy(page["widgets"]))
+        initial_state.update(copy.deepcopy(page.get("initialState") or {}))
+        _merge_locale_dictionaries(dictionaries, compiled["locale_dictionaries"])
+        for semantic_ref, runtime_refs in compiled["source_map"].items():
+            source_map.setdefault(str(semantic_ref), []).extend(
+                str(item) for item in runtime_refs
+            )
+        proofs = {str(item["id"]): dict(item["proof"]) for item in resource_states}
+        for check in compiled["representative_state_checks"]:
+            check = copy.deepcopy(dict(check))
+            proof = proofs[str(check["state_id"])]
+            check["proof"] = proof
+            check["observable_runtime_refs"] = copy.deepcopy(
+                source_map.get(f"state:{check['state_id']}") or []
+            )
+            state_checks.append(check)
+        prototype_resources.append(
+            {
+                "resource_ref": resource_id,
+                "resource_type": _runtime_resource_type(resource_id, project_ref),
+                "records": copy.deepcopy(compiled["prototype_records"]),
+            }
+        )
+
+    for relationship in document["relationships"]:
+        relationship_ref = f"relationship:{relationship['id']}"
+        source_map[relationship_ref] = list(
+            dict.fromkeys(
+                [
+                    *source_map.get(f"field:{relationship['from_field_ref']}", []),
+                    *source_map.get(f"field:{relationship['to_field_ref']}", []),
+                ]
+            )
+        )
+
+    region_roles = {str(view["region_role"]) for view in document["views"]}
+    layout_type, layout_pattern = {
+        "flow": ("stack", "stack"),
+        "split": ("split", "split"),
+        "grid": ("grid", "grid"),
+        "focus_detail": ("split", "focus-detail"),
+    }[str(document["layout"]["pattern"])]
+    page_schema = {
+        "id": str(document["document_id"]),
+        "title": title,
+        "title_i18n": title_i18n,
+        "layout": {
+            "type": layout_type,
+            "pattern": layout_pattern,
+            "areas": [
+                {
+                    "id": region_role,
+                    "role": "main" if region_role == "primary" else "auxiliary",
+                }
+                for region_role in ("primary", "supporting", "actions")
+                if region_role in region_roles
+            ],
+        },
+        "widgets": widgets,
+        "initialState": initial_state,
+        "meta": {
+            "builder": {
+                "semantic_source": SEMANTIC_PROTOTYPE_V2_SCHEMA,
+                "semantic_digest": _digest(document),
+                "brief_ref": document["brief_ref"],
+                "relationships": copy.deepcopy(document["relationships"]),
+            }
+        },
+    }
+    webui = {
+        "schema": "adaos.webui.v1",
+        "generated_by": "builder.semantic_compiler.v2",
+        "ui": {"application": {"desktop": {"pageSchema": page_schema}}},
+    }
+    try:
+        _validator("webui.v1.schema.json").validate(webui)
+    except ValidationError as exc:
+        path = ".".join(str(item) for item in exc.absolute_path)
+        suffix = f" at {path}" if path else ""
+        _fail(f"compiled WebUI is invalid{suffix}: {exc.message}")
+    validation = validate_webui_capabilities(webui)
+    if not validation.get("ok"):
+        _fail(
+            "compiled WebUI failed capability validation: "
+            + json.dumps(validation.get("findings") or [], ensure_ascii=False)
+        )
+
+    views_by_ref = {f"view:{identifier}": view for identifier, view in views.items()}
+    queries_by_view = {
+        str(view["id"]): [
+            f"query:{control['id']}" for control in view.get("query_controls") or []
+        ]
+        for view in document["views"]
+    }
+    binding_expansions: dict[str, list[str]] = {}
+    requirement_map: dict[str, list[str]] = {}
+    for item in document["requirement_bindings"]:
+        requirement_ref = str(item["requirement_ref"])
+        explicit_refs = {str(ref) for ref in item["semantic_refs"]}
+        expanded_refs = set(explicit_refs)
+        for semantic_ref in explicit_refs:
+            view = views_by_ref.get(semantic_ref)
+            if view is None:
+                continue
+            expanded_refs.update(f"field:{field_id}" for field_id in view["field_refs"])
+            expanded_refs.update(queries_by_view.get(str(view["id"]), []))
+            expanded_refs.update(
+                f"command:{command_id}"
+                for command_id, command in commands.items()
+                if command["view_ref"] == view["id"]
+            )
+        derived_refs = sorted(expanded_refs - explicit_refs)
+        if derived_refs:
+            binding_expansions[requirement_ref] = derived_refs
+        requirement_map[requirement_ref] = sorted(
+            {
+                runtime_ref
+                for semantic_ref in expanded_refs
+                for runtime_ref in source_map.get(semantic_ref, [])
+            }
+        )
+    unresolved_runtime = sorted(
+        requirement_ref
+        for requirement_ref, runtime_refs in requirement_map.items()
+        if not runtime_refs
+    )
+    if unresolved_runtime:
+        _fail(f"requirements compile to no runtime nodes: {unresolved_runtime}")
+
+    result = {
+        "schema": SEMANTIC_COMPILE_RESULT_SCHEMA,
+        "semantic_digest": _digest(document),
+        "webui": webui,
+        "locale_dictionaries": dictionaries,
+        "prototype_resources": prototype_resources,
+        "representative_state_checks": state_checks,
+        "source_map": source_map,
+        "requirement_runtime_map": requirement_map,
+        "binding_expansions": binding_expansions,
+        "capability_gaps": copy.deepcopy(document["capability_gaps"]),
+        "validation": validation,
+    }
+    if len(prototype_resources) == 1:
+        result["prototype_records"] = copy.deepcopy(
+            prototype_resources[0]["records"]
+        )
+    return result
+
+
+def validate_semantic_prototype(
+    value: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    if value.get("schema") == SEMANTIC_PROTOTYPE_V2_SCHEMA:
+        return _validate_semantic_prototype_v2(value, brief=brief)
+    return _validate_semantic_prototype_v1(value, brief=brief)
+
+
+def normalize_semantic_prototype_candidate(
+    value: Mapping[str, Any], *, brief: Mapping[str, Any]
+) -> dict[str, Any]:
+    if value.get("schema") != SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA:
+        return _normalize_semantic_prototype_candidate_v1(value, brief=brief)
+    candidate, _ = _canonicalize_semantic_prototype_candidate_v2(value)
+    return _validate_semantic_prototype_v2(
+        _lower_semantic_prototype_candidate_v2(candidate, brief=brief), brief=brief
+    )
+
+
+def compile_semantic_prototype(
+    value: Mapping[str, Any],
+    *,
+    brief: Mapping[str, Any] | None = None,
+    project_ref: str | None = None,
+) -> dict[str, Any]:
+    if value.get("schema") == SEMANTIC_PROTOTYPE_V2_SCHEMA:
+        return _compile_semantic_prototype_v2(
+            value, brief=brief, project_ref=project_ref
+        )
+    return _compile_semantic_prototype_v1(
+        value, brief=brief, project_ref=project_ref
+    )
+
+
+def compile_semantic_prototype_candidate(
+    value: Mapping[str, Any],
+    *,
+    brief: Mapping[str, Any],
+    project_ref: str | None = None,
+) -> dict[str, Any]:
+    if value.get("schema") != SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA:
+        return _compile_semantic_prototype_candidate_v1(
+            value, brief=brief, project_ref=project_ref
+        )
+    candidate, normalizations = _canonicalize_semantic_prototype_candidate_v2(value)
+    requirement_findings = _requirement_contract_findings(candidate, brief=brief)
+    try:
+        semantic_document = _lower_semantic_prototype_candidate_v2(
+            candidate, brief=brief
+        )
+        normalizations.append(
+            {
+                "kind": "authoritative_brief_provenance",
+                "from": "Prototype Brief",
+                "to": str(semantic_document["brief_ref"]),
+                "target": "$.brief_ref|$.brief_digest",
+            }
+        )
+        result = _compile_semantic_prototype_v2(
+            semantic_document,
+            brief=brief,
+            project_ref=project_ref,
+        )
+    except BuilderWorkflowError as exc:
+        prefix = "invalid semantic Prototype: "
+        detail = str(exc)
+        if detail.startswith(prefix):
+            detail = detail[len(prefix) :]
+        matching_finding = next(
+            (
+                item
+                for item in requirement_findings
+                if str(item.get("detail") or "") == detail
+            ),
+            None,
+        )
+        findings = [
+            copy.deepcopy(matching_finding)
+            if matching_finding is not None
+            else {
+                "code": "semantic.validation_failed",
+                "path": "$",
+                "detail": detail,
+            }
+        ]
+        findings.extend(
+            item
+            for item in requirement_findings
+            if str(item.get("detail") or "") != detail
+        )
+        raise SemanticPrototypeValidationError(findings) from exc
+    if requirement_findings:
+        raise SemanticPrototypeValidationError(requirement_findings)
+    result["semantic_document"] = semantic_document
+    result["normalizations"] = normalizations
+    return result
+
+
 __all__ = [
     "SEMANTIC_COMPILE_RESULT_SCHEMA",
     "SEMANTIC_PROTOTYPE_CANDIDATE_SCHEMA",
+    "SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA",
     "SEMANTIC_PROTOTYPE_SCHEMA",
+    "SEMANTIC_PROTOTYPE_V2_SCHEMA",
     "SemanticPrototypeValidationError",
     "compile_semantic_prototype_candidate",
     "compile_semantic_prototype",
