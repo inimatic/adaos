@@ -1783,6 +1783,10 @@ def test_semantic_v2_capability_gap_conservatively_overrides_binding() -> None:
         and item["to"] == requirement_ref
         for item in result["normalizations"]
     )
+    builder_meta = result["webui"]["ui"]["application"]["desktop"][
+        "pageSchema"
+    ]["meta"]["builder"]
+    assert builder_meta["capability_gaps"] == result["capability_gaps"]
 
 
 def test_semantic_v2_relationship_identity_compiles_editor_selector() -> None:

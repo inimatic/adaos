@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "7"
+PROTOTYPE_GRADER_VERSION = "8"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -123,6 +123,9 @@ Do not broaden one mutation into all mutations: an action that changes only an o
 for example, is not evidence about actions that change status. Evidence and reasoning
 for a violated behavior must identify the same behavior named by that prohibition;
 unrelated or merely adjacent controls and actions are irrelevant.
+A capability gap is evidence of disclosed non-support, not implementation. Grade a
+corresponding required job as unsupported. For a prohibited assumption, the gap alone
+is not positive evidence that the behavior occurs; inspect executable paths separately.
 Be conservative: use unclear when evidence is insufficient. Return only the requested
 JSON object.
 """
@@ -151,6 +154,7 @@ def _evidence_pointers(artifact: Mapping[str, Any]) -> list[str]:
         "query",
         "validation",
         "visibleWhen",
+        "capability_gaps",
     }
 
     def visit(value: Any, pointer: str) -> None:
@@ -171,6 +175,8 @@ def _evidence_pointers(artifact: Mapping[str, Any]) -> list[str]:
         if isinstance(value, Sequence) and not isinstance(
             value, (str, bytes, bytearray)
         ):
+            if pointer.rsplit("/", 1)[-1] in semantic_container_names:
+                entries.append(pointer)
             for index, nested in enumerate(value):
                 visit(nested, f"{pointer}/{index}")
 
@@ -179,14 +185,8 @@ def _evidence_pointers(artifact: Mapping[str, Any]) -> list[str]:
 
 
 def _model_result_schema(evidence_pointers: Sequence[str]) -> dict[str, Any]:
-    schema = copy.deepcopy(_MODEL_RESULT_SCHEMA)
-    pointers = list(dict.fromkeys(str(item) for item in evidence_pointers if item))
-    if pointers:
-        schema["$defs"]["evidence"]["properties"]["pointer"] = {
-            "type": "string",
-            "enum": pointers,
-        }
-    return schema
+    del evidence_pointers
+    return copy.deepcopy(_MODEL_RESULT_SCHEMA)
 
 
 def _json_pointer_exists(document: Any, pointer: str) -> bool:
@@ -422,7 +422,7 @@ def grade_builder_prototype(
                 }
             },
             request_id=request_id,
-            prompt_cache_key="adaos-builder-e2e-prototype-grader-v7",
+            prompt_cache_key="adaos-builder-e2e-prototype-grader-v8",
             timeout=min(15.0, timeout_seconds),
         )
     )

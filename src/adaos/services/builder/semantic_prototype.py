@@ -1983,6 +1983,7 @@ def _compile_semantic_prototype_v1(
                 "semantic_source": SEMANTIC_PROTOTYPE_SCHEMA,
                 "semantic_digest": _digest(document),
                 "brief_ref": document["brief_ref"],
+                "capability_gaps": copy.deepcopy(document["capability_gaps"]),
             }
         },
     }
@@ -3266,6 +3267,7 @@ def _compile_semantic_prototype_v2(
                 "semantic_digest": _digest(document),
                 "brief_ref": document["brief_ref"],
                 "relationships": copy.deepcopy(document["relationships"]),
+                "capability_gaps": copy.deepcopy(document["capability_gaps"]),
             }
         },
     }

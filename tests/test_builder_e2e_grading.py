@@ -66,6 +66,37 @@ def test_evidence_index_includes_deep_semantic_state_containers() -> None:
     )
 
 
+def test_evidence_index_includes_builder_capability_gaps() -> None:
+    artifact = {
+        "webui": {
+            "ui": {
+                "application": {
+                    "desktop": {
+                        "pageSchema": {
+                            "meta": {
+                                "builder": {
+                                    "capability_gaps": [
+                                        {
+                                            "requirement_ref": "job:01",
+                                            "code": "runtime_unavailable",
+                                            "detail": "Not implemented.",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    assert (
+        "/webui/ui/application/desktop/pageSchema/meta/builder/capability_gaps"
+        in _evidence_pointers(artifact)
+    )
+
+
 def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
     recorded: list[dict] = []
 
@@ -74,10 +105,8 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
         assert "Do not broaden one mutation into all mutations" in messages[0]["content"]
         assert kwargs["text"]["format"]["type"] == "json_schema"
         pointer_schema = kwargs["text"]["format"]["schema"]["$defs"]["evidence"]
-        assert pointer_schema["properties"]["pointer"]["enum"] == [
-            "/ui",
-            "/ui/control",
-        ]
+        assert pointer_schema["properties"]["pointer"]["pattern"].startswith("^/")
+        assert "enum" not in pointer_schema["properties"]["pointer"]
         assert kwargs["model"] == "gpt-4.1"
         assumption_schema = kwargs["text"]["format"]["schema"]["properties"][
             "prohibited_assumptions"
@@ -88,7 +117,7 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
             "unclear",
         ]
         assert "Mere absence is not uncertainty" in messages[0]["content"]
-        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v7"
+        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v8"
         return {"job_id": "job-1", "_client": {"base_url": "https://root"}}
 
     def wait(job_id, **kwargs):
