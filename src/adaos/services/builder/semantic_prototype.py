@@ -2642,6 +2642,59 @@ def _lower_semantic_prototype_candidate_v2(
     }
 
 
+def _state_proof_findings(
+    state: Mapping[str, Any], view: Mapping[str, Any], *, index: int
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    state_id = str(state["id"])
+
+    def add(code: str, detail: str) -> None:
+        findings.append({
+            "code": code,
+            "path": f"$.representative_states[{index}].proof",
+            "semantic_refs": [f"state:{state_id}", f"view:{view['id']}"],
+            "detail": f"representative state {state_id!r} {detail}",
+        })
+
+    proof = state["proof"]
+    visible_fields = set(proof["visible_field_refs"])
+    hidden = sorted(visible_fields - set(view["field_refs"]))
+    if hidden:
+        add("semantic.state_proof_hidden", f"claims fields not visible in view {view['id']!r}: {hidden}")
+    filters = state.get("filters") or []
+    predicate_fields = {
+        str(field) for predicate in filters
+        for field in (predicate["field_ref"], predicate.get("compare_field_ref"))
+        if field
+    }
+    kind = str(proof["kind"])
+    rule = STATE_PROOF_RULES[kind]
+    if ((rule["filters"] == "none" and filters)
+        or (rule["filters"] == "required" and not filters)
+        or int(state["min_items"]) < rule["min_items"]
+        or ("max_items" in rule and (
+            state.get("max_items") != rule["max_items"]
+            or state["min_items"] != rule["min_items"]
+        ))):
+        add("semantic.state_proof_invalid", f"{kind} proof requires {rule}")
+    if rule.get("visible_predicates"):
+        missing = sorted(predicate_fields - visible_fields)
+        if missing:
+            add("semantic.state_proof_hidden", f"does not expose predicate fields {missing}")
+    if rule.get("query_controls"):
+        controls = {
+            str(control["field_ref"]) for control in view.get("query_controls") or []
+            if control["kind"] == "filter"
+        }
+        if not predicate_fields.issubset(controls) or any(
+            item["operator"] != "eq" or item.get("compare_field_ref") for item in filters
+        ):
+            add("semantic.state_query_unreachable", "query_empty requires matching equality filter controls")
+    if rule.get("empty_state") and not view.get("empty_state"):
+        add("semantic.state_empty_view_missing", f"requires an explicit empty_state on view {view['id']!r}")
+    return findings
+
+
 def _semantic_v2_model_findings(
     document: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
@@ -2871,21 +2924,7 @@ def _semantic_v2_model_findings(
                     ),
                 }
             )
-        proof = state.get("proof") if isinstance(state.get("proof"), Mapping) else {}
-        visible_fields = {str(item) for item in proof.get("visible_field_refs") or []}
-        hidden = sorted(visible_fields - set(view.get("field_refs") or []))
-        if hidden:
-            findings.append(
-                {
-                    "code": "semantic.state_proof_hidden",
-                    "path": f"$.representative_states[{state_index}].proof",
-                    "semantic_refs": [f"state:{state_id}"],
-                    "detail": (
-                        f"representative state {state_id!r} claims fields not "
-                        f"visible in view {view.get('id')!r}: {hidden}"
-                    ),
-                }
-            )
+        findings.extend(_state_proof_findings(state, view, index=state_index))
     return findings
 
 
@@ -3031,49 +3070,11 @@ def _validate_semantic_prototype_v2(
             slice_document, brief=None, require_primary=False
         )
 
-    for state in states.values():
+    for index, state in enumerate(states.values()):
         view = views[str(state["view_ref"])]
-        proof = dict(state["proof"])
-        visible_fields = set(proof["visible_field_refs"])
-        unknown_visible = sorted(visible_fields - set(view["field_refs"]))
-        if unknown_visible:
-            _fail(
-                f"representative state {state['id']!r} claims fields not visible "
-                f"in view {view['id']!r}: {unknown_visible}"
-            )
-        filters = [dict(item) for item in state.get("filters") or []]
-        predicate_fields = {
-            field_ref
-            for predicate in filters
-            for field_ref in (
-                str(predicate["field_ref"]),
-                str(predicate.get("compare_field_ref") or ""),
-            )
-            if field_ref
-        }
-        proof_kind = str(proof["kind"])
-        rule = STATE_PROOF_RULES[proof_kind]
-        if ((rule["filters"] == "none" and filters)
-            or (rule["filters"] == "required" and not filters)
-            or int(state["min_items"]) < rule["min_items"]
-            or ("max_items" in rule and (state.get("max_items") != rule["max_items"] or state["min_items"] != rule["min_items"]))):
-            _fail(f"representative state {state['id']!r} {proof_kind} proof requires {rule}")
-        if rule.get("visible_predicates"):
-            missing_visible = sorted(predicate_fields - visible_fields)
-            if missing_visible:
-                _fail(
-                    f"representative state {state['id']!r} does not expose "
-                    f"predicate fields {missing_visible}"
-                )
-        if rule.get("query_controls"):
-            control_fields = {
-                str(control.get("field_ref")) for control in view.get("query_controls") or []
-                if control.get("kind") == "filter"
-            }
-            if not predicate_fields.issubset(control_fields) or any(
-                item["operator"] != "eq" or item.get("compare_field_ref") for item in filters
-            ):
-                _fail(f"representative state {state['id']!r} query_empty requires matching equality filter controls")
+        findings = _state_proof_findings(state, view, index=index)
+        if findings:
+            _fail(findings[0]["detail"])
 
     query_controls = {
         str(control["id"]): dict(control)

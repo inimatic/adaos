@@ -752,11 +752,14 @@ read-only record fields missing from form guards and numeric `.length > 0`
 conditions unsupported by the Client evaluator. Both were fixed without adding
 hidden fields to mutation payloads; focused Client tests now total 127.
 
-- [ ] `[must]` Compare explicit GPT-5 reasoning profiles on the same eight
+- [x] `[must]` Compare explicit GPT-5 reasoning profiles on the same eight
   prompts before fixing a cost/latency default. Record requested and actual
   options; never attribute a profile change to context engineering alone.
-- [ ] `[must]` Complete all independent state-proof findings before repair;
+- [x] `[must]` Complete all independent state-proof findings before repair;
   query reachability failures must not remain hidden behind fixture mismatches.
+  Proof rules, hidden predicates, unreachable queries and missing empty views
+  now share the validation/diagnostic implementation. Patch schemas include only
+  reachable definitions; regression tests cover digest and unrelated-view edits.
 - [ ] `[must]` Reduce state-repair input to affected evidence, typed fields,
   readable fixture values and affected Brief requirements; retain full original
   input/output for audit. Qualify preservation and meaning, not only patch size.
@@ -767,6 +770,37 @@ Artifacts: `state-repair-effort-low-20260911-01` and its `-validated` offline
 receipt. The initial replay helper omitted the authoritative Brief; validation
 was rerun with the captured checkpoint, without a second model call. This is
 single-case diagnostic evidence, not a changed historical verdict or a baseline.
+
+The complete matched `executable-surfaces-gpt5-low-20260911-01` run passed 4/8
+(operations, appointments, budget, media), versus 2/8 at `minimal`. Both used the
+same 8,000 total-output-token ceiling. Case p50/p90 increased to 95.0/132.1
+seconds. Equipment and knowledge failed repair; volunteer and inventory were
+provider-incomplete (`max_output_tokens`), not semantic rejections. No default
+profile change or reliability claim follows from this single comparison.
+
+Audit also found that E2E ignored Root's flat `reasoning_tokens` usage field.
+The collector now supports flat and nested usage without counting both; the
+retained successful-response records contain 22,656 reasoning tokens, not zero.
+Usage for the two incomplete responses is absent from compact Root telemetry,
+so the reported token totals are a lower bound, not complete billing evidence.
+Historical artifacts are not overwritten. Diagnostics now expose provider
+incompleteness and missing usage explicitly. An opt-in run-specific output
+budget allows a measured 12,000-token follow-up without changing user defaults.
+
+`executable-surfaces-gpt5-20260911-03/evidence/appointments-crud-02` additionally
+passes create/read/delete using only a new probe-owned record on both viewports,
+alongside update/restore and cancelled confirmations. This proves local CRUD for
+one compiled editor, not every requested operation in all eight archetypes.
+The first create probe incorrectly treated radio choices as select elements;
+its failed evidence remains retained. Required-field, upload, localized browser
+rendering and complete eight-case interaction coverage remain open.
+
+- [ ] `[must]` Preserve structured partial output and usage for provider
+  incompleteness, separating generated JSON and reasoning token budgets before
+  choosing capacity defaults. Never shorten the response to disguise failures.
+- [ ] `[must]` Qualify the same eight cases under the selected profile with
+  repeated fresh generations and complete user-task probes. A diagnostic subset
+  or a union of best results across runs is not an eight-case baseline.
 
 
 Current correction evidence (2026-09-11): the eight visible rubrics now trace

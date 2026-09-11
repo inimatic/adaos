@@ -663,10 +663,15 @@ lower controls. Capture success is not a visual-quality or interaction pass.
 `e2e/stand/browser/prototype-interactions.mjs` accepts an explicit
 `ADAOS_E2E_CHECKPOINT` for a retained, unapproved, dev-only test artifact. It
 derives forms and collections from the actual compiled WebUI and exercises text
-update, persisted reopen and fixture restoration through the Client. Run with
+update, persisted reopen and fixture restoration through the Client. Modal
+editors also exercise dismissal, focus restoration and cancellation of enabled
+confirmation commands. Supported same-editor create/delete pairs additionally
+create a new record through the form, locate and reopen it through the collection,
+then delete only that probe-owned record. Run with
 the same explicit local scope/token and a fresh `ADAOS_E2E_OUTPUT`. Unsupported
 editors are reported as `not_exercised`, never a task pass. This initial probe
-does not qualify all create/delete, upload, focus, locale or application-specific
+does not qualify all create/delete combinations, required-field validation,
+upload, locale or application-specific
 tasks; the roadmap retains those gates. Do not promote its test resources.
 
 For a controlled GPT-5 profile experiment, the dev runner forwards
@@ -674,6 +679,11 @@ For a controlled GPT-5 profile experiment, the dev runner forwards
 request metadata and records the override in the run environment. This does
 not change Builder's default. Actual primary/repair request artifacts remain
 the authority for effective options. Keep cases and output budgets unchanged.
+For a separate capacity experiment, `ADAOS_BUILDER_LLM_MAX_TOKENS` explicitly
+forwards a total output ceiling between 1,000 and 12,000 tokens. Record this
+changed variable; never combine such a run into a matched-effort comparison.
+Compact generation diagnostics distinguish provider incompleteness and observed
+usage. Missing usage is not zero cost; retain original provider evidence.
 GPT-5 supports these effort levels in the [official model contract](https://developers.openai.com/api/docs/models/gpt-5).
 The diagnostic helper `e2e/stand/replay-builder-state-repair.py` replays one
 retained request with an explicit matching `--checkpoint` and `--effort` into

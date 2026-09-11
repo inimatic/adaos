@@ -335,6 +335,14 @@ not execute. Unit-level schema validation missed this mismatch.
   inspect, edit, validation, cancellation and deletion on wide/compact surfaces.
   Add this probe to ABI impact checks; structural capability inventory alone
   cannot verify renderer semantics.
+  Progress: the retained appointments editor now passes create/read/delete of
+  a probe-owned record, update/restore and confirmation cancellation on both
+  viewports. Unsupported editor field combinations are marked not exercised,
+  never counted as full task coverage. Required-field and EN/RU browser gates
+  remain open. Apparent modal background bleed-through was traced to a capture
+  during Ionic's enter animation, not a renderer opacity defect. The probe now
+  waits for the shadow wrapper's final opacity and finishes finite animations
+  before capture. A computed background color alone is insufficient evidence.
 - [x] `[should]` Add opt-in local table sorting before pagination and localized
   ISO date/time rendering. Disable local sort for cursor/server pagination;
   never imply a whole-catalog order from one loaded page.

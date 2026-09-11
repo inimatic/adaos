@@ -22,7 +22,12 @@ def _digest(candidate: Mapping[str, Any]) -> str:
 
 
 def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
-    if not findings or any(item.get("code") not in {"semantic.state_fixture_mismatch", "semantic.state_proof_hidden"} for item in findings):
+    state_codes = {
+        "semantic.state_fixture_mismatch", "semantic.state_proof_hidden",
+        "semantic.state_proof_invalid", "semantic.state_query_unreachable",
+        "semantic.state_empty_view_missing",
+    }
+    if not findings or any(item.get("code") not in state_codes for item in findings):
         return None
     refs = {str(ref) for finding in findings for ref in finding.get("semantic_refs") or []}
     states = [state for state in candidate.get("representative_states") or []
@@ -33,7 +38,29 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
     views = [view for view in candidate["views"] if view["id"] in view_ids]
     if len(views) != len(view_ids):
         return None
-    definitions = semantic_prototype_provider_contract(version="v2")["$defs"]
+    available = semantic_prototype_provider_contract(version="v2")["$defs"]
+    definitions: dict[str, Any] = {}
+
+    def include(name: str) -> None:
+        if name in definitions:
+            return
+        definitions[name] = available[name]
+        visit(available[name])
+
+    def visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            reference = value.get("$ref", "")
+            if reference.startswith("#/$defs/"):
+                include(reference.removeprefix("#/$defs/"))
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    # Only the patch's reachable definitions belong in its provider schema.
+    include("representativeState")
+    include("view")
     definitions["representativeState"]["properties"]["id"] = {"type": "string", "enum": [state["id"] for state in states]}
     definitions["view"]["properties"]["id"] = {"type": "string", "enum": [view["id"] for view in views]}
     digest = _digest(candidate)

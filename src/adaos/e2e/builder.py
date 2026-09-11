@@ -137,10 +137,14 @@ def _generation_metadata(context: Mapping[str, Any]) -> dict[str, Any]:
     effort = str(os.getenv("ADAOS_BUILDER_LLM_REASONING_EFFORT") or "").strip()
     if effort and effort not in {"minimal", "low", "medium", "high"}:
         raise BuilderE2EError("Invalid ADAOS_BUILDER_LLM_REASONING_EFFORT")
+    budget = str(os.getenv("ADAOS_BUILDER_LLM_MAX_TOKENS") or "").strip()
+    if budget and (not budget.isdigit() or not 1000 <= int(budget) <= 12000):
+        raise BuilderE2EError("Invalid ADAOS_BUILDER_LLM_MAX_TOKENS")
     return {
         "builder_e2e_generation_contract": contract,
         "builder_semantic_compiler": contract.startswith("semantic."),
         **({"builder_llm_reasoning_effort": effort} if effort else {}),
+        **({"builder_llm_max_output_tokens": int(budget)} if budget else {}),
     }
 
 
@@ -338,6 +342,16 @@ def _compact_generation_diagnostic(journal: Mapping[str, Any]) -> dict[str, Any]
         if isinstance(diagnostic.get("telemetry"), Mapping)
         else {}
     )
+    provider_error = result.get("error")
+    provider_failure: dict[str, Any] = {}
+    if isinstance(provider_error, Mapping):
+        incomplete = provider_error.get("incomplete_details")
+        provider_failure = {
+            key: provider_error[key] for key in ("id", "status", "code", "max_output_tokens")
+            if provider_error.get(key) is not None
+        }
+        if isinstance(incomplete, Mapping):
+            provider_failure["incomplete_reason"] = incomplete.get("reason")
     return {
         "schema": "adaos.builder.e2e_generation_diagnostic.v1",
         "job_id": str(journal.get("job_id") or ""),
@@ -346,6 +360,8 @@ def _compact_generation_diagnostic(journal: Mapping[str, Any]) -> dict[str, Any]
         "attempts": attempts,
         "candidate_artifacts": candidates,
         "result_validation": validation_summary(result.get("validation")),
+        "provider_failure": provider_failure,
+        "usage_observed": bool(telemetry.get("usage") or telemetry.get("usage_breakdown")),
         "normalizations": copy.deepcopy(result.get("normalizations") or [])[:64],
         "telemetry": {
             key: copy.deepcopy(telemetry.get(key))
@@ -491,6 +507,7 @@ def _repository_environment(repo_root: Path) -> dict[str, Any]:
     return {
         "runner_version": RUNNER_VERSION,
         "builder_reasoning_effort_override": os.getenv("ADAOS_BUILDER_LLM_REASONING_EFFORT") or None,
+        "builder_max_output_tokens_override": os.getenv("ADAOS_BUILDER_LLM_MAX_TOKENS") or None,
         "repository_commit": _run_command(["git", "rev-parse", "HEAD"], repo_root),
         "repository_dirty": bool(status),
         "client_commit": (
@@ -733,10 +750,10 @@ def _collect_usage(value: Any) -> dict[str, int]:
                     ),
                 )
                 output_details = keys.get("output_tokens_details")
-                if isinstance(output_details, Mapping):
-                    totals["reasoning_tokens"] += max(
-                        0, int(output_details.get("reasoning_tokens") or 0)
-                    )
+                reasoning = keys.get("reasoning_tokens")
+                if reasoning is None and isinstance(output_details, Mapping):
+                    reasoning = output_details.get("reasoning_tokens")
+                totals["reasoning_tokens"] += max(0, int(reasoning or 0))
                 totals["model_calls"] += 1
                 return
             for key, child in keys.items():

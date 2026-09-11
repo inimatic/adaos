@@ -396,6 +396,19 @@ model-declared capability names are not proof of runtime support. Cross-record
 business rules remain explicit pending Automation obligations unless an actual
 supported primitive implements and verifies them.
 
+Repair diagnostics collect independent proof defects before choosing a repair
+scope. Proof-kind rules, fixture cardinality, visible predicates, query
+reachability and empty-view rendering must not hide one another behind a
+fail-fast validator. A scoped repair cannot change unrelated fixtures, commands,
+view surfaces or requirement bindings. Its output schema includes only reachable
+patch definitions, and the merged candidate still undergoes full validation.
+
+An incomplete provider response is not a semantic model rejection. Retain its
+structured status, reason, partial output and usage; distinguish unknown usage
+from zero. Reasoning tokens share a provider's total output budget where that
+contract applies. Profile and capacity experiments must record actual request
+options and must not silently alter the normal user's defaults.
+
 Generation context must expose one authoritative inventory of required references.
 Each operation retains its action, source clause, known target and related jobs;
 an isolated verb is not a sufficient description. Unknown entities remain explicit

@@ -118,7 +118,21 @@ try {
         await input.fill(marker)
         const button = form.locator(`[data-command-id=${JSON.stringify(update.id)}]`)
         await expect(button).toBeEnabled()
-        await page.screenshot({ path: path.join(output, `${layout}-${widget.id}-edit.png`), fullPage: true })
+        if (modalId) {
+          const surface = page.locator('ion-modal').last().locator('.modal-wrapper')
+          await expect(surface).toHaveCSS('opacity', '1')
+          sample.overlayBackground = await surface.evaluate(element => getComputedStyle(element).backgroundColor)
+          sample.overlayStyles = await surface.evaluate(element => {
+            const result = []
+            for (let node = element; node; node = node.assignedSlot || node.parentElement || node.getRootNode()?.host) {
+              const style = getComputedStyle(node)
+              result.push({ tag: node.tagName, classes: node.className, opacity: style.opacity, background: style.backgroundColor, filter: style.filter })
+            }
+            return result
+          })
+          if (sample.overlayBackground === 'rgba(0, 0, 0, 0)' || sample.overlayBackground === 'transparent') throw new Error('Editor overlay has no opaque surface')
+        }
+        await page.screenshot({ path: path.join(output, `${layout}-${widget.id}-edit.png`), fullPage: true, animations: 'disabled' })
         sample.beforeSubmit = await form.evaluate((element, fieldId) => {
           const component = window.ng?.getComponent(element.querySelector('ada-form-widget'))
           return { field: fieldId, values: component?.values, input: element.querySelector('input,textarea')?.value,
@@ -149,6 +163,54 @@ try {
         const restored = await restore
         if (!restored.ok() || (await restored.json()).ok === false) throw new Error('Could not restore fixture')
         sample.checks.push({ editor: widget.id, status: 'passed', task: 'select/edit/save/reopen/restore', surface: modalId ? 'overlay' : 'inline' })
+        const create = widget.actions.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'create')
+        const remove = widget.actions.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'delete')
+        const supportedTypes = ['shortText', 'longText', 'number', 'integer', 'date', 'singleChoice', 'boolean', 'toggle']
+        if (!create || !remove || widget.inputs.fields.some(item => !supportedTypes.includes(item.type) || item.visibleIf)) {
+          sample.checks.push({ editor: widget.id, status: 'not_exercised', task: 'create/read/delete', reason: 'Requires same-editor create/delete and supported unconditional fields' })
+          continue
+        }
+        if (modalId) await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
+        await host(`open-${widget.id}`).locator('[data-command-id="new"]').click()
+        const createdMarker = `created-${checkpoint.run_id}-${layout}`
+        const originalValues = sample.conditionDebug.values
+        for (const item of widget.inputs.fields) {
+          const container = form.locator(`[data-webui-field-id=${JSON.stringify(item.id)}]`)
+          const value = item.id === field.id ? createdMarker : originalValues[item.id]
+          if (['boolean', 'toggle'].includes(item.type)) {
+            await container.locator('input[type=checkbox]').setChecked(Boolean(value))
+          } else if (item.type === 'singleChoice') {
+            const index = (item.options || []).findIndex(option => option.value === value)
+            if (index >= 0) await container.locator('input[type=radio]').nth(index).check()
+          } else {
+            await container.locator('input,textarea').fill(value == null ? '' : String(value))
+          }
+        }
+        const creating = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate', { timeout: 15_000 })
+        await form.locator(`[data-command-id=${JSON.stringify(create.id)}]`).locator('button').click()
+        if (create.confirmation) await page.locator('ion-alert').last().locator('button').last().click()
+        const createdResponse = await creating
+        const createdResult = await createdResponse.json()
+        if (!createdResponse.ok() || createdResult.ok === false) throw new Error(`Create rejected: ${JSON.stringify(createdResult)}`)
+        if (sample.mutations.at(-1)?.payload?.[field.id] !== createdMarker) throw new Error('Create submitted the wrong draft')
+        if (modalId) await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
+        // The new record must be discoverable through the collection before deletion.
+        const newRow = host(collection.id).locator('tr.row-selectable, .collection-focus-item').filter({ hasText: createdMarker })
+        await expect(newRow).toHaveCount(1, { timeout: 30_000 })
+        await newRow.click()
+        if (modalId) await host(`open-${widget.id}`).locator('[data-command-id="edit"]').click()
+        await expect(input).toHaveValue(createdMarker, { timeout: 30_000 })
+        const selected = await form.evaluate(element => window.ng?.getComponent(element.querySelector('ada-form-widget'))?.recordValues)
+        if (selected?.[field.id] !== createdMarker || !selected.id || selected.id === sample.conditionDebug.record.id) throw new Error('Refusing to delete a record not created by this probe')
+        const deleting = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate', { timeout: 15_000 })
+        await form.locator(`[data-command-id=${JSON.stringify(remove.id)}]`).locator('button').click()
+        if (remove.confirmation) await page.locator('ion-alert').last().locator('button').last().click()
+        const removedResponse = await deleting
+        if (!removedResponse.ok() || (await removedResponse.json()).ok === false) throw new Error('Delete rejected')
+        if (sample.mutations.at(-1)?.record !== selected.id) throw new Error('Delete targeted the wrong record')
+        if (modalId) await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
+        await expect(newRow).toHaveCount(0, { timeout: 30_000 })
+        sample.checks.push({ editor: widget.id, status: 'passed', task: 'create/read/delete', surface: modalId ? 'overlay' : 'inline' })
       }
       if (!sample.checks.some(check => check.status === 'passed')) throw new Error('No mutation exercised; this is not a task pass')
       await page.screenshot({ path: path.join(output, `${layout}-complete.png`), fullPage: true })

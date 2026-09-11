@@ -4,6 +4,7 @@ import copy
 import re
 
 import pytest
+from jsonschema import ValidationError
 
 from adaos.sdk.builder import prototype as prototype_sdk
 from adaos.sdk.developer import prototypes as developer_prototypes
@@ -1713,11 +1714,19 @@ def test_state_repair_preserves_fixtures_commands_and_other_states() -> None:
     findings = caught.value.findings
     plan = prepare_state_repair(candidate, findings)
     assert plan is not None
+    assert "command" not in plan["output_schema"]["$defs"]
+    assert "resource" not in plan["output_schema"]["$defs"]
     repair = {"schema": "adaos.builder.state_repair.v1", "base_sha256": plan["base_sha256"], "states": [valid["representative_states"][0]], "views": []}
     repaired = apply_state_repair(candidate, repair, findings)
     assert repaired == valid
     assert candidate != valid
     compile_semantic_prototype_candidate(repaired, brief=brief)
+    with pytest.raises(ValidationError):
+        apply_state_repair(candidate, {**repair, "base_sha256": "different"}, findings)
+    changed_view = copy.deepcopy(candidate["views"][0])
+    changed_view["surface"] = "side_sheet"
+    with pytest.raises(BuilderWorkflowError, match="unrelated view change"):
+        apply_state_repair(candidate, {**repair, "views": [changed_view]}, findings)
     assert prepare_state_repair(candidate, [{"code": "semantic.compiler_contract_invalid"}]) is None
     repair["states"].append(copy.deepcopy(repair["states"][0]))
     with pytest.raises(BuilderWorkflowError, match="duplicate"):
@@ -1746,6 +1755,26 @@ def test_query_empty_proof_has_no_records_and_requires_a_reachable_filter() -> N
     view["query_controls"] = []
     with pytest.raises(BuilderWorkflowError, match="matching equality filter controls"):
         compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+
+
+def test_state_findings_include_unreachable_queries_before_bounded_repair() -> None:
+    brief, semantic = _multi_resource_fixture()
+    state = semantic["representative_states"][0]
+    state["proof"] = {"kind": "query_empty", "visible_field_refs": ["title"]}
+    state["filters"] = [{"field_ref": "title", "operator": "eq", "value": "No matching record"}]
+    second = copy.deepcopy(state)
+    second["id"] = "also-invalid"
+    second["min_items"] = 1
+    second["max_items"] = None
+    second["proof"]["kind"] = "field_predicate"
+    semantic["representative_states"].append(second)
+    candidate = _multi_resource_candidate(semantic)
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    codes = {item["code"] for item in caught.value.findings}
+    assert {"semantic.state_query_unreachable", "semantic.state_fixture_mismatch"} <= codes
+    plan = prototype_sdk.prepare_state_repair(candidate, caught.value.findings)
+    assert set(plan["allowed_state_ids"]) == {state["id"], second["id"]}
 
 
 def test_semantic_v2_rejects_state_proof_for_hidden_fields() -> None:

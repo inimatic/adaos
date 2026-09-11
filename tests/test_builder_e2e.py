@@ -27,6 +27,18 @@ from adaos.services.builder.llm_input_attribution import (
 )
 
 
+def test_generation_diagnostic_exposes_truncation_without_copying_response() -> None:
+    from adaos.e2e.builder import _compact_generation_diagnostic
+    diagnostic = _compact_generation_diagnostic({"status": "failed", "diagnostic": {
+        "result": {"ok": False, "error": {"id": "response", "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"}, "max_output_tokens": 8000,
+            "output": ["large partial output"], "instructions": "complete instructions"}},
+    }})
+    assert diagnostic["provider_failure"] == {"id": "response", "status": "incomplete", "max_output_tokens": 8000, "incomplete_reason": "max_output_tokens"}
+    assert diagnostic["usage_observed"] is False
+    assert "large partial output" not in json.dumps(diagnostic)
+
+
 def test_reasoning_override_is_explicit_and_validated(monkeypatch):
     from adaos.e2e.builder import _generation_metadata
     monkeypatch.delenv("ADAOS_BUILDER_LLM_REASONING_EFFORT", raising=False)
@@ -36,6 +48,18 @@ def test_reasoning_override_is_explicit_and_validated(monkeypatch):
     monkeypatch.setenv("ADAOS_BUILDER_LLM_REASONING_EFFORT", "unsupported")
     with pytest.raises(BuilderE2EError, match="REASONING_EFFORT"):
         _generation_metadata({})
+
+
+def test_generation_budget_override_is_explicit_and_validated(monkeypatch):
+    from adaos.e2e.builder import _generation_metadata
+    monkeypatch.delenv("ADAOS_BUILDER_LLM_MAX_TOKENS", raising=False)
+    assert "builder_llm_max_output_tokens" not in _generation_metadata({})
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_MAX_TOKENS", "12000")
+    assert _generation_metadata({})["builder_llm_max_output_tokens"] == 12000
+    for value in ("0", "12001", "lots"):
+        monkeypatch.setenv("ADAOS_BUILDER_LLM_MAX_TOKENS", value)
+        with pytest.raises(BuilderE2EError, match="MAX_TOKENS"):
+            _generation_metadata({})
 
 
 def test_artifact_writers_keep_unicode_readable_in_plain_and_compressed_json(tmp_path) -> None:
@@ -337,11 +361,13 @@ def test_runner_counts_generation_usage_breakdown_once(tmp_path: Path) -> None:
                 "input_tokens": 120,
                 "cached_input_tokens": 0,
                 "output_tokens": 20,
+                "reasoning_tokens": 8,
             },
             "repair": {
                 "input_tokens": 100,
                 "cached_input_tokens": 80,
                 "output_tokens": 10,
+                "output_tokens_details": {"reasoning_tokens": 3},
             },
         },
         "repair": {
@@ -374,6 +400,7 @@ def test_runner_counts_generation_usage_breakdown_once(tmp_path: Path) -> None:
     assert report["metrics"]["fresh_input_tokens"] == 140
     assert report["metrics"]["cached_input_tokens"] == 80
     assert report["metrics"]["output_tokens"] == 30
+    assert report["metrics"]["reasoning_tokens"] == 11
 
 
 def test_required_failure_stops_case_but_optional_failure_does_not(
