@@ -2,7 +2,7 @@
 
 Status: target architecture for reproducible Builder evaluation.
 
-Last reviewed: 2026-09-10.
+Last reviewed: 2026-09-11.
 
 Architecture owner: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
 Sequencing owner: [Builder Intent-to-Prototype Roadmap](builder-intent-to-prototype-roadmap.md).
@@ -534,3 +534,34 @@ first request after the stable schema digest changed had no cached input; it is
 therefore a cold-contract cohort and must not be compared as a warm-cache
 regression. The retained runtime evidence contains localized confirmation on
 all transition actions.
+
+Runs `sdk-semantic-operations-20260911-08` through `-11` exposed two evaluator
+defects and one generation-input defect without changing the user task. The
+first typed Brief stopped at the explicit workflow and omitted the later
+`empty` and `overdue` requirements. Core now aggregates all explicit workflow
+and representative-state clauses and excludes continuity constraints such as
+"open without losing the queue" from the state set. The resulting dynamic
+Brief contains five atomic jobs and the six states `New`, `In progress`,
+`Blocked`, `Done`, `empty`, and `overdue states`.
+
+Grader v4 incorrectly used an owner-assignment action as evidence about status
+mutations. Grader v5 corrected evidence scope, then Run 09 exposed a verdict
+polarity error: it described four explicit status confirmations but labelled
+the prohibited behavior as present. Grader v6 changed the model-facing verdicts
+to `violated/not_violated`, while preserving `present/absent` in the report ABI.
+Run 10 then treated missing public visibility as uncertainty. The evaluation
+artifact had discarded the create step's typed application governance. It now
+retains project-scoped application id, publisher, visibility, and revision;
+grader v7 treats the complete executable artifact as closed-world for
+prohibited behavior and requires positive evidence for a violation.
+
+Fresh run `sdk-semantic-operations-20260911-11` passed all stages and the hard
+outcome gate at `1.0` with one generation call and no repair. Its 43.2 seconds
+separated into 25.3 seconds provider execution, 8.1 seconds grader execution,
+110 ms local validation, and 6 ms Root queueing. The stable generation prefix
+reused 2,816 of 2,880 input tokens, but the model still emitted 4,616 output
+tokens; the grader consumed 7,355 fresh input and 796 output tokens. This is a
+warm-cache functional pass, not a latency SLO. It confirms that cache is a cost
+control for the stable prefix while output volume and the full-artifact model
+grader remain the principal latency/cost targets. A hard timeout would only
+truncate those phases and is not accepted as remediation.

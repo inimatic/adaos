@@ -3,7 +3,7 @@
 Status: active corrective roadmap. It blocks new claims of generic Builder
 Prototype autonomy.
 
-Last reviewed: 2026-09-10.
+Last reviewed: 2026-09-11.
 
 Architecture: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
 Parent lifecycle roadmap: [Builder Roadmap](builder-roadmap.md).
@@ -321,6 +321,16 @@ Builder authoring commands such as "create an application" from the
 application's own operation set. Generic capability selection consumes these
 facts before lexical fallback. Residual model interpretation, accepted-field
 persistence, ambiguity policy, and user confirmation remain open.
+
+Progress note (2026-09-11): operation clauses are now split into ordered atomic
+principal jobs with exact character evidence. Representative-state compilation
+aggregates workflow and later visual/exception states instead of returning on
+the first match, and it distinguishes state absence from interaction-continuity
+phrases such as "without losing the queue". The visible operations case now
+gives the model five atomic jobs and six explicit states and passes from one
+generation with no repair. This improves explicit-clause coverage only;
+schema-constrained residual interpretation, accepted Brief persistence, and
+clarification policy remain open.
 
 RU/EN parity note (2026-09-10): authoring exclusion is now span-aware rather
 than clause-wide. A single ordinary turn may say "create an application" and
