@@ -44,7 +44,12 @@ def test_reasoning_override_is_explicit_and_validated(monkeypatch):
     monkeypatch.delenv("ADAOS_BUILDER_LLM_REASONING_EFFORT", raising=False)
     assert "builder_llm_reasoning_effort" not in _generation_metadata({})
     monkeypatch.setenv("ADAOS_BUILDER_LLM_REASONING_EFFORT", "low")
+    monkeypatch.delenv("ADAOS_BUILDER_LLM_MODEL", raising=False)
+    with pytest.raises(BuilderE2EError, match="explicit ADAOS_BUILDER_LLM_MODEL"):
+        _generation_metadata({})
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_MODEL", "gpt-5")
     assert _generation_metadata({})["builder_llm_reasoning_effort"] == "low"
+    assert _generation_metadata({})["builder_llm_model"] == "gpt-5"
     monkeypatch.setenv("ADAOS_BUILDER_LLM_REASONING_EFFORT", "unsupported")
     with pytest.raises(BuilderE2EError, match="REASONING_EFFORT"):
         _generation_metadata({})

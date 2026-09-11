@@ -1290,6 +1290,9 @@ the prompt against that false-positive gate or copy a domain solution into Core.
   options and runtime reference validation. Creating a related record must make
   it selectable without regenerating the Prototype; reject dangling references.
   Qualify create-related/select/save/reopen across unrelated archetypes.
+  Form lookup and atomic provider checks are implemented with component/Core
+  tests. Browser create-related flow, live collection filters/display labels and
+  viewless lookup resources remain open; do not mark the whole task complete.
 
 Qualification progress: `context-media-paired-low-20260911-02` passed all four
 development attempts (short 2/2, detailed 2/2). Each prompt needed one repair
@@ -1376,6 +1379,22 @@ fixed the unchanged generated artifact. Earlier captures remain failures, not
 rewritten passes. Procurement empty-response fixtures passed both viewports
 separately from its real create/status-transition command tests. These results
 qualify the named primitives, not every workflow or polished layout.
+
+- [x] `[must]` Reject an E2E reasoning override without an explicit model; pass
+  the model through SDK metadata and record model plus primary/repair wait
+  settings. Add a reproducible local experiment launcher and inspect actual
+  saved provider requests before accepting a model comparison.
+- [x] `[must]` Derive supported filter types from the validator constant and
+  report cross-resource guard references before repair. Clarify that deferred
+  computations need inspectable representative outputs, not only raw inputs.
+
+`context-archetypes-low-20260912-03` is invalidated, not a GPT-5 score. After a
+restart the invocation omitted an explicit model and inherited a 150-second
+wait; saved requests contain model=null/reasoning=null. The runner was stopped,
+with checkpoints and browser evidence retained. Its budget and guard observations
+motivate generic regressions, but cannot support a claim about GPT-5 low. The
+next controlled cohort must verify actual model/effort in the first request and
+retain all terminal response evidence. Previous explicit GPT-5 runs are unchanged.
 
 Engineering basis: [OpenAI text-generation guidance](https://developers.openai.com/api/docs/guides/text),
 [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), and

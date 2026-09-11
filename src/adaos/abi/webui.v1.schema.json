@@ -2116,6 +2116,12 @@
           "type": "array",
           "items": { "$ref": "#/$defs/formOption" }
         },
+        "optionsDataSource": {
+          "allOf": [{ "$ref": "#/$defs/dataSource" }, { "properties": { "kind": { "const": "resourceQuery" } } }],
+          "description": "Live related-record options. Refreshes on resource invalidation, preserves the draft and blocks submission while unavailable."
+        },
+        "optionValuePath": { "$ref": "#/$defs/fieldPath" },
+        "optionLabelPaths": { "type": "array", "items": { "$ref": "#/$defs/fieldPath" } },
         "choices": {
           "type": "array",
           "items": { "$ref": "#/$defs/formOption" }

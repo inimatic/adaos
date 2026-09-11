@@ -2020,6 +2020,21 @@ def test_state_view_errors_are_included_in_first_pass_findings() -> None:
     assert "semantic.state_view_missing" in {item["code"] for item in _semantic_v2_model_findings(semantic)}
 
 
+def test_cross_record_guard_is_reported_before_repair() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["commands"][0]["guard"] = {"when": {"field_ref": "result", "operator": "equals", "value": "issue"}, "require_nonempty": ["person_phone"]}
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    assert "semantic.command_field_missing" in {item["code"] for item in caught.value.findings}
+
+
+def test_filter_context_is_generated_from_validator_types() -> None:
+    from adaos.services.builder.semantic_prototype import FILTER_VALUE_TYPES, semantic_prototype_generation_guidance
+    guidance = semantic_prototype_generation_guidance()
+    assert set(guidance["query_filters"]["field_types"]) == FILTER_VALUE_TYPES
+    assert {"number", "boolean"} <= FILTER_VALUE_TYPES
+
+
 def test_all_invalid_state_predicates_are_reported_before_repair_scope() -> None:
     brief, semantic = _multi_resource_fixture()
     state = semantic["representative_states"][0]
@@ -2334,25 +2349,13 @@ def test_semantic_v2_relationship_identity_compiles_editor_selector() -> None:
         for item in editor_widget["inputs"]["fields"]
         if item["id"] == "work_owner_id"
     )
-    assert owner["type"] == "singleChoice"
-    assert owner["options"] == [
-        {
-            "value": "person-1",
-            "label": "Alex",
-            "label_i18n": {
-                "key": "relationship.work_owner.option.person_1",
-                "fallback": "Alex",
-            },
-        },
-        {
-            "value": "person-2",
-            "label": "Sam",
-            "label_i18n": {
-                "key": "relationship.work_owner.option.person_2",
-                "fallback": "Sam",
-            },
-        },
-    ]
+    assert owner["type"] == "dropdown"
+    assert owner["optionsDataSource"] == {"kind": "resourceQuery", "resourceType": "prototype.people", "query": {"limit": 100}}
+    assert owner["optionValuePath"] == "id"
+    assert owner["optionLabelPaths"] == ["person_name"]
+    assert "options" not in owner
+    schema = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"]["prototype_record_schemas"]["prototype.work_items"]
+    assert schema["properties"]["work_owner_id"] == {"type": ["string", "null"]}
 
 
 def test_semantic_v2_accepts_choice_foreign_key_to_string_identity() -> None:
@@ -2386,7 +2389,8 @@ def test_semantic_v2_accepts_choice_foreign_key_to_string_identity() -> None:
     rendered_owner = next(
         item for item in editor["inputs"]["fields"] if item["id"] == "work_owner_id"
     )
-    assert rendered_owner["type"] == "singleChoice"
+    assert rendered_owner["type"] == "dropdown"
+    assert rendered_owner["optionValuePath"] == "id"
 
 
 def test_semantic_v2_normalizes_choice_relationship_values_consistently() -> None:

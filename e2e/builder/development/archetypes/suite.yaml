@@ -1,6 +1,6 @@
 schema: adaos.builder.e2e_suite.v1
 suite_id: builder-visible-archetypes
-version: "5"
+version: "6"
 title: Builder visible cross-domain archetypes
 description: Visible development cases for diagnosing intent, component, context, cost, and latency gaps.
 cohort: development
@@ -18,7 +18,7 @@ defaults:
   profile: generic
   generation_contract: semantic.v2
   repetitions: 1
-  timeout_seconds: 420
+  timeout_seconds: 1250
   browser: "off"
   grader_model: gpt-4.1
   require_client_profile: true

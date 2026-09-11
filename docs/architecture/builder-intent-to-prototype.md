@@ -611,6 +611,20 @@ when appropriate. Collection-empty and query-empty proofs still require an
 actual collection. Proof/view compatibility is part of the shared model-visible
 rules and first-pass diagnostics, not a hidden late compiler restriction.
 
+Relationship form fields query current target records instead of embedding a
+seed-time enum. Options refresh after target invalidation without replacing
+the edited draft; unavailable sources block submission. The Preview provider
+checks references under its registry mutation lock, including inverse references
+on target deletion, scoped to the same project and WebUI revision. Current
+collection filters and relationship display labels still need live lookup
+qualification; a dynamic form alone does not qualify all relationship workflows.
+
+A deferred computation still requires representative output values when those
+outputs are requested. Raw inputs plus an explanatory paragraph are not an
+inspectable result. Single-record guards cannot stand in for a predicate over
+related records. Both distinctions must be visible to the model before generation
+and retained as testable Automation obligations, without injecting domain code.
+
 Normalization may decode an exact JSON scalar string according to its declared
 number/boolean type and map an optional empty scalar to null. Exact JSON arrays
 of strings may likewise be decoded for attachments/multiple choices only.

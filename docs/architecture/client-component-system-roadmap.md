@@ -418,6 +418,10 @@ modal dismissal and edit round trips; the generated source was not hand-patched.
 - [ ] `[must]` Add generic live resource-backed form options with invalidation,
   loading/error states and preserved drafts. Compile relationship selectors to
   current records, not seed-time enums; qualify newly created related records.
+  Client `ab83285` implements form lookup, draft preservation, source status and
+  retry (EN/RU); 138 focused Client tests passed. Resource-query status/retry now
+  uses the same normalized request identity as loading. Full browser qualification
+  and collection lookup propagation are still required.
 - [ ] `[should]` Group collection search/filters into responsive tool regions.
   The current library still spends much of its first viewport on stacked
   full-width filters. This is shared Client/compiler UX debt, not evidence that

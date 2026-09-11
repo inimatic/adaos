@@ -257,6 +257,51 @@ def test_prototype_resource_runs_generic_query_and_crud_across_service_instances
     assert all(item["id"] != created["id"] for item in _query(workbench)["items"])
 
 
+def test_live_relationships_accept_new_targets_and_reject_dangling_writes(tmp_path) -> None:
+    service = PrototypeResourceService(state_dir=tmp_path)
+    source = _bundle()
+    target = _bundle()
+    target["resource_definition"]["resource_type"] = "prototype.kanban.people"
+    target["resource_definition"]["authority"]["binding"] = "kanban.people"
+    target["data_definition"]["source_id"] = "kanban.people"
+    # Existing title is a string property, used here as a declared foreign key.
+    for record in source["data_definition"]["seed"]:
+        record["title"] = "one"
+    source["resource_definition"]["metadata"] = {"prototype_policy": {"relationships": [{
+        "field_ref": "title", "target_resource_type": "prototype.kanban.people", "target_field_ref": "id",
+    }]}}
+    service.materialize(source)
+    service.materialize(target)
+    created = service.operate("prototype.kanban.people", "create", record_id="", payload={"title": "New person", "status": "planned"})
+    identifier = created["record_id"]
+    assigned = service.operate("prototype.kanban.cards", "update", record_id="one", payload={"title": identifier})
+    assert assigned["record"]["title"] == identifier
+    with pytest.raises(PrototypeResourceConflict, match="missing record"):
+        service.operate("prototype.kanban.cards", "update", record_id="one", payload={"title": "missing"})
+    with pytest.raises(PrototypeResourceConflict, match="missing record"):
+        service.operate("prototype.kanban.people", "delete", record_id=identifier, payload={})
+    assert service.operate("prototype.kanban.cards", "show", record_id="one", payload={})["record"]["title"] == identifier
+    assert service.operate("prototype.kanban.people", "show", record_id=identifier, payload={})["record"]["id"] == identifier
+
+
+@pytest.mark.parametrize("difference", ["project_ref", "webui_digest"])
+def test_relationships_cannot_cross_project_or_revision(tmp_path, difference: str) -> None:
+    service = PrototypeResourceService(state_dir=tmp_path)
+    source = _bundle()
+    target = _bundle()
+    target["resource_definition"]["resource_type"] = "prototype.kanban.people"
+    target["resource_definition"]["authority"]["binding"] = "kanban.people"
+    target["data_definition"]["source_id"] = "kanban.people"
+    target[difference] = "project:other" if difference == "project_ref" else "sha256:" + "3" * 64
+    source["resource_definition"]["metadata"] = {"prototype_policy": {"relationships": [{
+        "field_ref": "title", "target_resource_type": "prototype.kanban.people", "target_field_ref": "id",
+    }]}}
+    service.materialize(source)
+    service.materialize(target)
+    with pytest.raises(PrototypeResourceConflict, match="not materialized in this revision"):
+        service.operate("prototype.kanban.cards", "update", record_id="one", payload={"title": "one"})
+
+
 def test_new_prototype_revision_replaces_disposable_mutations(tmp_path: Path) -> None:
     prototypes = PrototypeResourceService(state_dir=tmp_path)
     prototypes.materialize(_bundle())

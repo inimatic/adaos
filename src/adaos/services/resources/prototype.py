@@ -134,6 +134,19 @@ class PrototypeResourceService:
             raise ValueError("prototype resource record_schema must equal prototype data record_schema")
         metadata = definition.get("metadata") if isinstance(definition.get("metadata"), Mapping) else {}
         policy = metadata.get("prototype_policy") or {}
+        if not isinstance(policy, Mapping):
+            raise ValueError("prototype policy must be an object")
+        relationships = policy.get("relationships") or []
+        Draft202012Validator({
+            "type": "array", "maxItems": 16,
+            "items": {"type": "object", "additionalProperties": False,
+                      "required": ["field_ref", "target_resource_type", "target_field_ref"],
+                      "properties": {"field_ref": {"type": "string", "minLength": 1},
+                                     "target_resource_type": {"type": "string", "pattern": "^prototype\\."},
+                                     "target_field_ref": {"type": "string", "minLength": 1}}},
+        }).validate(relationships)
+        if any(item["field_ref"] not in record_schema.get("properties", {}) for item in relationships):
+            raise ValueError("prototype relationship references an unknown record property")
         condition = policy.get("read_only_when")
         if condition is not None:
             Draft202012Validator({"$ref": "#/$defs/condition", "$defs": _schema("webui.semantic.v1.schema.json")["$defs"]}).validate(condition)
@@ -402,6 +415,8 @@ class PrototypeResourceService:
             state["generation"] = runtime.generation
             state["trace_entries"] = runtime.entries[-500:]
             registry["resources"][resource_type] = state
+            if operation_kind in {"create", "update", "delete", "reset"}:
+                self._validate_relationships(registry, state)
             self._write_registry(registry)
         result = execution["result"]
         return {
@@ -417,6 +432,40 @@ class PrototypeResourceService:
                 "webui_digest": state["webui_digest"],
             },
         }
+
+    @staticmethod
+    def _validate_relationships(registry: Mapping[str, Any], changed: Mapping[str, Any]) -> None:
+        # The existing registry lock makes reference checks and the write atomic,
+        # including inverse references when a target is deleted or renamed.
+        resources = registry["resources"]
+        def reference_key(value: Any) -> tuple[str, Any]:
+            if isinstance(value, bool):
+                return "boolean", value
+            if isinstance(value, (int, float)):
+                return "number", value
+            if isinstance(value, str):
+                return "string", value
+            raise PrototypeResourceConflict("prototype relationship requires scalar keys")
+        for state in resources.values():
+            if state["project_ref"] != changed["project_ref"] or state["webui_digest"] != changed["webui_digest"]:
+                continue
+            policy = state["definition"].get("metadata", {}).get("prototype_policy") or {}
+            for relation in policy.get("relationships") or []:
+                target = resources.get(relation["target_resource_type"])
+                if not target or target["project_ref"] != state["project_ref"] or target["webui_digest"] != state["webui_digest"]:
+                    raise PrototypeResourceConflict("prototype relationship target is not materialized in this revision")
+                target_field = relation["target_field_ref"]
+                if target_field not in target["definition"]["record_schema"]["properties"]:
+                    raise PrototypeResourceConflict("prototype relationship target property is missing")
+                values = [_read_path(record, target_field) for record in target["records"]]
+                keys = [reference_key(value) for value in values if value is not None and value != ""]
+                if len(keys) != len(set(keys)):
+                    raise PrototypeResourceConflict("prototype relationship target values must be unique")
+                allowed = set(keys)
+                for record in state["records"]:
+                    value = _read_path(record, relation["field_ref"])
+                    if value is not None and value != "" and reference_key(value) not in allowed:
+                        raise PrototypeResourceConflict("prototype relationship would reference a missing record")
 
     def _state(self, resource_type: str) -> dict[str, Any] | None:
         state = self._read_registry()["resources"].get(_text(resource_type))

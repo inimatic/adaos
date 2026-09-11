@@ -134,15 +134,19 @@ def _evaluation_application_context(
 
 def _generation_metadata(context: Mapping[str, Any]) -> dict[str, Any]:
     contract = str(context.get("generation_contract") or "webui.v1")
+    model = str(os.getenv("ADAOS_BUILDER_LLM_MODEL") or "").strip()
     effort = str(os.getenv("ADAOS_BUILDER_LLM_REASONING_EFFORT") or "").strip()
     if effort and effort not in {"minimal", "low", "medium", "high"}:
         raise BuilderE2EError("Invalid ADAOS_BUILDER_LLM_REASONING_EFFORT")
+    if effort and not model:
+        raise BuilderE2EError("ADAOS_BUILDER_LLM_REASONING_EFFORT requires an explicit ADAOS_BUILDER_LLM_MODEL")
     budget = str(os.getenv("ADAOS_BUILDER_LLM_MAX_TOKENS") or "").strip()
     if budget and (not budget.isdigit() or not 1000 <= int(budget) <= 128000):
         raise BuilderE2EError("Invalid ADAOS_BUILDER_LLM_MAX_TOKENS")
     return {
         "builder_e2e_generation_contract": contract,
         "builder_semantic_compiler": contract.startswith("semantic."),
+        **({"builder_llm_model": model} if model else {}),
         **({"builder_llm_reasoning_effort": effort} if effort else {}),
         **({"builder_llm_max_output_tokens": int(budget)} if budget else {}),
     }
@@ -506,6 +510,9 @@ def _repository_environment(repo_root: Path) -> dict[str, Any]:
     status = _run_command(["git", "status", "--porcelain"], repo_root)
     return {
         "runner_version": RUNNER_VERSION,
+        "builder_model_override": os.getenv("ADAOS_BUILDER_LLM_MODEL") or None,
+        "builder_job_timeout_override": os.getenv("ADAOS_BUILDER_LLM_JOB_TIMEOUT_S") or os.getenv("ADAOS_BUILDER_LLM_TIMEOUT_S") or None,
+        "builder_repair_timeout_override": os.getenv("ADAOS_BUILDER_LLM_REPAIR_JOB_TIMEOUT_S") or os.getenv("ADAOS_BUILDER_LLM_JOB_TIMEOUT_S") or os.getenv("ADAOS_BUILDER_LLM_TIMEOUT_S") or None,
         "builder_reasoning_effort_override": os.getenv("ADAOS_BUILDER_LLM_REASONING_EFFORT") or None,
         "builder_max_output_tokens_override": os.getenv("ADAOS_BUILDER_LLM_MAX_TOKENS") or None,
         "repository_commit": _run_command(["git", "rev-parse", "HEAD"], repo_root),
@@ -2578,6 +2585,7 @@ class BuilderE2ERunner:
         return result
 
     def run(self) -> dict[str, Any]:
+        _generation_metadata({})
         selected = self._selected_cases()
         self._emit_progress("run_started", case_count=len(selected))
         if self.bundle_dir.exists() and not self.resume:
