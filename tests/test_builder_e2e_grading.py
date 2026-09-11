@@ -103,6 +103,15 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
     def submit(messages, **kwargs):
         assert recorded
         assert "Do not broaden one mutation into all mutations" in messages[0]["content"]
+        payload = json.loads(messages[1]["content"])
+        assert payload["evidence_pointers"] == ["/ui", "/ui/control"]
+        assert payload["rubric"]["primary_jobs"] == [
+            {
+                "statement": "save an item",
+                "acceptance": "A save action consumes the editor values.",
+                "exclusions": ["Delete behavior is graded separately."],
+            }
+        ]
         assert kwargs["text"]["format"]["type"] == "json_schema"
         pointer_schema = kwargs["text"]["format"]["schema"]["$defs"]["evidence"]
         assert pointer_schema["properties"]["pointer"]["pattern"].startswith("^/")
@@ -117,7 +126,7 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
             "unclear",
         ]
         assert "Mere absence is not uncertainty" in messages[0]["content"]
-        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v8"
+        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v9"
         return {"job_id": "job-1", "_client": {"base_url": "https://root"}}
 
     def wait(job_id, **kwargs):
@@ -140,7 +149,13 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
         artifact={"ui": {"control": {"action": "save"}}},
         user_turns=["Build a useful editor."],
         requirements={
-            "primary_jobs": ["save an item"],
+            "primary_jobs": [
+                {
+                    "statement": "save an item",
+                    "acceptance": "A save action consumes the editor values.",
+                    "exclusions": ["Delete behavior is graded separately."],
+                }
+            ],
             "representative_states": ["empty"],
         },
         prohibited_assumptions=["save can discard input"],

@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "8"
+PROTOTYPE_GRADER_VERSION = "9"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -102,8 +102,10 @@ displayed, and a generic submit action proves only the state update it explicitl
 declares. They do not prove row editing, filtering, selection, navigation, file
 attachment, validation, or lifecycle transitions. Mutating jobs need both an
 available control and an executable action or binding that consumes its value.
+Each rubric item supplies a statement plus optional acceptance and exclusions. Apply
+its acceptance literally and do not import an excluded concern from another item.
 Every supported or partial verdict must cite one or more existing RFC 6901 JSON
-pointers selected exactly from the evidence.pointer enum in the output schema. Never
+pointers copied exactly from the supplied evidence_pointers list. Never
 construct or edit an array index, and never append a label, explanation, or
 parenthetical note to evidence.pointer. Each cited object must itself contain the fact
 described in the reason; a sibling or nearby object is not evidence. Cite the nearest
@@ -187,6 +189,36 @@ def _evidence_pointers(artifact: Mapping[str, Any]) -> list[str]:
 def _model_result_schema(evidence_pointers: Sequence[str]) -> dict[str, Any]:
     del evidence_pointers
     return copy.deepcopy(_MODEL_RESULT_SCHEMA)
+
+
+def _rubric_criteria(values: Sequence[Any]) -> list[dict[str, Any]]:
+    criteria: list[dict[str, Any]] = []
+    for value in values:
+        if isinstance(value, Mapping):
+            statement = str(value.get("statement") or "").strip()
+            acceptance = str(value.get("acceptance") or "").strip()
+            raw_exclusions = value.get("exclusions") or []
+            exclusions = [
+                str(item).strip()
+                for item in raw_exclusions
+                if str(item).strip()
+            ] if isinstance(raw_exclusions, Sequence) and not isinstance(
+                raw_exclusions, (str, bytes, bytearray)
+            ) else []
+        else:
+            statement = str(value).strip()
+            acceptance = ""
+            exclusions = []
+        if not statement:
+            continue
+        criteria.append(
+            {
+                "statement": statement,
+                "acceptance": acceptance,
+                "exclusions": exclusions,
+            }
+        )
+    return criteria
 
 
 def _json_pointer_exists(document: Any, pointer: str) -> bool:
@@ -277,7 +309,7 @@ def _usage(value: Any) -> dict[str, int]:
 
 def _normalize_checks(
     *,
-    requirements: Sequence[str],
+    requirements: Sequence[Mapping[str, Any]],
     raw: Any,
     artifact: Mapping[str, Any],
     assumption: bool = False,
@@ -290,7 +322,8 @@ def _normalize_checks(
         and not isinstance(item.get("index"), bool)
     }
     results: list[dict[str, Any]] = []
-    for index, requirement in enumerate(requirements):
+    for index, criterion in enumerate(requirements):
+        requirement = str(criterion.get("statement") or "")
         item = indexed.get(index, {})
         admitted = (
             {"not_violated", "violated", "unclear"}
@@ -328,7 +361,7 @@ def _normalize_checks(
             verdict = "unclear"
         results.append(
             {
-                "requirement": str(requirement),
+                "requirement": requirement,
                 "verdict": verdict,
                 "evidence": evidence,
                 "invalid_evidence": invalid_evidence,
@@ -354,7 +387,7 @@ def grade_builder_prototype(
     artifact: Mapping[str, Any],
     user_turns: Sequence[str],
     requirements: Mapping[str, Any],
-    prohibited_assumptions: Sequence[str],
+    prohibited_assumptions: Sequence[Any],
     locale: str,
     threshold: float = 0.85,
     model: str | None = None,
@@ -365,9 +398,9 @@ def grade_builder_prototype(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Grade one immutable artifact and return the grade plus exact request record."""
 
-    jobs = [str(item) for item in requirements.get("primary_jobs") or []]
-    states = [str(item) for item in requirements.get("representative_states") or []]
-    assumptions = [str(item) for item in prohibited_assumptions]
+    jobs = _rubric_criteria(requirements.get("primary_jobs") or [])
+    states = _rubric_criteria(requirements.get("representative_states") or [])
+    assumptions = _rubric_criteria(prohibited_assumptions)
     evidence_pointers = _evidence_pointers(artifact)
     payload = {
         "schema": "adaos.builder.prototype_grade_request.v1",
@@ -378,6 +411,7 @@ def grade_builder_prototype(
             "representative_states": states,
             "prohibited_assumptions": assumptions,
         },
+        "evidence_pointers": evidence_pointers,
         "artifact": dict(artifact),
     }
     selected_model = str(model or _DEFAULT_GRADER_MODEL).strip()
@@ -422,7 +456,7 @@ def grade_builder_prototype(
                 }
             },
             request_id=request_id,
-            prompt_cache_key="adaos-builder-e2e-prototype-grader-v8",
+            prompt_cache_key="adaos-builder-e2e-prototype-grader-v9",
             timeout=min(15.0, timeout_seconds),
         )
     )

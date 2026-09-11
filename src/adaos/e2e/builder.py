@@ -1271,9 +1271,9 @@ class CompatibilityBuilderExecutor:
                 artifact=dict(artifact),
                 user_turns=[str(item) for item in inputs.get("user_turns") or []],
                 requirements=dict(inputs.get("requirements") or {}),
-                prohibited_assumptions=[
-                    str(item) for item in inputs.get("prohibited_assumptions") or []
-                ],
+                prohibited_assumptions=copy.deepcopy(
+                    inputs.get("prohibited_assumptions") or []
+                ),
                 locale=str(context.get("locale") or "en"),
                 threshold=float(inputs.get("threshold") or 0.85),
                 model=str(inputs.get("model") or "").strip() or None,

@@ -5,9 +5,30 @@ description: Visible development case for people, availability, and shift assign
 locale: en
 tags: [visible, people, scheduling]
 requirements:
-  primary_jobs: [review availability, fill shift, contact volunteer, find coverage gap]
-  representative_states: [unfilled shifts, fully staffed, conflicting availability]
-prohibited_assumptions: [private contact details are public, one person can cover overlapping shifts]
+  primary_jobs:
+    - statement: review availability
+      acceptance: A visible collection exposes each volunteer's role and availability.
+    - statement: fill shift
+      acceptance: An executable create-assignment path lets the coordinator choose a shift and a volunteer.
+      exclusions: [Overlap prevention is graded separately.]
+    - statement: contact volunteer
+      acceptance: Contact fields are absent from the volunteer collection and available in a selected volunteer details surface.
+      exclusions: [A persisted reveal flag or contact mutation is not required.]
+    - statement: find coverage gap
+      acceptance: A visible per-shift gap, remaining-capacity, or coverage-status value is sufficient; an aggregate dashboard is not required.
+  representative_states:
+    - statement: unfilled shifts
+      acceptance: At least one visible shift fixture explicitly has an unfilled or coverage-gap state.
+      exclusions: [An empty assignment collection alone is insufficient.]
+    - statement: fully staffed
+      acceptance: At least one visible shift or day fixture explicitly states that it is fully staffed.
+    - statement: conflicting availability
+      acceptance: At least one visible assignment or availability fixture explicitly states a conflict.
+prohibited_assumptions:
+  - statement: private contact details are public
+    acceptance: Violation requires contact fields in a collection or other default public surface; a selected details surface is permitted.
+  - statement: one person can cover overlapping shifts
+    acceptance: Not violated requires an executable guard or validation that blocks overlap; a capability gap alone is unclear, not proof of safety.
 steps:
   - id: create
     type: builder.chat
