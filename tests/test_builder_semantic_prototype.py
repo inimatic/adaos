@@ -567,7 +567,7 @@ def test_semantic_model_contract_is_strict_and_bounded() -> None:
     assert_strict(semantic_prototype_provider_contract())
     assert contract["properties"]["resource"]["properties"]["records"][
         "maxItems"
-    ] == 6
+    ] == 12
 
     provider_contract = semantic_prototype_provider_contract()
     unsupported_provider_keywords = {
@@ -1943,6 +1943,33 @@ def test_qualified_record_identity_alias_is_unambiguous() -> None:
     relationship["to_field_ref"] = relationship["to_resource_ref"] + ".id"
     compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
     assert any(item["kind"] == "qualified_record_identity" for item in compiled["normalizations"])
+
+
+def test_typed_fixture_literals_normalize_only_exact_json_scalars() -> None:
+    from adaos.services.builder.semantic_prototype import _normalize_candidate_fixture_values
+    fields = [{"value_type": "number", "required": False}, {"value_type": "boolean", "required": False}, {"value_type": "short_text"}]
+    records = [{"values": ["12.0", "false", "0012"]}, {"values": ["", "", ""]}, {"values": ["00:12", "no", "unchanged"]}]
+    changes = []
+    _normalize_candidate_fixture_values(fields=fields, records=records, path="$.records", normalizations=changes)
+    assert [record["values"] for record in records] == [[12.0, False, "0012"], [None, None, ""], ["00:12", "no", "unchanged"]]
+    assert len(changes) == 4
+    assert all(change["kind"] == "typed_json_scalar" for change in changes)
+
+
+def test_collection_empty_is_a_fixture_of_the_same_populated_resource() -> None:
+    brief, semantic = _multi_resource_fixture()
+    resource = semantic["resources"][0]
+    view = next(view for view in semantic["views"] if view["role"] == "collection" and view["resource_ref"] == resource["id"])
+    view["presentation"] = "table"
+    state = copy.deepcopy(semantic["representative_states"][0])
+    state.update(id="empty-example", view_ref=view["id"], filters=[], min_items=0, max_items=0, proof={"kind": "collection_empty", "visible_field_refs": []})
+    semantic["representative_states"].append(state)
+    compiled = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    assert compiled["prototype_resources"][0]["records"]
+    check = next(check for check in compiled["representative_state_checks"] if check["state_id"] == "empty-example")
+    assert check["fixture_mode"] == "empty"
+    assert check["matching_record_count"] == 0
+    assert compiled["source_map"]["state:empty-example"][0].endswith(".inputs.emptyText")
 
 
 def test_all_invalid_state_predicates_are_reported_before_repair_scope() -> None:

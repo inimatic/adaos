@@ -57,6 +57,11 @@ def binding_findings(document: Mapping, brief: Mapping | None) -> list[dict]:
         findings.append({"code": "semantic.requirement_binding_incomplete", "path": "$.requirement_bindings",
                          "requirement_ref": ref, "detail": detail})
 
+    for requirement in document.get("automation_requirements", []):
+        ref = requirement["requirement_ref"]
+        if not any(item.startswith(("view:", "state:")) for item in bindings.get(ref, set())):
+            add(ref, f"automation requirement {ref!r} needs a visible prototype binding")
+
     for operation in brief.get("operations", []):
         ref, kind = operation["id"], operation["kind"]
         if kind not in {"search", "filter"} or ref in gaps:

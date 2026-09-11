@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
@@ -297,7 +298,7 @@ def _candidate_choice_value(
     return matches[0], True
 
 
-def _normalize_candidate_choice_fixtures(
+def _normalize_candidate_fixture_values(
     *,
     fields: Sequence[Mapping[str, Any]],
     records: Sequence[dict[str, Any]],
@@ -311,6 +312,7 @@ def _normalize_candidate_choice_fixtures(
                 continue
             kind = str(field.get("value_type") or "")
             original = values[field_index]
+            normalization_kind = "localized_choice_value"
             if kind == "choice":
                 normalized, changed = _candidate_choice_value(field, original)
             elif kind == "multi_choice" and isinstance(original, list):
@@ -321,6 +323,20 @@ def _normalize_candidate_choice_fixtures(
                     normalized_values.append(normalized_item)
                     changed = changed or item_changed
                 normalized = normalized_values
+            elif kind in {"number", "boolean"} and isinstance(original, str):
+                if original.strip() == "" and not field.get("required"):
+                    normalized = None
+                else:
+                    try:
+                        normalized = json.loads(original)
+                    except ValueError:
+                        continue
+                    if kind == "number" and not (isinstance(normalized, (int, float)) and not isinstance(normalized, bool) and math.isfinite(normalized)):
+                        continue
+                    if kind == "boolean" and not isinstance(normalized, bool):
+                        continue
+                changed = True
+                normalization_kind = "typed_json_scalar"
             else:
                 continue
             if not changed:
@@ -328,7 +344,7 @@ def _normalize_candidate_choice_fixtures(
             values[field_index] = normalized
             normalizations.append(
                 {
-                    "kind": "localized_choice_value",
+                    "kind": normalization_kind,
                     "from": json.dumps(original, ensure_ascii=False),
                     "to": json.dumps(normalized, ensure_ascii=False),
                     "target": f"{path}[{record_index}].values[{field_index}]",
@@ -852,7 +868,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "modeling": "Use separate resources for independently editable repeated concepts, including links. Every resource has a collection; prefix field IDs with its concept. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
         "coverage": "Use the Brief required_references once each. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search uses field_ref=null; filters target choice, short_text or date, never multi_choice. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
         "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
-        "state_rules": "Every proof belongs to a collection view. Count fixtures satisfying ALL of that state's predicates; states do not inherit other states' filters and a view.filter is a user-controlled value, not a fixed base predicate. min_items=1 means at least one match; min=max=0 means none. query_empty needs literal equality predicates addressable by that view's filter controls. Empty proofs need an explicit empty_state. Predicate fields must be visible. A required quantity is not proof of achieved quantity; show an explicit illustrative result when business computation is pending. Choose only proofs relevant to the request, not one of each kind.",
+        "state_rules": "States are test cases of the same UI, not separate resources. collection_empty runs that collection with an empty response fixture; keep its normal populated records and declare empty_state. Never clone a resource or add a separate Samples collection just to demonstrate emptiness. Other proofs count normal fixtures satisfying ALL predicates. States do not inherit other states' filters; view.filter is a user-controlled value, not a fixed base predicate. query_empty needs a reachable combination of equality filters with zero matches; choice values must be declared options. Predicate fields must be visible. An illustrative result is not a business computation. Choose proofs relevant to the request, not one of each kind.",
         "interactions": "Reuse local CRUD, selectors, query controls, confirmation and field guards. Commands belong to an editor; each resource needs its own collection. Foreign-key collections need a reachable relationship filter when the workflow requires inspecting one selected item's linked records; an unfiltered list of raw IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
         "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references: sample://image, sample://video, sample://document (downloadable text), sample://unavailable. Do not invent local paths for files that do not exist. attachment/attachments fields capture real local bytes, store references and render download links in details; documents do not require mediaKey or an image viewer. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading.",
         "ux_recommendations": {
@@ -1144,7 +1160,7 @@ def _canonicalize_semantic_prototype_candidate(
             )
     for record in records:
         record["id"] = record_ids[str(record["id"]).strip()]
-    _normalize_candidate_choice_fixtures(
+    _normalize_candidate_fixture_values(
         fields=fields,
         records=records,
         path="$.resource.records",
@@ -1670,6 +1686,7 @@ def _compile_semantic_prototype_v1(
     dictionaries: dict[str, dict[str, str]] = {locale: {} for locale in _text_locales(document["title"])}
     resource = dict(document["resource"])
     fields = {str(item["id"]): dict(item) for item in resource["fields"]}
+    views = {str(item["id"]): item for item in document["views"]}
     commands = {str(item["id"]): dict(item) for item in document["commands"]}
     region_roles = {str(view["region_role"]) for view in document["views"]}
     resource_type = _runtime_resource_type(str(resource["id"]), project_ref)
@@ -2103,7 +2120,7 @@ def _compile_semantic_prototype_v1(
         view_ref = str(state["view_ref"])
         source_map[f"state:{state_id}"] = [
             (
-                f"ui.application.desktop.pageSchema.widgets.@{view_ref}.inputs.emptyState"
+                f"ui.application.desktop.pageSchema.widgets.@{view_ref}.inputs.{'emptyText' if views[view_ref].get('presentation') == 'table' else 'emptyState'}"
                 if empty_fixture
                 else f"ui.application.desktop.pageSchema.widgets.@{view_ref}"
             )

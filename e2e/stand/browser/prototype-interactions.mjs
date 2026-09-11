@@ -1,6 +1,7 @@
 import { chromium, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Interaction review requires ENV_TYPE=dev')
 const checkpointPath = path.resolve(process.env.ADAOS_E2E_CHECKPOINT || '')
@@ -142,6 +143,23 @@ try {
         }
         const marker = field.type === 'date' ? '2099-12-30' : `review-${checkpoint.run_id}-${layout}`
         await input.fill(marker)
+        let uploadProof
+        for (const attachment of widget.inputs.fields.filter(item => item.fileStorage === 'prototype' && update.params.payload[item.id])) {
+          const fileInput = form.locator(`[data-webui-field-id=${JSON.stringify(attachment.id)}] input[type=file]`)
+          if (!await fileInput.isVisible()) continue
+          const bytes = await fs.readFile(path.resolve('src/adaos/integrations/adaos-client/src/assets/prototype/sample-image.jpg'))
+          const name = `review-${layout}.jpg`
+          const pending = page.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname.endsWith('/attachments'))
+          void pending.catch(() => {})
+          await fileInput.setInputFiles({ name, mimeType: 'image/jpeg', buffer: bytes })
+          const uploaded = await pending
+          const receipt = await uploaded.json()
+          if (!uploaded.ok() || receipt.sha256 !== createHash('sha256').update(bytes).digest('hex')) throw new Error(`Attachment upload failed: ${JSON.stringify(receipt)}`)
+          await expect.poll(() => form.evaluate((element, fieldId) => window.ng?.getComponent(element.querySelector('ada-form-widget'))?.values?.[fieldId], attachment.id))
+            .toEqual(attachment.multiple ? [receipt.ref] : receipt.ref)
+          uploadProof = { field: attachment.id, name, sha256: receipt.sha256, ref: receipt.ref, multiple: attachment.multiple, bytes }
+          break
+        }
         const button = form.locator(`[data-command-id=${JSON.stringify(update.id)}]`)
         await expect(button).toBeEnabled()
         if (modalId) {
@@ -172,6 +190,7 @@ try {
         if (!response.ok() || result.ok === false) throw new Error(`Update rejected: ${JSON.stringify(result)}`)
         const mutation = sample.mutations.at(-1)
         if (!mutation?.record || mutation.payload[field.id] !== marker) throw new Error('Wrong record or payload was submitted')
+        try {
         if (modalId) {
           await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
           await opener.click()
@@ -183,6 +202,16 @@ try {
         }
         await expect(input).toHaveValue(marker, { timeout: 30_000 })
         sample.checks.push({ editor: widget.id, status: 'passed', task: 'select/edit/save/reopen', surface: modalId ? 'overlay' : 'inline' })
+        if (uploadProof) {
+          const download = page.waitForEvent('download')
+          void download.catch(() => {})
+          await form.getByRole('button', { name: uploadProof.name, exact: true }).click()
+          const file = await download
+          const bytes = await fs.readFile(await file.path())
+          if (!bytes.equals(uploadProof.bytes)) throw new Error('Downloaded attachment differs from uploaded bytes')
+          sample.checks.push({ editor: widget.id, status: 'passed', task: 'upload/save/reopen/download', field: uploadProof.field, sha256: uploadProof.sha256, size: bytes.length })
+        }
+        } finally {
         // Fixture restoration is not a claimed user workflow: an assignment
         // command need not expose unassignment of the originally empty field.
         const body = response.request().postDataJSON()
@@ -195,6 +224,7 @@ try {
         })
         if (!restored.ok() || (await restored.json()).ok === false) throw new Error('Could not restore fixture')
         sample.checks.push({ editor: widget.id, status: 'passed', task: 'fixture-restore', evidenceKind: 'stand_cleanup' })
+        }
         if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: 'Close', exact: true }).click()
         const create = widget.actions.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'create')
         const remove = widget.actions.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'delete')

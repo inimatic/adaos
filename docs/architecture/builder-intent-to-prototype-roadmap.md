@@ -1338,6 +1338,22 @@ it is not a reduction of required outcomes or a claim of better UX.
 Automated Core/Client tests are prerequisites, not proof of eight-archetype
 autonomy. Full fresh-generation and browser qualification remain open.
 
+`context-primitives-low-20260912-01` passed library and procurement formal grades;
+media failed after repair on a visible Automation binding not included in the
+initial findings. Library needed no repair but split real and sample collections:
+the generation guidance failed to explain an already implemented empty-response
+fixture. This is a context defect, not a need for a new resource type. Procurement
+passed the browser command probe on both layouts; the text-edit probe correctly
+reported no applicable task for its create/transition forms. Record this as a
+probe limitation, not as either a working edit path or a generation failure.
+- [x] `[must]` Explain empty states as variants of the same populated resource,
+  repair table empty-state evidence paths, and diagnose missing Automation
+  visibility bindings alongside the other first-pass findings.
+- [x] `[must]` Normalize only unambiguous typed JSON fixture scalars with retained
+  original evidence; reject unit/timecode interpretations and text-ID coercion.
+- [ ] `[must]` Qualify empty render fixtures separately from real mutations and
+  repeat library/media generation under the corrected state context.
+
 Engineering basis: [OpenAI text-generation guidance](https://developers.openai.com/api/docs/guides/text),
 [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), and
 [Anthropic context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).

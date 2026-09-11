@@ -8,6 +8,17 @@ const subnet = process.env.ADAOS_E2E_SUBNET_ID
 const token = process.env.ADAOS_E2E_HUB_TOKEN
 const selectWidget = process.env.ADAOS_E2E_SELECT_WIDGET || ''
 const locale = process.env.ADAOS_E2E_LOCALE || 'en'
+const emptyMode = process.env.ADAOS_E2E_EMPTY_STATES === '1'
+let emptyCollections = []
+if (emptyMode) {
+  const checkpoint = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CHECKPOINT, 'utf8'))
+  const created = checkpoint.steps.find(step => step.id === 'create')?.output
+  if (!checkpoint.cleanup?.test || created.scenario_id !== scenario) throw new Error('Empty fixture review requires an owned test checkpoint')
+  const application = JSON.parse(await fs.readFile(path.join(created.artifact_root, 'webui.json'), 'utf8')).ui.application
+  emptyCollections = application.desktop.pageSchema.widgets.filter(widget => ['ui.list', 'ui.table'].includes(widget.type)
+    && widget.dataSource?.resourceType?.startsWith('prototype.') && (widget.inputs?.emptyState?.title || widget.inputs?.emptyText))
+  if (!emptyCollections.length) throw new Error('No declared empty collection states')
+}
 if (!['en', 'ru'].includes(locale)) throw new Error('Review locale must be en or ru')
 if (!scenario || !webspace || !subnet || !token) {
   throw new Error('Scenario, webspace, subnet and local hub token are required')
@@ -40,6 +51,17 @@ try {
       })) localStorage.setItem(key, value)
     }, { hub, token, subnet, webspace, locale })
     const page = await context.newPage()
+    const emptyChecks = []
+    if (emptyMode) {
+      await page.route('**/api/resources/query', async route => {
+        const resource = route.request().postDataJSON()?.resource_type
+        if (!emptyCollections.some(widget => widget.dataSource.resourceType === resource)) return route.continue()
+        const response = await route.fetch()
+        const body = await response.json()
+        if (!response.ok() || !body.ok) return route.fulfill({ response })
+        await route.fulfill({ response, json: { ...body, items: [], count: 0, cursor: null, trace: { fixture: 'empty-response-render-test' } } })
+      })
+    }
     page.setDefaultTimeout(30_000)
     page.setDefaultNavigationTimeout(60_000)
     const errors = []
@@ -66,12 +88,21 @@ try {
       }, scenario, { timeout: 60_000 })
       await page.locator('ada-page-widget-host, ada-widget').first().waitFor({ timeout: 15_000 })
       await page.evaluate(() => document.fonts.ready)
-      if (selectWidget) {
+      if (emptyMode) {
+        for (const widget of emptyCollections) {
+          const host = page.locator(`[data-webui-widget-id=${JSON.stringify(widget.id)}]`)
+          const title = widget.inputs.emptyState?.title || widget.inputs.emptyText
+          await host.getByText(title, { exact: true }).waitFor()
+          if (await host.locator('tr.row-selectable, .collection-focus-item').count()) throw new Error('Empty response still renders records')
+          emptyChecks.push({ widget: widget.id, status: 'passed', fixtureKind: 'intercepted_empty_response', runtimeMutation: false })
+        }
+      }
+      if (selectWidget && !emptyMode) {
         await page.locator(`[data-webui-widget-id=${JSON.stringify(selectWidget)}]`)
           .locator('tr.row-selectable, .collection-focus-item').first().click()
         await page.locator('ada-details-widget .details-row').first().waitFor({ timeout: 15_000 })
       }
-      if (['1', 'inspect'].includes(process.env.ADAOS_E2E_MEDIA_TESTS)) {
+      if (!emptyMode && ['1', 'inspect'].includes(process.env.ADAOS_E2E_MEDIA_TESTS)) {
         const rows = page.locator(`[data-webui-widget-id=${JSON.stringify(selectWidget)}]`)
           .locator('tr.row-selectable, .collection-focus-item')
         for (let index = 0; index < await rows.count(); index += 1) {
@@ -139,7 +170,7 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}-bottom.png`), fullPage: true })
     }
     await Promise.allSettled(responseTasks)
-    samples.push({ layout, viewport, locale, selectWidget, geometry, mediaChecks, scrollSurfaces, failure, errors, requestFailures, text })
+    samples.push({ layout, viewport, locale, selectWidget, geometry, mediaChecks, emptyChecks, scrollSurfaces, failure, errors, requestFailures, text })
     await context.close()
   }
 } finally { await browser.close() }

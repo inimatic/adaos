@@ -598,6 +598,21 @@ State-only repair uses a patch contract: mutable view fields are transmitted,
 while ownership, title, surface and media remain immutable by construction.
 Legacy full-view repair responses remain replayable under their original schema.
 
+Representative states are test variants of the same resource and interface,
+not a requirement to create separate empty/live/sample collections. The existing
+`collection_empty` fixture overrides the query response for a render test while
+retaining normal seeded records. Browser receipts distinguish intercepted empty
+responses from real provider-backed mutations. This follows the separation of
+[UI state fixtures and interaction tests](https://storybook.js.org/docs/writing-stories/mocking-data-and-modules/mocking-network-requests),
+without adding Storybook or a second runtime to Builder.
+
+Normalization may decode an exact JSON scalar string according to its declared
+number/boolean type and map an optional empty scalar to null. It must preserve
+raw model evidence, record each conversion, and never infer units, parse a timecode
+as seconds, or rewrite textual identifiers. Validation still rejects ambiguous
+or incompatible values; another model call is not needed merely to remove quotes
+from an otherwise valid typed numeric literal.
+
 Evidence bindings close over declared command/view/resource ownership. Collection
 requirements can inherit a unique owned collection/editor; a search/filter can
 inherit its unique query control from a bound view or resource. Ambiguity requires an explicit
