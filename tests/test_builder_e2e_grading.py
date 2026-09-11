@@ -71,6 +71,7 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
 
     def submit(messages, **kwargs):
         assert recorded
+        assert "Do not broaden one mutation into all mutations" in messages[0]["content"]
         assert kwargs["text"]["format"]["type"] == "json_schema"
         pointer_schema = kwargs["text"]["format"]["schema"]["$defs"]["evidence"]
         assert pointer_schema["properties"]["pointer"]["enum"] == [
@@ -78,6 +79,7 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
             "/ui/control",
         ]
         assert kwargs["model"] == "gpt-4.1"
+        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v5"
         return {"job_id": "job-1", "_client": {"base_url": "https://root"}}
 
     def wait(job_id, **kwargs):

@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "4"
+PROTOTYPE_GRADER_VERSION = "5"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -114,6 +114,11 @@ An absent prohibited assumption needs no positive evidence. Mark an assumption p
 when an executable path explicitly implements it or necessarily relies on it. In
 particular, a direct mutation with no explicit confirmation control or policy implements
 an action without confirmation; silence must not be interpreted as hidden confirmation.
+Judge the exact subject, action, object, field, and condition named by each assumption.
+Do not broaden one mutation into all mutations: an action that changes only an owner,
+for example, is not evidence about actions that change status. Evidence and reasoning
+for a present assumption must identify the same behavior named by that assumption;
+unrelated or merely adjacent controls and actions are irrelevant.
 Be conservative: use unclear when evidence is insufficient. Return only the requested
 JSON object.
 """
@@ -407,7 +412,7 @@ def grade_builder_prototype(
                 }
             },
             request_id=request_id,
-            prompt_cache_key="adaos-builder-e2e-prototype-grader-v4",
+            prompt_cache_key="adaos-builder-e2e-prototype-grader-v5",
             timeout=min(15.0, timeout_seconds),
         )
     )
