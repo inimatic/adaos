@@ -756,6 +756,13 @@ def semantic_prototype_provider_contract(*, version: str = "v1") -> dict[str, An
         if isinstance(node, dict):
             for keyword in unsupported_validation_keywords:
                 node.pop(keyword, None)
+            if "$ref" in node:
+                # Provider references cannot carry JSON Schema annotations.
+                # Keep their prose in the authoring ABI and generation guidance.
+                for keyword in ("description", "title", "$comment", "default", "examples"):
+                    node.pop(keyword, None)
+                if set(node) != {"$ref"}:
+                    _fail("provider schema reference has unsupported assertion siblings")
             for key, child in node.items():
                 if key in schema_map_keys and isinstance(child, dict):
                     for property_schema in child.values():

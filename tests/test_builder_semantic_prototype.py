@@ -12,6 +12,7 @@ from adaos.services.builder.semantic_prototype import (
     compile_semantic_prototype,
     semantic_prototype_candidate_contract,
     semantic_prototype_provider_contract,
+    semantic_prototype_generation_guidance,
     validate_semantic_prototype,
 )
 from adaos.services.builder.workflow import BuilderWorkflowError
@@ -437,6 +438,22 @@ def _multi_resource_candidate(semantic: dict) -> dict:
 
     strip_localization_keys(candidate)
     return candidate
+
+
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_provider_references_have_no_sibling_keywords(version) -> None:
+    def visit(node):
+        if isinstance(node, dict):
+            if "$ref" in node:
+                assert set(node) == {"$ref"}
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, list):
+            for value in node:
+                visit(value)
+    visit(semantic_prototype_provider_contract(version=version))
+    if version == "v2":
+        assert semantic_prototype_generation_guidance()["relationships"]
 
 
 def test_semantic_model_contract_is_strict_and_bounded() -> None:
