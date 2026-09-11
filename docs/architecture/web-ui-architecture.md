@@ -168,18 +168,20 @@ Primary sources:
 
 Actions must move from loosely typed button behavior to typed semantic actions.
 
-Representative action kinds:
+The currently executable generic semantic-v0 action kinds are:
 
-- `emit`
 - `open_modal`
 - `navigate`
 - `call_host`
-- `open_url`
 - `set_view_state`
-- `patch_y`
 - `invoke_skill_action`
 - `open_workspace`
-- `apply_review_change`
+
+Event publication, shared-state mutation, URL policy, and product review
+application are not generic aliases for arbitrary browser effects. They require
+separately owned typed ports or product extensions before they may be advertised
+by a semantic contract. Unknown legacy kinds fail closed with a structured
+capability diagnostic.
 
 ## Interaction Behavior Model
 

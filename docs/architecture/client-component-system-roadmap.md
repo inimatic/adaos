@@ -2,7 +2,7 @@
 
 Status: active prerequisite and growth roadmap for the universal AdaOS Client.
 
-Last reviewed: 2026-09-10.
+Last reviewed: 2026-09-11.
 
 Architecture owner: [Web UI Architecture](web-ui-architecture.md).
 Builder dependency: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
@@ -174,14 +174,24 @@ ports. Evidence is TypeScript compilation, 11/11 registry tests, inventory, and
 boundary checks; test bundle generation took 31.5 seconds and browser execution
 took 0.14 seconds.
 
-The gate remains open. The generated inventory makes the next failures
-explicit: the semantic contract advertises action kinds `apply_review_change`,
-`emit`, `navigate`, and `patch_y`, and binding kinds `projection` and `view`,
-without corresponding lowering. Product-specific compatibility still exists
-in desktop shell orchestration and product-owned compatibility components. The
-collection grid, voice, media, vision, and desktop widget implementations are
-now explicitly product-owned and can be disabled by browser profile, but still
-require retained compatibility fixtures before the clean baseline.
+Client commit `50eb154` makes the draft semantic adapter inventory total for
+its advertised surface. Generic `navigate` and `projection` now lower to
+existing typed runtime contracts; `view` is admitted only as a selection
+binding, not a data source. Unused, unimplemented `emit`, `patch_y`, and
+Builder-specific `apply_review_change` commands are no longer advertised by
+the generic Client union. Old documents containing them still fail closed with
+a typed semantic diagnostic. Core schema tests now enforce the binding roles,
+and the generated inventory reports no unsupported view, action, or binding
+kinds. Evidence is 5/5 focused adapter tests, TypeScript compilation, 79 Core
+ABI tests, and the Client inventory/boundary gates; focused test bundle
+generation took 27.6 seconds while browser execution took 0.10 seconds.
+
+The gate remains open. Product-specific compatibility still exists in desktop
+shell orchestration and product-owned compatibility components. The collection
+grid, voice, media, vision, and desktop widget implementations are explicitly
+product-owned and can be disabled by browser profile, but still require retained
+compatibility fixtures and compact/wide clean-profile traces before the clean
+baseline.
 
 A clean-profile RU equipment-inspection E2E is evidence of an unresolved
 semantic-granularity decision, not yet a measured Client gap. The generated
