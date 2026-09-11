@@ -28,6 +28,29 @@ declared behavior through the public SDK and a retained evaluation result.
 
 ## Stop Conditions
 
+Active scope (2026-09-11): reliable small prototypes, then their complete Builder
+lifecycle including Automation. Large-prototype orchestration is deferred, not a
+prerequisite for the small-application gate. Current work is limited to acceptance,
+contract consistency, generation context and minimal visibility in existing Builder.
+
+### Current Iteration Checklist
+
+- [ ] `[must]` Calibrate the eight development archetypes' outcome/state/exclusion
+  criteria against exact user requests; retain positive and negative grader probes.
+- [ ] `[must]` Align candidate/canonical capacity, attachment, relationship and
+  representative-state contracts with cross-domain executable regression tests.
+- [ ] `[must]` Supply an exact required-reference inventory, contextual operations
+  and an executable-contract-derived invariant catalog to generation and repair.
+- [ ] `[must]` Retain dev-only test applications in Builder with searchable
+  `[TEST]` and date/unique suffix; prepare the exact revision's owner-managed preview.
+  Keep generated, failed and accepted states distinct. Do not publish beta/stable.
+- [ ] `[must]` Run the full eight-case GPT-5 cohort after local replay tests;
+  inspect complete inputs/outputs and actual browser previews, record unresolved debt.
+- [x] `[must]` Consolidate the standalone stage review into architecture and roadmap
+  ownership; keep measurements in this checklist's evidence, not a parallel report.
+- [ ] `[should]` Follow with targeted semantic repair and preservation checks only
+  after the current acceptance/context/contract iteration is measured.
+
 Until R8 is complete:
 
 - do not add another subject-specific recipe, lexical domain branch, prompt
@@ -504,7 +527,7 @@ proof of state meaning.
   count are never sufficient evidence.
 - [ ] `[must]` Bind every accepted brief requirement to semantic data, view,
   command, state, or typed capability-gap refs and reject unresolved bindings.
-- [ ] `[must]` Publish `adaos.builder.prototype_plan.v1` as an adaptive DAG with
+- [ ] `[deferred]` Publish `adaos.builder.prototype_plan.v1` as an adaptive DAG with
   typed inputs, outputs, dependencies, validation, budget, and route class.
 - [ ] `[must]` Implement `D0` deterministic routing for supported rename, move,
   visibility, declared option, and other typed semantic edits with zero model
@@ -670,7 +693,7 @@ Stage-boundary correction (2026-09-11):
   UTF-8 (`ensure_ascii=False`). Do not alter historical evidence hashes.
 - [ ] `[must]` Prove obligation closure using executable success/failure tests
   at Automation/Trial gates; merely copying acceptance text is not enforcement.
-- [ ] `[must]` Measure large-prototype planning separately: dependency graph,
+- [ ] `[deferred]` Measure large-prototype planning separately: dependency graph,
   stable cross-slice identities, scoped context, resumability, unaffected-binding
   preservation and integrated browser tasks. Do not infer scalability from one
   small schema-constrained response.
@@ -681,23 +704,29 @@ Stage-boundary correction (2026-09-11):
 
 ### AdaOS Tests Review Workbench
 
-Decision: plan a dedicated scenario instead of publishing unfinished prototypes
-as ordinary beta applications. Until implemented, review uses retained E2E
-artifacts and explicit development previews. This is not a Trial approval.
+Decision: use the existing Builder project selector first. Retain explicitly named
+test applications and their development previews on dev nodes, including successful
+cases, instead of deleting them automatically. The name includes `[TEST]` and
+`YYYYMMDD-uid` so search works without a Builder redesign. No ordinary desktop or
+Marketplace beta promotion. Historical evidence stays immutable; manual removal of
+test applications remains separate from run evidence retention.
 
-- [ ] `[must]` Implement a dev-only `adaos_tests` scenario. Enforce
+The specialized latest-run-only workbench below is deferred. It must not be built
+as a prerequisite for the small-application Prototype/Automation cycle.
+
+- [ ] `[deferred]` Implement a dev-only `adaos_tests` scenario. Enforce
   `ENV_TYPE=dev` on the node at creation, listing and opening, not only in Client.
   No ordinary user desktop icons or marketplace entries.
-- [ ] `[must]` Project only the latest run into the workbench; retain immutable
+- [ ] `[deferred]` Project only the latest run into the workbench; retain immutable
   historical run evidence outside that projection. Use a generation/run token
   and atomic switch so late results from an older run cannot repopulate it.
   Delete only projection-owned materialization, never a user's development.
-- [ ] `[must]` Show each case's explicit stage, model, run/revision, result,
+- [ ] `[deferred]` Show each case's explicit stage, model, run/revision, result,
   preview, wide/compact screenshots, pending obligations and error diagnosis.
   A failed or unavailable preview must not silently show a prior revision.
-- [ ] `[must]` Mark samples `test`; add `beta` only after a genuine Trial gate.
+- [ ] `[deferred]` Mark samples `test`; add `beta` only after a genuine Trial gate.
   Capture human verdict and notes against exact source and renderer digests.
-- [ ] `[should]` Add run/baseline comparison, replay of one case, scenario
+- [ ] `[deferred]` Add run/baseline comparison, replay of one case, scenario
   selector and EN/RU switch. Keep launch privileges and budgets node-controlled.
 - [ ] `[could]` Add a bounded screenshot reviewer after deterministic/browser
   checks and translate renderer shortcomings into owning-layer Dev Tickets.
@@ -710,7 +739,56 @@ the configured non-browser gate. A late budget repair compiled successfully
 after its local timeout; it is retained separately, not retroactively passed.
 The browser review found and fixed a generic SDK filter-declaration defect and
 still rejected visual quality. Large-prototype granulation remains unproven.
-See [full input/output, CRUD and planning assessment](builder-stage-review-2026-09-11.md).
+Retained evidence is summarized below; target decisions live in the architecture.
+
+| Development case | Seconds | Stage-aware result before this correction |
+| --- | ---: | --- |
+| Volunteer roster EN | 99.59 | First candidate valid; grade 0.925, coverage job partial |
+| Operations work queue EN | 110.48 | Repair fixed bindings but duplicated an editor field |
+| Service appointments RU | 141.85 | Relationship repair valid; grade 0.925, free-time job partial |
+| Household budget EN | 227.67 | Local repair wait expired; late candidate subsequently compiled |
+| Equipment inspections RU | 144.00 | Repair used editor instead of collection-state evidence |
+| Knowledge library EN | 130.96 | Attachment repair damaged empty-result evidence |
+| Media review RU | 223.26 | Attachment repair damaged empty-result evidence |
+| Inventory/procurement RU | 242.39 | Repaired candidate passed grade 1.0; no browser qualification |
+
+Evidence roots: `e2e/artifacts/builder/sdk-stage-aware-gpt5-20260911-01` and `-02`.
+Generation: GPT-5, minimal reasoning, generic semantic-v2, no domain packs, one
+full repair, 8,000-token cap. Grader: GPT-4.1 v10. These are eight development
+samples, not the held-out baseline. Complete requests expose isolated operation
+verbs, empty entity facts, ambiguous identity/display contracts and incomplete
+state/attachment instructions. Complete repairs show preservation failures.
+
+- [x] `[must]` Inspect full late budget output, not only timeout: Root job
+  `llm_job_921c0a60a4bf4f20bccf2b2c` completed in 244.898s (queue 4ms, TTFT 3.174s,
+  output 3,330 tokens). Original SDK receipts reconstruct its exact Brief; three
+  resources, six views and nine bindings compile. The run verdict is unchanged;
+  replay evidence is in `-02/evidence/late-results/`, not materialized/graded.
+- [x] `[must]` Inspect actual Client at 1440x1000 and 390x844. The same volunteer
+  candidate initially produced three resource API 400s and a stuck loader. After
+  the SDK filter fix it displays records with no resource errors or JS errors.
+  Evidence: `-01/evidence/browser-diagnostic` and `browser-sdk-final`, including
+  inner-scroll bottom screenshots. Node-status 401 and transient reliability 503
+  remain visible shell diagnostics, not hidden successful checks.
+- [ ] `[must]` Fix remaining visual/task defects at their owners: raw choice
+  values, clipped card labels, excessive flow layout, technical fixture wording,
+  compact table usability and untested CRUD interactions. Document-level width
+  alone does not establish readability or user-task success.
+- [ ] `[should]` Reconcile usage of late jobs: the two reports' 49,908 generation
+  output tokens omit the budget's 3,330 late tokens. Three grader calls add 33,030
+  fresh input tokens. No arbitrary shorter timeout is accepted as optimization.
+- [x] `[must]` Retain a DEV checkpoint for the stage correction: `builder@0.2.107`,
+  `builder_skill@0.3.164`, source `d26f48ce06f1cb487f82a1507d80cfe6d32b30cf5d685daab8353e3a02b935ba`,
+  release `471a0e91cbd1edd936ad0d6461007bd7c3285d4b44cdada28ac7c525146d59c5`.
+  Workspace remains 0.2.106. Local verification: 360 Core/SDK and 278 DEV skill
+  tests pass; this does not establish model autonomy.
+- [x] `[must]` Verify readable UTF-8 writers and mechanically reformat 121 mutable
+  checkpoints without changing values or historical hashes. Exact provider strings
+  remain exact, including provider-authored escapes.
+- [x] `[should]` Inspect `.env` without speculative edits: 104 CRLF, 11 LF-only,
+  no bare CR, final newline; ENV_TYPE, ADAOS_LANG and ADAOS_PROFILE parse separately.
+  LF/CRLF append/replace tests with/without final newline pass. Reported glued lines
+  were not reproduced; mixed endings alone do not establish their cause.
 
 - [x] `[must]` Derive resource filter admission from each projection's declared
   fields; test the actual workbench with multiple resources and unknown filters.
@@ -831,6 +909,11 @@ Prototype without understanding AdaOS internals, and the evidence demonstrates
 that this result was not supplied by a subject-specific recipe.
 
 ## Could And Deferred
+
+- [ ] `[deferred]` Large-prototype decomposition, shared entity/navigation/locale
+  contracts, dependency invalidation, resumable work units and atomic assembly.
+  After the small lifecycle passes, compare at least three sizes, including beyond
+  single-unit capacity, and test one failed unit plus a shared-entity change.
 
 - [ ] `[could]` Learn capability ranking from accepted traces after a
   deterministic baseline and anti-leakage evaluation exist.

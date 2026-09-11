@@ -182,7 +182,13 @@ must not silently become a destructive default. Clarification is required only
 when an unresolved field changes safety, architecture, or the primary user
 experience.
 
-### 3. Adaptive Prototype Plan
+### 3. Request Routing And Deferred Large-Prototype Plan
+
+The active milestone is the complete Builder lifecycle for small applications,
+including Automation. Routing between deterministic edits, bounded edits, design
+and capability gaps does not require a general dependency-graph executor.
+Large-application planning, cross-unit orchestration and resumable DAG execution
+are deferred until that small-scale lifecycle is reliable.
 
 `adaos.builder.prototype_plan.v1` is a dependency graph of work units. It is
 not a domain recipe and not a fixed series of prompts. Each unit declares its
@@ -289,13 +295,13 @@ rather than forcing the model to author RFC 6902 paths.
 
 ### 5. Runtime Artifact And Evidence
 
-Large-prototype readiness is a separate admission dimension. A plan must assign
+Large-prototype readiness is a deferred admission dimension. A future plan must assign
 requirement ownership to dependency-aware semantic units, preserve shared IDs
 and locale/navigation contracts, and resume or repair only affected units.
 Small requests may bypass decomposition. Neither a universal sequence of model
-calls nor larger candidate limits proves this capability. The current
-[readiness assessment](builder-stage-review-2026-09-11.md) distinguishes these
-target properties from the implemented full-candidate compatibility route.
+calls nor larger candidate limits proves this capability. These target properties
+are not implemented by the current full-candidate compatibility route and do not
+block small-application Automation qualification.
 
 Supported local CRUD and finite automation primitives belong to Prototype, not
 to an automatically deferred implementation backlog. Their executable contracts
@@ -303,6 +309,23 @@ must state preconditions, side effects, error behavior and composition limits;
 model-declared capability names are not proof of runtime support. Cross-record
 business rules remain explicit pending Automation obligations unless an actual
 supported primitive implements and verifies them.
+
+Generation context must expose one authoritative inventory of required references.
+Each operation retains its action, source clause, known target and related jobs;
+an isolated verb is not a sufficient description. Unknown entities remain explicit
+rather than being guessed by domain classifiers. Deterministic interpretation and
+model-selected design must have distinct provenance.
+
+The generation contract, canonical compiler and runtime must agree on capacity,
+relationship identity versus display labels, attachment values, query filters and
+representative-state proof. Generic invariants are derived from executable
+contracts, versioned with them and shared by initial generation and repair. Case
+rubrics, exemplar applications and reference solutions remain evaluation-only.
+
+Prototype qualification separates structural validity, actual resource execution,
+rendering, user-task success and human acceptance. A declared target count is not
+proof of achieved coverage; an evaluator cannot invent automatic behavior absent
+from the request. Grader calibration tests both false positives and false negatives.
 
 The compiler emits complete, atomically validated `webui.json`, locale assets,
 fixture declarations, and an attribution receipt. The receipt links intent,

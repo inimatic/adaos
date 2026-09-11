@@ -2,7 +2,7 @@
 
 Status: high-level sequencing for the AdaOS Builder vertical slice.
 
-Last reviewed: 2026-09-10.
+Last reviewed: 2026-09-11.
 
 This roadmap tracks how AdaOS evolves from separate skill/scenario/runtime
 surfaces into a coherent Builder workflow: idea -> governed artifact -> preview
@@ -10,6 +10,13 @@ surfaces into a coherent Builder workflow: idea -> governed artifact -> preview
 
 Detailed implementation remains in the specialized roadmaps. This page is the
 cross-cutting source of truth for Builder readiness.
+
+Active sequence: stabilize small-application Prototype acceptance, contracts and
+context, then exercise the complete small Builder cycle including Automation.
+Large-prototype DAG planning and orchestration are deferred. The specialized
+corrective roadmap owns task checklists and retained run measurements. Minimal
+human observation uses test-labelled retained projects in existing Builder, not
+a prerequisite new application or automatic Trial publication.
 
 ## Corrective Rebaseline - 2026-09-10
 
@@ -180,7 +187,7 @@ gate easy to read by priority.
 | 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, dependent Process projection, durable prose continuation, outcome-oriented stable installation/placement, isolated Trial Workspace activation, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gates include the executable-prototype foundation: bounded local CRUD/provider mocks, semantic activity requirements and simulation trace, compact composition slices, and the constrained conversational workflow profile and Automation handoff; plus one production IntentProposal rail, compatibility-rail retirement, complete registered activity/reply recovery, one fresh operational empty-scenario acceptance run through the isolated Trial path, and Applications dogfooding through public SDK/MCP contracts. | Open: complete Builder-caller migration, deterministic representative-state profiles, structured renderer composition evidence, durable external delivery receipts, live English/Russian mutating Telegram parity, human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. Web/Voice consumed-control parity is locally complete. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: screenshot/multimodal context, general workflow prototype slices and round trips, protected-node migration/retirement, reverse/legacy workflow inference, visual workflow studio, non-conversational/advanced workflow prototyping, full Trial data isolation, simultaneous shared-skill versions, hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 | 12. Project Composition And Scoped Development | Specified: Project is a distribution definition; Development Session, presentations, fallback skill preview, local artifact context, and canonical navigation have target contracts. | Open: registry/Catalog Project projection and portable artifact groups. | None. | External artifact providers/MCP and remote multi-component Project install/remove are deferred until local TLP proof. |
 | 13. Context-Compiled Execution | Open: typed subject resolution, ref-only automation state, role-scoped restoration, Context Receipts, domain handoff isolation, and Subscription accounting proofs. | Open: Context Inspector, related-work batching, and evidence-gated warm caches. | Open: model-assisted ranking behind deterministic policy gates. | Distributed context federation remains owned by the context/distributed roadmaps. |
-| Corrective. Intent-to-Prototype | Open and blocking: forensic snapshot, Core/Builder domain decontamination, Client integrity gate, declarative E2E runner, clean generic baseline, ownership seams, typed Prototype Brief, adaptive plan, component contracts, semantic compiler, bounded context/model execution, held-out evaluation, and shadow cutover. | Open: Client conformance/lazy-loading completion, trace diagnostics, incremental brief repair, retrieval comparison, candidate reuse, and failure-corpus curation. | Open only after measured baseline: cross-domain component growth, learned ranking, selective design alternatives, and governed domain-pack registry. | Multi-agent orchestration, generated Client renderer code, general reverse inference, unbounded visual iteration, and multi-user semantic editing. |
+| Corrective. Intent-to-Prototype | Open and blocking: forensic snapshot, Core/Builder domain decontamination, Client integrity gate, declarative E2E runner, clean generic baseline, ownership seams, typed Prototype Brief, component contracts, semantic compiler, bounded context/model execution, held-out evaluation, and shadow cutover. | Open: Client conformance/lazy-loading completion, trace diagnostics, incremental brief repair, retrieval comparison, candidate reuse, and failure-corpus curation. | Open only after measured baseline: cross-domain component growth, learned ranking, selective design alternatives, and governed domain-pack registry. | Large-prototype adaptive DAG planning/orchestration, multi-agent orchestration, generated Client renderer code, general reverse inference, unbounded visual iteration, and multi-user semantic editing. |
 
 ## Phase 0. Terminology And Ownership
 
