@@ -168,6 +168,29 @@ def test_brief_combines_workflow_and_later_explicit_visual_states() -> None:
     ]["value"]
 
 
+
+def test_brief_splits_alternative_operations_and_explicit_staffing_states() -> None:
+    brief = compile_prototype_brief(
+        "A coordinator needs to review volunteers and their availability, see "
+        "coverage gaps, assign or remove a person, and open contact details. "
+        "Include clear states for no volunteers, an unfilled shift, a fully staffed "
+        "day and conflicting availability."
+    )
+
+    assert [item["statement"] for item in brief["principal_jobs"]] == [
+        "A coordinator needs to review volunteers and their availability",
+        "see coverage gaps",
+        "assign",
+        "remove a person",
+        "open contact details",
+    ]
+    assert brief["representative_states"]["value"] == [
+        "no volunteers",
+        "unfilled shift",
+        "fully staffed day",
+        "conflicting availability",
+    ]
+
 def test_brief_preserves_explicit_attachment_capture_in_en_and_ru() -> None:
     statements = (
         "A technician adds a measurement and uploads a defect photo.",
@@ -283,9 +306,11 @@ def test_brief_preserves_unclassified_explicit_requirements() -> None:
     brief = compile_prototype_brief(statement)
 
     assert [item["statement"] for item in brief["residual_requirements"]] == [
-        "see the current balance and category totals",
         "compare this month with the previous month",
         "set monthly category limits",
+    ]
+    assert "see the current balance and category totals" in [
+        item["statement"] for item in brief["principal_jobs"]
     ]
     for requirement in brief["residual_requirements"]:
         offsets = requirement["evidence"][0].removeprefix(

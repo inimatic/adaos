@@ -57,7 +57,7 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "inspect",
         re.compile(
-            r"\b(?:inspect|open|view|review|scan|browse|откр|просмотр|просматр|изуч)\w*\b|"
+            r"\b(?:inspect|open|view|review|see|scan|browse|откр|просмотр|просматр|изуч)\w*\b|"
             r"\bпровер(?:ить|ять|яет|яют|ял|яла|яли|ь|ьте)\b",
             re.IGNORECASE,
         ),
@@ -140,8 +140,8 @@ _WORKFLOW_STATES_PATTERNS = (
 )
 _REPRESENTATIVE_STATE_SIGNAL_PATTERN = re.compile(
     r"\b(?:empty|no|none|without|unassigned|unfinished|incomplete|draft|completed?|"
-    r"blocked|disabled|loading|offline|error|failed?|forbid|prevent|overdue|late|"
-    r"conflict|unavailable|busy|"
+    r"unfilled|understaffed|fully\s+staffed|blocked|disabled|loading|offline|error|failed?|forbid|prevent|overdue|late|"
+    r"conflict\w*|unavailable|busy|"
     r"пуст\w*|нет|без|неназнач\w*|не\s+назнач\w*|незаверш\w*|чернов\w*|"
     r"заверш\w*|заблокир\w*|недоступ\w*|загруз\w*|офлайн\w*|ошиб\w*|"
     r"неуспеш\w*|запрет\w*|нельзя|просроч\w*|конфликт\w*|занят\w*)\b",
@@ -155,8 +155,8 @@ _NON_STATE_CONTINUITY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _JOB_SEPARATOR_PATTERN = re.compile(
-    r"[,;:]|\b(?:and\s+then|then|and|but|while|"
-    r"и\s+затем|затем|и|а\s+затем|а)\b",
+    r"[,;:]|\b(?:and\s+then|then|and|or|but|while|"
+    r"и\s+затем|затем|и|или|либо|а\s+затем|а)\b",
     re.IGNORECASE,
 )
 
