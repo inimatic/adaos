@@ -66,6 +66,84 @@ def _fail(detail: str) -> None:
     raise BuilderWorkflowError(f"invalid semantic Prototype: {detail}")
 
 
+class SemanticPrototypeValidationError(BuilderWorkflowError):
+    """Semantic validation failure with model-actionable structured findings."""
+
+    def __init__(self, findings: Sequence[Mapping[str, Any]]) -> None:
+        self.findings = [copy.deepcopy(dict(item)) for item in findings]
+        detail = "; ".join(str(item.get("detail") or "") for item in self.findings)
+        super().__init__(f"invalid semantic Prototype: {detail}")
+
+
+def _requirement_contract_findings(
+    value: Mapping[str, Any], *, brief: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    binding_refs = [
+        str(item.get("requirement_ref") or "")
+        for item in value.get("requirement_bindings") or []
+        if isinstance(item, Mapping)
+    ]
+    gap_refs = [
+        str(item.get("requirement_ref") or "")
+        for item in value.get("capability_gaps") or []
+        if isinstance(item, Mapping)
+    ]
+    bound = {item for item in binding_refs if item}
+    gaps = {item for item in gap_refs if item}
+    required = _brief_requirement_ids(brief)
+    findings: list[dict[str, Any]] = []
+
+    overlap = sorted(bound & gaps)
+    if overlap:
+        findings.append(
+            {
+                "code": "requirement.binding_and_gap",
+                "path": "$.requirement_bindings|$.capability_gaps",
+                "requirement_refs": overlap,
+                "detail": f"requirements cannot be both bound and capability gaps: {overlap}",
+            }
+        )
+    missing = sorted(required - bound - gaps)
+    if missing:
+        findings.append(
+            {
+                "code": "requirement.coverage_missing",
+                "path": "$.requirement_bindings|$.capability_gaps",
+                "requirement_refs": missing,
+                "detail": (
+                    "accepted requirements have no semantic binding or gap: "
+                    f"{missing}"
+                ),
+            }
+        )
+    unexpected = sorted((bound | gaps) - required)
+    if unexpected:
+        findings.append(
+            {
+                "code": "requirement.reference_unknown",
+                "path": "$.requirement_bindings[*].requirement_ref",
+                "requirement_refs": unexpected,
+                "detail": (
+                    "semantic document references unknown requirements: "
+                    f"{unexpected}"
+                ),
+            }
+        )
+    duplicate_gaps = sorted(
+        {item for item in gap_refs if item and gap_refs.count(item) > 1}
+    )
+    if duplicate_gaps:
+        findings.append(
+            {
+                "code": "requirement.gap_duplicate",
+                "path": "$.capability_gaps",
+                "requirement_refs": duplicate_gaps,
+                "detail": f"duplicate capability gaps: {duplicate_gaps}",
+            }
+        )
+    return findings
+
+
 def _unique(
     values: Sequence[Mapping[str, Any]], label: str
 ) -> dict[str, dict[str, Any]]:
@@ -1212,20 +1290,52 @@ def compile_semantic_prototype_candidate(
     """Validate, lower, and compile one strict provider candidate."""
 
     candidate, normalizations = _canonicalize_semantic_prototype_candidate(value)
-    semantic_document = _lower_semantic_prototype_candidate(candidate, brief=brief)
-    normalizations.append(
-        {
-            "kind": "authoritative_brief_provenance",
-            "from": "Prototype Brief",
-            "to": str(semantic_document["brief_ref"]),
-            "target": "$.brief_ref|$.brief_digest",
-        }
-    )
-    result = compile_semantic_prototype(
-        semantic_document,
-        brief=brief,
-        project_ref=project_ref,
-    )
+    requirement_findings = _requirement_contract_findings(candidate, brief=brief)
+    try:
+        semantic_document = _lower_semantic_prototype_candidate(candidate, brief=brief)
+        normalizations.append(
+            {
+                "kind": "authoritative_brief_provenance",
+                "from": "Prototype Brief",
+                "to": str(semantic_document["brief_ref"]),
+                "target": "$.brief_ref|$.brief_digest",
+            }
+        )
+        result = compile_semantic_prototype(
+            semantic_document,
+            brief=brief,
+            project_ref=project_ref,
+        )
+    except BuilderWorkflowError as exc:
+        prefix = "invalid semantic Prototype: "
+        detail = str(exc)
+        if detail.startswith(prefix):
+            detail = detail[len(prefix) :]
+        matching_finding = next(
+            (
+                item
+                for item in requirement_findings
+                if str(item.get("detail") or "") == detail
+            ),
+            None,
+        )
+        findings = [
+            copy.deepcopy(matching_finding)
+            if matching_finding is not None
+            else {
+                "code": "semantic.validation_failed",
+                "path": "$",
+                "detail": detail,
+            }
+        ]
+        findings.extend(
+            item
+            for item in requirement_findings
+            if str(item.get("detail") or "") != detail
+        )
+        raise SemanticPrototypeValidationError(findings) from exc
+    if requirement_findings:
+        raise SemanticPrototypeValidationError(requirement_findings)
     result["semantic_document"] = semantic_document
     result["normalizations"] = normalizations
     return result
@@ -1811,6 +1921,7 @@ __all__ = [
     "SEMANTIC_COMPILE_RESULT_SCHEMA",
     "SEMANTIC_PROTOTYPE_CANDIDATE_SCHEMA",
     "SEMANTIC_PROTOTYPE_SCHEMA",
+    "SemanticPrototypeValidationError",
     "compile_semantic_prototype_candidate",
     "compile_semantic_prototype",
     "normalize_semantic_prototype_candidate",

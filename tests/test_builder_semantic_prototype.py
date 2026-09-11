@@ -409,6 +409,38 @@ def test_semantic_model_candidate_compiles_to_canonical_document() -> None:
     )
 
 
+def test_semantic_model_candidate_reports_all_requirement_contract_findings() -> None:
+    brief, semantic = _fixture()
+    candidate = _candidate(semantic)
+    overlap_ref = candidate["requirement_bindings"][0]["requirement_ref"]
+    candidate["capability_gaps"].append(
+        {
+            "requirement_ref": overlap_ref,
+            "code": "constraint.unsupported",
+            "detail": "The requirement cannot be enforced.",
+        }
+    )
+    candidate["requirement_bindings"].append(
+        {
+            "requirement_ref": "q_search_bind",
+            "semantic_refs": copy.deepcopy(
+                candidate["requirement_bindings"][0]["semantic_refs"]
+            ),
+        }
+    )
+
+    with pytest.raises(BuilderWorkflowError) as captured:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    findings = captured.value.findings
+    assert [item["code"] for item in findings] == [
+        "requirement.binding_and_gap",
+        "requirement.reference_unknown",
+    ]
+    assert findings[0]["requirement_refs"] == [overlap_ref]
+    assert findings[1]["requirement_refs"] == ["q_search_bind"]
+
+
 def test_semantic_table_presentation_compiles_all_declared_columns() -> None:
     brief, semantic = _fixture()
     collection = semantic["views"][0]
