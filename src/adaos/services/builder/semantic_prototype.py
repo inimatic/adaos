@@ -231,6 +231,73 @@ def _field_value_is_valid(field: Mapping[str, Any], field_value: Any) -> bool:
     )
 
 
+def _candidate_choice_value(
+    field: Mapping[str, Any], value: Any
+) -> tuple[Any, bool]:
+    options = [
+        dict(item)
+        for item in field.get("options") or []
+        if isinstance(item, Mapping)
+    ]
+    if any(option.get("value") == value for option in options):
+        return value, False
+    if not isinstance(value, str):
+        return value, False
+    token = value.strip().casefold()
+    matches = [
+        option.get("value")
+        for option in options
+        if any(
+            isinstance(option.get("label"), Mapping)
+            and str(option["label"].get(locale) or "").strip().casefold() == token
+            for locale in ("en", "ru")
+        )
+    ]
+    if len(matches) != 1:
+        return value, False
+    return matches[0], True
+
+
+def _normalize_candidate_choice_fixtures(
+    *,
+    fields: Sequence[Mapping[str, Any]],
+    records: Sequence[dict[str, Any]],
+    path: str,
+    normalizations: list[dict[str, str]],
+) -> None:
+    for record_index, record in enumerate(records):
+        values = list(record.get("values") or [])
+        for field_index, field in enumerate(fields):
+            if field_index >= len(values):
+                continue
+            kind = str(field.get("value_type") or "")
+            original = values[field_index]
+            if kind == "choice":
+                normalized, changed = _candidate_choice_value(field, original)
+            elif kind == "multi_choice" and isinstance(original, list):
+                normalized_values: list[Any] = []
+                changed = False
+                for item in original:
+                    normalized_item, item_changed = _candidate_choice_value(field, item)
+                    normalized_values.append(normalized_item)
+                    changed = changed or item_changed
+                normalized = normalized_values
+            else:
+                continue
+            if not changed:
+                continue
+            values[field_index] = normalized
+            normalizations.append(
+                {
+                    "kind": "localized_choice_value",
+                    "from": json.dumps(original, ensure_ascii=False),
+                    "to": json.dumps(normalized, ensure_ascii=False),
+                    "target": f"{path}[{record_index}].values[{field_index}]",
+                }
+            )
+        record["values"] = values
+
+
 def _brief_requirement_ids(brief: Mapping[str, Any]) -> set[str]:
     result: set[str] = set()
     for key in (
@@ -958,6 +1025,12 @@ def _canonicalize_semantic_prototype_candidate(
             )
     for record in records:
         record["id"] = record_ids[str(record["id"]).strip()]
+    _normalize_candidate_choice_fixtures(
+        fields=fields,
+        records=records,
+        path="$.resource.records",
+        normalizations=normalizations,
+    )
 
     runtime_state_ids: dict[str, str] = {}
     runtime_state_owners: dict[str, str] = {}
@@ -1985,6 +2058,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
     query_ids: dict[str, str] = {}
     command_ids: dict[str, str] = {}
     state_ids: dict[str, str] = {}
+    record_ids_by_resource: dict[str, dict[str, str]] = {}
 
     for resource_index, resource in enumerate(resources):
         raw_resource_id = str(resource.get("id") or "")
@@ -2038,6 +2112,14 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 normalized_field["id"]
             )
         normalized_resources.append(normalized_resource)
+        record_ids_by_resource[normalized_resource_id] = {
+            str(raw_record.get("id") or ""): str(normalized_record["id"])
+            for raw_record, normalized_record in zip(
+                resource.get("records") or [],
+                normalized_resource.get("records") or [],
+                strict=True,
+            )
+        }
 
         for raw_view, normalized_view in zip(
             resource_views, normalized["views"], strict=True
@@ -2157,6 +2239,85 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 raw_ref,
                 _canonical_candidate_identifier(raw_ref, namespace=key),
             )
+        from_resource_id = str(normalized_relationship["from_resource_ref"])
+        to_resource_id = str(normalized_relationship["to_resource_ref"])
+        from_field_id = str(normalized_relationship["from_field_ref"])
+        to_field_id = str(normalized_relationship["to_field_ref"])
+        from_resource = next(
+            item for item in normalized_resources if item["id"] == from_resource_id
+        )
+        to_resource = next(
+            item for item in normalized_resources if item["id"] == to_resource_id
+        )
+        target_id_map = record_ids_by_resource.get(to_resource_id, {})
+        target_ids = {
+            **target_id_map,
+            **{value: value for value in target_id_map.values()},
+        }
+        from_field_index = next(
+            index
+            for index, field in enumerate(from_resource.get("fields") or [])
+            if str(field.get("id") or "") == from_field_id
+        )
+        source_values = [
+            record["values"][from_field_index]
+            for record in from_resource.get("records") or []
+            if record["values"][from_field_index] not in (None, "")
+        ]
+        if to_field_id == "id":
+            target_values = [
+                record["id"] for record in to_resource.get("records") or []
+            ]
+        else:
+            to_field_index = next(
+                index
+                for index, field in enumerate(to_resource.get("fields") or [])
+                if str(field.get("id") or "") == to_field_id
+            )
+            target_values = [
+                record["values"][to_field_index]
+                for record in to_resource.get("records") or []
+                if record["values"][to_field_index] not in (None, "")
+            ]
+        references_target_ids = bool(source_values) and all(
+            isinstance(item, str) and item in target_ids for item in source_values
+        )
+        references_declared_field = bool(source_values) and all(
+            item in target_values for item in source_values
+        )
+        if references_target_ids and not references_declared_field:
+            if to_field_id != "id":
+                normalizations.append(
+                    {
+                        "kind": "relationship_identity_target",
+                        "from": to_field_id,
+                        "to": "id",
+                        "target": (
+                            f"$.relationships[{len(normalized_relationships)}]"
+                            ".to_field_ref"
+                        ),
+                    }
+                )
+                normalized_relationship["to_field_ref"] = "id"
+            for record_index, record in enumerate(
+                from_resource.get("records") or []
+            ):
+                original = record["values"][from_field_index]
+                normalized_id = target_ids.get(original)
+                if normalized_id is None or normalized_id == original:
+                    continue
+                record["values"][from_field_index] = normalized_id
+                normalizations.append(
+                    {
+                        "kind": "relationship_identity_value",
+                        "from": str(original),
+                        "to": normalized_id,
+                        "target": (
+                            f"$.resources.@{from_resource_id}.records"
+                            f"[{record_index}].{from_field_id}"
+                        ),
+                    }
+                )
         normalized_relationships.append(normalized_relationship)
     _unique_v2_ids(normalized_relationships, "relationship")
 
@@ -2390,6 +2551,47 @@ def _semantic_v2_model_findings(
                     }
                 )
 
+    for relationship_index, relationship in enumerate(
+        document.get("relationships") or []
+    ):
+        if not isinstance(relationship, Mapping):
+            continue
+        relationship_id = str(relationship.get("id") or relationship_index)
+        from_resource = resources.get(
+            str(relationship.get("from_resource_ref") or "")
+        )
+        to_resource = resources.get(str(relationship.get("to_resource_ref") or ""))
+        if from_resource is None or to_resource is None:
+            continue
+        from_field = str(relationship.get("from_field_ref") or "")
+        to_field = str(relationship.get("to_field_ref") or "")
+        target_values = [
+            record.get(to_field)
+            for record in to_resource.get("records") or []
+            if isinstance(record, Mapping) and record.get(to_field) not in (None, "")
+        ]
+        missing_values = list(
+            dict.fromkeys(
+                str(record[from_field])
+                for record in from_resource.get("records") or []
+                if isinstance(record, Mapping)
+                and record.get(from_field) not in (None, "")
+                and record.get(from_field) not in target_values
+            )
+        )
+        if missing_values:
+            findings.append(
+                {
+                    "code": "semantic.relationship_target_missing",
+                    "path": f"$.relationships[{relationship_index}]",
+                    "semantic_refs": [f"relationship:{relationship_id}"],
+                    "detail": (
+                        f"relationship {relationship_id!r} has source values with no "
+                        f"target {to_field!r}: {missing_values}"
+                    ),
+                }
+            )
+
     for state_index, state in enumerate(document.get("representative_states") or []):
         if not isinstance(state, Mapping):
             continue
@@ -2518,6 +2720,51 @@ def _validate_semantic_prototype_v2(
                     f"relationship {relationship['id']!r} references field "
                     f"{field_id!r} outside resource {resource_id!r}"
                 )
+        from_resource = resources[str(relationship["from_resource_ref"])]
+        to_resource = resources[str(relationship["to_resource_ref"])]
+        from_field_id = str(relationship["from_field_ref"])
+        to_field_id = str(relationship["to_field_ref"])
+        from_field = next(
+            (
+                item
+                for item in from_resource["fields"]
+                if str(item["id"]) == from_field_id
+            ),
+            None,
+        )
+        to_field = next(
+            (
+                item
+                for item in to_resource["fields"]
+                if str(item["id"]) == to_field_id
+            ),
+            None,
+        )
+        from_type = str(from_field["value_type"]) if from_field else "short_text"
+        to_type = str(to_field["value_type"]) if to_field else "short_text"
+        if from_type != to_type:
+            _fail(
+                f"relationship {relationship['id']!r} connects incompatible "
+                f"fields {from_field_id!r} and {to_field_id!r}"
+            )
+        target_values = [
+            record.get(to_field_id)
+            for record in to_resource["records"]
+            if record.get(to_field_id) not in (None, "")
+        ]
+        missing_values = sorted(
+            {
+                str(record[from_field_id])
+                for record in from_resource["records"]
+                if record.get(from_field_id) not in (None, "")
+                and record.get(from_field_id) not in target_values
+            }
+        )
+        if missing_values:
+            _fail(
+                f"relationship {relationship['id']!r} has source values with no "
+                f"target {to_field_id!r}: {missing_values}"
+            )
 
     for resource_id, resource in resources.items():
         resource_views = views_by_resource[resource_id]
@@ -2714,6 +2961,86 @@ def _merge_locale_dictionaries(
             dictionary[str(key)] = text
 
 
+def _prototype_relation_option_fields(
+    *,
+    resource_id: str,
+    resource: dict[str, Any],
+    relationships: Sequence[Mapping[str, Any]],
+    resources: Mapping[str, Mapping[str, Any]],
+    views: Sequence[Mapping[str, Any]],
+) -> None:
+    fields = {
+        str(item["id"]): item
+        for item in resource.get("fields") or []
+        if isinstance(item, dict)
+    }
+    for relationship in relationships:
+        if str(relationship.get("from_resource_ref") or "") != resource_id:
+            continue
+        field = fields.get(str(relationship.get("from_field_ref") or ""))
+        target = resources.get(str(relationship.get("to_resource_ref") or ""))
+        if field is None or target is None or not field.get("editable"):
+            continue
+        target_records = [
+            dict(item)
+            for item in target.get("records") or []
+            if isinstance(item, Mapping)
+        ]
+        if not target_records:
+            continue
+        target_field_id = str(relationship.get("to_field_ref") or "")
+        target_values = [record.get(target_field_id) for record in target_records]
+        if any(value in (None, "") for value in target_values):
+            continue
+
+        display_field_ids: list[str] = []
+        target_resource_id = str(relationship.get("to_resource_ref") or "")
+        for view in views:
+            if (
+                str(view.get("resource_ref") or "") == target_resource_id
+                and str(view.get("role") or "") == "collection"
+            ):
+                display_field_ids = [
+                    str(item)
+                    for item in view.get("field_refs") or []
+                    if str(item) != target_field_id
+                ]
+                break
+        selected_display_fields: list[str] = []
+        for display_field_id in display_field_ids:
+            selected_display_fields.append(display_field_id)
+            labels = [
+                tuple(str(record.get(item) or "") for item in selected_display_fields)
+                for record in target_records
+            ]
+            if len(labels) == len(set(labels)):
+                break
+
+        relationship_id = str(relationship.get("id") or "relationship")
+        options: list[dict[str, Any]] = []
+        for record, target_value in zip(target_records, target_values, strict=True):
+            parts = [
+                str(record.get(item) or "").strip()
+                for item in selected_display_fields
+            ]
+            label = " / ".join(item for item in parts if item) or str(target_value)
+            key_suffix = _runtime_state_identifier(
+                str(record.get("id") or target_value), fallback="option"
+            )
+            options.append(
+                {
+                    "value": target_value,
+                    "label": {
+                        "key": f"relationship.{relationship_id}.option.{key_suffix}",
+                        "en": label,
+                        "ru": label,
+                    },
+                }
+            )
+        field["value_type"] = "choice"
+        field["options"] = options
+
+
 def _compile_semantic_prototype_v2(
     value: Mapping[str, Any],
     *,
@@ -2768,6 +3095,13 @@ def _compile_semantic_prototype_v2(
             "requirement_bindings": [],
             "capability_gaps": [],
         }
+        _prototype_relation_option_fields(
+            resource_id=resource_id,
+            resource=slice_document["resource"],
+            relationships=document["relationships"],
+            resources=resources,
+            views=document["views"],
+        )
         compiled = _compile_semantic_prototype_v1(
             slice_document,
             brief=None,

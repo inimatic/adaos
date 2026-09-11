@@ -550,6 +550,25 @@ def test_semantic_model_candidate_compiles_to_canonical_document() -> None:
     )
 
 
+def test_semantic_candidate_normalizes_unambiguous_localized_choice_value() -> None:
+    brief, semantic = _fixture()
+    candidate = _candidate(semantic)
+    result_index = next(
+        index
+        for index, field in enumerate(candidate["resource"]["fields"])
+        if field["id"] == "result"
+    )
+    candidate["resource"]["records"][0]["values"][result_index] = "Issue"
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    assert result["prototype_records"][0]["result"] == "issue"
+    assert any(
+        item["kind"] == "localized_choice_value"
+        for item in result["normalizations"]
+    )
+
+
 def test_semantic_model_candidate_reports_all_requirement_contract_findings() -> None:
     brief, semantic = _fixture()
     candidate = _candidate(semantic)
@@ -1682,3 +1701,70 @@ def test_semantic_v2_capability_gap_conservatively_overrides_binding() -> None:
         and item["to"] == requirement_ref
         for item in result["normalizations"]
     )
+
+
+def test_semantic_v2_relationship_identity_compiles_editor_selector() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    candidate["relationships"][0]["to_field_ref"] = "person_name"
+    editor = next(item for item in candidate["views"] if item["role"] == "editor")
+    editor["field_refs"].append("work_owner_id")
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    assert result["semantic_document"]["relationships"][0]["to_field_ref"] == "id"
+    assert any(
+        item["kind"] == "relationship_identity_target"
+        for item in result["normalizations"]
+    )
+    editor_widget = next(
+        item
+        for item in result["webui"]["ui"]["application"]["desktop"][
+            "pageSchema"
+        ]["widgets"]
+        if item["id"] == "work-editor"
+    )
+    owner = next(
+        item
+        for item in editor_widget["inputs"]["fields"]
+        if item["id"] == "work_owner_id"
+    )
+    assert owner["type"] == "singleChoice"
+    assert owner["options"] == [
+        {
+            "value": "person-1",
+            "label": "Alex",
+            "label_i18n": {
+                "key": "relationship.work_owner.option.person_1",
+                "fallback": "Alex",
+            },
+        },
+        {
+            "value": "person-2",
+            "label": "Sam",
+            "label_i18n": {
+                "key": "relationship.work_owner.option.person_2",
+                "fallback": "Sam",
+            },
+        },
+    ]
+
+
+def test_semantic_v2_reports_broken_relationship_fixture() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    owner_index = next(
+        index
+        for index, field in enumerate(candidate["resources"][0]["fields"])
+        if field["id"] == "work_owner_id"
+    )
+    candidate["resources"][0]["records"][0]["values"][owner_index] = (
+        "missing-person"
+    )
+
+    with pytest.raises(BuilderWorkflowError) as captured:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    assert "semantic.relationship_target_missing" in {
+        item["code"] for item in captured.value.findings
+    }
