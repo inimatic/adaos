@@ -218,6 +218,15 @@ The document must have a deterministic compiler to `adaos.webui.v1`. Unknown
 or lossy mappings fail with a capability gap. Direct full-WebUI generation is
 a compatibility fallback and must be measured separately.
 
+The current `adaos.builder.semantic_prototype_candidate.v1` single-resource
+shape is a bootstrap subset, not the complete semantic document described
+above. It is sufficient only when one independently editable record type can
+truthfully represent every accepted job and state. A request with independent
+collections such as people, shifts, and assignments must either use typed
+multi-resource/relationship semantics or expose an exact capability gap; it
+must not flatten those collections into fields or claim that absence from one
+collection proves the state of another.
+
 Every accepted brief requirement must bind to one or more semantic nodes, or
 to a typed capability gap. The compiler emits source maps from those semantic
 nodes to runtime resources, widgets, fields, actions, states, and locale keys.
@@ -293,6 +302,12 @@ Every route has independent ceilings for fresh input, cached input, output,
 wall time, model attempts, and repair attempts. Exceeding a ceiling produces a
 typed partial result or clarification. It does not silently widen context or
 switch to a more expensive route.
+
+Output ceilings are selected from retained response distributions and task
+completeness evidence. During development evaluation, AdaOS first retains and
+examines the complete provider response and exact sanitized request. It may
+reduce a limit only after showing that the removed tail is unnecessary rather
+than truncating the response and tuning against an incomplete artifact.
 
 Ceilings and timeouts are safety controls, not latency remediations. Stage
 timings must first distinguish local orchestration, validation, Root transport

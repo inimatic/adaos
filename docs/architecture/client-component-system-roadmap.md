@@ -204,6 +204,15 @@ proven insufficient or an unrelated archetype supplies the second occurrence
 required by C4. The inventory should record the unresolved need without
 advertising a component contract that has not been admitted.
 
+The retained volunteer-roster run on 2026-09-11 likewise does not justify a
+product-shaped Client component. Existing `ui.table`, `item.details`, and
+`ui.form` contracts rendered every field emitted by the semantic compiler.
+The missing coverage/conflict behavior came from a single-resource semantic
+shape that could not represent independent volunteers, shifts, and
+assignments. Multi-resource and structural state-proof work belongs in the
+Brief/semantic compiler first; C4 should add a schedule/availability primitive
+only after an unrelated archetype demonstrates a remaining renderer gap.
+
 The first cross-layer command-policy slice is now explicit. Semantic
 Prototype commands may compile a localized confirmation descriptor into a
 runtime action, and the Client blocks every such action before extension

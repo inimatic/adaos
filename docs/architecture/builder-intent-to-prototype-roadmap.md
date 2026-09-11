@@ -229,7 +229,7 @@ Pointer repair remains a material legacy-path cost.
   [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md). Reuse
   existing Builder evaluation evidence and workflow metrics as referenced
   sources rather than duplicating them.
-- [ ] `[must]` Implement one technological CLI entry, `adaos builder e2e`, for
+- [x] `[must]` Implement one technological CLI entry, `adaos builder e2e`, for
   complete suites or selected cases/tags. It must validate, provision isolated
   DEV state, execute public SDK transitions, collect evidence, compare an
   optional baseline, report, and clean up without exposing low-level eval CRUD
@@ -353,6 +353,18 @@ This removes the contract ambiguity in which one requirement could be partly
 bound and partly missing. It does not infer actors, entities, targets, or
 authority; those remain inputs to schema-constrained residual interpretation.
 
+Cross-entity evidence (2026-09-11): retained run
+`sdk-retained-context-20260911-01` shows the remaining Brief defect without
+attributing it to the design model. The exact input kept entities and
+information requirements unknown, split one clause into the incomplete job
+`assign or`, and packed four materially different visual states into one
+requirement. The original user turn was still present, so the model recovered
+most intent, but requirement binding and architecture selection were not
+grounded in a reviewable contract. Residual schema-constrained interpretation
+must identify independent record types, relations, outcomes, and state
+requirements before semantic generation; lexical clauses alone are not the
+target Brief compiler.
+
 - [x] `[must]` Publish `adaos.builder.intent.v1` and
   `adaos.builder.prototype_brief.v1` schemas with provenance and `unknown`
   semantics.
@@ -434,11 +446,37 @@ an interim safety policy: R4/R5 must make authority, reversibility, and risk
 explicit so the compiler can derive confirmation from accepted semantics
 rather than command kind alone.
 
+Semantic presentation evidence (2026-09-11): the bootstrap candidate now
+declares `list`, `table`, or `cards` for collection views. The deterministic
+compiler maps dense comparison to the existing `ui.table` contract and maps
+every declared collection field into a visible column or list/card metadata;
+it no longer drops all fields except the first title. Fresh operations run
+`sdk-visible-fields-20260911-02` passed all four primary jobs and all four
+states from one generation call in 32.7 seconds total. Generation used 2,890
+fresh input and 2,314 output tokens, took 14.5 seconds at the provider, and did
+not require repair.
+
+The same change did not make the single-resource semantic subset generally
+complete. In `sdk-retained-context-20260911-01`, a volunteer assignment record
+could show existing assignments but could not truthfully represent independent
+volunteers, shift capacity, an unfilled shift, or overlap prevention. Local
+validation accepted a state named `unfilled shift` whose predicates actually
+matched existing assignments; the outcome grader rejected the missing visible
+coverage/conflict semantics. State labels and fixture counts are therefore not
+proof of state meaning.
+
 - [ ] `[must]` Replace or promote `webui.semantic.v0` with a complete versioned
   semantic document for the currently supported Prototype component set.
 - [ ] `[must]` Represent entity and collection-item granularity explicitly;
   prohibit the design stage from collapsing an accepted repeated collection
   into an opaque scalar unless the brief says it is read-only text.
+- [ ] `[must]` Represent multiple independently inspectable resources and their
+  typed relationships when the accepted Brief requires them. Keep the
+  single-resource candidate as a bounded fast path, not a universal contract.
+- [ ] `[must]` Make representative-state proof structural. A visible state
+  must bind to observable fields, predicates, aggregate/relationship facts, or
+  an explicit capability gap; a model-authored label and matching fixture
+  count are never sufficient evidence.
 - [ ] `[must]` Bind every accepted brief requirement to semantic data, view,
   command, state, or typed capability-gap refs and reject unresolved bindings.
 - [ ] `[must]` Publish `adaos.builder.prototype_plan.v1` as an adaptive DAG with
@@ -515,6 +553,16 @@ must not count as a latency improvement or turn an incomplete result into a
 pass. The remaining cost target is fewer and smaller model outputs and
 stage-specific context, not a shorter local deadline.
 
+Context-retention follow-up (2026-09-11): E2E previously retained compact
+message digests and candidate paths, then deleted the temporary Project that
+owned the referenced files. That was insufficient for context engineering.
+The runner now copies the complete sanitized request, terminal journal, raw
+provider candidate, and normalized candidate into content-addressed run
+evidence before cleanup. The first retained volunteer request was about 2,853
+input tokens, reused 1,792 cached tokens, emitted 3,314 output tokens, and took
+22.3 seconds at the provider. Its full trace identified a Brief/data-model
+defect that a shorter output limit or validator timeout would only conceal.
+
 - [ ] `[must]` Replace complete WebUI/project-memory/history inclusion with
   brief deltas, semantic slices, accepted constraints, findings, and retrievable
   content-addressed refs.
@@ -558,6 +606,10 @@ Targets may change only from retained matched evaluation, not timeout tuning.
   same primary jobs and representative states from the brief.
 - [ ] `[must]` Add a bounded screenshot/DOM/accessibility-tree review after
   deterministic checks. Permit at most two targeted repair iterations.
+- [ ] `[must]` Feed typed deterministic and calibrated outcome findings into a
+  bounded semantic repair unit only after retaining the complete candidate.
+  The repair receives the smallest authoritative Brief/semantic slice that can
+  address the findings; it does not replay or truncate an unexamined response.
 - [ ] `[must]` Convert unresolved renderer, component-contract, compiler, or
   Core failures into owning-layer Development Feedback/Dev Tickets instead of
   broadening the application prompt.

@@ -172,15 +172,17 @@ per step by failure class and bounded. Case/repetition webspaces are distinct,
 and a completed resumed run returns its existing immutable report.
 
 The executable model-input receipt is
-`adaos.builder.llm_input_attribution.v1`. Exact messages remain local in the
-scenario-owned `llm_jobs/*.request.json` journal. Reports consume the compact
-receipt: per-message digests and byte/token estimates, stable-prefix and
-dynamic-suffix digests, selected component/pattern/example refs, domain-pack
-receipts, and sanitized generation options. The journal is written before
-provider submission so a timeout cannot erase the evaluated input. Provider
-usage returned after inference remains authoritative for billing; the
-receipt's `utf8_bytes_div_4_ceil` value is only a provider-independent
-preflight estimate.
+`adaos.builder.llm_input_attribution.v1`. The scenario-owned
+`llm_jobs/*.request.json` journal is written before provider submission so a
+timeout cannot erase the evaluated input. Before temporary Project cleanup,
+the E2E bundle retains a complete sanitized copy of that request, the terminal
+journal, every raw provider candidate, and every normalized candidate, each
+with source and evidence digests. Reports also consume the compact receipt:
+per-message digests and byte/token estimates, stable-prefix and dynamic-suffix
+digests, selected component/pattern/example refs, domain-pack receipts, and
+sanitized generation options. Provider usage returned after inference remains
+authoritative for billing; the receipt's `utf8_bytes_div_4_ceil` value is only
+a provider-independent preflight estimate.
 
 Before cleanup and scoring, the compatibility executor reads the actual
 scenario journals, schema-validates every unique receipt, and compares the
@@ -283,6 +285,10 @@ continues through the existing Builder approval and publication authority.
 
 - Remove credentials, private user data, subnet secrets, and raw unrestricted
   model payloads from retained fixtures and reports.
+- Retain complete development-run model requests and candidates only after
+  structured redaction, with both source and retained digests and an explicit
+  `content_redacted` marker. Sealed holdout artifacts follow their stricter
+  access and retention policy.
 - Keep sealed cases inaccessible to generation context, retrieval indexes,
   examples, domain packs, and automatic failure-learning pipelines.
 - Record permitted network/tool access and fail closed on undeclared access.
