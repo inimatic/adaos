@@ -91,6 +91,46 @@ try {
         const field = widget.inputs.fields?.find(field => ['shortText', 'longText'].includes(field.type) && editableField(field))
           || widget.inputs.fields?.find(field => field.type === 'date' && editableField(field))
         const collection = widgets.find(item => ['ui.table', 'ui.list'].includes(item.type) && item.dataSource?.resourceType === update?.target)
+        if (process.env.ADAOS_E2E_READONLY === '1') {
+          if (!update || !collection || !widget.inputs.readOnlyIf) continue
+          const rows = host(collection.id).locator('tr.row-selectable, .collection-focus-item')
+          await expect(rows.first()).toBeVisible()
+          let checked = false
+          for (let index = 0; index < await rows.count(); index++) {
+            const row = rows.nth(index)
+            await row.click()
+            const opener = editorOpener(modalId, row)
+            if (modalId && opener !== row) await opener.click()
+            const form = host(widget.id)
+            const state = () => form.evaluate(element => {
+              const component = window.ng?.getComponent(element.querySelector('ada-form-widget'))
+              return { record: component?.recordValues, locked: component?.recordReadOnly, loaded: component?.recordLoaded }
+            })
+            await expect.poll(async () => (await state()).loaded).toBe(true)
+            const selected = await state()
+            if (selected.locked) {
+              for (const input of await form.locator('input:not([type=hidden]),textarea,select').all()) await expect(input).toBeDisabled()
+              for (const command of widget.actions.filter(action => action.type === 'resourceOperation'
+                && ['update', 'delete'].includes(action.params.operation_id))) {
+                await expect(form.locator(`[data-command-id=${JSON.stringify(command.id)}]`).locator('button')).toBeDisabled()
+              }
+              if (!update.target.startsWith('prototype.') || !selected.record?.id) throw new Error('Unsafe readonly provider probe')
+              const response = await context.request.post(`${hub}/api/resources/operate`, {
+                headers: { Authorization: `Bearer ${token}` },
+                data: { resource_type: update.target, operation_id: 'update', record_id: selected.record.id, payload: {} },
+              })
+              const body = await response.json()
+              if (response.status() !== 409 || !String(body.detail).includes('read-only')) throw new Error(`Record lock not enforced: ${JSON.stringify(body)}`)
+              sample.checks.push({ editor: widget.id, status: 'passed', task: 'select-locked/disabled-fields-and-actions/provider-rejection', record: selected.record.id })
+              checked = true
+              await page.screenshot({ path: path.join(output, `${layout}-${widget.id}-readonly.png`), fullPage: true })
+            }
+            if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+            if (checked) break
+          }
+          if (!checked) throw new Error(`No reachable locked fixture for ${widget.id}`)
+          continue
+        }
         if (!update || !field || !collection) {
           sample.checks.push({ editor: widget.id, status: 'not_exercised', reason: 'No supported text/date update and matching collection' })
           continue

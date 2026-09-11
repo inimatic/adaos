@@ -10,6 +10,7 @@ import subprocess
 
 from adaos.sdk.builder.prototype import apply_state_repair, compile_semantic_candidate
 from adaos.sdk.developer.prototypes import validate_resource_spec
+from adaos.sdk.developer.ui import evaluate
 
 
 def replay(run: Path, builder_skill: Path | None = None) -> list[dict]:
@@ -31,6 +32,18 @@ def replay(run: Path, builder_skill: Path | None = None) -> list[dict]:
             rows.append({"case": case, "attempt": attempt, "status": "not_replayed", "reason": "No retained terminal generation evidence"})
             continue
         generation = json.loads(generation_path.read_text(encoding="utf-8"))
+        instruction = None
+        for request_path in sorted((run / "evidence/model-io" / f"{case}-attempt-{attempt:02}").rglob("*.request.json")):
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            for message in request.get("messages") or []:
+                try:
+                    dynamic = json.loads(message.get("content") or "{}")
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(dynamic, dict) and isinstance(dynamic.get("builder_request"), dict):
+                    instruction = dynamic["builder_request"].get("instruction")
+            if instruction:
+                break
         base = None
         findings = []
         for artifact in generation.get("candidate_artifacts", []):
@@ -54,6 +67,15 @@ def replay(run: Path, builder_skill: Path | None = None) -> list[dict]:
                     row["builder_validation"] = validation
                     if not validation.get("ok"):
                         raise ValueError(f"Builder payload validation: {validation}")
+                if not instruction:
+                    raise ValueError("No exact retained user instruction for postcondition replay")
+                evaluation = evaluate(instruction, compiled["webui"],
+                                      prototype_records=compiled.get("prototype_records"),
+                                      prototype_resources=compiled.get("prototype_resources"),
+                                      locale_dictionaries=compiled.get("locale_dictionaries"), domain_packs=[])
+                row["postconditions"] = [item for item in evaluation.get("postconditions") or [] if not item.get("ok")]
+                if not evaluation.get("ok"):
+                    raise ValueError(f"Postconditions failed: {row['postconditions']}")
                 row.update(status="passed", normalizations=compiled["normalizations"])
             except Exception as exc:
                 findings = getattr(exc, "findings", [])

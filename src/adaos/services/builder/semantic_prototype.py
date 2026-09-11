@@ -886,7 +886,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             "record_order": "values follow fields order exactly; include each field once",
         },
         "relationships": contract["$defs"]["relationship"]["properties"]["to_field_ref"]["description"],
-        "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Prefix field IDs with its concept. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Otherwise provide an inspectable collection. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
+        "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Field IDs are unique within their resource; Core owner-qualifies repeated names. A field binding with a repeated name needs one owning resource/view/command or the resource.field ID. Each independently browsed resource needs a collection for record selection; details alone cannot select a record. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
         "coverage": "Use the Brief required_references once each. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search uses field_ref=null. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
         "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality",
                           "placement": "query_controls, filter and empty_state belong to collection views only. Details and editors have query_controls=[] and filter=null; put search on their owning collection."},
@@ -1089,6 +1089,7 @@ def _materialize_candidate_localization_keys(candidate: dict[str, Any]) -> None:
 
 def _canonicalize_semantic_prototype_candidate(
     value: Mapping[str, Any],
+    *, field_id_overrides: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     candidate = copy.deepcopy(dict(value))
     candidate["resource"].setdefault("read_only_when", None)
@@ -1127,6 +1128,14 @@ def _canonicalize_semantic_prototype_candidate(
         normalizations=normalizations,
         targets=[f"$.resource.fields[{index}].id" for index in range(len(fields))],
     )
+    for index, field in enumerate(fields):
+        raw_id = str(field["id"]).strip()
+        qualified = (field_id_overrides or {}).get(raw_id, field_ids[raw_id])
+        if qualified != field_ids[raw_id]:
+            normalizations.append({"kind": "field_owner_namespace", "from": field_ids[raw_id],
+                                   "to": qualified, "resource": str(resource["id"]),
+                                   "target": f"$.resource.fields[{index}].id"})
+            field_ids[raw_id] = qualified
     record_ids = _candidate_identifier_map(
         [record["id"] for record in records],
         namespace="record",
@@ -2284,6 +2293,28 @@ def _unique_v2_ids(values: Sequence[Mapping[str, Any]], label: str) -> None:
         seen.add(identifier)
 
 
+def _candidate_v2_field_namespaces(resources: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, str]]:
+    local_maps: dict[str, dict[str, str]] = {}
+    counts: dict[str, int] = {}
+    for resource in resources:
+        _unique_v2_ids(resource["fields"], "resource-local field")
+        mapping = _candidate_identifier_map(
+            [field["id"] for field in resource["fields"]], namespace="field", normalizations=[],
+            targets=[""] * len(resource["fields"]),
+        )
+        local_maps[resource["id"]] = mapping
+        for value in mapping.values():
+            counts[value] = counts.get(value, 0) + 1
+    for owner, mapping in local_maps.items():
+        for key, value in mapping.items():
+            if counts[value] > 1:
+                if value in {"id", "revision"}:
+                    _fail(f"field {value!r} conflicts with record metadata; use an explicit business field name")
+                mapping[key] = f"{_canonical_candidate_identifier(owner, namespace='resource')}.{value}"
+    _unique_v2_ids([{"id": value} for mapping in local_maps.values() for value in mapping.values()], "qualified field")
+    return local_maps
+
+
 def _normalize_relationship_identity_literals(
     *, resource: dict[str, Any], field_ref: str, target_ids: Mapping[str, str],
     commands: Sequence[dict[str, Any]], states: Sequence[dict[str, Any]],
@@ -2346,6 +2377,8 @@ def _canonicalize_semantic_prototype_candidate_v2(
     _validate_candidate_bounds(candidate)
     if not resources:
         _fail("candidate requires at least one resource")
+    _unique_v2_ids(resources, "resource")
+    field_ids_by_resource = _candidate_v2_field_namespaces(resources)
     raw_views = [dict(item) for item in candidate.get("views") or []]
     raw_commands = [dict(item) for item in candidate.get("commands") or []]
     raw_states = [dict(item) for item in candidate.get("representative_states") or []]
@@ -2399,7 +2432,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             "capability_gaps": [],
         }
         normalized, slice_normalizations = _canonicalize_semantic_prototype_candidate(
-            v1_candidate
+            v1_candidate, field_id_overrides=field_ids_by_resource[raw_resource_id],
         )
         normalizations.extend(slice_normalizations)
         normalized_resource = dict(normalized["resource"])
@@ -2447,7 +2480,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             normalized_view["resource_ref"] = normalized_resource_id
             normalized_view["surface"] = raw_view.get("surface", "inline")
             normalized_view["media"] = {
-                key: field_ids.get(str(ref), _canonical_candidate_identifier(ref, namespace="field")) if ref else None
+                key: field_ids_by_resource[raw_resource_id].get(str(ref), _canonical_candidate_identifier(ref, namespace="field")) if ref else None
                 for key, ref in raw_view["media"].items()
             } if raw_view.get("media") else None
             view_ids[str(raw_view.get("id") or "")] = str(normalized_view["id"])
@@ -2475,7 +2508,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             normalized_state = dict(normalized_state)
             proof = copy.deepcopy(dict(raw_state["proof"]))
             proof["visible_field_refs"] = [
-                field_ids.get(
+                field_ids_by_resource[raw_resource_id].get(
                     str(field_ref),
                     _canonical_candidate_identifier(field_ref, namespace="field"),
                 )
@@ -2554,14 +2587,14 @@ def _canonicalize_semantic_prototype_candidate_v2(
         normalized_relationship["id"] = relationship_ids[str(relationship["id"])]
         if "label_field_refs" in relationship:
             normalized_relationship["label_field_refs"] = [
-                field_ids.get(str(ref), _canonical_candidate_identifier(ref, namespace="field"))
+                field_ids_by_resource.get(relationship["to_resource_ref"], {}).get(str(ref), _canonical_candidate_identifier(ref, namespace="field"))
                 for ref in relationship["label_field_refs"]
             ]
         for key, namespace in (
             ("from_resource_ref", resource_ids),
             ("to_resource_ref", resource_ids),
-            ("from_field_ref", field_ids),
-            ("to_field_ref", field_ids),
+            ("from_field_ref", field_ids_by_resource.get(relationship["from_resource_ref"], {})),
+            ("to_field_ref", field_ids_by_resource.get(relationship["to_resource_ref"], {})),
         ):
             raw_ref = str(relationship[key])
             normalized_relationship[key] = namespace.get(
@@ -2687,11 +2720,28 @@ def _canonicalize_semantic_prototype_candidate_v2(
     }
     merged_bindings: list[dict[str, Any]] = []
     bindings_by_requirement: dict[str, dict[str, Any]] = {}
+    owners_by_ref = {("resource", resource["id"]): resource["id"] for resource in resources}
+    owners_by_ref.update({("view", view["id"]): view["resource_ref"] for view in raw_views})
+    owners_by_ref.update({("query", control["id"]): view["resource_ref"]
+                         for view in raw_views for control in view.get("query_controls") or []})
+    for kind, items in (("command", raw_commands), ("state", raw_states)):
+        owners_by_ref.update({(kind, item["id"]): owners_by_ref.get(("view", item["view_ref"])) for item in items})
     for binding in candidate.get("requirement_bindings") or []:
         normalized_refs: list[str] = []
+        binding_owners = {owners_by_ref.get((ref["kind"], ref["id"].removeprefix(f"{ref['kind']}:")))
+                          for ref in binding.get("semantic_refs") or []} - {None}
         for raw_ref in binding.get("semantic_refs") or []:
             kind = str(raw_ref["kind"])
             raw_identifier = str(raw_ref["id"])
+            if kind == "field":
+                local_id = raw_identifier.removeprefix("field:").strip()
+                matches = {owner: mapping[local_id] for owner, mapping in field_ids_by_resource.items() if local_id in mapping}
+                if len(matches) > 1:
+                    scoped = [value for owner, value in matches.items() if owner in binding_owners]
+                    if len(scoped) != 1:
+                        _fail(f"ambiguous field reference {raw_identifier!r} in requirement {binding['requirement_ref']!r}; use an owner-qualified field id or one owning resource/view/command")
+                    normalized_refs.append(f"field:{scoped[0]}")
+                    continue
             identifiers = semantic_namespaces[kind]
             canonical_identifier = identifiers.get(
                 raw_identifier,
@@ -3489,7 +3539,7 @@ def _prototype_relation_option_fields(
                 tuple(str(record.get(item) or "") for item in selected_display_fields)
                 for record in target_records
             ]
-            if len(labels) == len(set(labels)):
+            if not relationship.get("label_field_refs") and len(labels) == len(set(labels)):
                 break
 
         lookups[str(field["id"])] = {

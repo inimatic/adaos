@@ -8,6 +8,8 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from adaos.services.ui_resource_queries import widget_resource_queries
+
 from adaos.services.resources.prototype import (
     PrototypeResourceService,
     _read_path,
@@ -44,26 +46,12 @@ def _resource_query_widgets(
     result: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     expected_resource_type = str(resource_type or "").strip()
     for widget in _surface_widgets(webui):
-        if widget.get("type") == "ui.form":
-            for field in dict(widget.get("inputs") or {}).get("fields") or []:
-                source = field.get("optionsDataSource") if isinstance(field, Mapping) else None
-                if (isinstance(source, Mapping) and source.get("kind") == "resourceQuery"
-                        and str(source.get("resourceType") or "").startswith("prototype.")
-                        and (not expected_resource_type or source["resourceType"] == expected_resource_type)):
-                    result.append((widget, source))
-        data_source = (
-            widget.get("dataSource")
-            if isinstance(widget.get("dataSource"), Mapping)
-            else {}
-        )
-        if str(data_source.get("kind") or "") != "resourceQuery":
-            continue
-        current_resource_type = str(data_source.get("resourceType") or "").strip()
-        if current_resource_type.startswith("prototype.") and (
-            not expected_resource_type
-            or current_resource_type == expected_resource_type
-        ):
-            result.append((widget, data_source))
+        for data_source in widget_resource_queries(widget):
+            current_resource_type = data_source["resourceType"].strip()
+            if current_resource_type.startswith("prototype.") and (
+                not expected_resource_type or current_resource_type == expected_resource_type
+            ):
+                result.append((widget, data_source))
     return result
 
 

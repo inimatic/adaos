@@ -106,10 +106,14 @@ def test_relationship_choice_options_are_derived_before_record_validation() -> N
     assert {option["value"] for option in field["options"]} == {"person-1", "person-2"}
 
 
-def test_lookup_only_resource_materializes_without_inventing_a_collection() -> None:
+@pytest.mark.parametrize("surface", ["inline", "modal"])
+def test_lookup_only_resource_materializes_without_inventing_a_collection(surface) -> None:
+    from adaos.sdk.developer.ui import evaluate
+
     brief, semantic = _multi_resource_fixture()
     semantic["views"] = [view for view in semantic["views"] if view["resource_ref"] != "people"]
     editor = next(view for view in semantic["views"] if view["role"] == "editor")
+    editor["surface"] = surface
     editor["field_refs"].append("work_owner_id")
     next(command for command in semantic["commands"] if command["kind"] == "update")["input_field_refs"].append("work_owner_id")
     semantic["relationships"][0]["label_field_refs"] = ["person_name"]
@@ -117,7 +121,8 @@ def test_lookup_only_resource_materializes_without_inventing_a_collection() -> N
     compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
     page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
     assert all(widget.get("dataSource", {}).get("resourceType") != "prototype.people" for widget in page["widgets"])
-    field = next(field for widget in page["widgets"] if widget["type"] == "ui.form"
+    widgets = developer_prototypes._surface_widgets(compiled["webui"])
+    field = next(field for widget in widgets if widget["type"] == "ui.form"
                  for field in widget["inputs"]["fields"] if field["id"] == "work_owner_id")
     assert field["optionLabelPaths"] == ["person_name"]
     assert field["optionsDataSource"]["resourceType"] == "prototype.people"
@@ -126,9 +131,92 @@ def test_lookup_only_resource_materializes_without_inventing_a_collection() -> N
     assert {operation["id"] for operation in spec["resource_definition"]["operations"]} == {"list", "show"}
     assert "person_phone" in spec["data_definition"]["record_schema"]["properties"]
     assert compiled["source_map"]["resource:people"]
+    def resource_conditions(sidecars):
+        result = evaluate("Create and update work items in a list", compiled["webui"],
+                          prototype_resources=sidecars, locale_dictionaries=compiled["locale_dictionaries"], domain_packs=[])
+        return {item["id"]: item["ok"] for item in result["postconditions"] if item["id"] in {"resource.prototype_source", "resource.prototype_records"}}
+    assert resource_conditions(compiled["prototype_resources"]) == {"resource.prototype_source": True, "resource.prototype_records": True}
+    assert not resource_conditions(compiled["prototype_resources"][:1])["resource.prototype_source"]
+    orphan = {**resource, "resource_type": "prototype.unused"}
+    page["meta"]["unused_example"] = {"kind": "resourceQuery", "resourceType": "prototype.unused"}
+    assert not resource_conditions([*compiled["prototype_resources"], orphan])["resource.prototype_source"]
     candidate["resources"][1]["records"][0]["values"][0] = 123
     with pytest.raises(BuilderWorkflowError, match="invalid short_text"):
         compile_semantic_prototype_candidate(candidate, brief=brief)
+
+
+def test_explicit_relationship_labels_keep_all_declared_fields() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["relationships"][0]["label_field_refs"] = ["person_name", "person_phone"]
+    next(view for view in semantic["views"] if view["role"] == "editor")["field_refs"].append("work_owner_id")
+    result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    fields = [field for widget in developer_prototypes._surface_widgets(result["webui"]) if widget["type"] == "ui.form" for field in widget["inputs"]["fields"]]
+    assert next(field for field in fields if field["id"] == "work_owner_id")["optionLabelPaths"] == ["person_name", "person_phone"]
+
+
+def test_repeated_local_fields_are_scoped_without_rewriting_values_or_identity() -> None:
+    brief, semantic = _multi_resource_fixture()
+    work, people = semantic["resources"]
+    for field_id in ("title", "status", "comment"):
+        people["fields"].append(copy.deepcopy(next(field for field in work["fields"] if field["id"] == field_id)))
+    people["fields"][-1]["visible_when"] = {"field_ref": "status", "operator": "equals", "value": "open"}
+    for record in people["records"]:
+        record.update(title="title", status="open", comment="status")
+    people["read_only_when"] = {"field_ref": "status", "operator": "equals", "value": "complete"}
+    semantic["views"][-1]["field_refs"].extend(["title", "status", "comment"])
+    semantic["relationships"][0]["label_field_refs"] = ["title", "person_name"]
+    next(view for view in semantic["views"] if view["role"] == "editor")["field_refs"].append("work_owner_id")
+    candidate = _multi_resource_candidate(semantic)
+    original = copy.deepcopy(candidate)
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert candidate == original
+    assert {item["to"] for item in result["normalizations"] if item["kind"] == "field_owner_namespace"} == {
+        "work_items.title", "work_items.status", "work_items.comment", "people.title", "people.status", "people.comment",
+    }
+    document = result["semantic_document"]
+    assert document["resources"][1]["read_only_when"]["field_ref"] == "people.status"
+    assert document["resources"][1]["records"][0]["people.comment"] == "status"
+    assert document["relationships"][0]["to_field_ref"] == "id"
+    assert document["relationships"][0]["label_field_refs"] == ["people.title", "person_name"]
+    assert "work_items.title" in document["views"][0]["field_refs"]
+    assert "people.title" in document["views"][-1]["field_refs"]
+    guard = next(command["guard"] for command in document["commands"] if command.get("guard"))
+    assert guard["when"]["field_ref"] == "result"
+    assert "work_items.comment" in guard["require_nonempty"]
+    assert document["resources"][1]["fields"][-1]["visible_when"]["field_ref"] == "people.status"
+    assert document["commands"][0]["fixed_values"] == {"work_items.status": "open"}
+
+
+@pytest.mark.parametrize("owner_refs,expected", [
+    ([{"kind": "resource", "id": "people"}], "people.title"),
+    ([{"kind": "view", "id": "work-list"}], "work_items.title"),
+    ([], None),
+    ([{"kind": "resource", "id": "people"}, {"kind": "resource", "id": "work_items"}], None),
+])
+def test_ambiguous_binding_field_needs_one_explicit_owner(owner_refs, expected) -> None:
+    from adaos.services.builder.semantic_prototype import _canonicalize_semantic_prototype_candidate_v2
+
+    _, semantic = _multi_resource_fixture()
+    semantic["resources"][1]["fields"].append(copy.deepcopy(semantic["resources"][0]["fields"][0]))
+    candidate = _multi_resource_candidate(semantic)
+    candidate["requirement_bindings"] = [{"requirement_ref": "collection:01", "semantic_refs": [*owner_refs, {"kind": "field", "id": "title"}]}]
+    if expected is None:
+        with pytest.raises(BuilderWorkflowError, match="ambiguous field reference"):
+            _canonicalize_semantic_prototype_candidate_v2(candidate)
+    else:
+        document, _ = _canonicalize_semantic_prototype_candidate_v2(candidate)
+        assert document["requirement_bindings"][0]["semantic_refs"][-1] == f"field:{expected}"
+
+
+@pytest.mark.parametrize("resources,pattern", [
+    ([{"id": "a", "fields": [{"id": "name"}, {"id": "name"}]}], "resource-local field"),
+    ([{"id": "a", "fields": [{"id": "name"}, {"id": "a.name"}]}, {"id": "b", "fields": [{"id": "name"}]}], "qualified field"),
+    ([{"id": "a", "fields": [{"id": "id"}]}, {"id": "b", "fields": [{"id": "id"}]}], "record metadata"),
+])
+def test_field_namespace_does_not_hide_identity_or_declaration_collisions(resources, pattern) -> None:
+    from adaos.services.builder.semantic_prototype import _candidate_v2_field_namespaces
+    with pytest.raises(BuilderWorkflowError, match=pattern):
+        _candidate_v2_field_namespaces(resources)
 
 
 def test_unreachable_resource_cannot_be_excused_as_lookup_only() -> None:

@@ -1425,6 +1425,30 @@ positive verdict. Original verdicts and response artifacts remain unchanged.
   GPT-5 low generation and create-related/select/save/reopen browser tasks.
   Replay is diagnostic evidence, not a replacement for fresh generation.
 
+`context-archetypes-gpt5-low-20260912-05` completed at 4/8: library, media,
+volunteer roster and procurement passed. Three first-pass candidates compiled
+but failed because a separate final postcondition scanner omitted lookup sources
+inside forms. Appointments failed on repeated field names across resources;
+replay after qualification still correctly rejects its unselectable client
+details. These are distinct causes, not a justification to relax acceptance.
+
+- [x] `[must]` Share executable query-slot discovery between resource
+  materialization and postcondition acceptance, including modal lookup fields.
+  Add public SDK regressions for missing and unconsumed resource sidecars.
+- [x] `[must]` Owner-qualify repeated resource-local candidate field names and
+  all typed references. Preserve fixture text and identities; reject ambiguous
+  evidence bindings and collisions. Honor complete explicit relationship labels.
+- [x] `[must]` Replay retained responses through semantic, resource, DEV Builder
+  payload and public postcondition checks before another paid cohort. Replays
+  are immutable diagnostics and do not replace the recorded fresh-run scores.
+- [x] `[must]` Browser-prove stored-record read-only policy independently of
+  mutable CRUD: disabled form/actions plus a provider-side rejection on both
+  layouts. The retained library state cohort passed; fresh library run 05 also
+  passed edit/cancel/focus and real file upload/download integrity checks.
+- [ ] `[must]` Repeat all eight fresh cases after this boundary-alignment batch;
+  qualify related-record creation/selection using live options, and retain any
+  browser-task coverage gaps explicitly.
+
 Engineering basis: [OpenAI text-generation guidance](https://developers.openai.com/api/docs/guides/text),
 [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), and
 [Anthropic context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).

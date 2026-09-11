@@ -20,7 +20,7 @@ def main() -> int:
     parser.add_argument("--subnet", required=True)
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--attempt", type=int, default=1)
-    parser.add_argument("--probe", choices=("review", "interactions", "commands", "empty"), default="review")
+    parser.add_argument("--probe", choices=("review", "interactions", "commands", "empty", "readonly"), default="review")
     args = parser.parse_args()
     load_dotenv(".env")
     if os.environ.get("ENV_TYPE") != "dev":
@@ -36,7 +36,7 @@ def main() -> int:
         "client_dirty": bool(subprocess.check_output(["git", "-C", "src/adaos/integrations/adaos-client", "status", "--porcelain"], text=True).strip()),
     }
     scripts = {"review": "prototype-review.mjs", "empty": "prototype-review.mjs", "interactions": "prototype-interactions.mjs",
-               "commands": "prototype-command-probe.mjs"}
+               "commands": "prototype-command-probe.mjs", "readonly": "prototype-interactions.mjs"}
     for checkpoint in sorted(args.run.glob(f"checkpoints/*/attempt-{args.attempt:02}.json")):
         case = checkpoint.parent.name
         if args.case and case not in args.case:
@@ -66,6 +66,7 @@ def main() -> int:
                "ADAOS_E2E_SUBNET_ID": args.subnet,
                "ADAOS_E2E_LOCALE": value["context"]["locale"],
                "ADAOS_E2E_EMPTY_STATES": "1" if args.probe == "empty" else "0",
+               "ADAOS_E2E_READONLY": "1" if args.probe == "readonly" else "0",
                "ADAOS_E2E_SELECT_WIDGET": collection["id"] if collection else "",
                "ADAOS_E2E_MEDIA_TESTS": environment.get("ADAOS_E2E_MEDIA_TESTS") or ("inspect" if details and details.get("inputs", {}).get("mediaKey") and collection else "0"),
                "ADAOS_E2E_OUTPUT": str(output.resolve())}

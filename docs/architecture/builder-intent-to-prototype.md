@@ -625,6 +625,19 @@ records and undergo the same identity/reference validation. Relationship
 labels or the target identity provide backward-compatible fallbacks. Never infer
 private display fields or fabricate a collection solely to satisfy lowering.
 Unreachable resources and details without a selection path remain invalid.
+Materialization and final postcondition checks share a typed query-slot walker:
+both page/modal widget sources and form-field `optionsDataSource` participate.
+Example JSON or metadata is not an executable dependency. Sidecars must match
+all and only the queried resources. Explicit label fields remain complete even
+when the first seed label happens to be unique.
+
+Candidate field names are resource-local. Repeated names are deterministically
+qualified with their owning resource before runtime lowering, with normalization
+receipts and preserved raw responses. Typed local references, relationship ends
+and state proofs use the same owner map; fixture text and record identities are
+not renamed. Requirement bindings with a repeated field name must identify one
+owner or use the qualified field ID. Ambiguous bindings and namespace collisions
+are errors, not opportunities to guess domain semantics.
 
 A deferred computation still requires representative output values when those
 outputs are requested. Raw inputs plus an explanatory paragraph are not an

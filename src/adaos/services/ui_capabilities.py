@@ -10,6 +10,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 
+from adaos.services.ui_resource_queries import widget_resource_queries
+
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief
 from adaos.services.builder_domain_packs import (
     domain_pack_receipts,
@@ -1294,13 +1296,8 @@ def evaluate_ui_request(
             for _, page in _page_schemas(webui)
             for widget in page.get("widgets") or []
             if isinstance(widget, Mapping)
-            for data_source in [
-                widget.get("dataSource")
-                if isinstance(widget.get("dataSource"), Mapping)
-                else {}
-            ]
-            if str(data_source.get("kind") or "") == "resourceQuery"
-            and str(data_source.get("resourceType") or "").startswith("prototype.")
+            for data_source in widget_resource_queries(widget)
+            if data_source["resourceType"].startswith("prototype.")
         }
         resource_actions = [
             action

@@ -68,8 +68,9 @@ requests had model/reasoning null and a 150-second local wait. Keep its evidence
 but never count it in GPT-5 comparisons.
 
 `replay-builder-candidates.py --builder-skill .adaos/dev/<subnet>/skills/builder_skill`
-checks archived candidates against both Core and the actual DEV Builder payload
-validator without applying a revision. Use a new output file; replay never replaces
+checks archived candidates through semantic compilation, resource materialization,
+the actual DEV Builder payload validator and public UI postconditions, using the
+exact retained instruction without applying a revision. Use a new output file; replay never replaces
 fresh-generation scores. `retain-builder-job.py` preserves a terminal Root response
 after a runner interruption, with an explicit not-applied marker.
 
@@ -78,3 +79,10 @@ Builder/live-dropdown contract blocker after four completed attempts. Its pendin
 budget response was retained separately. It is incomplete, not a full-cohort score.
 Grader v13 constrains evidence pointers to the actual artifact and includes the
 result schema in its request digest. Do not compare it silently with v12 scores.
+
+Run `context-archetypes-gpt5-low-20260912-05` is a complete 4/8 cohort. Its lookup
+postcondition failures and duplicate resource-local fields motivated the next
+batch; subsequent replays do not change those scores. Browser `--probe readonly`
+selects a fixture with a stored-record lock, checks disabled inputs/actions and
+the provider's rejection of a direct update. It is separate from the mutable
+`interactions` probe; unsupported tasks must remain visibly unexercised.
