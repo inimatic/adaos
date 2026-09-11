@@ -125,16 +125,26 @@
         "field_ref": { "$ref": "#/$defs/id" },
         "operator": { "type": "string", "enum": ["eq", "neq", "lt", "lte", "gt", "gte"] },
         "operand": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "value", "field_ref"],
-          "properties": {
-            "kind": { "type": "string", "enum": ["value", "field"] },
-            "value": { "$ref": "#/$defs/scalar" },
-            "field_ref": {
-              "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }]
+          "anyOf": [
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "value", "field_ref"],
+              "properties": {
+                "kind": { "type": "string", "enum": ["value"] },
+                "value": { "$ref": "#/$defs/scalar" },
+                "field_ref": { "type": "null" }
+              }
+            },
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "value", "field_ref"],
+              "properties": {
+                "kind": { "type": "string", "enum": ["field"] },
+                "value": { "type": "null" },
+                "field_ref": { "$ref": "#/$defs/id" }
+              }
             }
-          }
+          ]
         }
       }
     },
@@ -214,6 +224,10 @@
         "resource_ref": { "$ref": "#/$defs/id" },
         "role": { "type": "string", "enum": ["collection", "details", "editor"] },
         "region_role": { "type": "string", "enum": ["primary", "supporting", "actions"] },
+        "surface": {
+          "type": "string", "enum": ["inline", "modal", "side_sheet"],
+          "description": "Editor surface. Collections and details use inline. Choose modal for a short focused edit, side_sheet for contextual editing, inline for persistent work; this is a design choice, not a quality gate."
+        },
         "presentation": {
           "anyOf": [
             { "type": "string", "enum": ["list", "table", "cards"] },

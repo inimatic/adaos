@@ -1848,6 +1848,25 @@ def test_semantic_v2_capability_gap_conservatively_overrides_binding() -> None:
     assert builder_meta["capability_gaps"] == result["capability_gaps"]
 
 
+@pytest.mark.parametrize("surface,presentation", [("modal", "modal"), ("side_sheet", "sideSheet")])
+def test_semantic_v2_editor_surface_preserves_commands_and_source_map(surface, presentation) -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    editor = next(item for item in candidate["views"] if item["role"] == "editor")
+    editor["surface"] = surface
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+    application = result["webui"]["ui"]["application"]
+    modal = application["modals"][f"editor-{editor['id']}"]
+    assert modal["presentation"]["kind"] == presentation
+    form = modal["pageSchema"]["widgets"][0]
+    assert form["inputs"]["closeOnSuccess"] is True
+    assert {button["id"] for button in form["inputs"]["buttons"]} == {action["id"] for action in form["actions"]}
+    assert all("selected_" in action["enabledIf"] for action in form["actions"])
+    assert all(widget["id"] != editor["id"] for widget in application["desktop"]["pageSchema"]["widgets"])
+    assert all("ui.application.modals." in ref for ref in result["source_map"][f"view:{editor['id']}"])
+    assert any(widget["id"] == f"open-{editor['id']}" for widget in application["desktop"]["pageSchema"]["widgets"])
+
+
 def test_semantic_v2_relationship_identity_compiles_editor_selector() -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)

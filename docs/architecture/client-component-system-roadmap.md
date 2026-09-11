@@ -318,6 +318,23 @@ running a subject-specific Builder prompt.
 
 ## C4. Measured Cross-Domain Growth
 
+Current cross-boundary correction (before new primitive work): the semantic
+compiler emitted named form buttons and record data sources that `ui.form` did
+not execute. Unit-level schema validation missed this mismatch.
+
+- [x] `[must]` Add named-command dispatch and selected-record hydration to the
+  generic form; retain edits on operation failure and suppress completion after
+  cancelled confirmation. Focused ChromeHeadless suite: 96 tests pass.
+- [ ] `[must]` Replay the actual compiler artifact in the browser: create,
+  inspect, edit, validation, cancellation and deletion on wide/compact surfaces.
+  Add this probe to ABI impact checks; structural capability inventory alone
+  cannot verify renderer semantics.
+- [x] `[should]` Add opt-in local table sorting before pagination and localized
+  ISO date/time rendering. Disable local sort for cursor/server pagination;
+  never imply a whole-catalog order from one loaded page.
+- [ ] `[should]` Verify modal/side-sheet forms preserve selection, expose
+  dismissal and restore focus, including EN/RU and narrow viewports.
+
 Start this phase only after the clean generic Builder baseline. Prioritize a
 primitive when failures in at least two unrelated development archetypes show
 the same semantic gap. Do not create product-named components.

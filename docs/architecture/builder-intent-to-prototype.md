@@ -137,7 +137,8 @@ be reported as failed, never relabeled as working to promise a guarantee.
 
 ### UX Guidance And Feedback Memory
 
-Planned, not a prerequisite for the current small-Prototype correction:
+The bounded current context includes a progressive-disclosure recommendation;
+the broader golden-rule catalog and feedback memory remain planned:
 
 - Platform safety and runtime invariants remain enforced policy. Neither a
   preference nor an inferred UX convention may override them.
@@ -164,6 +165,22 @@ Planned, not a prerequisite for the current small-Prototype correction:
 Golden rules are promoted by reviewed cross-domain evidence, not by one failed
 generation. Optional quality evaluation and human feedback measure their effect
 on usability, added interactions, cost and latency before broad adoption.
+
+### Editor Surfaces And Executable Acceptance
+
+Semantic editor views select `inline`, `modal` or `side_sheet`; omitted surfaces
+on existing documents retain inline behavior. A short focused edit can use a
+modal, contextual editing can use a side sheet, and a persistent work area can
+remain inline. The choice itself is not a gate. Collections/details currently
+remain inline; broader navigation and large-project orchestration are separate.
+
+Core compiles openers, record selection, typed fields, separate command IDs,
+availability guards and source maps. The Client hydrates only the selected
+record, validates the chosen mutation, retains input on errors and dismisses an
+editor only after success. Cancelled confirmation is not successful mutation.
+Tests must execute the compiled artifact across this boundary, not substitute
+mocked WebUI or infer working CRUD from valid JSON and visible controls. Report
+generation validity, interaction success and UX quality separately.
 
 ## Architectural Constraints
 

@@ -269,6 +269,7 @@
         "resource_ref": { "$ref": "#/$defs/id" },
         "role": { "enum": ["collection", "details", "editor"] },
         "region_role": { "enum": ["primary", "supporting", "actions"] },
+        "surface": { "enum": ["inline", "modal", "side_sheet"] },
         "presentation": { "enum": ["list", "table", "cards"] },
         "title": { "$ref": "#/$defs/localizedText" },
         "field_refs": {

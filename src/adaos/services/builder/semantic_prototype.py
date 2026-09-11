@@ -729,6 +729,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1") -> dict[str, An
     contract = semantic_prototype_candidate_contract(version=version)
     if version == "v2":
         contract["required"].append("automation_requirements")
+        contract["$defs"]["view"]["required"].append("surface")
     unsupported_validation_keywords = {
         "maxItems",
         "maxLength",
@@ -797,6 +798,10 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
         "state_rules": "Every proof belongs to a collection view. min_items=1 means at least one matching fixture. query_empty needs literal equality predicates addressable by that view's filter controls. Empty proofs need an explicit empty_state. Predicate fields must be visible. A required quantity is not proof of achieved quantity; show an explicit illustrative result when business computation is pending.",
         "interactions": "Reuse local CRUD, selectors, query controls, confirmation and field guards. Commands belong to an editor; each resource needs its own collection. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure.",
+        "ux_recommendations": {
+            "editor_surface": "Use surface=modal for a short focused create/edit task, side_sheet when surrounding context matters, inline for a persistent work area. Collections and details stay inline. The compiler owns openers, selection, form hydration, save/error and dismissal. No surface is mandatory for acceptance.",
+            "progressive_disclosure": "Keep the main screen focused on the user's primary job. Put secondary fields in details and consider an on-demand editor instead of showing every form at once. Do not add hypothetical features or multiply views only to look complete.",
+        },
     }
 
 
@@ -1829,7 +1834,7 @@ def _compile_semantic_prototype_v1(
                 )
         else:
             widget["type"] = "ui.form"
-            widget["inputs"] = {"layout": "responsiveGrid", "fields": [], "buttons": []}
+            widget["inputs"] = {"layout": "responsiveGrid", "fields": [], "buttons": [], "selectedStateKey": selection_ref}
             widget["dataSource"]["query"]["id"] = f"$state.{selection_ref}"
             for field_id in view["field_refs"]:
                 field = fields[field_id]
@@ -1928,6 +1933,12 @@ def _compile_semantic_prototype_v1(
                     expression = _guard_expression(command["guard"])
                     button["enabledIf"] = expression
                     action["enabledIf"] = expression
+                selection_condition = f"$state.{selection_ref} {'===' if command['kind'] == 'create' else '!=='} ''"
+                for target in (button, action):
+                    target["enabledIf"] = (
+                        f"({selection_condition}) && ({target['enabledIf']})"
+                        if target.get("enabledIf") else selection_condition
+                    )
                 widget["inputs"]["buttons"].append(button)
                 actions.append(action)
             if actions:
@@ -2140,6 +2151,9 @@ def _canonicalize_semantic_prototype_candidate_v2(
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     candidate = copy.deepcopy(dict(value))
     candidate.setdefault("automation_requirements", [])
+    for view in candidate.get("views") or []:
+        if isinstance(view, dict):
+            view.setdefault("surface", "inline")
     try:
         Draft202012Validator(
             semantic_prototype_provider_contract(version="v2")
@@ -2194,7 +2208,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             "layout": candidate["layout"],
             "resource": copy.deepcopy(resource),
             "views": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "resource_ref"}
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface"}}
                 for item in resource_views
             ],
             "commands": copy.deepcopy(resource_commands),
@@ -2252,6 +2266,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 )
                 normalized_view["presentation"] = expected_presentation
             normalized_view["resource_ref"] = normalized_resource_id
+            normalized_view["surface"] = raw_view.get("surface", "inline")
             view_ids[str(raw_view.get("id") or "")] = str(normalized_view["id"])
             for raw_control, normalized_control in zip(
                 raw_view.get("query_controls") or [],
@@ -2585,7 +2600,7 @@ def _lower_semantic_prototype_candidate_v2(
                 "layout": candidate["layout"],
                 "resource": copy.deepcopy(resource),
                 "views": [
-                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "resource_ref"}
+                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface"}}
                     for item in views
                 ],
                 "commands": copy.deepcopy(commands),
@@ -2600,7 +2615,7 @@ def _lower_semantic_prototype_candidate_v2(
         )
         lowered_resources.append(dict(lowered["resource"]))
         for original, view in zip(views, lowered["views"], strict=True):
-            lowered_views.append({**dict(view), "resource_ref": resource_id})
+            lowered_views.append({**dict(view), "resource_ref": resource_id, "surface": original.get("surface", "inline")})
         lowered_commands.extend(dict(item) for item in lowered["commands"])
         for original, state in zip(states, lowered["representative_states"], strict=True):
             lowered_states.append(
@@ -2996,7 +3011,7 @@ def _validate_semantic_prototype_v2(
             "layout": copy.deepcopy(document["layout"]),
             "resource": copy.deepcopy(resource),
             "views": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "resource_ref"}
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface"}}
                 for item in resource_views
             ],
             "commands": [
@@ -3276,6 +3291,49 @@ def _prototype_relation_option_fields(
         field["options"] = options
 
 
+def _compile_editor_surfaces(
+    document: Mapping[str, Any], webui: dict[str, Any], source_map: dict[str, list[str]],
+) -> None:
+    application = webui["ui"]["application"]
+    widgets = application["desktop"]["pageSchema"]["widgets"]
+    for view in document["views"]:
+        surface = view.get("surface", "inline")
+        if view["role"] != "editor":
+            if surface != "inline":
+                _fail(f"{view['role']} view {view['id']!r} requires inline surface")
+            continue
+        editor = next(widget for widget in widgets if widget["id"] == view["id"])
+        selection = editor["inputs"]["selectedStateKey"]
+        commands = [command for command in document["commands"] if command["view_ref"] == view["id"]]
+        toolbar: dict[str, Any] = {
+            "id": f"open-{view['id']}", "area": view["region_role"], "type": "ui.actions",
+            "inputs": {"buttons": []}, "actions": [],
+        }
+        if any(command["kind"] == "create" for command in commands):
+            toolbar["inputs"]["buttons"].append({"id": "new", "label": "New", "label_i18n": {"en": "New", "ru": "Добавить"}, "icon": "add-outline"})
+            toolbar["actions"].append({"on": "click:new", "type": "updateState", "params": {selection: ""}})
+        if surface != "inline":
+            modal_id = f"editor-{view['id']}"
+            if any(command["kind"] != "create" for command in commands):
+                toolbar["inputs"]["buttons"].append({"id": "edit", "label": editor["title"], "label_i18n": editor["title_i18n"], "icon": "create-outline", "enabledIf": f"$state.{selection} !== ''"})
+            for button in toolbar["inputs"]["buttons"]:
+                toolbar["actions"].append({"on": f"click:{button['id']}", "type": "openModal", "params": {"modalId": modal_id}})
+            widgets.remove(editor)
+            editor["area"] = "main"
+            editor["inputs"]["closeOnSuccess"] = True
+            application.setdefault("modals", {})[modal_id] = {
+                "title": editor["title"], "title_i18n": editor["title_i18n"],
+                "presentation": {"kind": "sideSheet" if surface == "side_sheet" else "modal"},
+                "pageSchema": {"id": modal_id, "layout": {"type": "stack", "areas": [{"id": "main"}]}, "widgets": [editor]},
+            }
+            old = f"ui.application.desktop.pageSchema.widgets.@{view['id']}"
+            new = f"ui.application.modals.{modal_id}.pageSchema.widgets.@{view['id']}"
+            for refs in source_map.values():
+                refs[:] = [ref.replace(old, new) if ref == old or ref.startswith(old + ".") else ref for ref in refs]
+        if toolbar["inputs"]["buttons"]:
+            widgets.append(toolbar)
+
+
 def _compile_semantic_prototype_v2(
     value: Mapping[str, Any],
     *,
@@ -3315,7 +3373,7 @@ def _compile_semantic_prototype_v2(
             "layout": copy.deepcopy(document["layout"]),
             "resource": copy.deepcopy(resource),
             "views": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "resource_ref"}
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface"}}
                 for item in resource_views
             ],
             "commands": [
@@ -3421,6 +3479,9 @@ def _compile_semantic_prototype_v2(
         "generated_by": "builder.semantic_compiler.v2",
         "ui": {"application": {"desktop": {"pageSchema": page_schema}}},
     }
+    _compile_editor_surfaces(document, webui, source_map)
+    for check in state_checks:
+        check["observable_runtime_refs"] = copy.deepcopy(source_map.get(f"state:{check['state_id']}") or [])
     try:
         _validator("webui.v1.schema.json").validate(webui)
     except ValidationError as exc:

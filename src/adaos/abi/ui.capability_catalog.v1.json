@@ -159,7 +159,7 @@
       "events": ["select", "click:<buttonId>"],
       "responsive": { "desktop": "tabular", "compact": "bounded horizontal overflow" },
       "limitations": ["Image cells and free-form HTML are not supported."],
-      "postconditions": ["Declared columns map to rendered cells in declaration order."]
+      "postconditions": ["Declared columns map to rendered cells in declaration order.", "columns[*].sortable=true enables local sorting before pagination; inputs.sort={key,direction} selects the initial order. Sorting is unavailable for server-paginated data. kind=datetime formats an ISO timestamp in the active locale and local timezone."]
     },
     {
       "id": "ui.form",
@@ -176,7 +176,8 @@
         "multiple_boolean_field_types": ["checkboxes", "checkboxGroup", "checkbox_group"],
         "choice_field_types": ["select", "dropdown", "combobox", "singleChoice", "radio"],
         "invalid_field_types": ["checkbox", "selector", "input.selector"],
-        "conditional_required": "Set required=true on the dependent field and use a string visibleIf expression such as $state.result === 'defect'. ui.form evaluates the expression against a snapshot that includes sibling form values and validates visible required fields before submit. Never use an object-shaped condition or synthesize errors with updateState."
+        "conditional_required": "Set required=true on the dependent field and use a string visibleIf expression such as $state.result === 'defect'. ui.form evaluates the expression against a snapshot that includes sibling form values and validates visible required fields before submit. Never use an object-shaped condition or synthesize errors with updateState.",
+        "record_editor": "A resourceQuery with query.id=$state.<selection> loads the selected record into local fields. Empty selection means create mode, not the first returned record. inputs.buttons[*].id dispatches only matching actions[*].id; multiple unrelated submit mutations must never execute together. Declared button enabledIf controls availability. closeOnSuccess dismisses the editor only after a successful command."
       },
       "data_shape": { "kind": "record" },
       "events": ["submit", "validate", "save_draft", "reset", "change:<fieldId>"],

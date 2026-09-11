@@ -686,6 +686,35 @@ Targets may change only from retained matched evaluation, not timeout tuning.
 
 ## R8. Evaluation, Browser Review, And User Experience
 
+### Executable-Interface Correction
+
+Critical review of the retained eight-archetype cohort found a compiler/Client
+contract mismatch: generated `ui.form.inputs.buttons` were ignored, all submit
+actions shared one trigger, and `resourceQuery` did not hydrate the selected
+record. Structural acceptance and nonblank screenshots therefore do not prove
+working CRUD. Historical generation scores remain unchanged, but must not be
+reported as user-task success or readiness for autonomous prototyping.
+
+- [ ] `[must]` Execute separately selected form commands, hydrate the selected
+  record, reject stale selection responses, validate required fields and keep
+  edits after errors. Verify create/update/delete and no unintended mutations.
+- [ ] `[must]` Test the compiler/renderer boundary with the actual compiled
+  artifact, including wide/compact browser interactions and EN/RU rendering.
+- [ ] `[must]` Repeat the eight-archetype GPT-5 cohort after correcting the
+  boundary. Inspect complete model inputs/outputs and distinguish generation,
+  compiler, renderer, task and UX findings. No guaranteed reliability claim
+  from a single successful generation per archetype.
+- [ ] `[must]` Show canonical project/component development timestamps in the
+  Builder catalog, newest first, with sortable Application and Updated columns.
+  Do not infer freshness from GUIDs, preview visits or source checkout mtimes.
+- [ ] `[should]` Expose inline/modal/side-sheet editor choice and provide a small
+  generic progressive-disclosure recommendation. The compiler owns openers,
+  selection, save/error/dismissal and source-map relocation. Surface preference
+  is qualitative unless the user explicitly requests it.
+- [ ] `[must]` Make state operands mutually exclusive in the provider schema;
+  explicitly teach query binding in initial and repair contexts.
+
+
 Current correction evidence (2026-09-11): the eight visible rubrics now trace
 mandatory outcomes to their original user turns. Unrequested status confirmation,
 role systems, automatic slot optimization and production aggregation were removed
