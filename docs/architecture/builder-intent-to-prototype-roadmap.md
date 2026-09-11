@@ -704,15 +704,30 @@ reported as user-task success or readiness for autonomous prototyping.
   boundary. Inspect complete model inputs/outputs and distinguish generation,
   compiler, renderer, task and UX findings. No guaranteed reliability claim
   from a single successful generation per archetype.
-- [ ] `[must]` Show canonical project/component development timestamps in the
+- [x] `[must]` Show canonical project/component development timestamps in the
   Builder catalog, newest first, with sortable Application and Updated columns.
   Do not infer freshness from GUIDs, preview visits or source checkout mtimes.
 - [ ] `[should]` Expose inline/modal/side-sheet editor choice and provide a small
   generic progressive-disclosure recommendation. The compiler owns openers,
   selection, save/error/dismissal and source-map relocation. Surface preference
   is qualitative unless the user explicitly requests it.
-- [ ] `[must]` Make state operands mutually exclusive in the provider schema;
+- [x] `[must]` Make state operands mutually exclusive in the provider schema;
   explicitly teach query binding in initial and repair contexts.
+
+Correction evidence: `executable-surfaces-gpt5-20260911-01/evidence/picker`
+passes Updated/Application sorting, pagination, test filtering and exact preview
+selection. `evidence/previous-media-interactions-04` in that run exercises two
+retained media editors on wide/compact screens: select, edit, save, reopen and
+restore. This exposed and corrected a late-record-load draft overwrite and
+missing resource-query unwrapping in details. A third editor was not exercised;
+this is not full CRUD or eight-archetype qualification.
+
+The fresh `-01` cohort stopped at a compiler-owned localized opener defect after
+three failed cases; no aggregate pass rate is inferred. Operations repair also
+rewrote a valid fixture and broke another state. A digest-bound state-only repair
+now preserves unrelated data and receives an explicit patch context/schema.
+Compiler defects are classified separately and do not trigger model repair.
+The complete raw input/output evidence is retained; a fresh run is required.
 
 
 Current correction evidence (2026-09-11): the eight visible rubrics now trace

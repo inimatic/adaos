@@ -123,6 +123,18 @@ def compile_semantic_candidate(
     )
 
 
+def prepare_state_repair(candidate: Mapping[str, Any], findings: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Select a bounded repair contract without changing candidate data."""
+    from adaos.services.builder.semantic_repair import prepare_state_repair as prepare
+    return prepare(candidate, findings)
+
+
+def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], findings: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge an in-scope repair; the complete candidate still requires compilation."""
+    from adaos.services.builder.semantic_repair import apply_state_repair as apply
+    return apply(candidate, repair, findings)
+
+
 def normalize_semantic_candidate(
     candidate: Mapping[str, Any], *, brief: Mapping[str, Any]
 ) -> dict[str, Any]:

@@ -182,6 +182,15 @@ Tests must execute the compiled artifact across this boundary, not substitute
 mocked WebUI or infer working CRUD from valid JSON and visible controls. Report
 generation validity, interaction success and UX quality separately.
 
+State-proof repair uses a bounded replacement contract tied to the original
+candidate digest. Only reported states and the evidence fields/query controls
+or empty-state presentation of their views may change. Fixtures, commands,
+bindings and unreported states remain immutable, and the assembled candidate
+passes the full compiler again. Keep raw patch output as evidence. Compiler
+contract defects stop this route instead of consuming another model generation.
+Other repair classes still use full candidates until their own bounded contracts
+are qualified; do not describe state-only repair as a general incremental editor.
+
 ## Architectural Constraints
 
 1. **The user contract is outcome-oriented.** Internal phase names, ABI paths,

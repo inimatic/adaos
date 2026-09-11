@@ -659,3 +659,12 @@ correction progress are owned by R8 of the
 Browser capture includes the bottom
 of inner scroll surfaces: a full-page screenshot alone can miss an Ionic page's
 lower controls. Capture success is not a visual-quality or interaction pass.
+
+`e2e/stand/browser/prototype-interactions.mjs` accepts an explicit
+`ADAOS_E2E_CHECKPOINT` for a retained, unapproved, dev-only test artifact. It
+derives forms and collections from the actual compiled WebUI and exercises text
+update, persisted reopen and fixture restoration through the Client. Run with
+the same explicit local scope/token and a fresh `ADAOS_E2E_OUTPUT`. Unsupported
+editors are reported as `not_exercised`, never a task pass. This initial probe
+does not qualify all create/delete, upload, focus, locale or application-specific
+tasks; the roadmap retains those gates. Do not promote its test resources.

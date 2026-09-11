@@ -1474,7 +1474,7 @@ def _compile_semantic_prototype_candidate_v1(
             copy.deepcopy(matching_finding)
             if matching_finding is not None
             else {
-                "code": "semantic.validation_failed",
+                "code": "semantic.compiler_contract_invalid" if detail.startswith("compiled WebUI") else "semantic.validation_failed",
                 "path": "$",
                 "detail": detail,
             }
@@ -3293,6 +3293,7 @@ def _prototype_relation_option_fields(
 
 def _compile_editor_surfaces(
     document: Mapping[str, Any], webui: dict[str, Any], source_map: dict[str, list[str]],
+    dictionaries: dict[str, dict[str, str]],
 ) -> None:
     application = webui["ui"]["application"]
     widgets = application["desktop"]["pageSchema"]["widgets"]
@@ -3310,7 +3311,8 @@ def _compile_editor_surfaces(
             "inputs": {"buttons": []}, "actions": [],
         }
         if any(command["kind"] == "create" for command in commands):
-            toolbar["inputs"]["buttons"].append({"id": "new", "label": "New", "label_i18n": {"en": "New", "ru": "Добавить"}, "icon": "add-outline"})
+            label, label_i18n = _localized({"key": "prototype.editor.new", "en": "New", "ru": "Добавить"}, dictionaries)
+            toolbar["inputs"]["buttons"].append({"id": "new", "label": label, "label_i18n": label_i18n, "icon": "add-outline"})
             toolbar["actions"].append({"on": "click:new", "type": "updateState", "params": {selection: ""}})
         if surface != "inline":
             modal_id = f"editor-{view['id']}"
@@ -3479,7 +3481,7 @@ def _compile_semantic_prototype_v2(
         "generated_by": "builder.semantic_compiler.v2",
         "ui": {"application": {"desktop": {"pageSchema": page_schema}}},
     }
-    _compile_editor_surfaces(document, webui, source_map)
+    _compile_editor_surfaces(document, webui, source_map, dictionaries)
     for check in state_checks:
         check["observable_runtime_refs"] = copy.deepcopy(source_map.get(f"state:{check['state_id']}") or [])
     try:
@@ -3645,7 +3647,7 @@ def compile_semantic_prototype_candidate(
             copy.deepcopy(matching_finding)
             if matching_finding is not None
             else {
-                "code": "semantic.validation_failed",
+                "code": "semantic.compiler_contract_invalid" if detail.startswith("compiled WebUI") else "semantic.validation_failed",
                 "path": "$",
                 "detail": detail,
             }

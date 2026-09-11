@@ -324,7 +324,10 @@ not execute. Unit-level schema validation missed this mismatch.
 
 - [x] `[must]` Add named-command dispatch and selected-record hydration to the
   generic form; retain edits on operation failure and suppress completion after
-  cancelled confirmation. Focused ChromeHeadless suite: 96 tests pass.
+  cancelled confirmation. Focused ChromeHeadless suite: 113 tests pass, including
+  resource-query details and preservation across selected-record loading and
+  same-selection refresh. The retained media browser probe verifies update/save/
+  reopen/restore on two editors in both viewports; full CRUD remains below.
 - [ ] `[must]` Replay the actual compiler artifact in the browser: create,
   inspect, edit, validation, cancellation and deletion on wide/compact surfaces.
   Add this probe to ABI impact checks; structural capability inventory alone

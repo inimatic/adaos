@@ -1700,6 +1700,40 @@ def test_candidate_capacity_is_enforced_after_provider_projection() -> None:
     assert caught.value.findings[0]["path"] == "$.resources"
 
 
+def test_state_repair_preserves_fixtures_commands_and_other_states() -> None:
+    from adaos.sdk.builder.prototype import prepare_state_repair, apply_state_repair
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    valid = copy.deepcopy(candidate)
+    state = candidate["representative_states"][0]
+    first_field = candidate["resources"][0]["fields"][0]["id"]
+    state["filters"] = [{"field_ref": first_field, "operator": "eq", "operand": {"kind": "value", "value": candidate["resources"][0]["records"][0]["values"][0], "field_ref": None}}]
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    findings = caught.value.findings
+    plan = prepare_state_repair(candidate, findings)
+    assert plan is not None
+    repair = {"schema": "adaos.builder.state_repair.v1", "base_sha256": plan["base_sha256"], "states": [valid["representative_states"][0]], "views": []}
+    repaired = apply_state_repair(candidate, repair, findings)
+    assert repaired == valid
+    assert candidate != valid
+    compile_semantic_prototype_candidate(repaired, brief=brief)
+    assert prepare_state_repair(candidate, [{"code": "semantic.compiler_contract_invalid"}]) is None
+    repair["states"].append(copy.deepcopy(repair["states"][0]))
+    with pytest.raises(BuilderWorkflowError, match="duplicate"):
+        apply_state_repair(candidate, repair, findings)
+
+
+def test_compiler_contract_failure_is_not_a_model_repair(monkeypatch) -> None:
+    import adaos.services.builder.semantic_prototype as compiler
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    monkeypatch.setattr(compiler, "validate_webui_capabilities", lambda *_args: {"ok": False, "findings": ["renderer contract defect"]})
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert caught.value.findings[0]["code"] == "semantic.compiler_contract_invalid"
+
+
 def test_query_empty_proof_has_no_records_and_requires_a_reachable_filter() -> None:
     brief, semantic = _multi_resource_fixture()
     view = semantic["views"][0]
@@ -1854,6 +1888,9 @@ def test_semantic_v2_editor_surface_preserves_commands_and_source_map(surface, p
     candidate = _multi_resource_candidate(semantic)
     editor = next(item for item in candidate["views"] if item["role"] == "editor")
     editor["surface"] = surface
+    create = copy.deepcopy(candidate["commands"][0])
+    create.update(id="create-item", kind="create", guard=None, fixed_values=[])
+    candidate["commands"].append(create)
     result = compile_semantic_prototype_candidate(candidate, brief=brief)
     application = result["webui"]["ui"]["application"]
     modal = application["modals"][f"editor-{editor['id']}"]
@@ -1865,6 +1902,7 @@ def test_semantic_v2_editor_surface_preserves_commands_and_source_map(surface, p
     assert all(widget["id"] != editor["id"] for widget in application["desktop"]["pageSchema"]["widgets"])
     assert all("ui.application.modals." in ref for ref in result["source_map"][f"view:{editor['id']}"])
     assert any(widget["id"] == f"open-{editor['id']}" for widget in application["desktop"]["pageSchema"]["widgets"])
+    assert result["locale_dictionaries"]["ru"]["prototype.editor.new"] == "Добавить"
 
 
 def test_semantic_v2_relationship_identity_compiles_editor_selector() -> None:
