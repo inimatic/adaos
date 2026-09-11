@@ -131,7 +131,10 @@ jobs:
           client_path="src/adaos/integrations/adaos-client"
           client_revision="$(git ls-tree HEAD "$client_path" | awk '{print $3}')"
           expected_revision="$(tr -d '[:space:]' < "${client_path}.sha")"
-          test "$client_revision" = "$expected_revision"
+          if [ "$client_revision" != "$expected_revision" ]; then
+            echo "::error file=${client_path}.sha::Client revision mismatch: gitlink=${client_revision}, expected=${expected_revision}. Update the gitlink and .sha together."
+            exit 1
+          fi
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
