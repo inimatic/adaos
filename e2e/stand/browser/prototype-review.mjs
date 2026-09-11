@@ -71,8 +71,31 @@ try {
       tables: document.querySelectorAll('ada-table-widget').length,
     }))
     await page.screenshot({ path: path.join(output, `${layout}.png`), fullPage: true })
+    const scrollSurfaces = await page.evaluate(() => {
+      const elements = []
+      const visit = root => {
+        for (const element of root.querySelectorAll('*')) {
+          if (element.shadowRoot) visit(element.shadowRoot)
+          const style = getComputedStyle(element)
+          if (element.clientHeight > 150 && element.scrollHeight > element.clientHeight + 2
+            && /auto|scroll/.test(style.overflowY)) {
+            elements.push(element)
+          }
+        }
+      }
+      visit(document)
+      return elements.slice(0, 8).map(element => {
+        const result = { tag: element.tagName, height: element.clientHeight, scrollHeight: element.scrollHeight }
+        element.scrollTop = element.scrollHeight
+        return result
+      })
+    })
+    if (scrollSurfaces.length) {
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+      await page.screenshot({ path: path.join(output, `${layout}-bottom.png`), fullPage: true })
+    }
     await Promise.allSettled(responseTasks)
-    samples.push({ layout, viewport, geometry, failure, errors, requestFailures, text })
+    samples.push({ layout, viewport, geometry, scrollSurfaces, failure, errors, requestFailures, text })
     await context.close()
   }
 } finally { await browser.close() }

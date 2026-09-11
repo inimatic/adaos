@@ -67,6 +67,27 @@ def _resource_query_widgets(
     return result
 
 
+def _declared_query_filters(
+    projections: Sequence[tuple[Mapping[str, Any], Mapping[str, Any]]],
+    properties: Mapping[str, Any],
+    defaults: Sequence[str],
+) -> list[str]:
+    declared: set[str] = set()
+    for _, data_source in projections:
+        query = data_source.get("query") or {}
+        filters = query.get("filters") or {}
+        if not isinstance(filters, Mapping):
+            raise ValueError("Prototype resource query filters must be an object")
+        declared.update(filters)
+    unknown = declared - set(properties) - {"search"}
+    if unknown:
+        raise ValueError(
+            "Prototype query filters reference unknown record properties: "
+            + ", ".join(sorted(unknown))
+        )
+    return list(dict.fromkeys([*defaults, *sorted(declared)]))
+
+
 def _resource_action_operations(webui: Mapping[str, Any], resource_type: str) -> set[str]:
     return {
         str(dict(action.get("params") or {}).get("operation_id") or "").strip()
@@ -302,7 +323,9 @@ def derive_record_resource_spec(
         "record_schema": record_schema,
         "query": {
             "default": str(projections[0][1].get("queryId") or "all"),
-            "filters": [item_id_key, "search"],
+            "filters": _declared_query_filters(
+                projections, properties, [item_id_key, "search"]
+            ),
             "sort": [title_key],
             "cursor": False,
             "include": [],
@@ -491,7 +514,11 @@ def derive_board_resource_spec(
         "record_schema": record_schema,
         "query": {
             "default": str(data_source.get("queryId") or "all"),
-            "filters": list(dict.fromkeys([item_id_key, lane_key, "search"])),
+            "filters": _declared_query_filters(
+                _resource_query_widgets(webui, resource_type=resolved_resource_type),
+                properties,
+                [item_id_key, lane_key, "search"],
+            ),
             "sort": [title_key],
             "cursor": False,
             "include": [],

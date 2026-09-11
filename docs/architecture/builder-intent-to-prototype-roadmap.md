@@ -704,6 +704,25 @@ artifacts and explicit development previews. This is not a Trial approval.
 
 ### Current Evaluation
 
+Stage-aware review across eight development archetypes: 1/8 first candidates
+qualified structurally, 3/8 qualified within the local workflow, and 1/8 passed
+the configured non-browser gate. A late budget repair compiled successfully
+after its local timeout; it is retained separately, not retroactively passed.
+The browser review found and fixed a generic SDK filter-declaration defect and
+still rejected visual quality. Large-prototype granulation remains unproven.
+See [full input/output, CRUD and planning assessment](builder-stage-review-2026-09-11.md).
+
+- [x] `[must]` Derive resource filter admission from each projection's declared
+  fields; test the actual workbench with multiple resources and unknown filters.
+- [ ] `[must]` Expose one exact required-reference inventory and object-aware
+  operations in generation context; test omission and unrelated-binding cases.
+- [ ] `[must]` Align authoring/provider/canonical capacity constraints and
+  relationship identity/display contracts before capacity-based plan routing.
+- [ ] `[must]` Calibrate false-positive state proof and false-negative implicit
+  Automation requirements against human-labelled artifact/task pairs.
+- [ ] `[should]` Reconcile late Root completions idempotently without discarding
+  complete responses or reclassifying a timed-out case as a historical pass.
+
 Evaluation progress (2026-09-11): grader v9 keeps its Structured Output schema
 byte-stable and supplies candidate-specific evidence pointers in the dynamic
 payload instead of embedding them as a schema enum. Rubric entries may carry

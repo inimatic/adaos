@@ -627,3 +627,10 @@ explicit local scope/token and `ENV_TYPE=dev`; prepare the dev webspace through
 the owning runtime before opening it. Its screenshots are evidence, not an
 automatic verdict or a Trial promotion. The dedicated latest-run-only
 `adaos_tests` scenario is planned in R8 of the Builder roadmap.
+
+The eight-case GPT-5 development run and actual Client checks are evaluated in
+[the stage-readiness report](builder-stage-review-2026-09-11.md). It includes
+input context, complete late output, large-prototype planning, CRUD runtime
+readiness and known grader miscalibration. Browser capture includes the bottom
+of inner scroll surfaces: a full-page screenshot alone can miss an Ionic page's
+lower controls. Capture success is not a visual-quality or interaction pass.

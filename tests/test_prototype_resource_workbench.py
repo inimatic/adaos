@@ -534,6 +534,49 @@ def test_derive_generic_record_resource_spec_without_board() -> None:
     assert spec["data_definition"]["seed"][0]["revision"] == 1
 
 
+@pytest.mark.parametrize("component", ["ui.table", "collection.board"])
+def test_derived_filters_execute_without_leaking_across_resources(tmp_path: Path, component: str) -> None:
+    widget = {
+        "id": "items",
+        "type": component,
+        "inputs": {
+            "itemIdKey": "id", "titleKey": "title", "laneKey": "status",
+            "lanes": [{"id": "planned", "label": "Planned"}],
+        },
+        "dataSource": {
+            "kind": "resourceQuery", "resourceType": "prototype.items",
+            "query": {"filters": {"priority": "$state.priority"}},
+        },
+    }
+    other = copy.deepcopy(widget)
+    other["id"] = "other"
+    other["dataSource"]["resourceType"] = "prototype.other"
+    other["dataSource"]["query"]["filters"] = {"category": "$state.category"}
+    webui = {"ui": {"application": {"desktop": {"pageSchema": {"widgets": [widget, other]}}}}}
+    records = [
+        {"id": "one", "title": "First", "status": "planned", "priority": "high"},
+        {"id": "two", "title": "Second", "status": "planned", "priority": "low"},
+    ]
+    spec = developer_prototypes.derive_resource_spec(webui, records, resource_type="prototype.items")
+    filters = spec["resource_definition"]["query"]["filters"]
+    assert "priority" in filters
+    assert "category" not in filters
+    PrototypeResourceService(state_dir=tmp_path).materialize({
+        "schema": "adaos.builder.prototype_resource.v1", "project_ref": "project:items",
+        "change_id": "change-items", "revision": "001", "webui_digest": prototype_webui_digest(webui),
+        **spec,
+    })
+    workbench = ResourceWorkbenchService(state_dir=tmp_path)
+    result = _query(workbench, resource_type="prototype.items", filters={"priority": "high"})
+    assert [item["id"] for item in result["items"]] == ["one"]
+    assert len(_query(workbench, resource_type="prototype.items", filters={"priority": ""})["items"]) == 2
+    with pytest.raises(ValueError, match="unsupported resource query filters"):
+        _query(workbench, resource_type="prototype.items", filters={"category": "arbitrary"})
+    widget["dataSource"]["query"]["filters"]["missing"] = "value"
+    with pytest.raises(ValueError, match="unknown record properties: missing"):
+        developer_prototypes.derive_resource_spec(webui, records, resource_type="prototype.items")
+
+
 def test_optional_numeric_prototype_field_accepts_explicit_empty_value() -> None:
     webui = {
         "schema": "adaos.webui.v1",

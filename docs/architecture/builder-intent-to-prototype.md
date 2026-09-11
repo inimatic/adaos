@@ -289,6 +289,21 @@ rather than forcing the model to author RFC 6902 paths.
 
 ### 5. Runtime Artifact And Evidence
 
+Large-prototype readiness is a separate admission dimension. A plan must assign
+requirement ownership to dependency-aware semantic units, preserve shared IDs
+and locale/navigation contracts, and resume or repair only affected units.
+Small requests may bypass decomposition. Neither a universal sequence of model
+calls nor larger candidate limits proves this capability. The current
+[readiness assessment](builder-stage-review-2026-09-11.md) distinguishes these
+target properties from the implemented full-candidate compatibility route.
+
+Supported local CRUD and finite automation primitives belong to Prototype, not
+to an automatically deferred implementation backlog. Their executable contracts
+must state preconditions, side effects, error behavior and composition limits;
+model-declared capability names are not proof of runtime support. Cross-record
+business rules remain explicit pending Automation obligations unless an actual
+supported primitive implements and verifies them.
+
 The compiler emits complete, atomically validated `webui.json`, locale assets,
 fixture declarations, and an attribution receipt. The receipt links intent,
 brief, plan, selected component contracts, semantic input, compiler version,
