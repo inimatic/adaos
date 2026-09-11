@@ -683,9 +683,194 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
     return result
 
 
+def _brief_evidence(brief: Mapping[str, Any], values: Any) -> list[str]:
+    brief_ref = str(brief.get("brief_id") or "").strip()
+    return [
+        value if value.startswith("brief:") else f"{brief_ref}/{value}"
+        for raw in values or []
+        if (value := str(raw or "").strip())
+    ]
+
+
+def _stable_requirement_id(prefix: str, item: Mapping[str, Any]) -> str:
+    identity = {
+        key: item.get(key)
+        for key in ("kind", "interaction", "statement")
+        if item.get(key) is not None
+    }
+    return f"{prefix}:{_digest(identity).removeprefix('sha256:')[:12]}"
+
+
+def _merge_requirement_list(
+    briefs: list[dict[str, Any]], key: str, prefix: str
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for brief in briefs:
+        for raw in brief.get(key) or []:
+            if not isinstance(raw, Mapping):
+                continue
+            item = copy.deepcopy(dict(raw))
+            stable_id = _stable_requirement_id(prefix, item)
+            item["id"] = stable_id
+            item["evidence"] = _brief_evidence(brief, item.get("evidence"))
+            existing = merged.get(stable_id)
+            if existing:
+                item["evidence"] = list(
+                    dict.fromkeys(
+                        [
+                            *list(existing.get("evidence") or []),
+                            *list(item.get("evidence") or []),
+                        ]
+                    )
+                )
+                item["confidence"] = max(
+                    float(existing.get("confidence") or 0),
+                    float(item.get("confidence") or 0),
+                )
+            merged[stable_id] = item
+    return list(merged.values())
+
+
+def _merge_known_field(
+    briefs: list[dict[str, Any]], path: tuple[str, ...]
+) -> dict[str, Any]:
+    selected: tuple[dict[str, Any], Mapping[str, Any]] | None = None
+    for brief in briefs:
+        value: Any = brief
+        for key in path:
+            value = value.get(key) if isinstance(value, Mapping) else None
+        if isinstance(value, Mapping) and value.get("state") == "known":
+            selected = (brief, value)
+    if selected is None:
+        return _knowledge("unknown")
+    brief, value = selected
+    result = copy.deepcopy(dict(value))
+    result["evidence"] = _brief_evidence(brief, value.get("evidence"))
+    return result
+
+
+def _merge_representative_states(briefs: list[dict[str, Any]]) -> dict[str, Any]:
+    values: list[Any] = []
+    evidence: list[str] = []
+    confidence = 0.0
+    for brief in briefs:
+        state = brief.get("representative_states")
+        if not isinstance(state, Mapping) or state.get("state") != "known":
+            continue
+        raw_values = state.get("value")
+        candidates = raw_values if isinstance(raw_values, list) else [raw_values]
+        for value in candidates:
+            if value not in (None, "") and value not in values:
+                values.append(copy.deepcopy(value))
+        evidence.extend(_brief_evidence(brief, state.get("evidence")))
+        confidence = max(confidence, float(state.get("confidence") or 0))
+    if not values:
+        return _knowledge("unknown")
+    return _knowledge(
+        "known",
+        values,
+        evidence=list(dict.fromkeys(evidence)),
+        confidence=confidence or 1.0,
+    )
+
+
+def merge_prototype_briefs(*values: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge accepted turn Briefs into one content-addressed project Brief."""
+
+    briefs = [copy.deepcopy(dict(value)) for value in values if value]
+    if not briefs:
+        raise ValueError("At least one Prototype Brief is required")
+    for brief in briefs:
+        _validate("builder.prototype_brief.v1.schema.json", brief)
+    unique = list({str(brief["digest"]): brief for brief in briefs}.values())
+    if len(unique) == 1:
+        return unique[0]
+    briefs = unique
+    current = briefs[-1]
+
+    operations = _merge_requirement_list(briefs, "operations", "operation")
+    unsigned: dict[str, Any] = {
+        "schema": PROTOTYPE_BRIEF_SCHEMA,
+        "intent_ref": current["intent_ref"],
+        "intent_digest": current["intent_digest"],
+        "problem": _merge_known_field(briefs, ("problem",)),
+        "outcome": _merge_known_field(briefs, ("outcome",)),
+        "actors": _merge_known_field(briefs, ("actors",)),
+        "principal_jobs": _merge_requirement_list(
+            briefs, "principal_jobs", "job"
+        ),
+        "residual_requirements": _merge_requirement_list(
+            briefs, "residual_requirements", "residual"
+        ),
+        "entities": _merge_known_field(briefs, ("entities",)),
+        "information_requirements": _merge_requirement_list(
+            briefs, "information_requirements", "information"
+        ),
+        "collection_requirements": _merge_requirement_list(
+            briefs, "collection_requirements", "collection"
+        ),
+        "operations": operations,
+        "representative_states": _merge_representative_states(briefs),
+        "boundaries": {
+            key: _merge_known_field(briefs, ("boundaries", key))
+            for key in ("data_effects", "external_effects", "destructive_effects")
+        },
+        "constraints": {
+            key: _merge_known_field(briefs, ("constraints", key))
+            for key in ("locale", "responsive", "accessibility", "content_volume")
+        },
+        "assumptions": _merge_requirement_list(briefs, "assumptions", "assumption"),
+        "open_questions": _merge_requirement_list(
+            briefs, "open_questions", "question"
+        ),
+        "capability_gaps": _merge_requirement_list(
+            briefs, "capability_gaps", "gap"
+        ),
+        "interpretation": {
+            "mode": (
+                "model_assisted"
+                if any(
+                    brief.get("interpretation", {}).get("mode") == "model_assisted"
+                    for brief in briefs
+                )
+                else "deterministic_explicit"
+            ),
+            "confidence": min(
+                float(brief.get("interpretation", {}).get("confidence") or 0)
+                for brief in briefs
+            ),
+            "unresolved_fields": sorted(
+                {
+                    str(field)
+                    for brief in briefs
+                    for field in brief.get("interpretation", {}).get(
+                        "unresolved_fields", []
+                    )
+                    if str(field).strip()
+                }
+            ),
+        },
+    }
+    if operations:
+        unsigned["interpretation"]["unresolved_fields"] = [
+            field
+            for field in unsigned["interpretation"]["unresolved_fields"]
+            if field != "operations"
+        ]
+    digest = _digest(unsigned)
+    result = {
+        **unsigned,
+        "brief_id": f"brief:{digest.removeprefix('sha256:')[:24]}",
+        "digest": digest,
+    }
+    _validate("builder.prototype_brief.v1.schema.json", result)
+    return result
+
+
 __all__ = [
     "INTENT_SCHEMA",
     "PROTOTYPE_BRIEF_SCHEMA",
     "capture_intent",
     "compile_prototype_brief",
+    "merge_prototype_briefs",
 ]

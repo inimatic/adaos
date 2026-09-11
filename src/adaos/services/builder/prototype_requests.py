@@ -69,6 +69,8 @@ def submit_request(
             "locale": language,
             "prototype_intent_id": intent["intent_id"],
             "prototype_brief_digest": brief["digest"],
+            "prototype_intent": intent,
+            "prototype_brief": brief,
         },
     }
     execution = port.submit_turn(payload, timeout_seconds=max(0.1, timeout_seconds))

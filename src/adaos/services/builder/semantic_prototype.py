@@ -20,6 +20,9 @@ from .workflow import BuilderWorkflowError
 
 
 SEMANTIC_PROTOTYPE_SCHEMA = "adaos.webui.semantic.v1"
+SEMANTIC_PROTOTYPE_CANDIDATE_SCHEMA = (
+    "adaos.builder.semantic_prototype_candidate.v1"
+)
 SEMANTIC_COMPILE_RESULT_SCHEMA = "adaos.builder.semantic_compile_result.v1"
 _ABI_ROOT = Path(__file__).resolve().parents[2] / "abi"
 _FIELD_TYPES = {
@@ -79,7 +82,12 @@ def _state_predicate_matches(
     record: Mapping[str, Any], predicate: Mapping[str, Any]
 ) -> bool:
     actual = record.get(str(predicate["field_ref"]))
-    expected = predicate.get("value")
+    compare_field_ref = predicate.get("compare_field_ref")
+    expected = (
+        record.get(str(compare_field_ref))
+        if compare_field_ref is not None
+        else predicate.get("value")
+    )
     operator = str(predicate["operator"])
     if operator == "eq":
         return actual == expected
@@ -115,6 +123,7 @@ def _brief_requirement_ids(brief: Mapping[str, Any]) -> set[str]:
     result: set[str] = set()
     for key in (
         "principal_jobs",
+        "residual_requirements",
         "information_requirements",
         "collection_requirements",
         "operations",
@@ -321,9 +330,13 @@ def validate_semantic_prototype(
         filters = [dict(item) for item in state.get("filters") or []]
         unknown_state_fields = sorted(
             {
-                str(predicate["field_ref"])
+                field_ref
                 for predicate in filters
-                if str(predicate["field_ref"]) not in fields
+                for field_ref in (
+                    str(predicate["field_ref"]),
+                    str(predicate.get("compare_field_ref") or ""),
+                )
+                if field_ref and field_ref not in fields
             }
         )
         if unknown_state_fields:
@@ -336,6 +349,15 @@ def validate_semantic_prototype(
             operator = str(predicate["operator"])
             expected_value = predicate.get("value")
             field = fields[field_ref]
+            compare_field_ref = str(predicate.get("compare_field_ref") or "")
+            compare_field = fields.get(compare_field_ref)
+            if compare_field is not None and (
+                compare_field["value_type"] != field["value_type"]
+            ):
+                _fail(
+                    f"representative state {state_id!r} compares incompatible "
+                    f"fields {field_ref!r} and {compare_field_ref!r}"
+                )
             if operator in {"lt", "lte", "gt", "gte"} and field[
                 "value_type"
             ] not in {"date", "number"}:
@@ -343,8 +365,13 @@ def validate_semantic_prototype(
                     f"representative state {state_id!r} uses range operator "
                     f"{operator!r} on non-orderable field {field_ref!r}"
                 )
-            if field["value_type"] == "choice" and operator in {"eq", "neq"} and not any(
+            if (
+                compare_field is None
+                and field["value_type"] == "choice"
+                and operator in {"eq", "neq"}
+                and not any(
                 option["value"] == expected_value for option in field.get("options") or []
+                )
             ):
                 _fail(
                     f"representative state {state_id!r} has invalid choice filter "
@@ -509,6 +536,619 @@ def semantic_prototype_contract() -> dict[str, Any]:
     return copy.deepcopy(_validator().schema)
 
 
+def semantic_prototype_candidate_contract() -> dict[str, Any]:
+    """Return the strict, bounded provider-output contract."""
+
+    return copy.deepcopy(
+        _validator("builder.semantic_prototype_candidate.v1.schema.json").schema
+    )
+
+
+def semantic_prototype_provider_contract() -> dict[str, Any]:
+    """Return the candidate schema projected to the provider strict subset."""
+
+    contract = semantic_prototype_candidate_contract()
+    unsupported_validation_keywords = {
+        "maxItems",
+        "maxLength",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minimum",
+        "pattern",
+        "uniqueItems",
+    }
+    schema_map_keys = {"$defs", "definitions", "properties"}
+    schema_list_keys = {"allOf", "anyOf", "oneOf", "prefixItems"}
+    schema_value_keys = {
+        "additionalProperties",
+        "contains",
+        "else",
+        "if",
+        "items",
+        "not",
+        "propertyNames",
+        "then",
+    }
+
+    def project(node: Any) -> None:
+        if isinstance(node, dict):
+            for keyword in unsupported_validation_keywords:
+                node.pop(keyword, None)
+            for key, child in node.items():
+                if key in schema_map_keys and isinstance(child, dict):
+                    for property_schema in child.values():
+                        project(property_schema)
+                elif key in schema_list_keys and isinstance(child, list):
+                    for branch in child:
+                        project(branch)
+                elif key in schema_value_keys and isinstance(child, dict):
+                    project(child)
+
+    project(contract)
+    return contract
+
+
+def _field_entries(
+    entries: Sequence[Mapping[str, Any]], *, owner: str
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for entry in entries:
+        field_ref = str(entry.get("field_ref") or "")
+        if field_ref in result:
+            _fail(f"{owner} repeats field {field_ref!r}")
+        result[field_ref] = copy.deepcopy(entry.get("value"))
+    return result
+
+
+def _canonical_candidate_identifier(value: Any, *, namespace: str) -> str:
+    raw = str(value or "").strip()
+    canonical = re.sub(r"[^A-Za-z0-9_.-]+", ".", raw)
+    canonical = re.sub(r"[.]+", ".", canonical).strip(".-")
+    if not canonical:
+        canonical = namespace
+    if not canonical[0].isalpha() or not canonical[0].isascii():
+        canonical = f"{namespace}.{canonical}"
+    return canonical
+
+
+def _runtime_state_identifier(value: Any, *, fallback: str) -> str:
+    raw = str(value or "").strip()
+    canonical = re.sub(r"[^A-Za-z0-9_]+", "_", raw).strip("_")
+    if not canonical:
+        canonical = fallback
+    if not canonical[0].isalpha() or not canonical[0].isascii():
+        canonical = f"{fallback}_{canonical}"
+    return canonical
+
+
+def _candidate_identifier_map(
+    values: Sequence[Any],
+    *,
+    namespace: str,
+    normalizations: list[dict[str, str]],
+    targets: Sequence[str],
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    owners: dict[str, str] = {}
+    for raw_value, target in zip(values, targets, strict=True):
+        raw = str(raw_value or "").strip()
+        canonical = _canonical_candidate_identifier(raw, namespace=namespace)
+        previous = owners.get(canonical)
+        if previous is not None and previous != raw:
+            _fail(
+                f"candidate {namespace} identifiers {previous!r} and {raw!r} "
+                f"normalize to the same id {canonical!r}"
+            )
+        owners[canonical] = raw
+        result[raw] = canonical
+        if canonical != raw:
+            normalizations.append(
+                {
+                    "kind": "candidate_identifier",
+                    "namespace": namespace,
+                    "from": raw,
+                    "to": canonical,
+                    "target": target,
+                }
+            )
+    return result
+
+
+def _mapped_candidate_ref(
+    value: Any,
+    *,
+    namespace: str,
+    identifiers: Mapping[str, str],
+    normalizations: list[dict[str, str]],
+    target: str,
+) -> str:
+    raw = str(value or "").strip()
+    canonical = identifiers.get(raw)
+    if canonical is None:
+        canonical = _canonical_candidate_identifier(raw, namespace=namespace)
+    if canonical != raw:
+        normalizations.append(
+            {
+                "kind": "candidate_reference",
+                "namespace": namespace,
+                "from": raw,
+                "to": canonical,
+                "target": target,
+            }
+        )
+    return canonical
+
+
+def _normalize_candidate_localization_keys(
+    value: Any,
+    *,
+    normalizations: list[dict[str, str]],
+    path: str = "$",
+    owners: dict[str, str] | None = None,
+) -> None:
+    if owners is None:
+        owners = {}
+    if isinstance(value, dict):
+        if {"key", "en", "ru"}.issubset(value):
+            raw = str(value.get("key") or "").strip()
+            canonical = _canonical_candidate_identifier(raw, namespace="text")
+            previous = owners.get(canonical)
+            if previous is not None and previous != raw:
+                _fail(
+                    f"candidate localization keys {previous!r} and {raw!r} "
+                    f"normalize to the same id {canonical!r}"
+                )
+            owners[canonical] = raw
+            if canonical != raw:
+                value["key"] = canonical
+                normalizations.append(
+                    {
+                        "kind": "candidate_identifier",
+                        "namespace": "localized_text",
+                        "from": raw,
+                        "to": canonical,
+                        "target": f"{path}.key",
+                    }
+                )
+        for key, child in value.items():
+            _normalize_candidate_localization_keys(
+                child,
+                normalizations=normalizations,
+                path=f"{path}.{key}",
+                owners=owners,
+            )
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _normalize_candidate_localization_keys(
+                child,
+                normalizations=normalizations,
+                path=f"{path}[{index}]",
+                owners=owners,
+            )
+
+
+def _canonicalize_semantic_prototype_candidate(
+    value: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    candidate = copy.deepcopy(dict(value))
+    try:
+        Draft202012Validator(semantic_prototype_provider_contract()).validate(
+            candidate
+        )
+    except ValidationError as exc:
+        path = ".".join(str(item) for item in exc.absolute_path)
+        suffix = f" at {path}" if path else ""
+        _fail(f"{exc.message}{suffix}")
+
+    normalizations: list[dict[str, str]] = []
+    resource = candidate["resource"]
+    fields = resource["fields"]
+    views = candidate["views"]
+    commands = candidate["commands"]
+    states = candidate["representative_states"]
+
+    document_ids = _candidate_identifier_map(
+        [candidate["document_id"]],
+        namespace="prototype",
+        normalizations=normalizations,
+        targets=["$.document_id"],
+    )
+    resource_ids = _candidate_identifier_map(
+        [resource["id"]],
+        namespace="resource",
+        normalizations=normalizations,
+        targets=["$.resource.id"],
+    )
+    field_ids = _candidate_identifier_map(
+        [field["id"] for field in fields],
+        namespace="field",
+        normalizations=normalizations,
+        targets=[f"$.resource.fields[{index}].id" for index in range(len(fields))],
+    )
+    view_ids = _candidate_identifier_map(
+        [view["id"] for view in views],
+        namespace="view",
+        normalizations=normalizations,
+        targets=[f"$.views[{index}].id" for index in range(len(views))],
+    )
+    query_entries = [
+        (control, f"$.views[{view_index}].query_controls[{control_index}]")
+        for view_index, view in enumerate(views)
+        for control_index, control in enumerate(view["query_controls"])
+    ]
+    query_ids = _candidate_identifier_map(
+        [control["id"] for control, _ in query_entries],
+        namespace="query",
+        normalizations=normalizations,
+        targets=[f"{path}.id" for _, path in query_entries],
+    )
+    command_ids = _candidate_identifier_map(
+        [command["id"] for command in commands],
+        namespace="command",
+        normalizations=normalizations,
+        targets=[f"$.commands[{index}].id" for index in range(len(commands))],
+    )
+    state_ids = _candidate_identifier_map(
+        [state["id"] for state in states],
+        namespace="state",
+        normalizations=normalizations,
+        targets=[
+            f"$.representative_states[{index}].id" for index in range(len(states))
+        ],
+    )
+
+    candidate["document_id"] = document_ids[str(candidate["document_id"]).strip()]
+    resource["id"] = resource_ids[str(resource["id"]).strip()]
+    for index, field in enumerate(fields):
+        field["id"] = field_ids[str(field["id"]).strip()]
+        condition = field.get("visible_when")
+        if isinstance(condition, dict):
+            condition["field_ref"] = _mapped_candidate_ref(
+                condition["field_ref"],
+                namespace="field",
+                identifiers=field_ids,
+                normalizations=normalizations,
+                target=f"$.resource.fields[{index}].visible_when.field_ref",
+            )
+    resource["identity_field_refs"] = [
+        _mapped_candidate_ref(
+            field_ref,
+            namespace="field",
+            identifiers=field_ids,
+            normalizations=normalizations,
+            target=f"$.resource.identity_field_refs[{index}]",
+        )
+        for index, field_ref in enumerate(resource["identity_field_refs"])
+    ]
+    for record_index, record in enumerate(resource["records"]):
+        for entry_index, entry in enumerate(record["values"]):
+            entry["field_ref"] = _mapped_candidate_ref(
+                entry["field_ref"],
+                namespace="field",
+                identifiers=field_ids,
+                normalizations=normalizations,
+                target=(
+                    f"$.resource.records[{record_index}].values[{entry_index}].field_ref"
+                ),
+            )
+
+    runtime_state_ids: dict[str, str] = {}
+    runtime_state_owners: dict[str, str] = {}
+    for view_index, view in enumerate(views):
+        view["id"] = view_ids[str(view["id"]).strip()]
+        view["field_refs"] = [
+            _mapped_candidate_ref(
+                field_ref,
+                namespace="field",
+                identifiers=field_ids,
+                normalizations=normalizations,
+                target=f"$.views[{view_index}].field_refs[{field_index}]",
+            )
+            for field_index, field_ref in enumerate(view["field_refs"])
+        ]
+        view_filter = view.get("filter")
+        if isinstance(view_filter, dict):
+            view_filter["field_ref"] = _mapped_candidate_ref(
+                view_filter["field_ref"],
+                namespace="field",
+                identifiers=field_ids,
+                normalizations=normalizations,
+                target=f"$.views[{view_index}].filter.field_ref",
+            )
+            raw_state_ref = str(view_filter["state_ref"] or "").strip()
+            canonical_state_ref = runtime_state_ids.setdefault(
+                raw_state_ref,
+                _runtime_state_identifier(raw_state_ref, fallback="query_state"),
+            )
+            previous_state_ref = runtime_state_owners.get(canonical_state_ref)
+            if previous_state_ref is not None and previous_state_ref != raw_state_ref:
+                _fail(
+                    f"candidate query_state identifiers {previous_state_ref!r} and "
+                    f"{raw_state_ref!r} normalize to the same id "
+                    f"{canonical_state_ref!r}"
+                )
+            runtime_state_owners[canonical_state_ref] = raw_state_ref
+            if canonical_state_ref != raw_state_ref:
+                normalizations.append(
+                    {
+                        "kind": "candidate_reference",
+                        "namespace": "query_state",
+                        "from": raw_state_ref,
+                        "to": canonical_state_ref,
+                        "target": f"$.views[{view_index}].filter.state_ref",
+                    }
+                )
+            view_filter["state_ref"] = canonical_state_ref
+        for control_index, control in enumerate(view["query_controls"]):
+            control["id"] = query_ids[str(control["id"]).strip()]
+            if control.get("field_ref") is not None:
+                control["field_ref"] = _mapped_candidate_ref(
+                    control["field_ref"],
+                    namespace="field",
+                    identifiers=field_ids,
+                    normalizations=normalizations,
+                    target=(
+                        f"$.views[{view_index}].query_controls[{control_index}].field_ref"
+                    ),
+                )
+
+    for command_index, command in enumerate(commands):
+        command["id"] = command_ids[str(command["id"]).strip()]
+        command["view_ref"] = _mapped_candidate_ref(
+            command["view_ref"],
+            namespace="view",
+            identifiers=view_ids,
+            normalizations=normalizations,
+            target=f"$.commands[{command_index}].view_ref",
+        )
+        command["input_field_refs"] = [
+            _mapped_candidate_ref(
+                field_ref,
+                namespace="field",
+                identifiers=field_ids,
+                normalizations=normalizations,
+                target=f"$.commands[{command_index}].input_field_refs[{field_index}]",
+            )
+            for field_index, field_ref in enumerate(command["input_field_refs"])
+        ]
+        for entry_index, entry in enumerate(command["fixed_values"]):
+            entry["field_ref"] = _mapped_candidate_ref(
+                entry["field_ref"],
+                namespace="field",
+                identifiers=field_ids,
+                normalizations=normalizations,
+                target=(
+                    f"$.commands[{command_index}].fixed_values[{entry_index}].field_ref"
+                ),
+            )
+        guard = command.get("guard")
+        if isinstance(guard, dict):
+            guard["when"]["field_ref"] = _mapped_candidate_ref(
+                guard["when"]["field_ref"],
+                namespace="field",
+                identifiers=field_ids,
+                normalizations=normalizations,
+                target=f"$.commands[{command_index}].guard.when.field_ref",
+            )
+            guard["require_nonempty"] = [
+                _mapped_candidate_ref(
+                    field_ref,
+                    namespace="field",
+                    identifiers=field_ids,
+                    normalizations=normalizations,
+                    target=(
+                        f"$.commands[{command_index}].guard.require_nonempty[{field_index}]"
+                    ),
+                )
+                for field_index, field_ref in enumerate(guard["require_nonempty"])
+            ]
+
+    for state_index, state in enumerate(states):
+        state["id"] = state_ids[str(state["id"]).strip()]
+        state["view_ref"] = _mapped_candidate_ref(
+            state["view_ref"],
+            namespace="view",
+            identifiers=view_ids,
+            normalizations=normalizations,
+            target=f"$.representative_states[{state_index}].view_ref",
+        )
+        for filter_index, predicate in enumerate(state["filters"]):
+            predicate["field_ref"] = _mapped_candidate_ref(
+                predicate["field_ref"],
+                namespace="field",
+                identifiers=field_ids,
+                normalizations=normalizations,
+                target=(
+                    f"$.representative_states[{state_index}].filters[{filter_index}].field_ref"
+                ),
+            )
+            operand = predicate["operand"]
+            if operand["kind"] == "field" and operand.get("field_ref") is not None:
+                operand["field_ref"] = _mapped_candidate_ref(
+                    operand["field_ref"],
+                    namespace="field",
+                    identifiers=field_ids,
+                    normalizations=normalizations,
+                    target=(
+                        f"$.representative_states[{state_index}].filters[{filter_index}].operand.field_ref"
+                    ),
+                )
+
+    semantic_namespaces = {
+        "resource": resource_ids,
+        "field": field_ids,
+        "view": view_ids,
+        "query": query_ids,
+        "command": command_ids,
+        "state": state_ids,
+    }
+    kind_aliases = {"res": "resource", "f": "field", "cmd": "command"}
+    for binding_index, binding in enumerate(candidate["requirement_bindings"]):
+        normalized_refs: list[str] = []
+        for ref_index, raw_ref_value in enumerate(binding["semantic_refs"]):
+            raw_ref = str(raw_ref_value or "").strip()
+            raw_kind, separator, raw_identifier = raw_ref.partition(":")
+            semantic_kind = kind_aliases.get(raw_kind, raw_kind)
+            identifiers = semantic_namespaces.get(semantic_kind)
+            if not separator or identifiers is None:
+                normalized_refs.append(raw_ref)
+                continue
+            identifier_candidates = (raw_ref, raw_identifier)
+            canonical_identifier = next(
+                (
+                    identifiers[item]
+                    for item in identifier_candidates
+                    if item in identifiers
+                ),
+                _canonical_candidate_identifier(
+                    raw_identifier,
+                    namespace=semantic_kind,
+                ),
+            )
+            canonical_ref = f"{semantic_kind}:{canonical_identifier}"
+            if canonical_ref != raw_ref:
+                normalizations.append(
+                    {
+                        "kind": "candidate_semantic_reference",
+                        "namespace": semantic_kind,
+                        "from": raw_ref,
+                        "to": canonical_ref,
+                        "target": (
+                            f"$.requirement_bindings[{binding_index}].semantic_refs[{ref_index}]"
+                        ),
+                    }
+                )
+            normalized_refs.append(canonical_ref)
+        binding["semantic_refs"] = normalized_refs
+
+    _normalize_candidate_localization_keys(
+        candidate,
+        normalizations=normalizations,
+    )
+    return candidate, normalizations
+
+
+def normalize_semantic_prototype_candidate(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Lower a strict provider candidate into the canonical semantic ABI."""
+
+    candidate, _ = _canonicalize_semantic_prototype_candidate(value)
+    try:
+        _validator("builder.semantic_prototype_candidate.v1.schema.json").validate(
+            candidate
+        )
+    except ValidationError as exc:
+        path = ".".join(str(item) for item in exc.absolute_path)
+        suffix = f" at {path}" if path else ""
+        _fail(f"{exc.message}{suffix}")
+
+    candidate["schema"] = SEMANTIC_PROTOTYPE_SCHEMA
+    candidate["layout"] = {"pattern": candidate["layout"]}
+    resource = dict(candidate["resource"])
+    resource["fields"] = []
+    for raw_field in candidate["resource"]["fields"]:
+        field = dict(raw_field)
+        if field["value_type"] == "attachments":
+            field["value_type"] = "attachment"
+            field["multiple"] = True
+        if not field.get("options"):
+            field.pop("options", None)
+        if field.get("visible_when") is None:
+            field.pop("visible_when", None)
+        resource["fields"].append(field)
+    resource["records"] = [
+        _field_entries(record["values"], owner=f"resource record {index}")
+        for index, record in enumerate(candidate["resource"]["records"])
+    ]
+    candidate["resource"] = resource
+
+    views: list[dict[str, Any]] = []
+    for raw_view in candidate["views"]:
+        view = dict(raw_view)
+        if view.get("filter") is None:
+            view.pop("filter", None)
+        controls: list[dict[str, Any]] = []
+        for raw_control in view.get("query_controls") or []:
+            control = dict(raw_control)
+            if control.get("field_ref") is None:
+                control.pop("field_ref", None)
+            controls.append(control)
+        if controls:
+            view["query_controls"] = controls
+        else:
+            view.pop("query_controls", None)
+        if view.get("empty_state") is None:
+            view.pop("empty_state", None)
+        elif view["empty_state"].get("detail") is None:
+            view["empty_state"].pop("detail", None)
+        views.append(view)
+    candidate["views"] = views
+
+    commands: list[dict[str, Any]] = []
+    for raw_command in candidate["commands"]:
+        command = dict(raw_command)
+        if command.get("confirmation") is None:
+            command.pop("confirmation", None)
+        fixed_values = _field_entries(
+            command.get("fixed_values") or [],
+            owner=f"command {command['id']!r} fixed_values",
+        )
+        if fixed_values:
+            command["fixed_values"] = fixed_values
+        else:
+            command.pop("fixed_values", None)
+        if command.get("guard") is None:
+            command.pop("guard", None)
+        commands.append(command)
+    candidate["commands"] = commands
+
+    for state in candidate["representative_states"]:
+        normalized_filters: list[dict[str, Any]] = []
+        for raw_predicate in state["filters"]:
+            predicate = dict(raw_predicate)
+            operand = dict(predicate.pop("operand"))
+            if operand["kind"] == "field":
+                compare_field_ref = operand.get("field_ref")
+                if compare_field_ref is None:
+                    _fail(
+                        f"representative state {state['id']!r} field operand "
+                        "requires field_ref"
+                    )
+                predicate["compare_field_ref"] = compare_field_ref
+            else:
+                if operand.get("field_ref") is not None:
+                    _fail(
+                        f"representative state {state['id']!r} value operand "
+                        "requires field_ref=null"
+                    )
+                predicate["value"] = copy.deepcopy(operand.get("value"))
+            normalized_filters.append(predicate)
+        state["filters"] = normalized_filters
+        if state.get("max_items") is None:
+            state.pop("max_items", None)
+    return candidate
+
+
+def compile_semantic_prototype_candidate(
+    value: Mapping[str, Any],
+    *,
+    brief: Mapping[str, Any] | None = None,
+    project_ref: str | None = None,
+) -> dict[str, Any]:
+    """Validate, lower, and compile one strict provider candidate."""
+
+    candidate, normalizations = _canonicalize_semantic_prototype_candidate(value)
+    semantic_document = normalize_semantic_prototype_candidate(candidate)
+    result = compile_semantic_prototype(
+        semantic_document,
+        brief=brief,
+        project_ref=project_ref,
+    )
+    result["semantic_document"] = semantic_document
+    result["normalizations"] = normalizations
+    return result
+
+
 def _localized(
     value: Mapping[str, Any], dictionaries: dict[str, dict[str, str]]
 ) -> tuple[str, dict[str, str]]:
@@ -564,7 +1204,10 @@ def compile_semantic_prototype(
     commands = {str(item["id"]): dict(item) for item in document["commands"]}
     region_roles = {str(view["region_role"]) for view in document["views"]}
     resource_type = _runtime_resource_type(str(resource["id"]), project_ref)
-    selection_ref = f"selected_{resource['id']}_id"
+    selection_namespace = _runtime_state_identifier(
+        resource["id"], fallback="resource"
+    )
+    selection_ref = f"selected_{selection_namespace}_id"
     initial_state: dict[str, Any] = {selection_ref: ""}
     widgets: list[dict[str, Any]] = []
     source_map: dict[str, list[str]] = {
@@ -1033,8 +1676,13 @@ def compile_semantic_prototype(
 
 __all__ = [
     "SEMANTIC_COMPILE_RESULT_SCHEMA",
+    "SEMANTIC_PROTOTYPE_CANDIDATE_SCHEMA",
     "SEMANTIC_PROTOTYPE_SCHEMA",
+    "compile_semantic_prototype_candidate",
     "compile_semantic_prototype",
+    "normalize_semantic_prototype_candidate",
+    "semantic_prototype_candidate_contract",
+    "semantic_prototype_provider_contract",
     "semantic_prototype_contract",
     "validate_semantic_prototype",
 ]

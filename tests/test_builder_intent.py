@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from adaos.sdk.builder import intent as intent_sdk
-from adaos.services.builder_intent import capture_intent, compile_prototype_brief
+from adaos.services.builder_intent import (
+    capture_intent,
+    compile_prototype_brief,
+    merge_prototype_briefs,
+)
 from adaos.services.ui_capabilities import selected_ui_capabilities
 
 
@@ -299,3 +303,29 @@ def test_brief_excludes_russian_prototype_authoring_directive() -> None:
     assert [item["statement"] for item in brief["residual_requirements"]] == [
         "Пользователь сравнивает варианты"
     ]
+
+
+def test_accepted_brief_merge_preserves_project_origin_and_current_jobs() -> None:
+    origin = compile_prototype_brief(
+        'Создай новое приложение "Запасы" для небольшой мастерской.'
+    )
+    design = compile_prototype_brief(
+        "Нужно видеть позиции ниже минимального остатка и фильтровать их по категории."
+    )
+
+    merged = merge_prototype_briefs(origin, design)
+    repeated = merge_prototype_briefs(origin, design, origin)
+
+    assert merged == repeated
+    assert merged["brief_id"].startswith("brief:")
+    assert [item["kind"] for item in merged["operations"]] == ["filter"]
+    assert merged["operations"][0]["id"].startswith("operation:")
+    assert any(
+        "небольшой мастерской" in item["statement"]
+        for item in merged["residual_requirements"]
+    )
+    assert all(
+        evidence.startswith("brief:")
+        for item in merged["residual_requirements"]
+        for evidence in item["evidence"]
+    )

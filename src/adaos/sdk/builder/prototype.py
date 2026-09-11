@@ -79,6 +79,14 @@ def model_context(brief: Mapping[str, Any]) -> dict[str, Any]:
     return compile_prototype_model_context(brief)
 
 
+def merge_briefs(*briefs: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge accepted turn Briefs into a cumulative project contract."""
+
+    from adaos.services.builder_intent import merge_prototype_briefs
+
+    return merge_prototype_briefs(*briefs)
+
+
 def compile_semantic(
     document: Mapping[str, Any],
     *,
@@ -96,12 +104,61 @@ def compile_semantic(
     )
 
 
+def compile_semantic_candidate(
+    candidate: Mapping[str, Any],
+    *,
+    brief: Mapping[str, Any] | None = None,
+    project_ref: str | None = None,
+) -> dict[str, Any]:
+    """Compile a strict model candidate into canonical runtime artifacts."""
+
+    from adaos.services.builder.semantic_prototype import (
+        compile_semantic_prototype_candidate,
+    )
+
+    return compile_semantic_prototype_candidate(
+        candidate,
+        brief=brief,
+        project_ref=project_ref,
+    )
+
+
+def normalize_semantic_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and lower a strict model candidate to the semantic ABI."""
+
+    from adaos.services.builder.semantic_prototype import (
+        normalize_semantic_prototype_candidate,
+    )
+
+    return normalize_semantic_prototype_candidate(candidate)
+
+
 def semantic_contract() -> dict[str, Any]:
     """Return the schema used for semantic Prototype generation."""
 
     from adaos.services.builder.semantic_prototype import semantic_prototype_contract
 
     return semantic_prototype_contract()
+
+
+def semantic_candidate_contract() -> dict[str, Any]:
+    """Return the strict schema supplied to the Prototype design model."""
+
+    from adaos.services.builder.semantic_prototype import (
+        semantic_prototype_candidate_contract,
+    )
+
+    return semantic_prototype_candidate_contract()
+
+
+def semantic_provider_contract() -> dict[str, Any]:
+    """Return the OpenAI strict-subset projection of the model contract."""
+
+    from adaos.services.builder.semantic_prototype import (
+        semantic_prototype_provider_contract,
+    )
+
+    return semantic_prototype_provider_contract()
 
 
 def start_data_runtime(definition: Mapping[str, Any]):
@@ -161,10 +218,15 @@ __all__ = [
     "candidate_status",
     "check_spatial_constraint",
     "compile_semantic",
+    "compile_semantic_candidate",
     "composition_slice",
     "automation_handoff",
     "model_context",
+    "merge_briefs",
+    "normalize_semantic_candidate",
+    "semantic_candidate_contract",
     "semantic_contract",
+    "semantic_provider_contract",
     "start_data_runtime",
     "submit_request",
     "validate_workflow_slice",

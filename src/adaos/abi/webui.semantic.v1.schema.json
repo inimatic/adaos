@@ -159,11 +159,22 @@
     "statePredicate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["field_ref", "operator", "value"],
+      "required": ["field_ref", "operator"],
+      "oneOf": [
+        {
+          "required": ["value"],
+          "not": { "required": ["compare_field_ref"] }
+        },
+        {
+          "required": ["compare_field_ref"],
+          "not": { "required": ["value"] }
+        }
+      ],
       "properties": {
         "field_ref": { "$ref": "#/$defs/id" },
         "operator": { "enum": ["eq", "neq", "lt", "lte", "gt", "gte"] },
-        "value": { "type": ["string", "number", "boolean", "null"] }
+        "value": { "type": ["string", "number", "boolean", "null"] },
+        "compare_field_ref": { "$ref": "#/$defs/id" }
       }
     },
     "field": {
