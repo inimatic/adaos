@@ -138,7 +138,7 @@ def _generation_metadata(context: Mapping[str, Any]) -> dict[str, Any]:
     if effort and effort not in {"minimal", "low", "medium", "high"}:
         raise BuilderE2EError("Invalid ADAOS_BUILDER_LLM_REASONING_EFFORT")
     budget = str(os.getenv("ADAOS_BUILDER_LLM_MAX_TOKENS") or "").strip()
-    if budget and (not budget.isdigit() or not 1000 <= int(budget) <= 12000):
+    if budget and (not budget.isdigit() or not 1000 <= int(budget) <= 128000):
         raise BuilderE2EError("Invalid ADAOS_BUILDER_LLM_MAX_TOKENS")
     return {
         "builder_e2e_generation_contract": contract,

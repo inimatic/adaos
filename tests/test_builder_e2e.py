@@ -56,7 +56,9 @@ def test_generation_budget_override_is_explicit_and_validated(monkeypatch):
     assert "builder_llm_max_output_tokens" not in _generation_metadata({})
     monkeypatch.setenv("ADAOS_BUILDER_LLM_MAX_TOKENS", "12000")
     assert _generation_metadata({})["builder_llm_max_output_tokens"] == 12000
-    for value in ("0", "12001", "lots"):
+    monkeypatch.setenv("ADAOS_BUILDER_LLM_MAX_TOKENS", "128000")
+    assert _generation_metadata({})["builder_llm_max_output_tokens"] == 128000
+    for value in ("0", "128001", "lots"):
         monkeypatch.setenv("ADAOS_BUILDER_LLM_MAX_TOKENS", value)
         with pytest.raises(BuilderE2EError, match="MAX_TOKENS"):
             _generation_metadata({})

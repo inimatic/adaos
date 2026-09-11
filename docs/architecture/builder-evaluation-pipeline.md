@@ -680,8 +680,15 @@ request metadata and records the override in the run environment. This does
 not change Builder's default. Actual primary/repair request artifacts remain
 the authority for effective options. Keep cases and output budgets unchanged.
 For a separate capacity experiment, `ADAOS_BUILDER_LLM_MAX_TOKENS` explicitly
-forwards a total output ceiling between 1,000 and 12,000 tokens. Record this
+forwards a total output ceiling between 1,000 and 128,000 tokens. Record this
 changed variable; never combine such a run into a matched-effort comparison.
+To remove the application-imposed ceiling for GPT-5 evaluation, explicitly use
+128,000, its documented model output maximum. Omitting the setting does not
+remove Builder's default or Root's fallback budget. This is an opt-in diagnostic
+setting, not a production default and not an unlimited provider allowance.
+Compare `low` and `high` with this same ceiling, cases, compiler, context and
+grader. Retain primary and repair usage separately, including reasoning and
+cached input, and distinguish model execution from whole-pipeline duration.
 Compact generation diagnostics distinguish provider incompleteness and observed
 usage. Missing usage is not zero cost; retain original provider evidence.
 GPT-5 supports these effort levels in the [official model contract](https://developers.openai.com/api/docs/models/gpt-5).
