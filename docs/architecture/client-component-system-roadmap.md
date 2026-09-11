@@ -346,6 +346,14 @@ not execute. Unit-level schema validation missed this mismatch.
 - [x] `[should]` Add opt-in local table sorting before pagination and localized
   ISO date/time rendering. Disable local sort for cursor/server pagination;
   never imply a whole-catalog order from one loaded page.
+- [x] `[should]` Persist table page size and declared filter modes in browser
+  storage scoped by subnet, webspace/scenario and widget; exclude search,
+  selection, records and cursors. Add targeted reload and keep bound controls
+  synchronized with restored state. Builder metadata edits invalidate its
+  catalog. ChromeHeadless: 39 focused checks pass. Browser evidence:
+  `table-preferences-20260911-04` verifies reload (including four user-renamed
+  titles), full browser reload, filters/page size, wide/compact capture and
+  selected new-window preview. Earlier failed captures remain retained.
 - [ ] `[should]` Verify modal/side-sheet forms preserve selection, expose
   dismissal and restore focus, including EN/RU and narrow viewports.
 

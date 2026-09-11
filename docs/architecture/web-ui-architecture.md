@@ -425,6 +425,18 @@ The canonical semantic type for:
 Columns must be described through semantic display and editor contracts rather
 than through Taiga directives.
 
+For `ui.table`, browser preferences are scoped by subnet, renderer page scope
+(webspace/scenario) and stable widget ID. Persist page size and declared filter
+modes, never table rows, search text, selection or pagination cursors. Restore
+only supported page sizes and scalar filter values; malformed or unavailable
+storage must not block rendering. Do not mirror preferences into global keys.
+`inputs.preferences=false` opts out; `inputs.preferences.filterStateKeys` may
+explicitly add server-side filter controls to the ordinary `inputs.filters`
+state keys. Bound selectors and toggles must reflect restored state without
+dispatching mutations. `inputs.refresh=true` exposes a localized icon command
+that refreshes only this table's data source. Metadata mutations must invalidate
+both detail and affected catalog sources.
+
 ### Form matrix
 
 This is a distinct semantic type for field-centric grid layouts where the table

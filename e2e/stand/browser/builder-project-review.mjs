@@ -31,6 +31,8 @@ try {
     })) localStorage.setItem(key, value)
   }, { hub, token, subnet, webspace })
   const page = await context.newPage()
+  page.setDefaultTimeout(30_000)
+  page.setDefaultNavigationTimeout(60_000)
   page.on('pageerror', error => report.errors.push(error.message))
   page.on('response', response => {
     if (response.status() >= 400) report.responses.push({ url: response.url(), status: response.status() })
@@ -69,6 +71,37 @@ try {
       return rows.length > 0 && rows.every(row => row.textContent.includes('[TEST]'))
     })
     report.testFilter = true
+    const reloadResponse = page.waitForResponse(response => {
+      try { return response.request().postDataJSON()?.tool === 'builder_sdk_control_skill:list_projects' && response.ok() }
+      catch { return false }
+    })
+    await picker.getByRole('button', { name: /reload table|обновить таблицу/i }).click()
+    const freshCatalog = await (await reloadResponse).json()
+    report.reloadedCatalog = { ok: freshCatalog.ok, renamedTitles: (freshCatalog.result || []).filter(item => item.title?.startsWith('+')).map(item => item.title) }
+    await picker.locator('.table-pagination__size select').selectOption('50')
+    await picker.locator('ada-toggle-widget ion-toggle').click()
+    await page.waitForFunction(() => Object.keys(localStorage).some(key => {
+      if (!key.includes('table-preferences:v1:')) return false
+      const value = JSON.parse(localStorage.getItem(key))
+      return value.pageSize === 50 && value.filters?.projectPickerSample === 'test' && value.filters?.projectPickerArchived === true
+    }))
+    const preferenceSnapshot = () => page.evaluate(() => ({
+      stored: Object.fromEntries(Object.keys(localStorage).filter(key => key.includes('table-preferences:v1:')).map(key => [key, JSON.parse(localStorage.getItem(key))])),
+      tables: [...document.querySelectorAll('ada-table-widget')].map(element => {
+        const component = window.ng?.getComponent(element)
+        return component ? { id: component.widget?.id, pageSize: component.pageSize, key: component.preferenceKey, scope: component.state?.getActiveScope?.() } : null
+      }),
+    }))
+    report.preferencesBeforeReload = await preferenceSnapshot()
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.getByRole('button', { name: /choose project|выбрать проект/i }).click()
+    await rows.first().waitFor({ state: 'visible', timeout: 30_000 })
+    report.preferencesAfterReload = await preferenceSnapshot()
+    if (await picker.locator('.table-pagination__size select').inputValue() !== '50') throw new Error('Page size was not restored')
+    if (!/test applications|тестовые приложения/i.test(await picker.locator('ada-selector-widget .selector__control').innerText())) throw new Error('Filter control disagrees with restored table state')
+    if (!await picker.locator('ada-toggle-widget ion-toggle').evaluate(element => element.checked)) throw new Error('Archive filter was not restored')
+    report.persistedPreferences = true
+    console.log('Table reload and persisted preferences passed')
     const searchInput = picker.locator('ada-table-widget input[type=search]')
     await searchInput.fill('e2e-no-such-project-20260911')
     await picker.getByText(/no matching projects|нет подходящих проектов/i).waitFor({ state: 'visible' })
@@ -79,10 +112,11 @@ try {
     await row.waitFor({ state: 'visible', timeout: 30_000 })
     report.selectedRow = await row.innerText()
     if (!report.selectedRow.includes('[TEST]')) throw new Error('Project is not marked TEST')
-    await page.screenshot({ path: path.join(output, 'project-picker.png'), fullPage: true })
+    await page.screenshot({ path: path.join(output, 'project-picker.png'), fullPage: true, animations: 'disabled' })
     await page.setViewportSize({ width: 390, height: 844 })
-    await page.screenshot({ path: path.join(output, 'project-picker-compact.png'), fullPage: true })
+    await page.screenshot({ path: path.join(output, 'project-picker-compact.png'), fullPage: true, animations: 'disabled' })
     await page.setViewportSize({ width: 1440, height: 1000 })
+    console.log('Opening the selected test application')
     await row.click()
     await picker.waitFor({ state: 'hidden', timeout: 15_000 })
     const openPreview = page.getByRole('button', { name: /open preview in a new window|открыть просмотр в новом окне/i })
