@@ -46,7 +46,7 @@
           "description": "Fields whose values form the stable identity of one semantic item. Use id only when records already carry a generic id.",
           "items": { "$ref": "#/$defs/id" }
         },
-        "item_semantics": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "item_semantics": { "type": "string", "minLength": 1, "maxLength": 500 },
         "item_label": { "$ref": "#/$defs/localizedText" },
         "fields": {
           "type": "array",

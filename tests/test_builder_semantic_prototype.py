@@ -227,6 +227,8 @@ def _fixture() -> tuple[dict, dict]:
 def _candidate(semantic: dict) -> dict:
     candidate = copy.deepcopy(semantic)
     candidate["schema"] = "adaos.builder.semantic_prototype_candidate.v1"
+    candidate.pop("brief_ref")
+    candidate.pop("brief_digest")
     candidate["layout"] = candidate["layout"]["pattern"]
     candidate["resource"].pop("identity_field_refs")
     field_ids = [field["id"] for field in candidate["resource"]["fields"]]
@@ -358,6 +360,8 @@ def test_semantic_model_contract_is_strict_and_bounded() -> None:
     assert "identity_field_refs" not in contract["properties"]["resource"][
         "properties"
     ]
+    assert "brief_ref" not in contract["properties"]
+    assert "brief_digest" not in contract["properties"]
     assert set(contract["$defs"]["localizedText"]["properties"]) == {"en", "ru"}
     assert set(contract["$defs"]["record"]["properties"]) == {"id", "values"}
     assert contract["$defs"]["id"]["pattern"]
@@ -370,6 +374,36 @@ def test_semantic_model_candidate_compiles_to_canonical_document() -> None:
 
     assert result["schema"] == "adaos.builder.semantic_compile_result.v1"
     assert result["prototype_records"][0]["id"] == "work-1"
+    assert result["semantic_document"]["brief_ref"] == brief["brief_id"]
+    assert result["semantic_document"]["brief_digest"] == brief["digest"]
+    assert any(
+        item["kind"] == "authoritative_brief_provenance"
+        for item in result["normalizations"]
+    )
+
+
+def test_semantic_model_candidate_merges_duplicate_requirement_bindings() -> None:
+    brief, semantic = _fixture()
+    candidate = _candidate(semantic)
+    binding = copy.deepcopy(candidate["requirement_bindings"][0])
+    binding["semantic_refs"] = [
+        {"kind": "view", "id": candidate["views"][1]["id"]}
+    ]
+    candidate["requirement_bindings"].append(binding)
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    matching = [
+        item
+        for item in result["semantic_document"]["requirement_bindings"]
+        if item["requirement_ref"] == binding["requirement_ref"]
+    ]
+    assert len(matching) == 1
+    assert f"view:{candidate['views'][1]['id']}" in matching[0]["semantic_refs"]
+    assert any(
+        item["kind"] == "duplicate_requirement_binding"
+        for item in result["normalizations"]
+    )
 
 
 def test_semantic_model_candidate_canonicalizes_identifiers_and_references() -> None:

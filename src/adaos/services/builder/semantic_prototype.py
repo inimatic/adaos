@@ -1040,15 +1040,46 @@ def _canonicalize_semantic_prototype_candidate(
             normalized_refs.append(canonical_ref)
         binding["semantic_refs"] = normalized_refs
 
+    merged_bindings: list[dict[str, Any]] = []
+    bindings_by_requirement: dict[str, dict[str, Any]] = {}
+    for binding_index, binding in enumerate(candidate["requirement_bindings"]):
+        requirement_ref = str(binding["requirement_ref"])
+        existing = bindings_by_requirement.get(requirement_ref)
+        if existing is None:
+            existing = copy.deepcopy(dict(binding))
+            bindings_by_requirement[requirement_ref] = existing
+            merged_bindings.append(existing)
+            continue
+        existing_refs = set(existing["semantic_refs"])
+        for semantic_ref in binding["semantic_refs"]:
+            if semantic_ref not in existing_refs:
+                existing["semantic_refs"].append(semantic_ref)
+                existing_refs.add(semantic_ref)
+        normalizations.append(
+            {
+                "kind": "duplicate_requirement_binding",
+                "from": f"$.requirement_bindings[{binding_index}]",
+                "to": requirement_ref,
+                "target": "$.requirement_bindings",
+            }
+        )
+    candidate["requirement_bindings"] = merged_bindings
+
     _materialize_candidate_localization_keys(candidate)
     return candidate, normalizations
 
 
 def _lower_semantic_prototype_candidate(
     value: Mapping[str, Any],
+    *,
+    brief: Mapping[str, Any],
 ) -> dict[str, Any]:
     candidate = copy.deepcopy(dict(value))
     candidate["schema"] = SEMANTIC_PROTOTYPE_SCHEMA
+    candidate["brief_ref"] = str(brief.get("brief_id") or "")
+    candidate["brief_digest"] = str(brief.get("digest") or "")
+    if not candidate["brief_ref"] or not candidate["brief_digest"]:
+        _fail("candidate lowering requires an authoritative Prototype Brief")
     candidate["layout"] = {"pattern": candidate["layout"]}
     resource = dict(candidate["resource"])
     resource["identity_field_refs"] = ["id"]
@@ -1153,23 +1184,35 @@ def _lower_semantic_prototype_candidate(
     return candidate
 
 
-def normalize_semantic_prototype_candidate(value: Mapping[str, Any]) -> dict[str, Any]:
+def normalize_semantic_prototype_candidate(
+    value: Mapping[str, Any], *, brief: Mapping[str, Any]
+) -> dict[str, Any]:
     """Lower a strict provider candidate into the canonical semantic ABI."""
 
     candidate, _ = _canonicalize_semantic_prototype_candidate(value)
-    return validate_semantic_prototype(_lower_semantic_prototype_candidate(candidate))
+    return validate_semantic_prototype(
+        _lower_semantic_prototype_candidate(candidate, brief=brief), brief=brief
+    )
 
 
 def compile_semantic_prototype_candidate(
     value: Mapping[str, Any],
     *,
-    brief: Mapping[str, Any] | None = None,
+    brief: Mapping[str, Any],
     project_ref: str | None = None,
 ) -> dict[str, Any]:
     """Validate, lower, and compile one strict provider candidate."""
 
     candidate, normalizations = _canonicalize_semantic_prototype_candidate(value)
-    semantic_document = _lower_semantic_prototype_candidate(candidate)
+    semantic_document = _lower_semantic_prototype_candidate(candidate, brief=brief)
+    normalizations.append(
+        {
+            "kind": "authoritative_brief_provenance",
+            "from": "Prototype Brief",
+            "to": str(semantic_document["brief_ref"]),
+            "target": "$.brief_ref|$.brief_digest",
+        }
+    )
     result = compile_semantic_prototype(
         semantic_document,
         brief=brief,

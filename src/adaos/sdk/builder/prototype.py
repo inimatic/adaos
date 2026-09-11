@@ -107,7 +107,7 @@ def compile_semantic(
 def compile_semantic_candidate(
     candidate: Mapping[str, Any],
     *,
-    brief: Mapping[str, Any] | None = None,
+    brief: Mapping[str, Any],
     project_ref: str | None = None,
 ) -> dict[str, Any]:
     """Compile a strict model candidate into canonical runtime artifacts."""
@@ -123,14 +123,16 @@ def compile_semantic_candidate(
     )
 
 
-def normalize_semantic_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+def normalize_semantic_candidate(
+    candidate: Mapping[str, Any], *, brief: Mapping[str, Any]
+) -> dict[str, Any]:
     """Validate and lower a strict model candidate to the semantic ABI."""
 
     from adaos.services.builder.semantic_prototype import (
         normalize_semantic_prototype_candidate,
     )
 
-    return normalize_semantic_prototype_candidate(candidate)
+    return normalize_semantic_prototype_candidate(candidate, brief=brief)
 
 
 def semantic_contract() -> dict[str, Any]:
