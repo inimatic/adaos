@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "12"
+PROTOTYPE_GRADER_VERSION = "13"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -220,8 +220,17 @@ def _evidence_pointers(artifact: Mapping[str, Any]) -> list[str]:
 
 
 def _model_result_schema(evidence_pointers: Sequence[str]) -> dict[str, Any]:
-    del evidence_pointers
-    return copy.deepcopy(_MODEL_RESULT_SCHEMA)
+    schema = copy.deepcopy(_MODEL_RESULT_SCHEMA)
+    pointers = list(dict.fromkeys(evidence_pointers))
+    if len(pointers) > 950 or sum(map(len, pointers)) > 100_000:
+        raise ValueError("Prototype evidence index exceeds the bounded grader contract")
+    # Chunk long enums within the provider's per-property string budget.
+    chunks = [pointers[index:index + 250] for index in range(0, len(pointers), 250)]
+    alternatives = [{"type": "string", "enum": chunk} for chunk in chunks]
+    schema["$defs"]["evidence"]["properties"]["pointer"] = (
+        alternatives[0] if len(alternatives) == 1 else {"anyOf": alternatives}
+    ) if alternatives else {"type": "string", "enum": [""]}
+    return schema
 
 
 def _rubric_criteria(values: Sequence[Any]) -> list[dict[str, Any]]:
@@ -448,6 +457,7 @@ def grade_builder_prototype(
         "artifact": dict(artifact),
     }
     selected_model = str(model or _DEFAULT_GRADER_MODEL).strip()
+    result_schema = _model_result_schema(evidence_pointers)
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT.strip()},
         {
@@ -455,7 +465,8 @@ def grade_builder_prototype(
             "content": json.dumps(payload, ensure_ascii=False, sort_keys=True),
         },
     ]
-    request_digest = _digest({"messages": messages, "model": selected_model})
+    request_digest = _digest({"messages": messages, "model": selected_model,
+                              "result_schema": result_schema, "grader_version": PROTOTYPE_GRADER_VERSION})
     request_id = "builder-e2e-grade-" + request_digest.removeprefix("sha256:")[:32]
     request_record = {
         "schema": "adaos.builder.prototype_grade_input.v1",
@@ -465,6 +476,8 @@ def grade_builder_prototype(
         "rubric_digest": _digest(payload["rubric"]),
         "messages": messages,
         "model": selected_model,
+        "result_schema": result_schema,
+        "grader_version": PROTOTYPE_GRADER_VERSION,
     }
     if request_recorder is not None:
         request_recorder(request_record)
@@ -485,7 +498,7 @@ def grade_builder_prototype(
                     "type": "json_schema",
                     "name": "adaos_builder_prototype_grade",
                     "strict": True,
-                    "schema": _model_result_schema(evidence_pointers),
+                    "schema": result_schema,
                 }
             },
             request_id=request_id,

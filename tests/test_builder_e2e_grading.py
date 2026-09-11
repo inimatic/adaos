@@ -6,6 +6,27 @@ from adaos.e2e.builder import validate_builder_e2e_record
 from adaos.e2e.builder_grading import _evidence_pointers, grade_builder_prototype
 
 
+def test_grader_evidence_schema_cannot_invent_or_shift_paths() -> None:
+    from jsonschema import Draft202012Validator
+    from adaos.e2e.builder_grading import _model_result_schema
+
+    pointers = [f"/webui/ui/application/desktop/pageSchema/widgets/{index}" for index in range(510)]
+    schema = _model_result_schema(pointers)
+    validator = Draft202012Validator(schema["$defs"]["evidence"]["properties"]["pointer"])
+    assert all(validator.is_valid(pointer) for pointer in pointers)
+    assert not validator.is_valid("/webui/ui/application/pageSchema/widgets/5")
+    assert not validator.is_valid(pointers[-1] + "/made-up")
+    assert len(validator.schema["anyOf"]) == 3
+
+
+def test_grader_rejects_oversized_evidence_before_inference() -> None:
+    import pytest
+    from adaos.e2e.builder_grading import _model_result_schema
+
+    with pytest.raises(ValueError, match="bounded grader"):
+        _model_result_schema([f"/{index}" for index in range(951)])
+
+
 def _model_result(*, evidence: str = "/ui") -> str:
     return json.dumps(
         {
@@ -118,8 +139,7 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
         ]
         assert kwargs["text"]["format"]["type"] == "json_schema"
         pointer_schema = kwargs["text"]["format"]["schema"]["$defs"]["evidence"]
-        assert pointer_schema["properties"]["pointer"]["pattern"].startswith("^/")
-        assert "enum" not in pointer_schema["properties"]["pointer"]
+        assert pointer_schema["properties"]["pointer"]["enum"] == payload["evidence_pointers"]
         assert kwargs["model"] == "gpt-4.1"
         assumption_schema = kwargs["text"]["format"]["schema"]["properties"][
             "prohibited_assumptions"
@@ -130,7 +150,7 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
             "unclear",
         ]
         assert "Mere absence is not uncertainty" in messages[0]["content"]
-        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v12"
+        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v13"
         return {"job_id": "job-1", "_client": {"base_url": "https://root"}}
 
     def wait(job_id, **kwargs):

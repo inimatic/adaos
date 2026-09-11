@@ -183,6 +183,7 @@
         "from_field_ref": { "$ref": "#/$defs/id" },
         "to_resource_ref": { "$ref": "#/$defs/id" },
         "to_field_ref": { "$ref": "#/$defs/id" },
+        "label_field_refs": { "type": "array", "maxItems": 3, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
         "cardinality": { "enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many"] }
       }
     },

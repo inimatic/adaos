@@ -44,6 +44,13 @@ def _resource_query_widgets(
     result: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     expected_resource_type = str(resource_type or "").strip()
     for widget in _surface_widgets(webui):
+        if widget.get("type") == "ui.form":
+            for field in dict(widget.get("inputs") or {}).get("fields") or []:
+                source = field.get("optionsDataSource") if isinstance(field, Mapping) else None
+                if (isinstance(source, Mapping) and source.get("kind") == "resourceQuery"
+                        and str(source.get("resourceType") or "").startswith("prototype.")
+                        and (not expected_resource_type or source["resourceType"] == expected_resource_type)):
+                    result.append((widget, source))
         data_source = (
             widget.get("dataSource")
             if isinstance(widget.get("dataSource"), Mapping)

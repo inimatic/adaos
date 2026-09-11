@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -11,7 +12,12 @@ from adaos.sdk.builder.prototype import apply_state_repair, compile_semantic_can
 from adaos.sdk.developer.prototypes import validate_resource_spec
 
 
-def replay(run: Path) -> list[dict]:
+def replay(run: Path, builder_skill: Path | None = None) -> list[dict]:
+    builder = None
+    if builder_skill:
+        spec = importlib.util.spec_from_file_location("builder_replay_validation", builder_skill / "handlers/main.py")
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
     rows = []
     for checkpoint in sorted(run.glob("checkpoints/*/attempt-*.json")):
         value = json.loads(checkpoint.read_text(encoding="utf-8"))
@@ -21,6 +27,9 @@ def replay(run: Path) -> list[dict]:
         case = checkpoint.parent.name
         attempt = int(checkpoint.stem.split("-")[-1])
         generation_path = run / "evidence" / "generation" / f"{case}-attempt-{attempt:02}.json"
+        if not generation_path.is_file():
+            rows.append({"case": case, "attempt": attempt, "status": "not_replayed", "reason": "No retained terminal generation evidence"})
+            continue
         generation = json.loads(generation_path.read_text(encoding="utf-8"))
         base = None
         findings = []
@@ -40,6 +49,11 @@ def replay(run: Path) -> list[dict]:
                 compiled = compile_semantic_candidate(candidate, brief=brief)
                 for resource in compiled.get("prototype_resources", []):
                     validate_resource_spec(compiled["webui"], resource["records"], resource_type=resource["resource_type"])
+                if builder:
+                    validation = builder._validate_builder_webui_payload(compiled["webui"], compiled.get("preview_state") or {})
+                    row["builder_validation"] = validation
+                    if not validation.get("ok"):
+                        raise ValueError(f"Builder payload validation: {validation}")
                 row.update(status="passed", normalizations=compiled["normalizations"])
             except Exception as exc:
                 findings = getattr(exc, "findings", [])
@@ -53,13 +67,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--builder-skill", type=Path, help="Validate the complete current DEV Builder payload boundary, without applying it")
     args = parser.parse_args()
     if args.output.exists():
         raise SystemExit("Replay output already exists; retain immutable evidence")
     result = {"kind": "compiler_replay_not_fresh_generation", "source_run": str(args.run),
               "core_head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
               "working_diff": subprocess.check_output(["git", "diff", "--stat"], text=True),
-              "rows": replay(args.run)}
+              "builder_skill": str(args.builder_skill) if args.builder_skill else None,
+              "rows": replay(args.run, args.builder_skill)}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return 0

@@ -398,12 +398,20 @@ def _validate_semantic_prototype_v1(
     brief: Mapping[str, Any] | None = None,
     require_primary: bool = True,
     record_state_ids: frozenset[str] = frozenset(),
+    lookup_only: bool = False,
 ) -> dict[str, Any]:
     """Validate schema, references, and accepted-requirement coverage."""
 
     document = copy.deepcopy(dict(value))
     try:
-        _validator().validate(document)
+        if lookup_only:
+            schema = copy.deepcopy(_validator().schema)
+            schema["properties"]["views"]["minItems"] = 0
+            Draft202012Validator(schema).validate(document)
+            if require_primary or document["views"] or document["commands"] or document["representative_states"]:
+                _fail("lookup-only validation requires an internal resource slice without views or commands")
+        else:
+            _validator().validate(document)
     except ValidationError as exc:
         path = ".".join(str(item) for item in exc.absolute_path)
         suffix = f" at {path}" if path else ""
@@ -799,6 +807,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
     text_schema["properties"] = {locale: text_schema["properties"][locale] for locale in requested_locales}
     if version == "v2":
         contract["required"].append("automation_requirements")
+        contract["$defs"]["relationship"]["required"].append("label_field_refs")
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
         if brief is not None:
@@ -877,14 +886,15 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             "record_order": "values follow fields order exactly; include each field once",
         },
         "relationships": contract["$defs"]["relationship"]["properties"]["to_field_ref"]["description"],
-        "modeling": "Use separate resources for independently editable repeated concepts, including links. Every resource has a collection; prefix field IDs with its concept. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
+        "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Prefix field IDs with its concept. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Otherwise provide an inspectable collection. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
         "coverage": "Use the Brief required_references once each. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search uses field_ref=null. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
-        "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality"},
+        "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality",
+                          "placement": "query_controls, filter and empty_state belong to collection views only. Details and editors have query_controls=[] and filter=null; put search on their owning collection."},
         "deferred_computations": "When a requested computation or rule is deferred, show plausible representative OUTPUT values and their meaning in an inspectable view. A description or raw inputs alone do not illustrate the requested result. Clearly disclose that these values are fixtures, not live calculations. Do not build data concepts used only by future Automation.",
         "command_guards": "Guards reference fields of the command's own editor resource only. A predicate over several related records is not a single-record field guard; preserve such business rules for Automation with visible representative outcomes.",
         "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
         "state_rules": "States are test cases of the same UI, not separate resources. collection_empty runs that collection with an empty response fixture; keep its normal populated records and declare empty_state. Never clone a resource or add a separate Samples collection just to demonstrate emptiness. Other proofs count normal fixtures satisfying ALL predicates. States do not inherit other states' filters; view.filter is a user-controlled value, not a fixed base predicate. query_empty needs a reachable combination of equality filters with zero matches; choice values must be declared options. Predicate fields must be visible. An illustrative result is not a business computation. Choose proofs relevant to the request, not one of each kind.",
-        "interactions": "Reuse local CRUD, selectors, query controls, confirmation and field guards. Commands belong to an editor; each resource needs its own collection. Foreign-key collections need a reachable relationship filter when the workflow requires inspecting one selected item's linked records; an unfiltered list of raw IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
+        "interactions": "Reuse local CRUD, live relationship selectors, query controls, confirmation and field guards. Commands belong to an editor; selection/details require a collection, but lookup-only resources need no standalone view. Foreign-key collections need a reachable relationship filter when the workflow requires inspecting one selected item's linked records; an unfiltered list of raw IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
         "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references: sample://image, sample://video, sample://document (downloadable text), sample://unavailable. Do not invent local paths for files that do not exist. attachment/attachments fields capture real local bytes, store references and render download links in details; documents do not require mediaKey or an image viewer. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading.",
         "ux_recommendations": {
             "layout": "layout=flow stacks regions; split/focus_detail places primary beside supporting on desktop, stacked on mobile; grid groups equal-priority regions. region_role is actual placement: primary for the main task, supporting for selected details or secondary work, actions for a footer. Putting every view in primary creates one long column even in split. Prefer one primary collection and contextual details; reserve flow for genuinely linear work. Supporting is a real region, not merely a label.",
@@ -2315,6 +2325,8 @@ def _canonicalize_semantic_prototype_candidate_v2(
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     candidate = copy.deepcopy(dict(value))
     candidate.setdefault("automation_requirements", [])
+    for relationship in candidate.get("relationships") or []:
+        relationship.setdefault("label_field_refs", [])
     for resource in candidate.get("resources") or []:
         resource.setdefault("read_only_when", None)
     for view in candidate.get("views") or []:
@@ -2540,6 +2552,11 @@ def _canonicalize_semantic_prototype_candidate_v2(
     for relationship in candidate.get("relationships") or []:
         normalized_relationship = copy.deepcopy(dict(relationship))
         normalized_relationship["id"] = relationship_ids[str(relationship["id"])]
+        if "label_field_refs" in relationship:
+            normalized_relationship["label_field_refs"] = [
+                field_ids.get(str(ref), _canonical_candidate_identifier(ref, namespace="field"))
+                for ref in relationship["label_field_refs"]
+            ]
         for key, namespace in (
             ("from_resource_ref", resource_ids),
             ("to_resource_ref", resource_ids),
@@ -2873,6 +2890,26 @@ def _state_proof_findings(
     return findings
 
 
+def _lookup_only_resource_ids(document: Mapping[str, Any]) -> set[str]:
+    views = document.get("views") or []
+    resources = {item["id"]: item for item in document.get("resources") or []}
+    result: set[str] = set()
+    for relation in document.get("relationships") or []:
+        source_id, target_id = relation["from_resource_ref"], relation["to_resource_ref"]
+        if any(view.get("resource_ref") == target_id for view in views):
+            continue
+        field_id = relation["from_field_ref"]
+        source = resources.get(source_id, {})
+        if not any(field["id"] == field_id and field["editable"] for field in source.get("fields") or []):
+            continue
+        editors = {view["id"] for view in views if view.get("resource_ref") == source_id
+                   and view["role"] == "editor" and field_id in view["field_refs"]}
+        if any(command["view_ref"] in editors and field_id in command.get("input_field_refs", [])
+               for command in document.get("commands") or []):
+            result.add(target_id)
+    return result
+
+
 def _semantic_v2_model_findings(
     document: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
@@ -2897,9 +2934,15 @@ def _semantic_v2_model_findings(
         ]
         for resource_id in resources
     }
+    for view_index, view in enumerate(views.values()):
+        if view.get("role") != "collection" and view.get("query_controls"):
+            findings.append({"code": "semantic.query_view_role", "path": f"$.views[{view_index}].query_controls",
+                             "semantic_refs": [f"view:{view['id']}"],
+                             "detail": f"query controls in {view['id']!r} must belong to its collection, not a {view['role']} view"})
+    lookup_only = _lookup_only_resource_ids(document)
     for resource_index, (resource_id, resource) in enumerate(resources.items()):
         resource_views = views_by_resource[resource_id]
-        if not resource_views:
+        if not resource_views and resource_id not in lookup_only:
             findings.append(
                 {
                     "code": "semantic.resource_view_missing",
@@ -2908,7 +2951,7 @@ def _semantic_v2_model_findings(
                     "detail": f"resource {resource_id!r} has no inspectable view",
                 }
             )
-        elif not any(view.get("role") == "collection" for view in resource_views):
+        elif resource_views and not any(view.get("role") == "collection" for view in resource_views):
             findings.append(
                 {
                     "code": "semantic.resource_collection_missing",
@@ -3191,13 +3234,21 @@ def _validate_semantic_prototype_v2(
                 f"{resource_id!r}: {unknown_fields}"
             )
         views_by_resource[resource_id].append(view)
+    lookup_only = _lookup_only_resource_ids(document)
     for resource_id, resource_views in views_by_resource.items():
+        if resource_id in lookup_only:
+            continue
         if not resource_views:
             _fail(f"resource {resource_id!r} has no inspectable view")
         if not any(str(item["role"]) == "collection" for item in resource_views):
             _fail(f"resource {resource_id!r} requires a collection view")
 
     for relationship in relationships.values():
+        target = resources.get(relationship["to_resource_ref"], {})
+        target_fields = {field["id"]: field for field in target.get("fields") or []}
+        for ref in relationship.get("label_field_refs") or []:
+            if ref not in target_fields or target_fields[ref]["value_type"] not in FILTER_VALUE_TYPES:
+                _fail(f"relationship {relationship['id']!r} label references an unknown or non-scalar target field {ref!r}")
         for side in ("from", "to"):
             resource_id = str(relationship[f"{side}_resource_ref"])
             field_id = str(relationship[f"{side}_field_ref"])
@@ -3289,6 +3340,7 @@ def _validate_semantic_prototype_v2(
         }
         _validate_semantic_prototype_v1(
             slice_document, brief=None, require_primary=False,
+            lookup_only=resource_id in lookup_only,
             record_state_ids=frozenset(str(item["id"]) for item in states.values() if item["proof"]["kind"] == "field_predicate"),
         )
 
@@ -3417,9 +3469,9 @@ def _prototype_relation_option_fields(
         if any(value in (None, "") for value in target_values):
             continue
 
-        display_field_ids: list[str] = []
+        display_field_ids: list[str] = list(relationship.get("label_field_refs") or [])
         target_resource_id = str(relationship.get("to_resource_ref") or "")
-        for view in views:
+        for view in ([] if display_field_ids else views):
             if (
                 str(view.get("resource_ref") or "") == target_resource_id
                 and str(view.get("role") or "") == "collection"
@@ -3619,6 +3671,16 @@ def _compile_semantic_prototype_v2(
             views=document["views"],
             project_ref=project_ref,
         )
+        runtime_type = _runtime_resource_type(resource_id, project_ref)
+        if not resource_views:
+            validated = _validate_semantic_prototype_v1(slice_document, require_primary=False, lookup_only=True)
+            record_schemas[runtime_type] = _prototype_record_schema(validated["resource"])
+            prototype_resources.append({
+                "resource_ref": resource_id, "resource_type": runtime_type,
+                "records": [{**copy.deepcopy(record), "id": "::".join(str(record[key]).strip()
+                            for key in resource["identity_field_refs"])} for record in resource["records"]],
+            })
+            continue
         compiled = _compile_semantic_prototype_v1(
             slice_document,
             brief=None,
@@ -3646,6 +3708,10 @@ def _compile_semantic_prototype_v2(
                     if field["id"] in lookups:
                         field.update(type="dropdown", **copy.deepcopy(lookups[field["id"]]))
                         field.pop("options", None)
+                        target_type = lookups[field["id"]]["optionsDataSource"]["resourceType"]
+                        target_id = next(identifier for identifier in resources if _runtime_resource_type(identifier, project_ref) == target_type)
+                        source_map.setdefault(f"resource:{target_id}", []).append(
+                            f"ui.application.desktop.pageSchema.widgets.@{widget['id']}.inputs.fields.@{field['id']}.optionsDataSource.resourceType")
         if policy:
             resource_policies[runtime_type] = policy
         record_schemas.update(page["meta"]["builder"]["prototype_record_schemas"])

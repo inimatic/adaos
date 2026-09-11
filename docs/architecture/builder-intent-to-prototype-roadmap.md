@@ -1396,6 +1396,35 @@ motivate generic regressions, but cannot support a claim about GPT-5 low. The
 next controlled cohort must verify actual model/effort in the first request and
 retain all terminal response evidence. Previous explicit GPT-5 runs are unchanged.
 
+`context-archetypes-gpt5-low-20260912-04` verified GPT-5 low in actual requests,
+but was stopped at a deterministic integration blocker after four completed
+attempts, not treated as a completed eight-archetype score. The compiler emitted
+live dropdown sources while DEV Builder still required static options. One
+additional budget request had already been submitted; its terminal Root response
+is retained separately and was not applied or counted as a completed attempt.
+Operations attempt 2 compiled and passed create/visible-record browser tasks on
+both layouts, but grader v12 cited a nonexistent path and downgraded its own
+positive verdict. Original verdicts and response artifacts remain unchanged.
+
+- [x] `[must]` Align DEV Builder's component preflight with live resource dropdowns;
+  run retained candidates through the complete Builder payload boundary, not
+  only semantic compilation and resource schema derivation.
+- [x] `[must]` Permit viewless lookup resources only when a reachable editor
+  consumes their relationship selector. Preserve record validation and read-only
+  materialization; choose explicit safe label fields, with identity fallback,
+  rather than exposing arbitrary target fields or inventing a collection.
+- [x] `[must]` Collect misplaced query controls alongside missing collections
+  before repair; describe collection-only query controls in the shared context.
+- [x] `[must]` Remove the duplicate semantic-rule checklist from repair prompts.
+  Repairs use the same shared capability contract as generation, plus preservation
+  and scope instructions, so stale rules cannot contradict new primitives.
+- [x] `[must]` Constrain grader evidence to existing pointers. Grader v13 hashes
+  and retains its exact response schema, bounds its evidence index, and groups
+  enums within provider limits. It does not forgive invalid evidence in old runs.
+- [ ] `[must]` Qualify the combined lookup/compiler/Builder fixes with fresh
+  GPT-5 low generation and create-related/select/save/reopen browser tasks.
+  Replay is diagnostic evidence, not a replacement for fresh generation.
+
 Engineering basis: [OpenAI text-generation guidance](https://developers.openai.com/api/docs/guides/text),
 [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), and
 [Anthropic context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).

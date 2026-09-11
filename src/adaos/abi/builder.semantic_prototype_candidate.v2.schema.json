@@ -95,7 +95,8 @@
         "from_resource_ref": { "$ref": "#/$defs/id" },
         "from_field_ref": { "$ref": "#/$defs/id" },
         "to_resource_ref": { "$ref": "#/$defs/id" },
-        "to_field_ref": { "$ref": "#/$defs/id", "description": "Use id for record identity, with source values equal to target record.id. A declared target field instead requires exact unique field values, not id-like labels. Display labels come from the target collection fields." },
+        "to_field_ref": { "$ref": "#/$defs/id", "description": "Use id for record identity, with source values equal to target record.id. A declared target field instead requires exact unique field values, not id-like labels. Display labels use label_field_refs or the target collection fields." },
+        "label_field_refs": { "type": "array", "maxItems": 3, "uniqueItems": true, "items": { "$ref": "#/$defs/id" }, "description": "Target fields safe to display in selectors. Empty uses target collection labels, or the target identity if it has no collection. Never include private details here." },
         "cardinality": { "type": "string", "enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many"] }
       }
     },

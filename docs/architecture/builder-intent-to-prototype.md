@@ -618,6 +618,13 @@ checks references under its registry mutation lock, including inverse references
 on target deletion, scoped to the same project and WebUI revision. Current
 collection filters and relationship display labels still need live lookup
 qualification; a dynamic form alone does not qualify all relationship workflows.
+Lookup-only resources may omit standalone views when another reachable editor
+consumes their relationship selector. They still materialize typed read-only
+records and undergo the same identity/reference validation. Relationship
+`label_field_refs` chooses target fields safe to display; existing target collection
+labels or the target identity provide backward-compatible fallbacks. Never infer
+private display fields or fabricate a collection solely to satisfy lowering.
+Unreachable resources and details without a selection path remain invalid.
 
 A deferred computation still requires representative output values when those
 outputs are requested. Raw inputs plus an explanatory paragraph are not an

@@ -106,6 +106,48 @@ def test_relationship_choice_options_are_derived_before_record_validation() -> N
     assert {option["value"] for option in field["options"]} == {"person-1", "person-2"}
 
 
+def test_lookup_only_resource_materializes_without_inventing_a_collection() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["views"] = [view for view in semantic["views"] if view["resource_ref"] != "people"]
+    editor = next(view for view in semantic["views"] if view["role"] == "editor")
+    editor["field_refs"].append("work_owner_id")
+    next(command for command in semantic["commands"] if command["kind"] == "update")["input_field_refs"].append("work_owner_id")
+    semantic["relationships"][0]["label_field_refs"] = ["person_name"]
+    candidate = _multi_resource_candidate(semantic)
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    assert all(widget.get("dataSource", {}).get("resourceType") != "prototype.people" for widget in page["widgets"])
+    field = next(field for widget in page["widgets"] if widget["type"] == "ui.form"
+                 for field in widget["inputs"]["fields"] if field["id"] == "work_owner_id")
+    assert field["optionLabelPaths"] == ["person_name"]
+    assert field["optionsDataSource"]["resourceType"] == "prototype.people"
+    resource = next(resource for resource in compiled["prototype_resources"] if resource["resource_ref"] == "people")
+    spec = developer_prototypes.derive_record_resource_spec(compiled["webui"], resource["records"], resource_type=resource["resource_type"])
+    assert {operation["id"] for operation in spec["resource_definition"]["operations"]} == {"list", "show"}
+    assert "person_phone" in spec["data_definition"]["record_schema"]["properties"]
+    assert compiled["source_map"]["resource:people"]
+    candidate["resources"][1]["records"][0]["values"][0] = 123
+    with pytest.raises(BuilderWorkflowError, match="invalid short_text"):
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+
+
+def test_unreachable_resource_cannot_be_excused_as_lookup_only() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["views"] = [view for view in semantic["views"] if view["resource_ref"] != "people"]
+    with pytest.raises(BuilderWorkflowError, match="has no inspectable view"):
+        compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+
+
+def test_query_role_findings_are_reported_alongside_missing_collections() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["views"] = [view for view in semantic["views"] if view["resource_ref"] != "people"]
+    detail = next(view for view in semantic["views"] if view["role"] == "details")
+    detail["query_controls"] = [{"id": "find", "kind": "search", "field_ref": None, "label": _text("find", "Find", "Find")}]
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    assert {"semantic.query_view_role", "semantic.resource_view_missing"}.issubset({item["code"] for item in caught.value.findings})
+
+
 def test_provider_grammar_limits_requirement_refs_to_the_active_inventory() -> None:
     brief, _ = _multi_resource_fixture()
     defs = semantic_prototype_provider_contract(version="v2", locales=("ru",), brief=brief)["$defs"]
