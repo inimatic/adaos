@@ -607,6 +607,17 @@ the optimization order explicit: improve semantic/context sufficiency and
 output volume first; retain timeout only as an outer phase-labelled circuit
 breaker.
 
+Smaller-model probe (2026-09-11): one unchanged volunteer E2E repetition on
+`gpt-5-mini` took 88.6 seconds, including 39.3 seconds primary generation and
+38.0 seconds automatic repair. The candidate failed semantic validation after
+repair; grading was not reached. The reference GPT-5 run `-13` took 39.2 seconds
+and passed semantic validation before failing the outcome hard gate. The
+system prefix and provider schema are identical, but cache conditions differ.
+See [complete comparison and context review](builder-gpt5-mini-evaluation-2026-09-11.md).
+This observation does not admit mini as the default or justify smaller output
+limits. It exposes missing first-call compiler invariants and repair regressions
+in previously satisfied requirement bindings.
+
 - [ ] `[must]` Replace complete WebUI/project-memory/history inclusion with
   brief deltas, semantic slices, accepted constraints, findings, and retrievable
   content-addressed refs.
@@ -624,6 +635,12 @@ breaker.
 - [ ] `[must]` Add route selection among zero-model, efficient model, full
   design model, and optional visual model. Promote a route only through matched
   evaluation.
+- [ ] `[must]` Include compiler-required cross-object invariants in the selected
+  first-call contract bundle, including each resource's required collection
+  surface. Verify request sufficiency against actual validator rules.
+- [ ] `[must]` Make repair preserve unaffected accepted requirement bindings and
+  states through deterministic before/after checks and scoped edits; retain
+  the mini run's dropped-state-binding failure as regression evidence.
 - [ ] `[should]` Add semantic-delta candidate reuse and exact candidate replay
   before another model request.
 - [ ] `[should]` Target at least 60% cached input for repeated profile and
