@@ -21,7 +21,7 @@ steps:
   - id: design
     type: builder.chat
     input:
-      text: Build a practical first version now. A coordinator needs to review volunteers and their roles and availability, see shifts and coverage gaps, assign or remove a person, avoid overlapping assignments, and open contact details only when needed. Include realistic examples and clear states for no volunteers, an unfilled shift and a fully staffed day.
+      text: Build a practical first version now. A coordinator needs to review volunteers and their roles and availability, see shifts and coverage gaps, assign or remove a person, avoid overlapping assignments, and open contact details only when needed. Include realistic examples and clear states for no volunteers, an unfilled shift, a fully staffed day and conflicting availability.
       auto_apply: true
     expect:
       values: {ok: true}

@@ -1,6 +1,6 @@
 schema: adaos.builder.e2e_suite.v1
 suite_id: builder-visible-archetypes
-version: "3"
+version: "4"
 title: Builder visible cross-domain archetypes
 description: Visible development cases for diagnosing intent, component, context, cost, and latency gaps.
 cohort: development

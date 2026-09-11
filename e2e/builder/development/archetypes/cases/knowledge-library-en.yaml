@@ -21,7 +21,7 @@ steps:
   - id: design
     type: builder.chat
     input:
-      text: Produce a useful first version now. People need to search by words, filter by topic, owner and status, scan matching articles, open an article without losing their search, read its formatted content and attachments, create a draft and revise it before publishing. Include realistic examples plus empty-library and no-results states.
+      text: Produce a useful first version now. People need to search by words, filter by topic, owner and status, scan matching articles, open an article without losing their search, read its formatted content and attachments, create a draft and revise it before publishing. Include realistic examples plus empty-library, no-results, and archived read-only article states.
       auto_apply: true
     expect:
       values: {ok: true}
