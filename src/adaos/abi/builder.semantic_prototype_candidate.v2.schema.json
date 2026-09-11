@@ -141,7 +141,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "label": { "$ref": "#/$defs/localizedText" },
-        "value_type": { "type": "string", "enum": ["short_text", "long_text", "number", "date", "boolean", "choice", "attachment", "attachments"] },
+        "value_type": { "type": "string", "enum": ["short_text", "long_text", "number", "date", "boolean", "choice", "multi_choice", "attachment", "attachments"] },
         "required": { "type": "boolean" },
         "editable": { "type": "boolean" },
         "options": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/option" } },

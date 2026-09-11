@@ -36,6 +36,7 @@ _FIELD_TYPES = {
     "date": "date",
     "boolean": "boolean",
     "choice": "singleChoice",
+    "multi_choice": "multiChoice",
     "attachment": "fileUpload",
 }
 
@@ -218,6 +219,13 @@ def _field_value_is_valid(field: Mapping[str, Any], field_value: Any) -> bool:
         return isinstance(field_value, (int, float)) and not isinstance(
             field_value, bool
         )
+    if kind == "multi_choice":
+        option_values = {option["value"] for option in field.get("options") or []}
+        return (
+            isinstance(field_value, list)
+            and len(field_value) == len(set(field_value))
+            and all(item in option_values for item in field_value)
+        )
     return any(
         option["value"] == field_value for option in field.get("options") or []
     )
@@ -314,9 +322,9 @@ def _validate_semantic_prototype_v1(
 
     for field in fields.values():
         options = field.get("options")
-        if field["value_type"] == "choice" and not options:
+        if field["value_type"] in {"choice", "multi_choice"} and not options:
             _fail(f"choice field {field['id']!r} requires options")
-        if field["value_type"] != "choice" and options:
+        if field["value_type"] not in {"choice", "multi_choice"} and options:
             _fail(f"non-choice field {field['id']!r} cannot declare options")
         if field.get("multiple") and field["value_type"] != "attachment":
             _fail(f"non-attachment field {field['id']!r} cannot be multiple")
@@ -438,6 +446,11 @@ def _validate_semantic_prototype_v1(
             field = fields[field_ref]
             compare_field_ref = str(predicate.get("compare_field_ref") or "")
             compare_field = fields.get(compare_field_ref)
+            if field["value_type"] == "multi_choice":
+                _fail(
+                    f"representative state {state_id!r} cannot predicate on "
+                    f"multi_choice field {field_ref!r}"
+                )
             if compare_field is not None and (
                 compare_field["value_type"] != field["value_type"]
             ):
@@ -2186,6 +2199,27 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 dict.fromkeys([*existing["semantic_refs"], *normalized_refs])
             )
 
+    capability_gaps = copy.deepcopy(candidate.get("capability_gaps") or [])
+    gap_requirements = {
+        str(item.get("requirement_ref") or "")
+        for item in capability_gaps
+        if isinstance(item, Mapping)
+    }
+    retained_bindings: list[dict[str, Any]] = []
+    for binding_index, binding in enumerate(merged_bindings):
+        requirement_ref = str(binding["requirement_ref"])
+        if requirement_ref not in gap_requirements:
+            retained_bindings.append(binding)
+            continue
+        normalizations.append(
+            {
+                "kind": "capability_gap_precedence",
+                "from": f"$.requirement_bindings[{binding_index}]",
+                "to": requirement_ref,
+                "target": "$.capability_gaps",
+            }
+        )
+
     document_id = _canonical_candidate_identifier(
         candidate["document_id"], namespace="prototype"
     )
@@ -2203,8 +2237,8 @@ def _canonicalize_semantic_prototype_candidate_v2(
             "views": normalized_views,
             "commands": normalized_commands,
             "representative_states": normalized_states,
-            "requirement_bindings": merged_bindings,
-            "capability_gaps": copy.deepcopy(candidate.get("capability_gaps") or []),
+            "requirement_bindings": retained_bindings,
+            "capability_gaps": capability_gaps,
         },
         normalizations,
     )

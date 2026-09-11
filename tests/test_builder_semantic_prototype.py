@@ -828,6 +828,61 @@ def test_semantic_model_candidate_maps_attachment_cardinality_from_type() -> Non
     assert semantic_evidence["multiple"] is True
 
 
+def test_semantic_multi_choice_compiles_to_existing_form_control() -> None:
+    brief, semantic = _fixture()
+    semantic["resource"]["fields"].append(
+        {
+            "id": "skills",
+            "label": _text("work.field.skills", "Skills", "Навыки"),
+            "value_type": "multi_choice",
+            "required": False,
+            "editable": True,
+            "options": [
+                {"value": "review", "label": _text("skill.review", "Review", "Ревью")},
+                {"value": "repair", "label": _text("skill.repair", "Repair", "Ремонт")},
+            ],
+        }
+    )
+    semantic["resource"]["records"][0]["skills"] = ["review", "repair"]
+    semantic["resource"]["records"][1]["skills"] = ["review"]
+    semantic["views"][2]["field_refs"].append("skills")
+
+    result = compile_semantic_prototype_candidate(_candidate(semantic), brief=brief)
+
+    editor = next(
+        widget
+        for widget in result["webui"]["ui"]["application"]["desktop"][
+            "pageSchema"
+        ]["widgets"]
+        if widget["id"] == "work-editor"
+    )
+    field = next(item for item in editor["inputs"]["fields"] if item["id"] == "skills")
+    assert field["type"] == "multiChoice"
+    assert result["prototype_records"][0]["skills"] == ["review", "repair"]
+
+
+def test_semantic_multi_choice_rejects_unknown_or_duplicate_options() -> None:
+    brief, semantic = _fixture()
+    semantic["resource"]["fields"].append(
+        {
+            "id": "skills",
+            "label": _text("work.field.skills", "Skills", "Навыки"),
+            "value_type": "multi_choice",
+            "required": False,
+            "editable": True,
+            "options": [
+                {"value": "review", "label": _text("skill.review", "Review", "Ревью")},
+                {"value": "repair", "label": _text("skill.repair", "Repair", "Ремонт")},
+            ],
+        }
+    )
+    semantic["resource"]["records"][0]["skills"] = ["review", "unknown"]
+    semantic["resource"]["records"][1]["skills"] = ["review", "review"]
+
+    with pytest.raises(BuilderWorkflowError, match="invalid multi_choice value"):
+        validate_semantic_prototype(semantic, brief=brief)
+
+
 def test_semantic_model_candidate_rejects_record_value_cardinality_mismatch() -> None:
     brief, semantic = _fixture()
     candidate = _candidate(semantic)
@@ -1602,3 +1657,28 @@ def test_semantic_v2_candidate_reports_record_and_state_defects_together() -> No
     codes = {item["code"] for item in captured.value.findings}
     assert "semantic.record_value_invalid" in codes
     assert "semantic.state_fixture_mismatch" in codes
+
+
+def test_semantic_v2_capability_gap_conservatively_overrides_binding() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    requirement_ref = candidate["requirement_bindings"][0]["requirement_ref"]
+    candidate["capability_gaps"].append(
+        {
+            "requirement_ref": requirement_ref,
+            "code": "runtime_enforcement_unavailable",
+            "detail": "The prototype can show the data but cannot enforce the rule.",
+        }
+    )
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    assert requirement_ref not in {
+        item["requirement_ref"]
+        for item in result["semantic_document"]["requirement_bindings"]
+    }
+    assert any(
+        item["kind"] == "capability_gap_precedence"
+        and item["to"] == requirement_ref
+        for item in result["normalizations"]
+    )
