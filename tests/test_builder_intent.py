@@ -54,6 +54,17 @@ def test_brief_separates_builder_authoring_from_in_application_operations() -> N
     ]
     assert brief["entities"]["state"] == "unknown"
     assert "entities" in brief["interpretation"]["unresolved_fields"]
+    assert [item["statement"] for item in brief["principal_jobs"]] == [
+        "Team members need to scan work",
+        "open one item",
+        "add a request",
+        "assign it",
+        "move it through New, In progress, Blocked and Done",
+    ]
+    for job in brief["principal_jobs"]:
+        offsets = job["evidence"][0].removeprefix("intent.statement#char=")
+        start, end = (int(value) for value in offsets.split(":"))
+        assert brief["problem"]["value"][start:end] == job["statement"]
 
 
 def test_brief_preserves_ru_operations_after_authoring_prefix_in_same_clause() -> None:
@@ -69,16 +80,16 @@ def test_brief_preserves_ru_operations_after_authoring_prefix_in_same_clause() -
         "assign",
         "transition",
     ]
-    assert brief["principal_jobs"] == [
-        {
-            "id": "job:01",
-            "statement": (
-                "для учета заявок: добавлять, назначать, менять статус и закрывать"
-            ),
-            "evidence": ["intent.statement"],
-            "confidence": 1.0,
-        }
+    assert [item["statement"] for item in brief["principal_jobs"]] == [
+        "для учета заявок: добавлять",
+        "назначать",
+        "менять статус",
+        "закрывать",
     ]
+    for job in brief["principal_jobs"]:
+        offsets = job["evidence"][0].removeprefix("intent.statement#char=")
+        start, end = (int(value) for value in offsets.split(":"))
+        assert statement[start:end] == job["statement"]
     assert "operations" not in brief["interpretation"]["unresolved_fields"]
     for operation in brief["operations"]:
         offsets = operation["evidence"][0].removeprefix("intent.statement#char=")
@@ -210,7 +221,8 @@ def test_brief_preserves_ru_lifecycle_and_exception_states_without_domain_terms(
     assert brief["representative_states"]["state"] == "known"
     assert brief["representative_states"]["value"] == [
         "Пользователь сохраняет незавершенную запись, а затем завершает ее",
-        "Покажи пустой список и запрети завершение без комментария",
+        "Покажи пустой список",
+        "запрети завершение без комментария",
     ]
 
 

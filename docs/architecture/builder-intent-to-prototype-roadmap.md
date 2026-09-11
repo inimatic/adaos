@@ -332,6 +332,17 @@ also prohibit lexical prefix leakage such as interpreting `marketplace` as a
 `mark` operation. All four visible RU development archetypes now compile a
 non-empty operation set without introducing subject entities into Core.
 
+Atomicity follow-up (2026-09-11): deterministic operation anchors now split a
+compound clause into separately addressable principal jobs with exact source
+character ranges. Adjacent aliases for the same operation without a linguistic
+separator remain one job, while comma/conjunction-separated actions remain
+distinct. Representative-state extraction reuses those job statements when
+possible. For the visible operations prompt this changes one broad job into
+five explicit jobs: scan, inspect one item, create, assign, and transition.
+This removes the contract ambiguity in which one requirement could be partly
+bound and partly missing. It does not infer actors, entities, targets, or
+authority; those remain inputs to schema-constrained residual interpretation.
+
 - [x] `[must]` Publish `adaos.builder.intent.v1` and
   `adaos.builder.prototype_brief.v1` schemas with provenance and `unknown`
   semantics.

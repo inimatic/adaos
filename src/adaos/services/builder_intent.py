@@ -139,6 +139,11 @@ _REPRESENTATIVE_STATE_SIGNAL_PATTERN = re.compile(
     r"неуспеш\w*|запрет\w*|нельзя)\b",
     re.IGNORECASE,
 )
+_JOB_SEPARATOR_PATTERN = re.compile(
+    r"[,;:]|\b(?:and\s+then|then|and|but|while|"
+    r"и\s+затем|затем|и|а\s+затем|а)\b",
+    re.IGNORECASE,
+)
 
 
 def _digest(value: Any) -> str:
@@ -214,24 +219,92 @@ def _without_spans(value: str, spans: list[tuple[int, int]]) -> str:
     return "".join(chars).strip(" \t\r\n,;:-.!?")
 
 
-def _first_non_authoring_match(
-    pattern: re.Pattern[str],
+def _operation_mentions(
+    clause: str, exclusion_spans: list[tuple[int, int]]
+) -> list[tuple[str, re.Match[str]]]:
+    candidates: list[tuple[int, int, int, str, re.Match[str]]] = []
+    for priority, (kind, pattern) in enumerate(_OPERATION_PATTERNS):
+        for match in pattern.finditer(clause):
+            if _overlaps_any(match.start(), match.end(), exclusion_spans):
+                continue
+            candidates.append((match.start(), match.end(), priority, kind, match))
+    selected: list[tuple[int, int, int, str, re.Match[str]]] = []
+    for candidate in sorted(candidates, key=lambda item: (item[0], item[2], -item[1])):
+        if any(
+            candidate[0] < existing[1] and candidate[1] > existing[0]
+            for existing in selected
+        ):
+            continue
+        selected.append(candidate)
+    mentions: list[tuple[str, re.Match[str]]] = []
+    for _start, _end, _priority, kind, match in sorted(
+        selected, key=lambda item: item[0]
+    ):
+        if mentions and mentions[-1][0] == kind:
+            previous = mentions[-1][1]
+            if not _JOB_SEPARATOR_PATTERN.search(
+                clause, previous.end(), match.start()
+            ):
+                continue
+        mentions.append((kind, match))
+    return mentions
+
+
+def _trim_job_span(clause: str, start: int, end: int) -> tuple[int, int]:
+    discard = " \t\r\n,;:-.!?"
+    while start < end and clause[start] in discard:
+        start += 1
+    while end > start and clause[end - 1] in discard:
+        end -= 1
+    return start, end
+
+
+def _atomic_job_spans(
     clause: str,
+    mentions: list[tuple[str, re.Match[str]]],
     authoring_spans: list[tuple[int, int]],
-) -> re.Match[str] | None:
-    return next(
+) -> list[tuple[str, int, int]]:
+    if not mentions:
+        return []
+    first_mention_start = mentions[0][1].start()
+    segment_start = max(
         (
-            match
-            for match in pattern.finditer(clause)
-            if not _overlaps_any(match.start(), match.end(), authoring_spans)
+            end
+            for start, end in authoring_spans
+            if start <= first_mention_start and end <= first_mention_start
         ),
-        None,
+        default=0,
     )
+    boundaries: list[tuple[int, int]] = []
+    for (_previous_kind, previous), (_kind, current) in zip(
+        mentions, mentions[1:]
+    ):
+        separators = list(
+            _JOB_SEPARATOR_PATTERN.finditer(clause, previous.end(), current.start())
+        )
+        if separators:
+            separator = separators[-1]
+            boundaries.append((separator.start(), separator.end()))
+        else:
+            boundaries.append((current.start(), current.start()))
+
+    result: list[tuple[str, int, int]] = []
+    for index, (_kind, mention) in enumerate(mentions):
+        segment_end = boundaries[index][0] if index < len(boundaries) else len(clause)
+        start, end = _trim_job_span(clause, segment_start, segment_end)
+        if start >= end or not (start <= mention.start() < end):
+            start, end = mention.start(), mention.end()
+        result.append((clause[start:end], start, end))
+        if index < len(boundaries):
+            segment_start = boundaries[index][1]
+    return result
 
 
-def _extract_operations(statement: str) -> tuple[list[dict[str, Any]], list[str]]:
+def _extract_operations(
+    statement: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     operations: list[dict[str, Any]] = []
-    jobs: list[str] = []
+    jobs: list[dict[str, Any]] = []
     seen_operations: set[str] = set()
     for clause, clause_start, _clause_end in _clauses(statement):
         authoring_spans = _authoring_spans(clause)
@@ -239,19 +312,30 @@ def _extract_operations(statement: str) -> tuple[list[dict[str, Any]], list[str]
             *authoring_spans,
             *(match.span() for match in _CAPTURE_ATTACHMENT_PATTERN.finditer(clause)),
         ]
-        clause_operations = []
-        for kind, pattern in _OPERATION_PATTERNS:
-            match = _first_non_authoring_match(
-                pattern, clause, operation_exclusion_spans
-            )
-            if match is not None:
-                clause_operations.append((kind, match))
-        if not clause_operations:
+        mentions = _operation_mentions(clause, operation_exclusion_spans)
+        if not mentions:
             continue
-        job_statement = _without_spans(clause, authoring_spans)
-        if job_statement:
-            jobs.append(job_statement)
-        for kind, match in clause_operations:
+        for job_statement, job_start, job_end in _atomic_job_spans(
+            clause, mentions, authoring_spans
+        ):
+            jobs.append(
+                {
+                    "id": f"job:{len(jobs) + 1:02d}",
+                    "statement": job_statement,
+                    "evidence": [
+                        f"intent.statement#char={clause_start + job_start}:"
+                        f"{clause_start + job_end}"
+                    ],
+                    "confidence": 0.95,
+                }
+            )
+        for kind, _pattern in _OPERATION_PATTERNS:
+            match = next(
+                (candidate for candidate_kind, candidate in mentions if candidate_kind == kind),
+                None,
+            )
+            if match is None:
+                continue
             if kind in seen_operations:
                 continue
             seen_operations.add(kind)
@@ -311,7 +395,9 @@ def _extract_collection_requirements(statement: str) -> list[dict[str, Any]]:
     return requirements[:12]
 
 
-def _extract_representative_states(statement: str) -> dict[str, Any]:
+def _extract_representative_states(
+    statement: str, jobs: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     for pattern in _WORKFLOW_STATES_PATTERNS:
         match = pattern.search(statement)
         if not match:
@@ -326,6 +412,20 @@ def _extract_representative_states(statement: str) -> dict[str, Any]:
             return _knowledge(
                 "known", values[:12], evidence=["intent.statement"], confidence=0.9
             )
+    state_jobs = [
+        str(item.get("statement") or "")
+        for item in jobs or []
+        if _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(
+            str(item.get("statement") or "")
+        )
+    ]
+    if state_jobs:
+        return _knowledge(
+            "known",
+            list(dict.fromkeys(state_jobs))[:12],
+            evidence=["intent.statement"],
+            confidence=0.8,
+        )
     state_clauses = []
     for clause, _start, _end in _clauses(statement):
         value = _without_spans(clause, _authoring_spans(clause))
@@ -400,18 +500,9 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
     )
     _validate("builder.intent.v1.schema.json", captured)
     statement = str(captured["statement"])
-    operations, job_statements = _extract_operations(statement)
+    operations, jobs = _extract_operations(statement)
     information_requirements = _extract_information_requirements(statement)
     collection_requirements = _extract_collection_requirements(statement)
-    jobs = [
-        {
-            "id": f"job:{index:02d}",
-            "statement": value,
-            "evidence": ["intent.statement"],
-            "confidence": 1.0,
-        }
-        for index, value in enumerate(job_statements, start=1)
-    ]
     responsive = (
         _knowledge(
             "known",
@@ -453,7 +544,7 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
         "information_requirements": information_requirements,
         "collection_requirements": collection_requirements,
         "operations": operations,
-        "representative_states": _extract_representative_states(statement),
+        "representative_states": _extract_representative_states(statement, jobs),
         "boundaries": {
             "data_effects": _knowledge(
                 "known",

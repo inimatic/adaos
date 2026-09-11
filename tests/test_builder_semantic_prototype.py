@@ -327,10 +327,6 @@ def test_search_and_filter_require_matching_query_bindings() -> None:
     _add_query_controls(semantic)
     semantic["requirement_bindings"] = [
         {
-            "requirement_ref": brief["principal_jobs"][0]["id"],
-            "semantic_refs": ["resource:work_items", "view:work-list"],
-        },
-        {
             "requirement_ref": brief["collection_requirements"][0]["id"],
             "semantic_refs": [
                 "resource:work_items",
@@ -339,6 +335,13 @@ def test_search_and_filter_require_matching_query_bindings() -> None:
             ],
         },
     ]
+    semantic["requirement_bindings"].extend(
+        {
+            "requirement_ref": job["id"],
+            "semantic_refs": ["resource:work_items", "view:work-list"],
+        }
+        for job in brief["principal_jobs"]
+    )
     operation_refs = {
         "search": "query:item-search",
         "filter": "query:result-filter",

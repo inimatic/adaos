@@ -524,3 +524,13 @@ boundaries in every result. A timeout is an outer circuit breaker only: it is
 reported against the phase it interrupted, cannot be credited as a performance
 gain, and cannot substitute for root-cause work on context, output size,
 provider execution, persistence, or repeated validation.
+
+Fresh run `sdk-semantic-operations-20260911-07`, after the generic semantic
+confirmation contract landed, passed every required stage and the independent
+outcome gate at `1.0`. It used one generation call and no repair. The 52.6
+second case duration separated into 33.7 seconds provider execution, 6.0
+seconds grading, 107 ms local scenario validation, and 5 ms Root queueing. The
+first request after the stable schema digest changed had no cached input; it is
+therefore a cold-contract cohort and must not be compared as a warm-cache
+regression. The retained runtime evidence contains localized confirmation on
+all transition actions.
