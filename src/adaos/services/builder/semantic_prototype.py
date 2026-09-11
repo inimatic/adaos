@@ -231,6 +231,24 @@ def _field_value_is_valid(field: Mapping[str, Any], field_value: Any) -> bool:
     )
 
 
+def _relationship_field_types_compatible(
+    from_field: Mapping[str, Any], to_field: Mapping[str, Any] | None
+) -> bool:
+    target = (
+        to_field
+        if to_field is not None
+        else {"value_type": "short_text", "options": []}
+    )
+    if str(from_field["value_type"]) == str(target["value_type"]):
+        return True
+    if str(from_field["value_type"]) != "choice":
+        return False
+    return all(
+        _field_value_is_valid(target, option["value"])
+        for option in from_field.get("options") or []
+    )
+
+
 def _candidate_choice_value(
     field: Mapping[str, Any], value: Any
 ) -> tuple[Any, bool]:
@@ -2606,6 +2624,38 @@ def _semantic_v2_model_findings(
             continue
         from_field = str(relationship.get("from_field_ref") or "")
         to_field = str(relationship.get("to_field_ref") or "")
+        from_field_definition = next(
+            (
+                item
+                for item in from_resource.get("fields") or []
+                if str(item.get("id") or "") == from_field
+            ),
+            None,
+        )
+        to_field_definition = next(
+            (
+                item
+                for item in to_resource.get("fields") or []
+                if str(item.get("id") or "") == to_field
+            ),
+            None,
+        )
+        if from_field_definition is not None and not (
+            _relationship_field_types_compatible(
+                from_field_definition, to_field_definition
+            )
+        ):
+            findings.append(
+                {
+                    "code": "semantic.relationship_type_incompatible",
+                    "path": f"$.relationships[{relationship_index}]",
+                    "semantic_refs": [f"relationship:{relationship_id}"],
+                    "detail": (
+                        f"relationship {relationship_id!r} connects incompatible "
+                        f"fields {from_field!r} and {to_field!r}"
+                    ),
+                }
+            )
         target_values = [
             record.get(to_field)
             for record in to_resource.get("records") or []
@@ -2781,9 +2831,9 @@ def _validate_semantic_prototype_v2(
             ),
             None,
         )
-        from_type = str(from_field["value_type"]) if from_field else "short_text"
-        to_type = str(to_field["value_type"]) if to_field else "short_text"
-        if from_type != to_type:
+        if from_field is not None and not _relationship_field_types_compatible(
+            from_field, to_field
+        ):
             _fail(
                 f"relationship {relationship['id']!r} connects incompatible "
                 f"fields {from_field_id!r} and {to_field_id!r}"

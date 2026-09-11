@@ -1832,6 +1832,60 @@ def test_semantic_v2_relationship_identity_compiles_editor_selector() -> None:
     ]
 
 
+def test_semantic_v2_accepts_choice_foreign_key_to_string_identity() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    owner = next(
+        field
+        for field in candidate["resources"][0]["fields"]
+        if field["id"] == "work_owner_id"
+    )
+    owner["value_type"] = "choice"
+    owner["options"] = [
+        {"value": "person-1", "label": {"en": "Alex", "ru": "Алекс"}},
+        {"value": "person-2", "label": {"en": "Sam", "ru": "Сэм"}},
+    ]
+    editor_view = next(
+        item for item in candidate["views"] if item["role"] == "editor"
+    )
+    editor_view["field_refs"].append("work_owner_id")
+
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    assert result["semantic_document"]["relationships"][0]["to_field_ref"] == "id"
+    editor = next(
+        item
+        for item in result["webui"]["ui"]["application"]["desktop"][
+            "pageSchema"
+        ]["widgets"]
+        if item["id"] == "work-editor"
+    )
+    rendered_owner = next(
+        item for item in editor["inputs"]["fields"] if item["id"] == "work_owner_id"
+    )
+    assert rendered_owner["type"] == "singleChoice"
+
+
+def test_semantic_v2_reports_incompatible_relationship_type() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    owner = next(
+        field
+        for field in candidate["resources"][0]["fields"]
+        if field["id"] == "work_owner_id"
+    )
+    owner["value_type"] = "number"
+    candidate["resources"][0]["records"][0]["values"][-1] = 1
+    candidate["resources"][0]["records"][1]["values"][-1] = 2
+
+    with pytest.raises(BuilderWorkflowError) as captured:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    assert "semantic.relationship_type_incompatible" in {
+        item["code"] for item in captured.value.findings
+    }
+
+
 def test_semantic_v2_reports_broken_relationship_fixture() -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)
