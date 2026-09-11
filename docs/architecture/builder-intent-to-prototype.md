@@ -4,7 +4,7 @@ Status: corrective target architecture. The current implementation is a
 transitional, recipe-guided prototype path and does not yet satisfy this
 contract.
 
-Last reviewed: 2026-09-10.
+Last reviewed: 2026-09-11.
 
 This page owns how Builder turns an ordinary user request into an executable
 Prototype. [AdaOS Builder](builder.md) continues to own the complete governed
@@ -72,6 +72,17 @@ from the compact/general context rule, while architecture and roadmap text did
 not provide the missing brief/semantic-compiler contract and accepted local
 mechanism tests as broader autonomy evidence. Both documentation and code need
 correction; neither can be treated as the sole source of the defect.
+
+The corrective implementation on 2026-09-11 establishes the first clean
+semantic-v2 vertical slice: schema-constrained multi-resource candidates,
+typed relationships, structural representative-state proof, requirement
+bindings, explicit capability gaps, deterministic compilation to WebUI, and
+exact model-input attribution. This is a supported subset, not completion of
+the target architecture. A retained volunteer run still left actors, entities,
+outcome, information hierarchy, and disclosure semantics unknown in the
+Prototype Brief. The design model reconstructed much of that meaning from the
+raw user turn, but such recovery is stochastic and cannot replace the R4
+understanding contract.
 
 ## Product Objective
 
@@ -293,6 +304,21 @@ Each model run receives three logical layers:
 3. A dynamic task suffix: brief slice, target semantic slice, active accepted
    constraints, validation findings, and the current user delta.
 
+Context composition is stage-specific. Intent residual interpretation receives
+the exact user evidence and unresolved Brief fields, semantic design receives
+the accepted Brief and admitted semantic capabilities, repair receives the
+candidate plus all independent typed findings, and evaluation receives the
+immutable artifact plus a post-generation rubric. A stage must not inherit a
+large shared packet merely because another stage needs it.
+
+The context plan is content addressed. Stable policy, schema, and capability
+units precede dynamic task content so provider prompt caching can reuse them.
+Cached-token price is tracked separately, but caching does not make irrelevant
+context acceptable: every unit still needs an owner, purpose, freshness,
+digest, and measured contribution. A runtime activation receipt must prove
+that the materialized Builder digest matches the edited DEV source; source
+changes alone are not evidence that a live experiment used them.
+
 Full `webui.json`, complete project memory, and raw history are excluded by
 default. They remain available through bounded ref retrieval for recovery or
 diagnosis. Retrieval may be deterministic prefetch or an actual read-only
@@ -318,6 +344,13 @@ must never be reported as a performance improvement.
 Provider-native schema-constrained output or typed tool calls are preferred.
 Text JSON extraction and bracket repair remain compatibility behavior and are
 not a success path for the target architecture.
+
+Validation reports all independent model-correctable findings in one bounded
+packet before a repair is considered. Sequential fail-fast disclosure wastes
+calls and permits a repair to expose a defect that already existed in the
+primary candidate. Deterministic normalization is allowed only for
+unambiguous representation aliases and is retained as evidence; semantic
+invention remains a model/user decision.
 
 ## Component Contract And Client Growth
 

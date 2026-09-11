@@ -365,6 +365,19 @@ must identify independent record types, relations, outcomes, and state
 requirements before semantic generation; lexical clauses alone are not the
 target Brief compiler.
 
+Disclosure evidence (2026-09-11): runs `sdk-semantic-v2-20260911-11` through
+`-13` show that the deterministic Brief still sends `actors`, `entities`, and
+`outcome` as unknown and has no typed disclosure/visibility requirement for
+"open contact details only when needed". A general semantic-design rule and a
+freshly activated DEV runtime moved contact fields from the collection into a
+details view, but one candidate still invented a persisted reveal field. R4
+must therefore add a versioned residual-interpretation result for entity,
+relationship, information-hierarchy, disclosure, and authority facts with
+source spans. It is invoked only for material unresolved fields; low-ambiguity
+requests retain the deterministic/one-call route. Its stable contract precedes
+the dynamic evidence suffix for cache reuse, and its output is independently
+validated before semantic design.
+
 - [x] `[must]` Publish `adaos.builder.intent.v1` and
   `adaos.builder.prototype_brief.v1` schemas with provenance and `unknown`
   semantics.
@@ -445,6 +458,18 @@ direct-transition omission without teaching Core an application domain. It is
 an interim safety policy: R4/R5 must make authority, reversibility, and risk
 explicit so the compiler can derive confirmation from accepted semantics
 rather than command kind alone.
+
+Semantic-v2 progress (2026-09-11): the provider-native candidate contract now
+supports up to four independent resources, globally unique typed fields,
+typed relationships, collection presentations, commands, structural state
+proof, exact requirement bindings, and capability gaps. The deterministic
+compiler canonicalizes IDs, resolves record-id foreign keys, maps
+relationships to typed Client selectors, compiles boolean filters without
+string coercion, preserves source metadata, and rejects fixture/type/reference
+defects. Model-correctable resource, relationship, record, state, and command
+ownership findings are aggregated before one bounded repair. This is a real
+vertical slice, but the complete semantic ABI, authority model, incremental
+semantic edits, and adaptive plan remain open.
 
 Semantic presentation evidence (2026-09-11): the bootstrap candidate now
 declares `list`, `table`, or `cards` for collection views. The deterministic
@@ -563,6 +588,25 @@ input tokens, reused 1,792 cached tokens, emitted 3,314 output tokens, and took
 22.3 seconds at the provider. Its full trace identified a Brief/data-model
 defect that a shorter output limit or validator timeout would only conceal.
 
+Semantic-v2 context evidence (2026-09-11): run `-10` retained the complete
+primary and repair outputs and showed that fail-fast diagnostics disclosed a
+state-fixture defect first and a pre-existing command-owner defect only after
+repair. Aggregated diagnostics now report both. Run `-11` used one generation
+call with 577 fresh and 2,304 cached input tokens and 3,567 output tokens;
+provider execution remained 26.8 seconds while local create/design work was
+about 7.3 seconds. A source edit initially had no effect because the active
+runtime still used the old stable-prefix digest. Explicit DEV activation
+changed the digest in run `-12`, establishing runtime materialization as part
+of experiment identity.
+
+Run `-13` again used one generation call, 607 fresh plus 2,304 cached input
+tokens, and 3,192 output tokens. The 39.2 second case separated into 24.3
+seconds generation wait, 6.5 seconds grading, 156 ms validation, and 7.6
+seconds Builder chat. Queueing remained negligible. These measurements keep
+the optimization order explicit: improve semantic/context sufficiency and
+output volume first; retain timeout only as an outer phase-labelled circuit
+breaker.
+
 - [ ] `[must]` Replace complete WebUI/project-memory/history inclusion with
   brief deltas, semantic slices, accepted constraints, findings, and retrievable
   content-addressed refs.
@@ -596,6 +640,17 @@ Initial performance targets:
 Targets may change only from retained matched evaluation, not timeout tuning.
 
 ## R8. Evaluation, Browser Review, And User Experience
+
+Evaluation progress (2026-09-11): grader v9 keeps its Structured Output schema
+byte-stable and supplies candidate-specific evidence pointers in the dynamic
+payload instead of embedding them as a schema enum. Rubric entries may carry
+explicit `statement`, `acceptance`, and `exclusions`; the runner injects them
+only after candidate generation, so they cannot leak into Builder context.
+Run `sdk-semantic-v2-20260911-13` cited only existing pointers, supported all
+four primary jobs and all three states, and scored 0.925. The hard gate
+correctly remained red because the runtime exposed no executable overlap guard
+and the candidate declared that capability gap. This is calibrated development
+evidence, not a clean baseline or a prompt-autonomy pass.
 
 - [ ] `[must]` Run R8 evidence through `adaos builder e2e` so local, CI, and
   release evaluation use the same resolved run manifest, stages, graders, and

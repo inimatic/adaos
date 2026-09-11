@@ -358,6 +358,22 @@ omits this step. This follows the composite-grader direction supported by the
 but local deterministic and browser graders remain authoritative for
 executable behavior; a model judgment alone cannot establish a clean pass.
 
+Grader protocol v9 separates stable grammar from dynamic evidence. Its
+provider Structured Output schema contains only the bounded result grammar;
+the immutable artifact, explicit rubric criteria, and exact RFC 6901 evidence
+catalog are supplied in the dynamic user payload. Criteria support
+`statement`, `acceptance`, and `exclusions`, while legacy string criteria are
+normalized into the same representation. Candidate-specific pointers are not
+embedded in the schema, preserving schema/prompt-cache identity, and every
+returned pointer is still resolved deterministically against the original
+artifact. Invalid or missing positive evidence downgrades the verdict to
+`unclear`.
+
+The rubric is an oracle and remains post-generation. It may define what counts
+as sufficient evidence and keep independent concerns separate, but it cannot
+enter Builder generation, capability retrieval, repair, or routing. This
+allows precise evaluation without teaching the candidate the held-out answer.
+
 The visible development suite now contains eight ordinary EN/RU archetype
 cases. They contain no component IDs, recipe names, AdaOS paths, or internal
 implementation phases. A `builder.wait` step binds to the case webspace and,
@@ -571,3 +587,21 @@ warm-cache functional pass, not a latency SLO. It confirms that cache is a cost
 control for the stable prefix while output volume and the full-artifact model
 grader remain the principal latency/cost targets. A hard timeout would only
 truncate those phases and is not accepted as remediation.
+
+The volunteer semantic-v2 series provides a second retained calibration. Run
+`-10` failed after two generation calls because repair received only the first
+of two pre-existing semantic defects. The compiler now aggregates independent
+model-correctable findings. Run `-11` then generated and validated in one call,
+but grader v8 had no evidence catalog after the dynamic schema enum was
+removed; it invented widget indexes and conflated the separate fill-shift and
+overlap criteria. Grader v9 corrected both protocol defects.
+
+Fresh run `sdk-semantic-v2-20260911-13` completed generation with one call in
+24.3 seconds, using 607 fresh, 2,304 cached, and 3,192 output tokens. Grading
+took 6.25 seconds with 7,497 fresh input and 724 output tokens. All cited
+pointers existed; all four jobs and all three representative states passed.
+The overall score was 0.925, but the hard gate correctly failed on the one
+remaining `unclear` prohibited assumption: a declared overlap-enforcement gap
+is not evidence that the executable assignment path prevents overlap. This is
+the intended distinction between a useful prototype, an honest capability
+gap, and an admitted autonomous pass.

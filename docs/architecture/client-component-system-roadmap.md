@@ -231,6 +231,16 @@ took 29.6 seconds and total wall time was 42.0 seconds. TypeScript checking took
 14-19 seconds. A shorter test timeout would hide no runtime defect; test-target
 cache and compilation-graph improvements must be measured separately.
 
+Client commit `20f0aca` closes the first typed relationship-selector defect
+found by semantic-v2. The generic selector preserves scalar option values and
+emits boolean `false` as a boolean instead of converting every option to text
+or losing false through fallback coercion. Thirteen focused selector tests
+pass; bundle preparation took about 27.6 seconds while browser execution took
+about 0.16 seconds. The repository lint command currently fails before source
+analysis with the existing Nx/Angular `Workspaces is not a constructor`
+toolchain incompatibility, which remains a build-tool issue rather than a
+selector correctness result.
+
 - [ ] `[must]` Extract Builder, Applications/Marketplace, Infrastate, Voice,
   and Media Center behavior from generic widgets and runtime services into
   explicitly registered product adapters or extensions.
