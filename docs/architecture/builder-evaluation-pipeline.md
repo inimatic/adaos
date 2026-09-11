@@ -646,6 +646,12 @@ automatic verdict or a Trial promotion. The dedicated latest-run-only
 `adaos_tests` scenario is deferred in R8 of the Builder roadmap. The immediate
 review surface is the existing Builder project selector: opt-in dev-only retained
 test applications with searchable test/date/unique names and exact dev previews.
+The existing Builder selector uses `ui.table` with pagination, test/non-test
+filtering and an archive toggle. SDK search precedes the catalog limit rather
+than filtering only the first 50 displayed records. The browser probe
+`e2e/stand/browser/builder-project-review.mjs` checks selection and new-window
+preview against the requested scenario. A retained artifact is not approval;
+run outcomes and human acceptance remain separate.
 
 The eight-case GPT-5 evidence, known grader defects, CRUD runtime findings and
 correction progress are owned by R8 of the

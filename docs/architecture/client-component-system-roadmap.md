@@ -304,6 +304,10 @@ machine-checked impact set.
   locale formatting, and long-content layout for all admitted components.
 - [ ] `[must]` Enforce stable dimensions and no incoherent overlap in declared
   representative states.
+- [ ] `[should]` Retain a viewport-change regression for an already-open
+  localized modal: locale, theme, filters, selection and focus must remain
+  consistent. The 2026-09-11 Builder picker review exposed mixed EN/RU labels
+  during wide-to-compact switching; do not treat a nonblank screenshot as closure.
 - [ ] `[should]` Load non-shell components by generated async factories and set
   bundle budgets per loading class.
 - [ ] `[should]` Run focused component tests on contract changes and a complete
@@ -326,6 +330,11 @@ the same semantic gap. Do not create product-named components.
   attachments, lifecycle/status, schedule/availability, timeline, multi-series
   chart, annotations, and generic collection exploration as candidate
   primitives.
+- [ ] `[should]` Add explicit display contracts for relationship labels versus
+  stored IDs, localized choice values, time-of-day and numeric units. The
+  appointments Prototype displays raw relationship IDs and numeric minutes;
+  solve this through generic field/column semantics and compiler mappings,
+  with EN/RU, compact/wide and edit-round-trip tests, not an appointments widget.
 - [ ] `[should]` Keep development archetypes and component fixtures visible;
   keep the sealed prompt-autonomy set unavailable to generation and tuning.
 - [ ] `[could]` Add map/spatial, scanner/camera capture, richer offline draft,

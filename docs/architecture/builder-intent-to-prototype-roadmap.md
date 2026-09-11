@@ -44,10 +44,10 @@ contract consistency, generation context and minimal visibility in existing Buil
   representative-state contracts with cross-domain executable regression tests.
 - [x] `[must]` Supply an exact required-reference inventory, contextual operations
   and an executable-contract-derived invariant catalog to generation and repair.
-- [ ] `[must]` Retain dev-only test applications in Builder with searchable
+- [x] `[must]` Retain dev-only test applications in Builder with searchable
   `[TEST]` and date/unique suffix; prepare the exact revision's owner-managed preview.
   Keep generated, failed and accepted states distinct. Do not publish beta/stable.
-- [ ] `[must]` Run the full eight-case GPT-5 cohort after local replay tests;
+- [x] `[must]` Run the full eight-case GPT-5 cohort after local replay tests;
   inspect complete inputs/outputs and actual browser previews, record unresolved debt.
 - [x] `[must]` Consolidate the standalone stage review into architecture and roadmap
   ownership; keep measurements in this checklist's evidence, not a parallel report.
@@ -595,8 +595,10 @@ Fresh run `sdk-semantic-operations-20260911-06` then took 49.0 seconds. Local
 scenario validation was 109 ms, Root queueing was 4 ms, and provider execution
 was 29.0 seconds; the independent grader took 10.3 seconds. Generation reused
 2,688 cached input tokens out of 2,786 and emitted 4,517 output tokens. The
-candidate covered all four primary jobs and representative states, but was
-correctly rejected at `0.925` because status mutations had no confirmation.
+candidate covered all four primary jobs and representative states, but the old
+grader rejected it at `0.925` because status mutations had no confirmation.
+The minimum-working calibration subsequently classified that unrequested UX
+convention as non-blocking; this historical rejection is not an acceptance rule.
 This separates semantic failure from transport and validator latency. No
 validator timeout was added. A timeout may exist only as an outer circuit
 breaker after a measured per-route SLO, must name the interrupted phase, and
@@ -710,7 +712,104 @@ identity and attachment value forms are explained; missing relationship refs
 produce typed findings. A `query_empty` proof requires zero matching fixtures
 and an exposed matching filter. Repeated operations retain their object-bearing
 source clause instead of collapsing into one bare verb. All of these mechanisms
-still need live model and browser outcome measurement below.
+are measured by the live model and browser checks below.
+
+#### Minimum-Working Cohort
+
+Runs `minimum-working-gpt5-20260911-02` (operations) and `-03` (remaining seven)
+retain one complete eight-case cohort on GPT-5, with unchanged user prompts.
+Run `-01` was rejected before generation because the provider schema contained
+an annotated `$ref`; the projection fix has regression coverage and that run
+does not count as model-quality evidence.
+
+| Case | Seconds | Outcome within one generation and at most one repair |
+| --- | ---: | --- |
+| Operations queue EN | 73.90 | Failed; repair regressed the previously valid overdue fixture |
+| Service appointments RU | 118.07 | Passed after repair; lexical interpretation had over-required text search |
+| Household budget EN | 133.68 | Passed after repair; business computation remains an Automation obligation |
+| Equipment inspections RU | 129.84 | Failed; missing collection, then unreachable empty-query proof |
+| Knowledge library EN | 90.07 | Failed; attachment/empty-query defects plus a compiler foreign-key normalization bug |
+| Media review RU | 86.43 | Passed first candidate |
+| Volunteer roster EN | 79.52 | Passed first candidate, with explicit pending overlap enforcement |
+| Inventory procurement RU | 138.95 | Failed; repair left an empty-state declaration missing |
+
+Result: 2/8 first candidates and 4/8 after the bounded repair path passed the
+configured non-browser gate. These are development observations, not an autonomy
+baseline or human acceptance. Four independent grader calls took 36.6 seconds;
+14 generation/repair calls consumed 59,252 fresh input, 35,328 cached input and
+58,386 output tokens. Full inputs and responses were inspected. Schema rejection,
+compiler defects and missing working controls are attributed separately from
+non-blocking visual quality. No output limit or timeout was reduced.
+
+Post-cohort corrections have cross-domain regressions: `find`/`найти` does not
+force a text-search widget, and record-ID normalization also updates foreign-key
+choices, fixed values, guards, conditional visibility and representative-state
+literals. The knowledge candidate used internally consistent raw foreign keys;
+Core had changed their fixture values without changing the choice options.
+This part of its failure belongs to the compiler, not the model. Previously
+recorded failed runs remain failed. Atomic UTF-8 checkpoint replacement also
+prevents readers from observing partially written JSON.
+
+Browser evidence under `-03/evidence/browser-picker-final` exercises the existing
+DEV Builder: page navigation, test filter, absent-result search, lookup beyond
+the former first-50 boundary, row selection and local new-window preview.
+`browser-appointments` retains wide/compact generated screens. The picker now
+uses generic `ui.table`, pagination, a test/non-test filter and archive toggle;
+SDK search runs before the result limit. Catalog errors are not empty results.
+Local combined verification: 603 passed, four opt-in live probes skipped.
+
+Focused follow-up `minimum-working-gpt5-20260911-04` after the compiler/context
+fixes is a separate two-case sample, not a replacement for that cohort.
+Appointments passed its first candidate in 110.66 seconds (one generation,
+4,943 input and 4,158 output tokens; cold cache, about 21 seconds grading).
+Knowledge failed in 83.08 seconds: its first state operand violated the
+value-versus-field contract, and repair lost a required search-control binding.
+The search control still existed in the repaired candidate, but the requirement
+pointed to an unrelated details view; do not describe this as an absent search
+UI. No foreign-key choice error recurred. This sample is 1/2, not evidence of
+uniform reliability or a latency improvement.
+
+DEV checkpoint: `adaos dev project push builder` retained Project `0.2.108`,
+scenario `0.2.84`, `builder_skill` `0.3.165` and control skill `0.1.109`.
+Release digest: `sha256:fbf73b0bc560ab6dac0029c1e0672bfd6266bc5236478abf51dedf1c2c09d471`.
+All 18 test Projects created by runs `-01` through `-04` were also checkpointed
+with that CLI into private DEV storage. These are source checkpoints, not
+Marketplace publication, Trial admission or user acceptance. Workspace Builder
+and published stable applications were not replaced.
+
+The Client checkout used by browser review is `203aeb9805f2695e7c5d5ebf1befef8383764100`;
+it differs from the pinned `20f0aca573941be1134b9b20203e86c30608fce0` only by
+package-version metadata. The Core gitlink and `.sha` remain equal. Neither
+Client nor Backend received source changes in this iteration.
+
+Remaining debt, not closed by these observations:
+
+- [ ] `[must]` Reach the fixed small-application reliability gate with repeated
+  matched runs; do not promote the experimental DEV Builder into Workspace yet.
+- [ ] `[must]` Preserve already valid fixtures, predicates and bindings during
+  repair; eliminate the observed unrelated date changes. Measure scoped repair
+  against full-candidate regeneration before expanding orchestration.
+- [ ] `[must]` Make empty-state evidence directly executable and reachable;
+  declaration text without a working filter/empty result is not a pass.
+- [ ] `[must]` Encode value-versus-field state operands as mutually exclusive
+  provider-contract variants, so schema-admitted output cannot violate the
+  compiler's `field_ref=null` requirement for a literal value. Keep typed
+  diagnostics and preservation checks for cases that still require repair.
+- [ ] `[should]` Revisit the current collection-per-resource compiler constraint.
+  A referenced lookup resource may need only an inspectable selector, not its own
+  list screen. Relax only with renderer and requirement-coverage regressions.
+- [ ] `[should]` Address display semantics for foreign keys, times, choice labels
+  and unit-bearing numbers through the Client contract roadmap, not domain widgets.
+- [ ] `[should]` Measure compact task completion, form-first vertical bulk and
+  EN/RU consistency across viewport changes. Nonblank screenshots alone do not
+  establish usability or successful CRUD.
+- [ ] `[could]` Add cursor-backed catalog paging when the bounded 5,000-match
+  catalog or measured response size warrants it; keep search/filter semantics
+  global when moving filtering from the current Client table to the server.
+- [ ] `[should]` Verify owner-side test-Webspace deletion by absence, not a
+  boolean receipt. A cleanup probe found that room prewarming could recreate
+  the just-deleted manifest; the one review-only manifest was removed explicitly.
+  Add a deletion/reconnect regression before automatic preview cleanup is enabled.
 
 Stage-boundary correction (2026-09-11):
 
@@ -738,7 +837,8 @@ Stage-boundary correction (2026-09-11):
 Decision: use the existing Builder project selector first. Retain explicitly named
 test applications and their development previews on dev nodes, including successful
 cases, instead of deleting them automatically. The name includes `[TEST]` and
-`YYYYMMDD-uid` so search works without a Builder redesign. No ordinary desktop or
+`YYYYMMDD-uid` so search works in the existing Builder. Its picker now uses the
+generic table rather than a first-page-only list. No ordinary desktop or
 Marketplace beta promotion. Historical evidence stays immutable; manual removal of
 test applications remains separate from run evidence retention.
 
@@ -762,9 +862,10 @@ as a prerequisite for the small-application Prototype/Automation cycle.
 - [ ] `[could]` Add a bounded screenshot reviewer after deterministic/browser
   checks and translate renderer shortcomings into owning-layer Dev Tickets.
 
-### Current Evaluation
+### Earlier Stage-Aware Evaluation
 
-Stage-aware review across eight development archetypes: 1/8 first candidates
+Before the minimum-working correction above, stage-aware review across eight
+development archetypes found 1/8 first candidates
 qualified structurally, 3/8 qualified within the local workflow, and 1/8 passed
 the configured non-browser gate. A late budget repair compiled successfully
 after its local timeout; it is retained separately, not retroactively passed.
