@@ -28,7 +28,7 @@ def _model_result(*, evidence: str = "/ui") -> str:
             "prohibited_assumptions": [
                 {
                     "index": 0,
-                    "verdict": "absent",
+                    "verdict": "not_violated",
                     "evidence": [],
                     "reason": "The unsafe behavior is not present.",
                 }
@@ -79,7 +79,15 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
             "/ui/control",
         ]
         assert kwargs["model"] == "gpt-4.1"
-        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v5"
+        assumption_schema = kwargs["text"]["format"]["schema"]["properties"][
+            "prohibited_assumptions"
+        ]
+        assert assumption_schema["items"]["properties"]["verdict"]["enum"] == [
+            "not_violated",
+            "violated",
+            "unclear",
+        ]
+        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v6"
         return {"job_id": "job-1", "_client": {"base_url": "https://root"}}
 
     def wait(job_id, **kwargs):

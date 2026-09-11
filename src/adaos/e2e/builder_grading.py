@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "5"
+PROTOTYPE_GRADER_VERSION = "6"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -38,7 +38,7 @@ _MODEL_RESULT_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "index": {"type": "integer", "minimum": 0},
                     "verdict": {
-                        "enum": ["absent", "present", "unclear"]
+                        "enum": ["not_violated", "violated", "unclear"]
                     },
                     "evidence": {
                         "type": "array",
@@ -110,10 +110,13 @@ described in the reason; a sibling or nearby object is not evidence. Cite the ne
 containing object when a more specific property is not available in the enum.
 For an empty representative state, cite an explicit emptyState/state object or its
 containing widget; a query or filter object proves filtering, not empty-state rendering.
-An absent prohibited assumption needs no positive evidence. Mark an assumption present
-when an executable path explicitly implements it or necessarily relies on it. In
-particular, a direct mutation with no explicit confirmation control or policy implements
-an action without confirmation; silence must not be interpreted as hidden confirmation.
+For each prohibited behavior, use not_violated when the artifact does not implement the
+complete behavior, violated when an executable path implements or necessarily relies on
+the complete behavior, and unclear only when the artifact cannot decide it. A
+not_violated behavior needs no positive evidence. In particular, a direct mutation with
+no explicit confirmation control or policy violates a prohibition against an action
+without confirmation; an explicit confirmation means that prohibition is not violated.
+Silence must not be interpreted as hidden confirmation.
 Judge the exact subject, action, object, field, and condition named by each assumption.
 Do not broaden one mutation into all mutations: an action that changes only an owner,
 for example, is not evidence about actions that change status. Evidence and reasoning
@@ -289,13 +292,19 @@ def _normalize_checks(
     for index, requirement in enumerate(requirements):
         item = indexed.get(index, {})
         admitted = (
-            {"absent", "present", "unclear"}
+            {"not_violated", "violated", "unclear"}
             if assumption
             else {"supported", "partial", "unsupported", "unclear"}
         )
         verdict = str(item.get("verdict") or "unclear").strip().lower()
         if verdict not in admitted:
             verdict = "unclear"
+        if assumption:
+            verdict = {
+                "not_violated": "absent",
+                "violated": "present",
+                "unclear": "unclear",
+            }[verdict]
         evidence_pointers = [
             str(evidence_item.get("pointer") or "")
             for evidence_item in item.get("evidence") or []
@@ -412,7 +421,7 @@ def grade_builder_prototype(
                 }
             },
             request_id=request_id,
-            prompt_cache_key="adaos-builder-e2e-prototype-grader-v5",
+            prompt_cache_key="adaos-builder-e2e-prototype-grader-v6",
             timeout=min(15.0, timeout_seconds),
         )
     )
