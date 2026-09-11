@@ -2611,6 +2611,40 @@ def _semantic_v2_model_findings(
                     }
                 )
 
+    for command_index, command in enumerate(document.get("commands") or []):
+        if not isinstance(command, Mapping):
+            continue
+        command_id = str(command.get("id") or command_index)
+        view_ref = str(command.get("view_ref") or "")
+        view = views.get(view_ref)
+        if view is None:
+            findings.append(
+                {
+                    "code": "semantic.command_view_missing",
+                    "path": f"$.commands[{command_index}].view_ref",
+                    "semantic_refs": [f"command:{command_id}"],
+                    "detail": (
+                        f"command {command_id!r} references unknown view "
+                        f"{view_ref!r}"
+                    ),
+                }
+            )
+            continue
+        if str(view.get("role") or "") != "editor":
+            findings.append(
+                {
+                    "code": "semantic.command_editor_required",
+                    "path": f"$.commands[{command_index}].view_ref",
+                    "semantic_refs": [
+                        f"command:{command_id}",
+                        f"view:{view_ref}",
+                    ],
+                    "detail": (
+                        f"command {command_id!r} must be owned by an editor view"
+                    ),
+                }
+            )
+
     for relationship_index, relationship in enumerate(
         document.get("relationships") or []
     ):

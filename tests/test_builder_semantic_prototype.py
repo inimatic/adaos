@@ -1715,6 +1715,10 @@ def test_semantic_v2_candidate_reports_record_and_state_defects_together() -> No
     ]
     candidate["representative_states"][0]["min_items"] = 1
     candidate["representative_states"][0]["max_items"] = None
+    collection_view = next(
+        item for item in candidate["views"] if item["role"] == "collection"
+    )
+    candidate["commands"][0]["view_ref"] = collection_view["id"]
 
     with pytest.raises(BuilderWorkflowError) as captured:
         compile_semantic_prototype_candidate(candidate, brief=brief)
@@ -1722,6 +1726,7 @@ def test_semantic_v2_candidate_reports_record_and_state_defects_together() -> No
     codes = {item["code"] for item in captured.value.findings}
     assert "semantic.record_value_invalid" in codes
     assert "semantic.state_fixture_mismatch" in codes
+    assert "semantic.command_editor_required" in codes
 
 
 def test_semantic_v2_candidate_normalizes_presentation_derived_from_role() -> None:
