@@ -183,11 +183,17 @@
     "view": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "role", "region_role", "title", "field_refs", "filter", "query_controls", "empty_state"],
+      "required": ["id", "role", "region_role", "presentation", "title", "field_refs", "filter", "query_controls", "empty_state"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "role": { "type": "string", "enum": ["collection", "details", "editor"] },
         "region_role": { "type": "string", "enum": ["primary", "supporting", "actions"] },
+        "presentation": {
+          "anyOf": [
+            { "type": "string", "enum": ["list", "table", "cards"] },
+            { "type": "null" }
+          ]
+        },
         "title": { "$ref": "#/$defs/localizedText" },
         "field_refs": { "type": "array", "maxItems": 24, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
         "filter": {
@@ -197,7 +203,14 @@
         "empty_state": {
           "anyOf": [{ "$ref": "#/$defs/emptyState" }, { "type": "null" }]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "role": { "const": "collection" } } },
+          "then": { "properties": { "presentation": { "enum": ["list", "table", "cards"] } } },
+          "else": { "properties": { "presentation": { "type": "null" } } }
+        }
+      ]
     },
     "guard": {
       "type": "object",

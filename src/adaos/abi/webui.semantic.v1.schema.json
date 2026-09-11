@@ -221,6 +221,7 @@
         "id": { "$ref": "#/$defs/id" },
         "role": { "enum": ["collection", "details", "editor"] },
         "region_role": { "enum": ["primary", "supporting", "actions"] },
+        "presentation": { "enum": ["list", "table", "cards"] },
         "title": { "$ref": "#/$defs/localizedText" },
         "field_refs": {
           "type": "array",
@@ -242,7 +243,14 @@
           "items": { "$ref": "#/$defs/queryControl" }
         },
         "empty_state": { "$ref": "#/$defs/emptyState" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "role": { "const": "collection" } } },
+          "then": { "required": ["presentation"] },
+          "else": { "not": { "required": ["presentation"] } }
+        }
+      ]
     },
     "queryControl": {
       "type": "object",

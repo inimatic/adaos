@@ -117,6 +117,7 @@ def _fixture() -> tuple[dict, dict]:
                 "id": "work-list",
                 "role": "collection",
                 "region_role": "primary",
+                "presentation": "list",
                 "title": _text("work.list", "Items", "Пункты"),
                 "field_refs": ["title", "result", "status"],
                 "empty_state": {
@@ -246,6 +247,9 @@ def _candidate(semantic: dict) -> dict:
         for record in candidate["resource"]["records"]
     ]
     for view in candidate["views"]:
+        view.setdefault(
+            "presentation", "list" if view["role"] == "collection" else None
+        )
         view.setdefault("filter", None)
         view.setdefault("query_controls", [])
         view.setdefault("empty_state", None)
@@ -380,6 +384,39 @@ def test_semantic_model_candidate_compiles_to_canonical_document() -> None:
         item["kind"] == "authoritative_brief_provenance"
         for item in result["normalizations"]
     )
+
+
+def test_semantic_table_presentation_compiles_all_declared_columns() -> None:
+    brief, semantic = _fixture()
+    collection = semantic["views"][0]
+    collection["presentation"] = "table"
+
+    result = compile_semantic_prototype_candidate(_candidate(semantic), brief=brief)
+
+    table = result["webui"]["ui"]["application"]["desktop"]["pageSchema"][
+        "widgets"
+    ][0]
+    assert table["type"] == "ui.table"
+    assert [column["key"] for column in table["inputs"]["columns"]] == collection[
+        "field_refs"
+    ]
+    assert table["inputs"]["emptyText"] == "No work items"
+
+
+def test_semantic_list_presentation_exposes_all_declared_fields() -> None:
+    brief, semantic = _fixture()
+
+    result = compile_semantic_prototype_candidate(_candidate(semantic), brief=brief)
+
+    collection = result["webui"]["ui"]["application"]["desktop"]["pageSchema"][
+        "widgets"
+    ][0]
+    assert collection["type"] == "ui.list"
+    assert collection["inputs"]["titleKey"] == "title"
+    assert [entry["key"] for entry in collection["inputs"]["meta"]] == [
+        "result",
+        "status",
+    ]
 
 
 def test_semantic_model_candidate_merges_duplicate_requirement_bindings() -> None:

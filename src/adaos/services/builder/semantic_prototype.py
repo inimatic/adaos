@@ -1118,6 +1118,8 @@ def _lower_semantic_prototype_candidate(
     views: list[dict[str, Any]] = []
     for raw_view in candidate["views"]:
         view = dict(raw_view)
+        if view.get("presentation") is None:
+            view.pop("presentation", None)
         if view.get("filter") is None:
             view.pop("filter", None)
         controls: list[dict[str, Any]] = []
@@ -1430,24 +1432,69 @@ def compile_semantic_prototype(
                 str(filter_value["field_ref"])
             ] = f"$state.{state_ref}"
         if role == "collection":
-            widget["type"] = "ui.list"
-            title_key = next(
-                (
-                    field_id
-                    for field_id in view["field_refs"]
-                    if fields[field_id]["value_type"] in {"short_text", "long_text"}
-                ),
-                "id",
-            )
-            widget["inputs"] = {
-                "variant": "list",
-                "itemIdKey": "id",
-                "titleKey": title_key,
-            }
-            if title_key != "id":
-                source_map.setdefault(f"field:{title_key}", []).append(
-                    f"ui.application.desktop.pageSchema.widgets.@{view_id}.inputs.titleKey"
+            presentation = str(view.get("presentation") or "list")
+            if presentation == "table":
+                widget["type"] = "ui.table"
+                widget["inputs"] = {"columns": []}
+                for column_index, field_id in enumerate(view["field_refs"]):
+                    label, label_i18n = _localized(
+                        fields[field_id]["label"], dictionaries
+                    )
+                    widget["inputs"]["columns"].append(
+                        {
+                            "key": field_id,
+                            "label": label,
+                            "label_i18n": label_i18n,
+                        }
+                    )
+                    source_map.setdefault(f"field:{field_id}", []).append(
+                        f"ui.application.desktop.pageSchema.widgets.@{view_id}.inputs.columns.{column_index}"
+                    )
+            else:
+                widget["type"] = "ui.list"
+                title_key = next(
+                    (
+                        field_id
+                        for field_id in view["field_refs"]
+                        if fields[field_id]["value_type"]
+                        in {"short_text", "long_text"}
+                    ),
+                    "id",
                 )
+                widget["inputs"] = {
+                    "variant": presentation,
+                    "itemIdKey": "id",
+                    "titleKey": title_key,
+                    "meta": [],
+                }
+                if title_key != "id":
+                    source_map.setdefault(f"field:{title_key}", []).append(
+                        f"ui.application.desktop.pageSchema.widgets.@{view_id}.inputs.titleKey"
+                    )
+                for field_id in view["field_refs"]:
+                    if field_id == title_key:
+                        continue
+                    label, label_i18n = _localized(
+                        fields[field_id]["label"], dictionaries
+                    )
+                    value_type = str(fields[field_id]["value_type"])
+                    meta = {
+                        "key": field_id,
+                        "label": label,
+                        "label_i18n": label_i18n,
+                        "kind": (
+                            "badge"
+                            if value_type == "choice"
+                            else "boolean"
+                            if value_type == "boolean"
+                            else "text"
+                        ),
+                    }
+                    meta_index = len(widget["inputs"]["meta"])
+                    widget["inputs"]["meta"].append(meta)
+                    source_map.setdefault(f"field:{field_id}", []).append(
+                        f"ui.application.desktop.pageSchema.widgets.@{view_id}.inputs.meta.{meta_index}"
+                    )
             widget["actions"] = [
                 {
                     "id": f"select-{view_id}",
@@ -1472,7 +1519,13 @@ def compile_semantic_prototype(
                     rendered_empty.update(
                         {"subtitle": detail, "subtitle_i18n": detail_i18n}
                     )
-                widget["inputs"]["emptyState"] = rendered_empty
+                if presentation == "table":
+                    widget["inputs"]["emptyText"] = rendered_empty["title"]
+                    widget["inputs"]["emptyText_i18n"] = rendered_empty[
+                        "title_i18n"
+                    ]
+                else:
+                    widget["inputs"]["emptyState"] = rendered_empty
         elif role == "details":
             widget["type"] = "item.details"
             widget["selectedStateKey"] = selection_ref
