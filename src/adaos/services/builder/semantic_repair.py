@@ -119,6 +119,8 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
             view.setdefault("section", None)
             view.setdefault("scope_filters", [])
             view.setdefault("selection_filter", None)
+            if view.get("selection_filter"):
+                view["selection_filter"].setdefault("source_field_ref", None)
     Draft202012Validator(plan["output_schema"]).validate(repair)
     result = copy.deepcopy(dict(candidate))
     for key, target, allowed in (("states", "representative_states", plan["allowed_state_ids"]), ("views", "views", plan["allowed_view_ids"])):
@@ -151,6 +153,8 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
                             "field_display": original.get("field_display", []), "section": original.get("section"),
                             "scope_filters": original.get("scope_filters", []),
                             "selection_filter": original.get("selection_filter")}
+                if original["selection_filter"]:
+                    original["selection_filter"] = {"source_field_ref": None, **original["selection_filter"]}
                 immutable = set(original) | set(replacement)
                 immutable -= {"empty_state", "field_refs", "query_controls"}
                 if any(original.get(name) != replacement.get(name) for name in immutable):

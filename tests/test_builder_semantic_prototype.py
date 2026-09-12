@@ -955,7 +955,8 @@ def test_provider_collection_requires_a_presentation_and_inline_surface() -> Non
         validator.validate(view)
 
 
-def test_semantic_model_contract_is_strict_and_bounded() -> None:
+@pytest.mark.parametrize('version', ['v1', 'v2'])
+def test_semantic_model_contract_is_strict_and_bounded(version) -> None:
     contract = semantic_prototype_candidate_contract()
 
     def assert_strict(node: object) -> None:
@@ -969,7 +970,7 @@ def test_semantic_model_contract_is_strict_and_bounded() -> None:
             for child in node:
                 assert_strict(child)
 
-    assert_strict(semantic_prototype_provider_contract())
+    assert_strict(semantic_prototype_provider_contract(version=version))
     assert contract["properties"]["resource"]["properties"]["records"][
         "maxItems"
     ] == 12

@@ -818,6 +818,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
     if version == "v2":
         contract["required"].append("automation_requirements")
         contract["$defs"]["relationship"]["required"].append("label_field_refs")
+        contract["$defs"]["selectionFilter"]["required"].append("source_field_ref")
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
         contract["$defs"]["view"]["required"].extend(["presentation_options", "field_display", "section", "scope_filters", "selection_filter"])
@@ -2473,6 +2474,8 @@ def _canonicalize_semantic_prototype_candidate_v2(
             view.setdefault("scope_filters", [])
             view.setdefault("selection_filter", None)
             view.setdefault("media", None)
+            if view.get("selection_filter"):
+                view["selection_filter"].setdefault("source_field_ref", None)
     try:
         Draft202012Validator(
             semantic_prototype_provider_contract(version="v2", locales=_text_locales(candidate["title"]), _view_variants=False)

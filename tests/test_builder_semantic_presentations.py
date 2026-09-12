@@ -143,7 +143,7 @@ def test_selection_filter_resolves_source_action_and_preserves_independent_queri
                     for key, expression in action['params'].items() if expression == '$event.id')
     assert widgets[view['id']]['dataSource']['query']['filters']['work_owner_id'] == f'$state.{selected}'
     assert page['initialState'][selected] == ''
-    assert result['semantic_document']['views'][0]['selection_filter'] == view['selection_filter']
+    assert result['semantic_document']['views'][0]['selection_filter'] == {**view['selection_filter'], 'source_field_ref': None}
 
 
 def test_record_presentation_error_explains_the_role_not_a_lost_presentation():
