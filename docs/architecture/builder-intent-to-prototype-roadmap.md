@@ -1517,6 +1517,66 @@ Apply their guidance as testable hypotheses: sufficient high-signal context,
 consistent contracts, representative evaluations and stable prefixes, not a
 promise that shorter prompts alone produce reliable software.
 
+Run 08 (`context-archetypes-gpt5-low-20260912-08`) is complete but not qualified:
+11 passed, three candidate-validation failures and two inconclusive grades.
+Thirteen of sixteen candidates reached generation admission. The failed grades
+are infrastructure/evaluator outcomes: library attempt 1 exhausted the grader's
+1800 output-token budget; procurement attempt 2 received Root
+`insufficient_quota / credit_balance_exhausted`. Failed grading calls are absent
+from this old report's usage totals. Preserve that limitation and the separate
+Root receipts rather than rewriting the report or counting either as model failure.
+
+- [x] `[must]` Orient scalar reference validation, identity normalization and
+  provider policies by cardinality; enforce one-to-one uniqueness atomically.
+  Preserve implicit identities on either end and require an explicit link
+  resource for many-to-many. Retained media replay now gets past inverse
+  identity checks, but still fails independent state visibility/label checks;
+  this is not a new successful generation.
+- [x] `[must]` Expose omitted nested authoring assertions from the ABI in the
+  portable generation context. The volunteer response exceeded a hidden
+  three-field label limit. The derived inventory adds 34 constraint entries
+  (2304 serialized characters); fresh token/repair impact remains to be measured.
+- [x] `[must]` Introduce additive state-repair v3 so adding a visible field
+  cannot erase existing queries or an empty presentation. Preserve old repair
+  semantics for replay and test Builder's v1/v2/v3 envelope agreement.
+- [x] `[must]` Retain grader inputs, responses and immutable pre-interaction
+  snapshots per attempt. Include output settings in request identity. Grader
+  v14 indexes executable read-only policies instead of nested schema-property
+  noise and uses the default GPT-4.1 output ceiling of 32768, not 1800.
+  Its complete-response quality still needs live qualification.
+- [ ] `[must]` Restore Root provider credits, then qualify the prepared schema
+  canary, grader v14 and fresh GPT-5/low generation separately. The first canary
+  also failed for quota; no provider schema-support conclusion is justified.
+  Do not send repeated paid requests while that failure remains unresolved.
+- [ ] `[must]` Regrade the retained library/procurement artifacts without
+  regenerating or modifying their source, retaining the new grader version.
+  All 13 admitted artifacts have snapshots taken before browser mutations.
+  The old grader's case-only input filename overwrote library attempt 1's
+  exact input; its retained Root response is not a replacement for that input.
+- [ ] `[must]` Qualify mutable relationship-label workflows, including category
+  rename with existing transactions. Run 08 budget browser edits fail because
+  links use the mutable category name. Prefer immutable IDs in context, expose
+  incompatible editable-key designs before admission, and do not hide the
+  failure by weakening referential integrity or silently cascading data changes.
+- [ ] `[must]` Continue all-independent-defect diagnostics before choosing a
+  repair scope. Run 08 media and volunteer reveal further state/label failures
+  after their initial identity/bounds failures are removed.
+
+Offline verification of this batch: 249 focused Core tests and 286 DEV Builder
+tests pass. Review probes open all eight selected prototypes at 1440px/390px;
+library read-only UI/provider checks pass. This does not prove complete CRUD:
+budget rename fails, and unsupported scalar probes for media/volunteer are
+explicitly unexercised. Native media commands pass; the volunteer command probe
+exposed Client `readOnly`/`readonly` disagreement. Browser evidence and renderer
+fix qualification are tracked in the Client roadmap. The new Core changes have
+not yet been evaluated by a fresh live generation cohort or promoted to Workspace.
+
+The grader/bounds changes follow the supported-subset distinction in
+[Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+and the documented [GPT-4.1 output ceiling](https://developers.openai.com/api/docs/models/gpt-4.1).
+Provider capability, context cost and task success remain measured gates, not
+assumptions inferred from a provider name or a valid JSON response.
+
 ## R9. Cutover And Cleanup
 
 Promotion evidence (2026-09-11): the pre-promotion comparison found no

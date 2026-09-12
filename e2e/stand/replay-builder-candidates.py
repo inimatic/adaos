@@ -52,7 +52,7 @@ def replay(run: Path, builder_skill: Path | None = None) -> list[dict]:
             row = {"case": case, "attempt": attempt, "stage": artifact["stage"], "source": artifact["evidence_ref"]}
             try:
                 candidate = json.loads((run / artifact["evidence_ref"]).read_text(encoding="utf-8"))["structured_candidate"]
-                if candidate.get("schema") in {"adaos.builder.state_repair.v1", "adaos.builder.state_repair.v2"}:
+                if candidate.get("schema") in {"adaos.builder.state_repair.v1", "adaos.builder.state_repair.v2", "adaos.builder.state_repair.v3"}:
                     original = next((attempt.get("validation", {}).get("findings") for attempt in generation.get("attempts", [])
                                      if attempt.get("validation", {}).get("findings")), findings)
                     candidate = apply_state_repair(base, candidate, original)

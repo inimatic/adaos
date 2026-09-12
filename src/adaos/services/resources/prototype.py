@@ -143,7 +143,8 @@ class PrototypeResourceService:
                       "required": ["field_ref", "target_resource_type", "target_field_ref"],
                       "properties": {"field_ref": {"type": "string", "minLength": 1},
                                      "target_resource_type": {"type": "string", "pattern": "^prototype\\."},
-                                     "target_field_ref": {"type": "string", "minLength": 1}}},
+                                     "target_field_ref": {"type": "string", "minLength": 1},
+                                     "unique_source": {"type": "boolean"}}},
         }).validate(relationships)
         if any(item["field_ref"] not in record_schema.get("properties", {}) for item in relationships):
             raise ValueError("prototype relationship references an unknown record property")
@@ -462,10 +463,16 @@ class PrototypeResourceService:
                 if len(keys) != len(set(keys)):
                     raise PrototypeResourceConflict("prototype relationship target values must be unique")
                 allowed = set(keys)
+                source_keys = []
                 for record in state["records"]:
                     value = _read_path(record, relation["field_ref"])
-                    if value is not None and value != "" and reference_key(value) not in allowed:
-                        raise PrototypeResourceConflict("prototype relationship would reference a missing record")
+                    if value is not None and value != "":
+                        key = reference_key(value)
+                        if key not in allowed:
+                            raise PrototypeResourceConflict("prototype relationship would reference a missing record")
+                        source_keys.append(key)
+                if relation.get("unique_source") and len(source_keys) != len(set(source_keys)):
+                    raise PrototypeResourceConflict("one-to-one prototype relationship source values must be unique")
 
     def _state(self, resource_type: str) -> dict[str, Any] | None:
         state = self._read_registry()["resources"].get(_text(resource_type))

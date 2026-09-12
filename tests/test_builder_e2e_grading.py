@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import copy
+
+import pytest
 
 from adaos.e2e.builder import validate_builder_e2e_record
 from adaos.e2e.builder_grading import _evidence_pointers, grade_builder_prototype
@@ -150,7 +153,9 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
             "unclear",
         ]
         assert "Mere absence is not uncertainty" in messages[0]["content"]
-        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v13"
+        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v14"
+        assert kwargs["max_tokens"] == 32768
+        assert kwargs["max_tokens"] == recorded[0]["generation_options"]["max_tokens"]
         return {"job_id": "job-1", "_client": {"base_url": "https://root"}}
 
     def wait(job_id, **kwargs):
@@ -214,6 +219,72 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
         "duration_ms": grade["grader_metrics"]["duration_ms"],
     }
     validate_builder_e2e_record("adaos.builder.prototype_grade.v1", grade)
+
+
+def test_evidence_index_exposes_provider_policies_without_schema_property_noise() -> None:
+    prefix = "/webui/ui/application/desktop/pageSchema"
+    page_schema = {
+        "meta": {"builder": {"prototype_resource_policies": {"prototype.items": {
+            "read_only_when": {"field_ref": "status", "operator": "equals", "value": "Archived"},
+        }}}},
+        "widgets": [{"id": "editor", "type": "form", "inputs": {
+            "readOnlyIf": {"eq": ["status", "Archived"]},
+            "schema": {"type": "object", "properties": {"status": {"type": "string"}}},
+        }}],
+    }
+    artifact = {"webui": {"ui": {"application": {"desktop": {"pageSchema": page_schema}}}}}
+    pointers = _evidence_pointers(artifact)
+    assert prefix + "/meta/builder/prototype_resource_policies/prototype.items/read_only_when" in pointers
+    assert prefix + "/widgets/0/inputs/readOnlyIf" in pointers
+    assert prefix + "/widgets/0" in pointers
+    assert prefix + "/widgets/0/inputs/schema/properties/status" not in pointers
+
+
+@pytest.mark.parametrize("response", [
+    {"status": "failed", "error": {"code": "insufficient_quota", "message": "credit_balance_exhausted"}},
+    {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"},
+     "output_text": '{"primary_jobs": [', "usage": {"output_tokens": 1800}},
+])
+def test_failed_grader_retains_job_partial_output_and_usage(response: dict) -> None:
+    recorded = []
+    with pytest.raises(ValueError, match="job_id=job-failed"):
+        grade_builder_prototype(
+            artifact={"ui": {}}, user_turns=[], requirements={}, prohibited_assumptions=[], locale="en",
+            submitter=lambda *a, **k: {"job_id": "job-failed"}, waiter=lambda *a, **k: response,
+            response_recorder=lambda value: recorded.append(copy.deepcopy(value)),
+        )
+    assert recorded[0]["submission"] == {"job_id": "job-failed"}
+    assert "response" not in recorded[0]
+    assert recorded[-1]["response"] == response
+    assert recorded[-1]["metrics"]["generated_tokens"] == response.get("usage", {}).get("output_tokens", 0)
+
+
+def test_grader_output_budget_changes_request_identity() -> None:
+    records = []
+    for budget in (1800, 32768):
+        grade_builder_prototype(
+            artifact={"ui": {}}, user_turns=[], requirements={}, prohibited_assumptions=[], locale="en",
+            max_output_tokens=budget,
+            submitter=lambda *a, **k: {"job_id": "job"},
+            waiter=lambda *a, **k: {"status": "succeeded", "output_text": "{}"},
+            request_recorder=lambda value: records.append(copy.deepcopy(value)),
+        )
+    assert records[0]["request_id"] != records[1]["request_id"]
+    assert [value["generation_options"]["max_tokens"] for value in records] == [1800, 32768]
+
+
+def test_grader_wait_failure_keeps_submitted_job_identity() -> None:
+    recorded = []
+    def wait(*args, **kwargs):
+        raise TimeoutError("poll failed")
+    with pytest.raises(TimeoutError):
+        grade_builder_prototype(
+            artifact={"ui": {}}, user_turns=[], requirements={}, prohibited_assumptions=[], locale="en",
+            submitter=lambda *a, **k: {"job_id": "job-wait"}, waiter=wait,
+            response_recorder=lambda value: recorded.append(copy.deepcopy(value)),
+        )
+    assert recorded[-1]["job_id"] == "job-wait"
+    assert recorded[-1]["wait_error"] == {"type": "TimeoutError", "message": "poll failed"}
 
 
 def test_prototype_grader_exposes_hard_gate_failure_above_score_threshold() -> None:

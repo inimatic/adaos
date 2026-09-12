@@ -794,6 +794,11 @@ def semantic_prototype_candidate_contract(*, version: str = "v1") -> dict[str, A
     return copy.deepcopy(_validator(filename).schema)
 
 
+_PROVIDER_OMITTED_ASSERTIONS = frozenset({
+    "minItems", "maxItems", "minLength", "maxLength", "minimum", "maximum", "pattern", "uniqueItems",
+})
+
+
 def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru"), brief: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Return the candidate schema projected to the provider strict subset."""
 
@@ -821,16 +826,6 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             ):
                 if allowed:
                     contract["$defs"][name]["properties"]["requirement_ref"] = {"type": "string", "enum": allowed}
-    unsupported_validation_keywords = {
-        "maxItems",
-        "maxLength",
-        "maximum",
-        "minItems",
-        "minLength",
-        "minimum",
-        "pattern",
-        "uniqueItems",
-    }
     schema_map_keys = {"$defs", "definitions", "properties"}
     schema_list_keys = {"allOf", "anyOf", "oneOf", "prefixItems"}
     schema_value_keys = {
@@ -846,7 +841,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
 
     def project(node: Any) -> None:
         if isinstance(node, dict):
-            for keyword in unsupported_validation_keywords:
+            for keyword in _PROVIDER_OMITTED_ASSERTIONS:
                 node.pop(keyword, None)
             if "$ref" in node:
                 # Provider references cannot carry JSON Schema annotations.
@@ -871,6 +866,22 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
 
 def semantic_prototype_generation_guidance() -> dict[str, Any]:
     contract = semantic_prototype_candidate_contract(version="v2")
+    constraints: dict[str, Any] = {}
+
+    def collect_bounds(node: Any, pointer: str) -> None:
+        if not isinstance(node, dict):
+            return
+        bounds = {key: value for key, value in node.items() if key in _PROVIDER_OMITTED_ASSERTIONS}
+        if bounds:
+            constraints[pointer] = bounds
+        for key, value in node.items():
+            if isinstance(value, dict):
+                collect_bounds(value, f"{pointer}/{key}")
+            elif isinstance(value, list):
+                for index, branch in enumerate(value):
+                    collect_bounds(branch, f"{pointer}/{key}/{index}")
+
+    collect_bounds(contract, "#")
     return {
         "contract": SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA,
         "stage": copy.deepcopy(PROTOTYPE_STAGE_CONTRACT),
@@ -879,6 +890,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             for key, descriptor in contract["properties"].items() if descriptor.get("type") == "array"
         },
         "records_per_resource": contract["$defs"]["resource"]["properties"]["records"]["maxItems"],
+        "authoring_constraints": constraints,
         "fixture_values": {
             "id": "Record id is implicit read-only string metadata; do not add an id field unless it is needed for display. If declared, it must be noneditable short_text and match record.id. It is not a business field to rename or edit.",
             "number": "JSON number, e.g. 12.5, not the string \"12.5\"; optional missing values use null",
@@ -2664,23 +2676,20 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 raw_ref,
                 _canonical_candidate_identifier(raw_ref, namespace=key),
             )
-        from_resource_id = str(normalized_relationship["from_resource_ref"])
-        to_resource_id = str(normalized_relationship["to_resource_ref"])
-        from_field_id = str(normalized_relationship["from_field_ref"])
-        to_field_id = str(normalized_relationship["to_field_ref"])
         resources_by_id = {item["id"]: item for item in normalized_resources}
-        target_resource = resources_by_id.get(to_resource_id)
-        if target_resource and str(relationship["to_field_ref"]) == f"{relationship['to_resource_ref']}.id" and not any(field["id"] == to_field_id for field in target_resource["fields"]):
-            normalized_relationship["to_field_ref"] = "id"
-            normalizations.append({"kind": "qualified_record_identity", "from": to_field_id, "to": "id", "target": f"$.relationships[{len(normalized_relationships)}].to_field_ref"})
-            to_field_id = "id"
         reference_findings = []
-        for side, resource_id, field_id in (
-            ("from", from_resource_id, from_field_id), ("to", to_resource_id, to_field_id),
-        ):
+        for side in ("from", "to"):
+            resource_id = normalized_relationship[f"{side}_resource_ref"]
+            field_id = normalized_relationship[f"{side}_field_ref"]
             resource = resources_by_id.get(resource_id)
+            if (resource and str(relationship[f"{side}_field_ref"]) == f"{relationship[f'{side}_resource_ref']}.id"
+                    and not any(field["id"] == field_id for field in resource["fields"])):
+                normalized_relationship[f"{side}_field_ref"] = "id"
+                normalizations.append({"kind": "qualified_record_identity", "from": field_id, "to": "id",
+                                       "target": f"$.relationships[{len(normalized_relationships)}].{side}_field_ref"})
+                field_id = "id"
             field_exists = resource is not None and (
-                (side == "to" and field_id == "id")
+                field_id == "id"
                 or any(field["id"] == field_id for field in resource["fields"])
             )
             if resource is None or not field_exists:
@@ -2692,6 +2701,10 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 })
         if reference_findings:
             raise SemanticPrototypeValidationError(reference_findings)
+        reference = _foreign_key_relationship(normalized_relationship)
+        from_resource_id, to_resource_id = reference["from_resource_ref"], reference["to_resource_ref"]
+        from_field_id, to_field_id = reference["from_field_ref"], reference["to_field_ref"]
+        identity_target_key = "from_field_ref" if normalized_relationship["cardinality"] == "one_to_many" else "to_field_ref"
         from_resource = resources_by_id[from_resource_id]
         to_resource = resources_by_id[to_resource_id]
         target_id_map = record_ids_by_resource.get(to_resource_id, {})
@@ -2699,15 +2712,15 @@ def _canonicalize_semantic_prototype_candidate_v2(
             **target_id_map,
             **{value: value for value in target_id_map.values()},
         }
-        from_field_index = next(
+        from_field_index = next((
             index
             for index, field in enumerate(from_resource.get("fields") or [])
             if str(field.get("id") or "") == from_field_id
-        )
+        ), None)
         source_values = [
-            record["values"][from_field_index]
+            value
             for record in from_resource.get("records") or []
-            if record["values"][from_field_index] not in (None, "")
+            if (value := record["id"] if from_field_index is None else record["values"][from_field_index]) not in (None, "")
         ]
         if to_field_id == "id":
             target_values = [
@@ -2739,20 +2752,23 @@ def _canonicalize_semantic_prototype_candidate_v2(
                         "to": "id",
                         "target": (
                             f"$.relationships[{len(normalized_relationships)}]"
-                            ".to_field_ref"
+                            f".{identity_target_key}"
                         ),
                     }
                 )
-                normalized_relationship["to_field_ref"] = "id"
-        if normalized_relationship["to_field_ref"] == "id":
+                normalized_relationship[identity_target_key] = "id"
+        if normalized_relationship[identity_target_key] == "id":
             for record_index, record in enumerate(
                 from_resource.get("records") or []
             ):
-                original = record["values"][from_field_index]
+                original = record["id"] if from_field_index is None else record["values"][from_field_index]
                 normalized_id = target_ids.get(original) if isinstance(original, str) else None
                 if normalized_id is None or normalized_id == original:
                     continue
-                record["values"][from_field_index] = normalized_id
+                if from_field_index is None:
+                    record["id"] = normalized_id
+                else:
+                    record["values"][from_field_index] = normalized_id
                 normalizations.append(
                     {
                         "kind": "relationship_identity_value",
@@ -3016,6 +3032,7 @@ def _lookup_only_resource_ids(document: Mapping[str, Any]) -> set[str]:
     resources = {item["id"]: item for item in document.get("resources") or []}
     result: set[str] = set()
     for relation in document.get("relationships") or []:
+        relation = _foreign_key_relationship(relation)
         source_id, target_id = relation["from_resource_ref"], relation["to_resource_ref"]
         if any(view.get("resource_ref") == target_id for view in views):
             continue
@@ -3179,6 +3196,7 @@ def _semantic_v2_model_findings(
     ):
         if not isinstance(relationship, Mapping):
             continue
+        relationship = _foreign_key_relationship(relationship)
         relationship_id = str(relationship.get("id") or relationship_index)
         from_resource = resources.get(
             str(relationship.get("from_resource_ref") or "")
@@ -3246,6 +3264,10 @@ def _semantic_v2_model_findings(
                     ),
                 }
             )
+        for detail in _relationship_cardinality_errors(relationship, from_resource, to_resource):
+            findings.append({"code": "semantic.relationship_cardinality_invalid",
+                             "path": f"$.relationships[{relationship_index}]",
+                             "semantic_refs": [f"relationship:{relationship_id}"], "detail": detail})
 
     for state_index, state in enumerate(document.get("representative_states") or []):
         if not isinstance(state, Mapping):
@@ -3400,6 +3422,7 @@ def _validate_semantic_prototype_v2(
                     f"relationship {relationship['id']!r} references field "
                     f"{field_id!r} outside resource {resource_id!r}"
                 )
+        relationship = _foreign_key_relationship(relationship)
         from_resource = resources[str(relationship["from_resource_ref"])]
         to_resource = resources[str(relationship["to_resource_ref"])]
         from_field_id = str(relationship["from_field_ref"])
@@ -3445,6 +3468,9 @@ def _validate_semantic_prototype_v2(
                 f"relationship {relationship['id']!r} has source values with no "
                 f"target {to_field_id!r}: {missing_values}"
             )
+        cardinality_errors = _relationship_cardinality_errors(relationship, from_resource, to_resource)
+        if cardinality_errors:
+            _fail("; ".join(cardinality_errors))
 
     for resource_id, resource in resources.items():
         resource_views = views_by_resource[resource_id]
@@ -3570,6 +3596,41 @@ def _merge_locale_dictionaries(
             dictionary[str(key)] = text
 
 
+def _relationship_cardinality_errors(
+    relationship: Mapping[str, Any], source: Mapping[str, Any], target: Mapping[str, Any]
+) -> list[str]:
+    errors = []
+    for side, resource in (("to", target), ("from", source)):
+        if side == "from" and relationship["cardinality"] != "one_to_one":
+            continue
+        values = [record.get(relationship[f"{side}_field_ref"]) for record in resource.get("records") or []]
+        values = [value for value in values if value is not None and value != ""]
+        if not all(isinstance(value, (str, int, float, bool)) for value in values):
+            continue
+        keys = [
+            ("number" if isinstance(value, (int, float)) and not isinstance(value, bool) else type(value).__name__, value)
+            for value in values
+        ]
+        if len(keys) != len(set(keys)):
+            errors.append(f"relationship {relationship['id']!r} requires unique {'target' if side == 'to' else 'source'} values")
+    return errors
+
+
+def _foreign_key_relationship(relationship: Mapping[str, Any]) -> dict[str, Any]:
+    """Orient reference operations by declared cardinality, not fixture contents."""
+    result = dict(relationship)
+    if result["cardinality"] == "many_to_many":
+        _fail("many_to_many relationships require an explicit link resource with scalar foreign keys")
+    if result["cardinality"] == "one_to_many":
+        for name in ("resource_ref", "field_ref"):
+            result[f"from_{name}"], result[f"to_{name}"] = result[f"to_{name}"], result[f"from_{name}"]
+        # Authored labels describe the original target, not the referenced parent.
+        # Its existing collection remains the safe display fallback.
+        result["label_field_refs"] = []
+        result["cardinality"] = "many_to_one"
+    return result
+
+
 def _prototype_relation_option_fields(
     *,
     resource_id: str,
@@ -3586,6 +3647,7 @@ def _prototype_relation_option_fields(
         if isinstance(item, dict)
     }
     for relationship in relationships:
+        relationship = _foreign_key_relationship(relationship)
         if str(relationship.get("from_resource_ref") or "") != resource_id:
             continue
         field = fields.get(str(relationship.get("from_field_ref") or ""))
@@ -3762,6 +3824,7 @@ def _compile_semantic_prototype_v2(
     prototype_resources: list[dict[str, Any]] = []
     record_schemas: dict[str, Any] = {}
     resource_policies: dict[str, Any] = {}
+    references = [_foreign_key_relationship(item) for item in document["relationships"]]
 
     for resource_id, resource in resources.items():
         resource_views = [
@@ -3808,6 +3871,20 @@ def _compile_semantic_prototype_v2(
             project_ref=project_ref,
         )
         runtime_type = _runtime_resource_type(resource_id, project_ref)
+        policy = {"read_only_when": copy.deepcopy(resource["read_only_when"])} if resource.get("read_only_when") else {}
+        relationships = [
+            {
+                "field_ref": item["from_field_ref"],
+                "target_resource_type": _runtime_resource_type(item["to_resource_ref"], project_ref),
+                "target_field_ref": item["to_field_ref"],
+                **({"unique_source": True} if item["cardinality"] == "one_to_one" else {}),
+            }
+            for item in references if item["from_resource_ref"] == resource_id
+        ]
+        if relationships:
+            policy["relationships"] = relationships
+        if policy:
+            resource_policies[runtime_type] = policy
         if not resource_views:
             validated = _validate_semantic_prototype_v1(slice_document, require_primary=False, lookup_only=True)
             record_schemas[runtime_type] = _prototype_record_schema(validated["resource"])
@@ -3825,13 +3902,7 @@ def _compile_semantic_prototype_v2(
             record_state_ids=frozenset(str(item["id"]) for item in resource_states if item["proof"]["kind"] == "field_predicate"),
         )
         page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
-        runtime_type = _runtime_resource_type(resource_id, project_ref)
-        policy = {"read_only_when": copy.deepcopy(resource["read_only_when"])} if resource.get("read_only_when") else {}
         if lookups:
-            policy["relationships"] = [
-                {"field_ref": field_id, "target_resource_type": lookup["optionsDataSource"]["resourceType"], "target_field_ref": lookup["optionValuePath"]}
-                for field_id, lookup in lookups.items()
-            ]
             properties = page["meta"]["builder"]["prototype_record_schemas"][runtime_type]["properties"]
             for field in resource["fields"]:
                 if field["id"] in lookups:
@@ -3848,8 +3919,6 @@ def _compile_semantic_prototype_v2(
                         target_id = next(identifier for identifier in resources if _runtime_resource_type(identifier, project_ref) == target_type)
                         source_map.setdefault(f"resource:{target_id}", []).append(
                             f"ui.application.desktop.pageSchema.widgets.@{widget['id']}.inputs.fields.@{field['id']}.optionsDataSource.resourceType")
-        if policy:
-            resource_policies[runtime_type] = policy
         record_schemas.update(page["meta"]["builder"]["prototype_record_schemas"])
         widgets.extend(copy.deepcopy(page["widgets"]))
         initial_state.update(copy.deepcopy(page.get("initialState") or {}))

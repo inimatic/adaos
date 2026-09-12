@@ -21,7 +21,10 @@ def _digest(candidate: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(candidate, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]], *, legacy: bool = False) -> dict[str, Any] | None:
+def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]], *, legacy: bool = False, version: int | None = None) -> dict[str, Any] | None:
+    version = version if version is not None else 1 if legacy else 3
+    if version not in (1, 2, 3):
+        raise BuilderWorkflowError("unsupported state repair version")
     state_codes = {
         "semantic.state_fixture_mismatch", "semantic.state_proof_hidden",
         "semantic.state_proof_invalid", "semantic.state_query_unreachable",
@@ -62,10 +65,11 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
 
     # Only the patch's reachable definitions belong in its provider schema.
     include("representativeState")
-    if legacy:
+    if version == 1:
         include("view")
     else:
-        properties = {name: copy.deepcopy(available["view"]["properties"][name])
+        properties = {("add_" + name if version == 3 and name in {"field_refs", "query_controls"} else name):
+                      copy.deepcopy(available["view"]["properties"][name])
                       for name in ("id", "empty_state", "field_refs", "query_controls")}
         definitions["view"] = {"type": "object", "additionalProperties": False,
                                "required": list(properties), "properties": properties}
@@ -77,12 +81,17 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
         "base_sha256": digest,
         "allowed_state_ids": [state["id"] for state in states],
         "allowed_view_ids": [view["id"] for view in views],
-        "task": "Return changed states and/or view patches resolving every reported failure. Omit unchanged items. A view patch contains only id, empty_state, field_refs and query_controls; Core retains the original title, resource, role, surface and media. Fixtures, commands, bindings and other states are immutable. First identify the intended state in the original request and Brief, then choose its proof and counts. A populated condition requires matching records and a visible predicate; do not turn it into an empty state to bypass a mismatch. Empty dataset and zero query matches are different proofs; use either only when it demonstrates the requested meaning. The merged candidate is fully validated after this patch.",
+        "task": (
+            "Return only changed states and view patches resolving every reported failure. "
+            + ("View add_field_refs and add_query_controls are ADDITIONS: empty arrays preserve all existing fields and controls. Never repeat or replace an existing query ID. empty_state=null preserves the existing empty presentation; an object sets it. " if version == 3 else
+               "View field_refs and query_controls REPLACE their complete original lists; empty arrays clear them. Carry unchanged entries forward. empty_state=null clears the original empty presentation. ")
+            + "Core retains the original title, resource, role, surface and media. Fixtures, commands, bindings and unreported states are immutable. First identify the intended state in the original request and Brief, then choose its proof and counts. A populated condition requires matching records and a visible predicate; do not turn it into an empty state to bypass a mismatch. Empty dataset and zero query matches are different proofs; use either only when it demonstrates the requested meaning. The merged candidate is fully validated after this patch."
+        ),
         "output_schema": {
             "type": "object", "additionalProperties": False,
             "required": ["schema", "base_sha256", "states", "views"],
             "properties": {
-                "schema": {"type": "string", "enum": [f"adaos.builder.state_repair.v{1 if legacy else 2}"]},
+                "schema": {"type": "string", "enum": [f"adaos.builder.state_repair.v{version}"]},
                 "base_sha256": {"type": "string", "enum": [digest]},
                 "states": {"type": "array", "items": {"$ref": "#/$defs/representativeState"}},
                 "views": {"type": "array", "items": {"$ref": "#/$defs/view"}},
@@ -93,8 +102,12 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
 
 
 def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    legacy = repair.get("schema") == "adaos.builder.state_repair.v1"
-    plan = prepare_state_repair(candidate, findings, legacy=legacy)
+    versions = {f"adaos.builder.state_repair.v{version}": version for version in (1, 2, 3)}
+    version = versions.get(repair.get("schema"))
+    if version is None:
+        raise BuilderWorkflowError("unsupported state repair version")
+    legacy = version == 1
+    plan = prepare_state_repair(candidate, findings, version=version)
     if plan is None:
         raise BuilderWorkflowError("state repair is not applicable to these findings")
     repair = copy.deepcopy(dict(repair))
@@ -112,6 +125,19 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
             if replacement is None:
                 continue
             if key == "views":
+                if version == 3:
+                    updated = copy.deepcopy(original)
+                    updated["field_refs"] = list(dict.fromkeys([*original["field_refs"], *replacement["add_field_refs"]]))
+                    controls = {item["id"]: item for item in original["query_controls"]}
+                    for control in replacement["add_query_controls"]:
+                        if control["id"] in controls:
+                            raise BuilderWorkflowError("state repair cannot replace or duplicate an existing query control")
+                        controls[control["id"]] = control
+                    updated["query_controls"] = list(controls.values())
+                    if replacement["empty_state"] is not None:
+                        updated["empty_state"] = replacement["empty_state"]
+                    result[target][index] = updated
+                    continue
                 if not legacy:
                     result[target][index] = {**original, **replacement}
                     continue

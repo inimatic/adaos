@@ -625,6 +625,16 @@ records and undergo the same identity/reference validation. Relationship
 labels or the target identity provide backward-compatible fallbacks. Never infer
 private display fields or fabricate a collection solely to satisfy lowering.
 Unreachable resources and details without a selection path remain invalid.
+Relationship direction follows cardinality: `many_to_one` references a unique
+target, while `one_to_many` references the unique parent from each child.
+Implicit record identity is valid at either end. `one_to_one` additionally
+enforces unique nonempty source values, both in fixtures and under the runtime
+mutation lock. Many-to-many uses a separate link resource, not a scalar edge
+whose cardinality the provider ignores. Inverse label fields describe the
+authored target; they must not be used to disclose unrelated parent fields.
+Prefer immutable record IDs over display names. The current provider rejects
+renaming a referenced natural key rather than silently breaking its links;
+acceptance must test requested rename workflows, not just initial fixtures.
 Materialization and final postcondition checks share a typed query-slot walker:
 both page/modal widget sources and form-field `optionsDataSource` participate.
 Example JSON or metadata is not an executable dependency. Sidecars must match
@@ -667,6 +677,30 @@ accidental context variation; cache-hit or latency gains require measurement.
 Repair context names its envelope from the SDK's actual output schema, rather
 than a second version constant in adapter prose. Validate system text, stable
 context and transport schema together, including compatibility versions.
+State repair v3 has explicitly additive view patches: `add_field_refs` and
+`add_query_controls` preserve existing entries, and `empty_state=null` preserves
+the existing empty presentation. Existing query IDs cannot be replaced by an
+additive patch. Reported states remain full replacements; unrelated states,
+fixtures, commands and bindings remain immutable. Replay keeps the original
+v1/v2 semantics instead of reinterpreting old outputs as v3.
+
+Provider schema projection must not hide Core authoring constraints. The
+portable projection supplies omitted nested assertions from the authoritative
+ABI in generation guidance, including label-field cardinality. More capable
+provider profiles may retain supported assertions directly after an actual
+Root/provider canary; a quota failure proves neither support nor incompatibility.
+Measure the additional context and avoided repairs together. Do not lower
+output budgets merely because a complete response is larger than expected.
+
+The independent grader receives revision-bound resources and executable provider
+policies, not just visible controls or schema property descriptions. Its pointer
+index must include stored-record locks while avoiding a catalogue of nested
+schema types as supposed interaction evidence. Preserve UTF-8 input, submission,
+terminal or partial response, usage and failure identity separately for each
+case attempt. Keep the pre-interaction artifact immutable across grading retries.
+Model options, including output budget, belong in request identity. Grader
+version changes invalidate direct score comparisons; regrading retained artifacts
+is separate from fresh generation and never overwrites the original cohort.
 
 A deferred computation still requires representative output values when those
 outputs are requested. Raw inputs plus an explanatory paragraph are not an

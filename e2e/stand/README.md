@@ -102,3 +102,29 @@ limited to operations explicitly declared by the prototype.
 `dropdown` and `singleChoice` also cover assignment and status editors. Probes
 record the field type, preserve fixture values after the task, verify read-only
 controls, and include the exact probe-script digest in their cohort receipt.
+
+Run `context-archetypes-gpt5-low-20260912-08` retains 11 passes, three validation
+failures and two inconclusive grades. Its original grader v13 exhausted its
+output budget for library attempt 1; Root credits were exhausted for procurement
+attempt 2. Do not retry paid inference until credits are restored. The separate
+schema canary failed for the same quota reason, not schema incompatibility.
+
+Grader v14 retains attempt-specific `-input.json`, `-response.json` and immutable
+`-artifact.json` files under `evidence/grading`. A retry reuses that artifact and
+rejects changed candidate identity; failed/partial Root responses retain job and
+request IDs plus usage. Its model settings participate in request identity.
+The default GPT-4.1 ceiling is 32768 output tokens; this is not a target response
+length. Version 14 scores must not silently replace or compare as v13 scores.
+
+For older cohorts, `retain-builder-evaluation-artifacts.py <run>` captures
+revision-bound, pre-interaction snapshots for admitted, owned, unapproved DEV
+tests. Run it before browser mutations and use a new output set; existing files
+are never overwritten. Run 08 has 13 such artifacts. Its library first-input
+overwrite predates per-attempt retention and remains an explicit evidence gap.
+
+`probe-structured-output-contract.py --output <new-directory>` is a deliberate
+live GPT-5/low canary for nested unions and bounds through the configured Root.
+It creates no application, retains exact request/response and requires
+`ENV_TYPE=dev`. A quota failure is inconclusive for schema support. Generation,
+artifact replay, regrading, browser review and mutation probes remain distinct
+evidence classes; none is a substitute for another.

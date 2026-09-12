@@ -1265,34 +1265,31 @@ class CompatibilityBuilderExecutor:
                     collect_resource_types(nested)
 
         collect_resource_types(webui)
-        resources = PrototypeResourceService().evaluation_snapshots(
-            project_ref=project_ref,
-            revision=revision,
-            webui_digest=prototype_webui_digest(webui),
-            resource_types=resource_types,
-        )
-        application = _evaluation_application_context(
-            context, project_ref=project_ref
-        )
-        artifact_payload = {
-            "schema": "adaos.builder.prototype_evaluation_artifact.v1",
-            "project_ref": project_ref,
-            "revision": revision,
-            "webui": dict(webui),
-            "prototype_resources": resources,
-        }
-        if application:
-            artifact_payload["application"] = application
-        artifact = validate_builder_e2e_record(
-            "adaos.builder.prototype_evaluation_artifact.v1",
-            artifact_payload,
-        )
         relative = (
             Path("evidence")
             / "grading"
-            / f"{_safe_token(str(context['case_id']), fallback='case')}-input.json"
+            / f"{_safe_token(str(context['case_id']), fallback='case')}-attempt-{int(context.get('repetition') or 1):02d}-input.json"
         )
         evidence_path = Path(context["bundle_dir"]) / relative
+        artifact_path = evidence_path.with_name(evidence_path.name.replace("-input.json", "-artifact.json"))
+        if artifact_path.exists():
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            validate_builder_e2e_record("adaos.builder.prototype_evaluation_artifact.v1", artifact)
+            if (artifact["project_ref"] != project_ref or artifact["revision"] != revision
+                    or prototype_webui_digest(artifact["webui"]) != prototype_webui_digest(webui)):
+                raise BuilderE2EError("The retained grading artifact belongs to a different candidate; start a new attempt")
+        else:
+            resources = PrototypeResourceService().evaluation_snapshots(
+                project_ref=project_ref, revision=revision,
+                webui_digest=prototype_webui_digest(webui), resource_types=resource_types,
+            )
+            application = _evaluation_application_context(context, project_ref=project_ref)
+            artifact = validate_builder_e2e_record("adaos.builder.prototype_evaluation_artifact.v1", {
+                "schema": "adaos.builder.prototype_evaluation_artifact.v1",
+                "project_ref": project_ref, "revision": revision, "webui": dict(webui),
+                "prototype_resources": resources, **({"application": application} if application else {}),
+            })
+            _write_json(artifact_path, artifact)
         try:
             grade, _request = grade_builder_prototype(
                 artifact=dict(artifact),
@@ -1310,6 +1307,9 @@ class CompatibilityBuilderExecutor:
                     or 180
                 ),
                 request_recorder=lambda value: _write_json(evidence_path, value),
+                response_recorder=lambda value: _write_json(
+                    evidence_path.with_name(evidence_path.name.replace("-input.json", "-response.json")), value
+                ),
             )
         except Exception as exc:
             raise BuilderE2EUnavailable(

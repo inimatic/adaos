@@ -95,9 +95,9 @@
         "from_resource_ref": { "$ref": "#/$defs/id" },
         "from_field_ref": { "$ref": "#/$defs/id" },
         "to_resource_ref": { "$ref": "#/$defs/id" },
-        "to_field_ref": { "$ref": "#/$defs/id", "description": "Use id for record identity, with source values equal to target record.id. A declared target field instead requires exact unique field values, not id-like labels. Display labels use label_field_refs or the target collection fields." },
+        "to_field_ref": { "$ref": "#/$defs/id", "description": "many_to_one/one_to_one: from is a foreign key, to is the unique target identity. one_to_many: from is the unique parent identity, to is the child's foreign key. Prefer implicit id on either end: reference values must exactly match record.id, never a mutable display label. A declared target field must be unique and cannot be renamed while referenced. one_to_one also requires unique source values. Model many-to-many with an explicit link resource and two many_to_one relationships. Display labels use label_field_refs for the to resource; inverse selectors use the parent collection labels." },
         "label_field_refs": { "type": "array", "maxItems": 3, "uniqueItems": true, "items": { "$ref": "#/$defs/id" }, "description": "Target fields safe to display in selectors. Empty uses target collection labels, or the target identity if it has no collection. Never include private details here." },
-        "cardinality": { "type": "string", "enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many"] }
+        "cardinality": { "type": "string", "enum": ["one_to_one", "one_to_many", "many_to_one"] }
       }
     },
     "option": {

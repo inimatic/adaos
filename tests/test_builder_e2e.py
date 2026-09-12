@@ -27,6 +27,45 @@ from adaos.services.builder.llm_input_attribution import (
 )
 
 
+def test_grading_evidence_is_scoped_to_attempt_and_reuses_immutable_snapshot(tmp_path, monkeypatch) -> None:
+    import adaos.e2e.builder_grading as grading
+    from adaos.services.resources.prototype import PrototypeResourceService
+
+    source = tmp_path / "candidate"
+    source.mkdir()
+    webui = {"ui": {"application": {"desktop": {"pageSchema": {"meta": {"builder": {"ui_revision": "proto-1"}}}}}}}
+    (source / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
+    snapshots = []
+    def snapshot(*args, **kwargs):
+        snapshots.append(kwargs)
+        return []
+    def grade(**kwargs):
+        kwargs["request_recorder"]({"message": "Проверка", "artifact": kwargs["artifact"]})
+        kwargs["response_recorder"]({"job_id": "job", "status": "failed", "error": "quota"})
+        raise ValueError("quota")
+    monkeypatch.setattr(PrototypeResourceService, "__init__", lambda *args, **kwargs: None)
+    monkeypatch.setattr(PrototypeResourceService, "evaluation_snapshots", snapshot)
+    monkeypatch.setattr(grading, "grade_builder_prototype", grade)
+    executor = SdkBuilderExecutor(repo_root=tmp_path)
+    for repetition in (1, 1, 2):
+        with pytest.raises(BuilderE2EUnavailable, match="quota"):
+            executor._prototype_grade({"path": str(source), "scenario_id": "candidate"}, {
+                "case_id": "test", "repetition": repetition, "bundle_dir": str(tmp_path),
+            })
+    assert len(snapshots) == 2
+    for repetition in (1, 2):
+        base = tmp_path / "evidence/grading" / f"test-attempt-{repetition:02d}"
+        assert "Проверка" in base.with_name(base.name + "-input.json").read_text(encoding="utf-8")
+        assert base.with_name(base.name + "-artifact.json").is_file()
+        assert json.loads(base.with_name(base.name + "-response.json").read_text(encoding="utf-8"))["error"] == "quota"
+    webui["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"]["ui_revision"] = "proto-2"
+    (source / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
+    with pytest.raises(BuilderE2EError, match="different candidate"):
+        executor._prototype_grade({"path": str(source), "scenario_id": "candidate"}, {
+            "case_id": "test", "repetition": 1, "bundle_dir": str(tmp_path),
+        })
+
+
 def test_generation_diagnostic_exposes_truncation_without_copying_response() -> None:
     from adaos.e2e.builder import _compact_generation_diagnostic
     diagnostic = _compact_generation_diagnostic({"status": "failed", "diagnostic": {
@@ -621,7 +660,7 @@ def test_baseline_remains_comparable_across_implementation_commits(
     assert comparison["reasons"] == []
     assert baseline["reference"]["adapter"] == "fixture.v1"
     assert baseline["cohort"]["grader_model"] == "gpt-4.1"
-    assert baseline["cohort"]["grader_version"] == "13"
+    assert baseline["cohort"]["grader_version"] == "14"
 
 
 def test_runner_rejects_undeclared_executor_adapter(tmp_path: Path) -> None:
@@ -768,7 +807,7 @@ def test_runner_injects_case_oracle_only_into_prototype_grade(tmp_path: Path) ->
     assert run_manifest["evaluation"]["prototype_grader"] == {
         "kind": "model",
         "model": "gpt-4.1",
-        "version": "13",
+        "version": "14",
     }
 
 

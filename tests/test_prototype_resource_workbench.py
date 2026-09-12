@@ -284,6 +284,25 @@ def test_live_relationships_accept_new_targets_and_reject_dangling_writes(tmp_pa
     assert service.operate("prototype.kanban.people", "show", record_id=identifier, payload={})["record"]["id"] == identifier
 
 
+def test_one_to_one_relationship_rejects_duplicate_assignment_atomically(tmp_path) -> None:
+    service = PrototypeResourceService(state_dir=tmp_path)
+    source, target = _bundle(), _bundle()
+    target["resource_definition"]["resource_type"] = "prototype.kanban.people"
+    target["resource_definition"]["authority"]["binding"] = "kanban.people"
+    target["data_definition"]["source_id"] = "kanban.people"
+    for record in source["data_definition"]["seed"]:
+        record["title"] = record["id"]
+    source["resource_definition"]["metadata"] = {"prototype_policy": {"relationships": [{
+        "field_ref": "title", "target_resource_type": "prototype.kanban.people", "target_field_ref": "id", "unique_source": True,
+    }]}}
+    service.materialize(source)
+    service.materialize(target)
+    records = source["data_definition"]["seed"]
+    with pytest.raises(PrototypeResourceConflict, match="source values must be unique"):
+        service.operate("prototype.kanban.cards", "update", record_id=records[1]["id"], payload={"title": records[0]["id"]})
+    assert service.operate("prototype.kanban.cards", "show", record_id=records[1]["id"], payload={})["record"]["title"] == records[1]["id"]
+
+
 @pytest.mark.parametrize("difference", ["project_ref", "webui_digest"])
 def test_relationships_cannot_cross_project_or_revision(tmp_path, difference: str) -> None:
     service = PrototypeResourceService(state_dir=tmp_path)

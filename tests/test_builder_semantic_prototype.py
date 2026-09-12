@@ -117,6 +117,8 @@ def test_lookup_only_resource_materializes_without_inventing_a_collection(surfac
     editor["field_refs"].append("work_owner_id")
     next(command for command in semantic["commands"] if command["kind"] == "update")["input_field_refs"].append("work_owner_id")
     semantic["relationships"][0]["label_field_refs"] = ["person_name"]
+    lock = {"field_ref": "person_name", "operator": "equals", "value": "Archived"}
+    semantic["resources"][1]["read_only_when"] = lock
     candidate = _multi_resource_candidate(semantic)
     compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
     page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
@@ -126,6 +128,7 @@ def test_lookup_only_resource_materializes_without_inventing_a_collection(surfac
                  for field in widget["inputs"]["fields"] if field["id"] == "work_owner_id")
     assert field["optionLabelPaths"] == ["person_name"]
     assert field["optionsDataSource"]["resourceType"] == "prototype.people"
+    assert page["meta"]["builder"]["prototype_resource_policies"]["prototype.people"]["read_only_when"] == lock
     resource = next(resource for resource in compiled["prototype_resources"] if resource["resource_ref"] == "people")
     spec = developer_prototypes.derive_record_resource_spec(compiled["webui"], resource["records"], resource_type=resource["resource_type"])
     assert {operation["id"] for operation in spec["resource_definition"]["operations"]} == {"list", "show"}
@@ -152,6 +155,78 @@ def test_explicit_relationship_labels_keep_all_declared_fields() -> None:
     result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
     fields = [field for widget in developer_prototypes._surface_widgets(result["webui"]) if widget["type"] == "ui.form" for field in widget["inputs"]["fields"]]
     assert next(field for field in fields if field["id"] == "work_owner_id")["optionLabelPaths"] == ["person_name", "person_phone"]
+
+
+@pytest.mark.parametrize("qualified", [False, True])
+def test_one_to_many_uses_the_many_side_foreign_key_without_requiring_children(qualified) -> None:
+    brief, semantic = _multi_resource_fixture()
+    editor = next(view for view in semantic["views"] if view["role"] == "editor")
+    editor["field_refs"].append("work_owner_id")
+    parent = semantic["resources"][1]
+    parent["records"].append({**parent["records"][0], "id": "person-3", "person_name": "Unassigned"})
+    forward = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    relation = semantic["relationships"][0]
+    for name in ("resource_ref", "field_ref"):
+        relation[f"from_{name}"], relation[f"to_{name}"] = relation[f"to_{name}"], relation[f"from_{name}"]
+    relation["cardinality"] = "one_to_many"
+    relation["label_field_refs"] = ["title"]
+    if qualified:
+        relation["from_field_ref"] = "people.id"
+    candidate = _multi_resource_candidate(semantic)
+    original = copy.deepcopy(candidate)
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert candidate == original
+    assert result["semantic_document"]["relationships"][0]["cardinality"] == "one_to_many"
+    assert result["semantic_document"]["relationships"][0]["label_field_refs"] == ["title"]
+    page = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    forward_page = forward["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    assert page["meta"]["builder"]["prototype_resource_policies"] == forward_page["meta"]["builder"]["prototype_resource_policies"]
+    fields = [field for widget in developer_prototypes._surface_widgets(result["webui"]) if widget["type"] == "ui.form" for field in widget["inputs"]["fields"]]
+    lookup = next(field for field in fields if field["id"] == "work_owner_id")
+    assert lookup["optionsDataSource"]["resourceType"] == "prototype.people"
+    assert lookup["optionLabelPaths"] == ["person_name"]
+    assert all(field["id"] != "id" for field in result["semantic_document"]["resources"][1]["fields"])
+    candidate["resources"][0]["records"][0]["values"][-1] = "missing-person"
+    with pytest.raises(BuilderWorkflowError, match="source values with no target"):
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+
+
+def test_many_to_many_requires_an_explicit_link_resource() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    candidate["relationships"][0]["cardinality"] = "many_to_many"
+    assert "explicit link resource" in semantic_prototype_generation_guidance()["relationships"]
+    with pytest.raises(BuilderWorkflowError, match="many_to_many"):
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+
+
+def test_generation_guidance_exposes_nested_authoring_bounds() -> None:
+    guidance = semantic_prototype_generation_guidance()
+    contract = semantic_prototype_candidate_contract(version="v2")
+    constraints = guidance["authoring_constraints"]
+    assert constraints["#/$defs/relationship/properties/label_field_refs"] == {
+        "maxItems": 3, "uniqueItems": True,
+    }
+    for pointer, bounds in constraints.items():
+        node = contract
+        for key in pointer.split("/")[1:]:
+            node = node[int(key)] if isinstance(node, list) else node[key]
+        assert all(node[key] == value for key, value in bounds.items())
+    assert "many_to_many" not in contract["$defs"]["relationship"]["properties"]["cardinality"]["enum"]
+
+
+def test_one_to_one_preserves_source_uniqueness_in_provider_policy() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["relationships"][0]["cardinality"] = "one_to_one"
+    for index, record in enumerate(semantic["resources"][0]["records"]):
+        record["work_owner_id"] = semantic["resources"][1]["records"][index]["id"] if index < 2 else None
+    candidate = _multi_resource_candidate(semantic)
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    policy = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"]["prototype_resource_policies"]
+    assert policy["prototype.work_items"]["relationships"][0]["unique_source"] is True
+    candidate["resources"][0]["records"][1]["values"][-1] = candidate["resources"][0]["records"][0]["values"][-1]
+    with pytest.raises(BuilderWorkflowError, match="unique source values"):
+        compile_semantic_prototype_candidate(candidate, brief=brief)
 
 
 def test_repeated_local_fields_are_scoped_without_rewriting_values_or_identity() -> None:
@@ -2167,11 +2242,12 @@ def test_view_only_state_repair_does_not_require_unchanged_state_echo() -> None:
 
 
 def test_state_repair_v2_cannot_echo_or_change_immutable_view_properties() -> None:
+    from adaos.services.builder.semantic_repair import prepare_state_repair
     _, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)
     state = candidate["representative_states"][0]
     findings = [{"code": "semantic.state_fixture_mismatch", "semantic_refs": [f"state:{state['id']}"]}]
-    plan = prototype_sdk.prepare_state_repair(candidate, findings)
+    plan = prepare_state_repair(candidate, findings, version=2)
     properties = plan["output_schema"]["$defs"]["view"]["properties"]
     assert set(properties) == {"id", "empty_state", "field_refs", "query_controls"}
     view = next(view for view in candidate["views"] if view["id"] == state["view_ref"])
@@ -2184,6 +2260,34 @@ def test_state_repair_v2_cannot_echo_or_change_immutable_view_properties() -> No
     patch["resource_ref"] = ""
     with pytest.raises(ValidationError):
         prototype_sdk.apply_state_repair(candidate, repair, findings)
+
+
+def test_state_repair_v3_adds_visibility_without_erasing_queries_or_empty_state() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    view = candidate["views"][0]
+    view["query_controls"] = [{"id": "status-filter", "kind": "filter", "field_ref": "status", "label": {"en": "Status", "ru": "Статус"}}]
+    state = next(item for item in candidate["representative_states"] if item["view_ref"] == view["id"])
+    state["proof"]["visible_field_refs"] = ["comment"]
+    findings = [{"code": "semantic.state_proof_hidden", "semantic_refs": [f"state:{state['id']}"]}]
+    original = copy.deepcopy(candidate)
+    plan = prototype_sdk.prepare_state_repair(candidate, findings)
+    assert plan["output_schema"]["properties"]["schema"]["enum"] == ["adaos.builder.state_repair.v3"]
+    patch = {"id": view["id"], "add_field_refs": ["comment"], "add_query_controls": [], "empty_state": None}
+    repair = {"schema": "adaos.builder.state_repair.v3", "base_sha256": plan["base_sha256"], "states": [], "views": [patch]}
+    result = prototype_sdk.apply_state_repair(candidate, repair, findings)
+    assert candidate == original
+    assert result["views"][0]["query_controls"] == view["query_controls"]
+    assert result["views"][0]["empty_state"] == view["empty_state"]
+    assert result["views"][0]["field_refs"] == list(dict.fromkeys([*view["field_refs"], "comment"]))
+    assert result["representative_states"] == candidate["representative_states"]
+    compile_semantic_prototype_candidate(result, brief=brief)
+    patch["add_query_controls"] = [copy.deepcopy(view["query_controls"][0])]
+    with pytest.raises(BuilderWorkflowError, match="existing query"):
+        prototype_sdk.apply_state_repair(candidate, repair, findings)
+    patch["add_query_controls"] = [{"id": "new-filter", "kind": "filter", "field_ref": "title", "label": {"en": "Title", "ru": "Название"}}]
+    result = prototype_sdk.apply_state_repair(candidate, repair, findings)
+    assert len(result["views"][0]["query_controls"]) == len(view["query_controls"]) + 1
 
 
 def test_numeric_filter_compiles_to_number_input() -> None:

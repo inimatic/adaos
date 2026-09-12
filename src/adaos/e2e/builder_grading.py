@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "13"
+PROTOTYPE_GRADER_VERSION = "14"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -190,13 +190,18 @@ def _evidence_pointers(artifact: Mapping[str, Any]) -> list[str]:
         "visibleWhen",
         "capability_gaps",
         "automation_requirements",
+        "prototype_resource_policies",
+        "read_only_when",
+        "readOnlyIf",
+        "relationships",
     }
 
-    def visit(value: Any, pointer: str) -> None:
+    def visit(value: Any, pointer: str, *, policy: bool = False, schema: bool = False) -> None:
         if isinstance(value, Mapping):
             if pointer and (
                 pointer.count("/") <= 5
-                or identity_keys.intersection(value)
+                or (identity_keys.intersection(value) and not schema)
+                or policy
                 or pointer.rsplit("/", 1)[-1] in semantic_container_names
                 or (
                     "/prototype_resources/" in pointer
@@ -205,7 +210,9 @@ def _evidence_pointers(artifact: Mapping[str, Any]) -> list[str]:
             ):
                 entries.append(pointer)
             for key, nested in value.items():
-                visit(nested, f"{pointer}/{_pointer_token(key)}")
+                visit(nested, f"{pointer}/{_pointer_token(key)}",
+                      policy=policy or key == "prototype_resource_policies",
+                      schema=schema or key in {"jsonSchema", "schema", "$defs"})
             return
         if isinstance(value, Sequence) and not isinstance(
             value, (str, bytes, bytearray)
@@ -213,7 +220,7 @@ def _evidence_pointers(artifact: Mapping[str, Any]) -> list[str]:
             if pointer.rsplit("/", 1)[-1] in semantic_container_names:
                 entries.append(pointer)
             for index, nested in enumerate(value):
-                visit(nested, f"{pointer}/{index}")
+                visit(nested, f"{pointer}/{index}", policy=policy, schema=schema)
 
     visit(artifact, "")
     return entries
@@ -437,6 +444,8 @@ def grade_builder_prototype(
     submitter: Callable[..., Mapping[str, Any]] | None = None,
     waiter: Callable[..., Mapping[str, Any]] | None = None,
     request_recorder: Callable[[Mapping[str, Any]], None] | None = None,
+    response_recorder: Callable[[Mapping[str, Any]], None] | None = None,
+    max_output_tokens: int = 32768,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Grade one immutable artifact and return the grade plus exact request record."""
 
@@ -465,8 +474,13 @@ def grade_builder_prototype(
             "content": json.dumps(payload, ensure_ascii=False, sort_keys=True),
         },
     ]
+    if isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int) or max_output_tokens <= 0:
+        raise ValueError("Grader max_output_tokens must be a positive integer")
+    generation_options = {"temperature": 0.0, "max_tokens": max_output_tokens,
+                          "prompt_cache_key": f"adaos-builder-e2e-prototype-grader-v{PROTOTYPE_GRADER_VERSION}"}
     request_digest = _digest({"messages": messages, "model": selected_model,
-                              "result_schema": result_schema, "grader_version": PROTOTYPE_GRADER_VERSION})
+                              "result_schema": result_schema, "generation_options": generation_options,
+                              "grader_version": PROTOTYPE_GRADER_VERSION})
     request_id = "builder-e2e-grade-" + request_digest.removeprefix("sha256:")[:32]
     request_record = {
         "schema": "adaos.builder.prototype_grade_input.v1",
@@ -478,6 +492,7 @@ def grade_builder_prototype(
         "model": selected_model,
         "result_schema": result_schema,
         "grader_version": PROTOTYPE_GRADER_VERSION,
+        "generation_options": generation_options,
     }
     if request_recorder is not None:
         request_recorder(request_record)
@@ -491,8 +506,7 @@ def grade_builder_prototype(
         submitter(
             messages,
             model=selected_model,
-            temperature=0.0,
-            max_tokens=1800,
+            **generation_options,
             text={
                 "format": {
                     "type": "json_schema",
@@ -502,30 +516,45 @@ def grade_builder_prototype(
                 }
             },
             request_id=request_id,
-            prompt_cache_key=f"adaos-builder-e2e-prototype-grader-v{PROTOTYPE_GRADER_VERSION}",
             timeout=min(15.0, timeout_seconds),
         )
     )
     job_id = str(submitted.get("job_id") or "").strip()
+    response_record: dict[str, Any] = {
+        "schema": "adaos.builder.prototype_grade_response.v1",
+        "request_id": request_id, "job_id": job_id, "submission": submitted,
+    }
+    if response_recorder is not None:
+        response_recorder(response_record)
     if not job_id:
         raise ValueError("prototype grader submission returned no job_id")
     client = submitted.get("_client")
     base_url = str(
         client.get("base_url") if isinstance(client, Mapping) else ""
     ).strip()
-    response = dict(
-        waiter(
+    try:
+        response = dict(waiter(
             job_id,
             base_url=base_url or None,
             timeout_s=timeout_seconds,
             poll_interval_s=1.0,
             request_timeout=6.0,
-        )
-    )
+        ))
+    except Exception as exc:
+        if response_recorder is not None:
+            response_recorder({**response_record, "wait_error": {"type": type(exc).__name__, "message": str(exc)}})
+        raise
+    response_record.update({"response": response, "metrics": {
+        **_usage(response), "duration_ms": round((time.perf_counter() - started) * 1000.0, 3),
+    }})
+    if response_recorder is not None:
+        response_recorder(response_record)
     if str(response.get("status") or "").lower() != "succeeded":
         raise ValueError(
             "prototype grader job did not succeed: "
             + str(response.get("status") or "unknown")
+            + f" (job_id={job_id}, request_id={request_id}); "
+            + json.dumps(response.get("error") or response.get("incomplete_details") or {}, ensure_ascii=False)
         )
     parsed = _parse_result(str(response.get("output_text") or ""))
     job_checks = _normalize_checks(
