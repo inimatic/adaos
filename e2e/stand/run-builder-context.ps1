@@ -3,6 +3,7 @@ param(
     [ValidateSet('minimal','low','medium','high')][string]$Effort = 'low',
     [ValidateRange(1,20)][int]$Repetitions = 2,
     [string]$Suite = 'e2e/builder/development/archetypes/suite.yaml',
+    [ValidateSet('on','off','auto')][string]$Browser = 'off',
     [string[]]$Cases = @()
 )
 $ErrorActionPreference = 'Stop'
@@ -18,7 +19,7 @@ try {
     $env:PYTHONIOENCODING = 'utf-8'
     $arguments = @('-c', 'from adaos.apps.cli.app import app; app()', 'builder', 'e2e',
         $Suite, '--run-id', $RunId,
-        '--repetitions', $Repetitions, '--browser', 'off')
+        '--repetitions', $Repetitions, '--browser', $Browser)
     foreach ($case in $Cases) { $arguments += @('--case', $case) }
     & .venv/Scripts/python.exe @arguments
     exit $LASTEXITCODE

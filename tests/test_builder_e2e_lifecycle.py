@@ -91,3 +91,72 @@ def test_retained_automation_is_not_mislabeled_as_an_unapproved_prototype():
     history = [{"type": kind, "status": "passed"} for kind in ("prototype.accept", "automation.start", "trial.prepare")]
     assert steps.retained_stage(history) == {"stage": "trial", "acceptance": "accepted"}
     assert steps.retained_stage([*history, {"type": "release.promote", "status": "failed"}])["stage"] == "trial"
+
+
+def test_browser_requires_owned_validated_unapproved_preview(context):
+    from pathlib import Path
+    from adaos.e2e import builder_browser
+
+    with pytest.raises(ValueError, match="validated test preview"):
+        builder_browser.execute({"object_id": "example"}, context, repo_root=Path.cwd())
+    outputs = {"create": {"scenario_id": "example", "draft_id": "draft"},
+               "validate": {"review_preview": {"scenario_id": "example", "stage": "prototype", "test": True}},
+               "approve": {"acceptance": {"decision": "accepted"}}}
+    with pytest.raises(ValueError, match="accepted prototypes"):
+        builder_browser.execute({"object_id": "example"}, {**context, "outputs": outputs}, repo_root=Path.cwd())
+
+
+def test_lifecycle_suite_keeps_automation_brief_out_of_prototype_requests():
+    from pathlib import Path
+    from adaos.e2e.builder import load_builder_e2e_suite
+
+    loaded = load_builder_e2e_suite(Path("e2e/builder/development/lifecycle/suite.yaml"))
+    case = loaded.cases[0]
+    declared = {step["id"]: step for step in case["steps"]}
+    assert loaded.suite["defaults"]["retain_test_projects"] is True
+    assert declared["implement"]["type"] == "automation.start"
+    assert "implementation_brief" not in declared["design"]["input"]
+    assert declared["approve"]["type"] == "prototype.accept"
+    assert declared["implementation-result"]["expect"]["values"]["status"] == "completed"
+    assert declared["trial"]["type"] == "trial.prepare"
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_browser_records_scoped_evidence_and_clears_inherited_probe_options(context, tmp_path, monkeypatch, timeout):
+    from pathlib import Path
+    from types import SimpleNamespace
+    from adaos.apps.cli import active_control
+    from adaos.services import agent_context
+    from adaos.e2e import builder_browser
+
+    monkeypatch.setattr(active_control, "resolve_control_token", lambda **kwargs: "secret")
+    monkeypatch.setattr(agent_context, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(subnet_id_value="subnet")))
+    monkeypatch.setenv("ADAOS_E2E_DICTIONARY_PROBE", "1")
+    monkeypatch.setenv("ADAOS_E2E_SELECT_WIDGET", "unrelated")
+    outputs = {"create": {"scenario_id": "example", "draft_id": "draft"},
+               "validate": {"review_preview": {"scenario_id": "example", "stage": "prototype", "test": True,
+                                               "webspace_id": "preview-owned"}}}
+    ctx = {**context, "outputs": outputs, "locale": "ru"}
+    seen = []
+
+    def run(args, **kwargs):
+        env = kwargs["env"]
+        assert "ADAOS_E2E_DICTIONARY_PROBE" not in env
+        assert "ADAOS_E2E_SELECT_WIDGET" not in env
+        assert env["ADAOS_E2E_WEBSPACE_ID"] == "preview-owned"
+        assert env["ADAOS_E2E_LOCALE"] == "ru"
+        seen.append(Path(env["ADAOS_E2E_OUTPUT"]))
+        if timeout:
+            raise builder_browser.subprocess.TimeoutExpired(args, 240, output="Partial output".encode("utf-8"))
+        (seen[-1] / "review.json").write_text("{}", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="review completed", stderr="")
+
+    monkeypatch.setattr(builder_browser.subprocess, "run", run)
+    for _ in range(2):
+        result = builder_browser.execute({"object_id": "example"}, ctx, repo_root=Path.cwd())
+        assert result["ok"] is not timeout
+        assert (tmp_path / result["evidence_ref"]).is_file()
+        assert "secret" not in (seen[-1] / "input.json").read_text(encoding="utf-8")
+    assert seen[0] != seen[1]
+    if timeout:
+        assert "Partial output" in (seen[0] / "probe.log").read_text(encoding="utf-8")

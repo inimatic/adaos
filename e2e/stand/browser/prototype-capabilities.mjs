@@ -7,7 +7,7 @@ const checkpoint = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CHECKPOINT
 const ownership = checkpoint.cleanup
 const created = checkpoint.steps.find(step => step.id === 'create')?.output
 const scenario = created?.scenario_id
-if (!ownership?.test || ownership.status !== 'retained_for_review' || ownership.acceptance !== 'not_approved'
+if (!ownership?.test || !['retained_for_review', 'review_in_progress'].includes(ownership.status) || ownership.acceptance !== 'not_approved'
   || !ownership.owned_artifacts.some(item => item.primary_ref === `scenario:${scenario}` && item.project_id === scenario)) {
   throw new Error('Only owned, retained, unapproved test scenarios may be exercised')
 }
@@ -60,6 +60,8 @@ try {
         window.ng.getComponent(element).rows.map(row => row.id).sort())
       if (target.type === 'ui.list') return host(target.id).locator('ada-list-widget').evaluate(element =>
         window.ng.getComponent(element).latestItems.map(row => row.id).sort())
+      if (target.type === 'collection.board') return host(target.id).locator('[data-webui-board-item-id]').evaluateAll(elements =>
+        elements.map(element => element.getAttribute('data-webui-board-item-id')).sort())
       throw new Error(`Unexercised related collection: ${target.type}`)
     }
     const ready = async () => page.waitForFunction(expected => {
@@ -157,11 +159,11 @@ try {
           }
           for (const control of widget.inputs.controls.filter(item => item.inputType === 'date')) {
             const input = toolbar.locator(`[data-query-id=${JSON.stringify(control.id)}] input`)
-            const collection = widgets.find(item => item.type === 'ui.table'
+            const collection = widgets.find(item => ['ui.table', 'ui.list', 'collection.board'].includes(item.type)
               && JSON.stringify(item.dataSource?.query || {}).includes(`$state.${control.stateKey}`))
-            if (!collection) throw new Error('Date filter has no table consumer')
-            const table = host(collection.id)
-            await expect(table.locator('tr.row-selectable').first()).toBeVisible({ timeout: 20_000 })
+            if (!collection) throw new Error('Date filter has no supported collection consumer')
+            await reveal(collection)
+            await expect.poll(async () => (await collectionIds(collection)).length, { timeout: 20_000 }).toBeGreaterThan(0)
             // Relationship labels hydrate separately; record identity must survive reset.
             const before = await collectionIds(collection)
             const response = page.waitForResponse(item => new URL(item.url()).pathname === '/api/resources/query'
@@ -172,7 +174,7 @@ try {
             await input.evaluate(element => { element.value = '2099-12-31'; element.dispatchEvent(new Event('change', { bubbles: true })) })
             const body = await (await response).json()
             if (!body.ok || body.items?.length) throw new Error('Date commit did not filter the resource query')
-            await expect(table.locator('tr.row-selectable')).toHaveCount(0)
+            await expect.poll(() => collectionIds(collection)).toEqual([])
             await toolbar.locator('.query-toolbar__reset').click()
             await expect.poll(() => collectionIds(collection), { timeout: 20_000 }).toEqual(before)
             sample.checks.push({ kind: 'date-change-query-reset', widget: widget.id, before: before.length })

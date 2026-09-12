@@ -67,8 +67,6 @@ component-retrieval, or implementation-agent workspaces.
 
 ## Declarative Contracts
 
-### Evaluation suite
-
 ### Lifecycle Steps
 
 The SDK adapter also admits `builder.workflow`, `prototype.accept`,
@@ -92,6 +90,12 @@ Prototype markers.
 These adapters are a qualification slice, not a completed release pipeline:
 real browser review, consumer install/update assertions and source-registry
 publication remain required by R10 of the Prototype roadmap.
+
+`prototype.browser` invokes the existing review, command, interaction or
+capability probe in an isolated case preview. Each retry retains its own evidence
+directory; `browser=off` is unavailable, not a passed review. Probe execution is
+not approval and cannot mutate an already accepted Prototype. The explicit
+review gate remains responsible for inspecting the resulting evidence.
 
 ### Evaluation Suite Contract
 

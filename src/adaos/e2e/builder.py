@@ -1577,6 +1577,11 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
     def execute(self, step_type: str, inputs: Mapping[str, Any], context: Mapping[str, Any]) -> Mapping[str, Any]:
         from adaos.e2e import builder_lifecycle
 
+        if step_type == "prototype.browser":
+            from adaos.e2e import builder_browser
+            if self.browser_mode == "off":
+                raise BuilderE2EUnavailable("prototype.browser requires browser mode on or auto")
+            return builder_browser.execute(inputs, context, repo_root=self.repo_root)
         if step_type in builder_lifecycle.STEP_TYPES:
             return builder_lifecycle.execute(step_type, inputs, context)
         result = dict(super().execute(step_type, inputs, context))

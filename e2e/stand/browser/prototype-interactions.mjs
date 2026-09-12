@@ -7,7 +7,7 @@ if (process.env.ENV_TYPE !== 'dev') throw new Error('Interaction review requires
 const checkpointPath = path.resolve(process.env.ADAOS_E2E_CHECKPOINT || '')
 const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8'))
 const ownership = checkpoint.cleanup
-if (!ownership?.test || ownership.status !== 'retained_for_review' || ownership.acceptance !== 'not_approved') {
+if (!ownership?.test || !['retained_for_review', 'review_in_progress'].includes(ownership.status) || ownership.acceptance !== 'not_approved') {
   throw new Error('Only retained, unapproved test artifacts may be mutated')
 }
 const created = checkpoint.steps.find(step => step.id === 'create')?.output
