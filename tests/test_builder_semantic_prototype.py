@@ -2862,6 +2862,7 @@ def test_semantic_v2_normalizes_choice_relationship_values_consistently() -> Non
     command["guard"] = {"when": {"field_ref": "work_owner_id", "operator": "equals", "value": "person:1"}, "require_nonempty": [source["fields"][0]["id"]]}
     collection = next(view for view in semantic["views"] if view["role"] == "collection" and view["resource_ref"] == source["id"])
     collection["field_refs"].append("work_owner_id")
+    collection['scope_filters'] = [{'field_ref': 'work_owner_id', 'value': 'person:1'}]
     semantic["representative_states"].append({
         "id": "owner-items", "label": _text("owner.items", "Owner items", "Записи владельца"),
         "view_ref": collection["id"], "min_items": 1, "max_items": 1,
@@ -2881,6 +2882,7 @@ def test_semantic_v2_normalizes_choice_relationship_values_consistently() -> Non
     assert document["commands"][0]["fixed_values"]["work_owner_id"] == "person.1"
     assert document["commands"][0]["guard"]["when"]["value"] == "person.1"
     assert document["representative_states"][-1]["filters"][0]["value"] == "person.1"
+    assert next(view for view in document['views'] if view['id'] == collection['id'])['scope_filters'][0]['value'] == 'person.1'
     assert result["normalizations"]
 
 

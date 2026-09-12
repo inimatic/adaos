@@ -1607,8 +1607,11 @@ cohort with their own request, schema, model settings and browser evidence.
   nested alternatives and array/string/number bounds passed through Root in
   `structured-bounds-gpt5-20260912-02`. This does not qualify new UI generation.
 
-- [ ] `[must]` Fix date filters for native calendar commits as well as keyboard
+- [x] `[must]` Fix date filters for native calendar commits as well as keyboard
   edits, without duplicate blur actions or changes to explicit manual commit.
+  Client component tests cover standalone calendar/manual-save behavior. Fresh
+  `capabilities-gpt5-low-20260912-01` daily-readings browser probes at 1440/390px
+  pass change-without-input/blur, filtered rows and reset to all five records.
 - [ ] `[must]` Provide a compact, extensible collection query toolbar with
   responsive disclosure, active-filter visibility and reset; reuse the same
   primitive for lists, tables and other collection presentations.
@@ -1620,6 +1623,12 @@ cohort with their own request, schema, model settings and browser evidence.
 - [ ] `[must]` Qualify tabs, modals, hierarchical navigation, accordion disclosure,
   numeric charts and board drag/move through schema, lowering and browser tasks.
   A rendered control alone does not qualify persistence or drag semantics.
+- [x] `[must]` Separate permanent typed collection scope from resettable filters.
+  `scope_filters` compiles to literal queries, participates in state evidence,
+  and rejects duplicate, invalid or conflicting fields (six regression tests).
+- [ ] `[must]` Regenerate and browser-test fixed-subset tabs, including reset and
+  mutation: the first library passed the grader but its Favorites tab displayed
+  all records by default. A title and an optional filter do not satisfy this task.
 - [ ] `[must]` Expose application settings through the existing host contract;
   test their actual effect and persistence scope rather than a Settings heading.
 - [ ] `[must]` Make Builder Conversation retain project-scoped user instructions
@@ -1640,6 +1649,28 @@ Design references: [Carbon data-table usage](https://carbondesignsystem.com/comp
 separates row, selection and toolbar actions; [PatternFly toolbar guidance](https://www.patternfly.org/components/toolbar/design-guidelines/)
 provides responsive grouping and filter disclosure. Adapt these generic patterns
 to AdaOS rather than introducing either system's component framework.
+
+Capability run 01 (2026-09-12) is retained unchanged: two cases passed generation,
+validation and grading; the board failed obsolete postconditions after semantic
+repair. Its primary context was 19,520 message characters plus the output schema
+(7,103 input tokens), not an application template. The repair fixed actual
+contract violations but collapsed the requested two tabs into one; this remains
+a task-quality failure, independent of the obsolete gate. The generic gate now
+recognizes query-toolbar state writes and guarded edit commands reached after
+selection; it still rejects unrelated state and unguarded entries.
+
+Browser evidence is distinct from grader success. Daily readings passes tabs,
+query disclosure, date filtering/reset and five numeric graph points (including
+zero) on both viewports. Earlier probe failures caught unrelated requests and
+remain retained alongside the corrected harness result. Library tree selection
+revealed missing selection-state display wiring; compiler lowering now emits
+the Client's actual `selectedStateKey` and `selectionMode` inputs. Fresh tree,
+fixed-subset, settings and drag/persistence qualification is still pending.
+
+DEV Builder Conversation ingress changes were tested and locally checkpointed
+as `builder@0.2.116`, source
+`sha256:04a46de7d758b097cccad9047591f8f521037f507abb353d229debe32e055066`.
+This is a local checkpoint, not a remote push or Workspace promotion.
 
 Promotion evidence (2026-09-11): the pre-promotion comparison found no
 Workspace-only product capability that needed to be carried forward. The four

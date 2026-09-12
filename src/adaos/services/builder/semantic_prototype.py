@@ -21,6 +21,7 @@ from .prototype_stage import automation_obligations, PROTOTYPE_STAGE_CONTRACT
 from .prototype_contracts import STATE_PROOF_RULES
 from .workflow import BuilderWorkflowError
 from .semantic_presentations import legacy_view, view_extras, presentation_findings, compile_presentations
+from .semantic_query_scope import compile_query_scopes, legacy_state, scope_findings, scoped_predicates
 
 
 FILTER_VALUE_TYPES = frozenset({"boolean", "choice", "date", "number", "short_text"})
@@ -818,7 +819,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         contract["$defs"]["relationship"]["required"].append("label_field_refs")
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
-        contract["$defs"]["view"]["required"].extend(["presentation_options", "field_display", "section"])
+        contract["$defs"]["view"]["required"].extend(["presentation_options", "field_display", "section", "scope_filters"])
         if brief is not None:
             inventory = prototype_requirement_inventory(brief)
             for name, allowed in (
@@ -914,10 +915,11 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "interactions": "Reuse local CRUD, live relationship selectors, query controls, confirmation and field guards. Commands belong to an editor; selection/details require a collection, but lookup-only resources need no standalone view. Foreign-key collections need a reachable relationship filter when the workflow requires inspecting one selected item's linked records; an unfiltered list of raw IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
         "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references: sample://image, sample://video, sample://document (downloadable text), sample://unavailable. Do not invent local paths for files that do not exist. attachment/attachments fields capture real local bytes, store references and render download links in details; documents do not require mediaKey or an image viewer. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading.",
         "ux_recommendations": {
-            "collection_presentations": "Use board for lanes of a choice field; presentation_options.draggable enables persisted moves between lanes, not ordering inside a lane. Use tree for nullable parent record ids, accordion for expandable groups, chart for one numeric point per record (group_field_ref=x, value_field_ref=y). Charts do not calculate aggregates. Plain lists/tables/cards remain valid choices. These are capabilities, not a mandatory checklist.",
-            "sections": "A view.section optionally groups related views into a tab or an application settings modal. Reuse the same id, kind and title within one section; null keeps shared content. Prefer tabs for distinct tasks and modals for focused editing. Settings contain real local resources/commands, not automatically implemented external effects. Do not invent additional sections just to fill the screen.",
+            "collection_presentations": "Use board for lanes of a choice field; presentation_options.draggable enables persisted moves between lanes, not ordering inside a lane. Use tree for nullable parent record ids, accordion for expandable groups, chart for one numeric point per record (group_field_ref=x, value_field_ref=y). Include lane/group/x/y fields in field_refs; a chart has only x and y. Charts do not calculate aggregates. Plain lists/tables/cards remain valid choices. These are capabilities, not a mandatory checklist.",
+            "sections": "A view.section optionally groups related views into a tab or an application settings modal. Different tabs need different ids. Reuse the same id, kind and title for views within ONE tab; null keeps shared content. Prefer tabs for distinct tasks and modals for focused editing. Settings contain real local resources/commands, not automatically implemented external effects; even a single settings record currently needs a collection for selection plus its editor. Do not invent additional sections just to fill the screen.",
             "query_toolbar": "Each collection's query_controls compile into one compact responsive search/filter toolbar with disclosure, active values and reset. Do not create separate resources or views for filter widgets.",
-            "text": "Text wraps by default in list/card metadata and table cells. field_display can explicitly request wrap or truncate and start/center/end alignment per visible field. Keep essential values readable; use truncation only for compact summaries with details available.",
+            "text": "Text wraps by default in list/card metadata and table cells. field_display can explicitly request wrap or truncate and start/center/end alignment per visible field on list/table/cards/accordion collections ONLY; other presentations, details and editors use field_display=[]. Keep essential values readable; use truncation only for compact summaries with details available.",
+            "query_scope": "scope_filters define permanent equality constraints for a collection, not user filter defaults. They survive reset. Use them when a tab must always show only a subset. Query controls narrow that scope on other fields; never reuse its field for a resettable filter. Representative states count records inside the permanent scope. A section title alone does not filter records.",
             "editor_inputs": "Only fields consumed by this editor's command input_field_refs are writable here. Other listed fields are read-only context; fixed_values are not editable inputs. A field may be writable in one editor and read-only in another.",
             "layout": "layout=flow stacks regions; split/focus_detail places primary beside supporting on desktop, stacked on mobile; grid groups equal-priority regions. region_role is actual placement: primary for the main task, supporting for selected details or secondary work, actions for a footer. Putting every view in primary creates one long column even in split. Prefer one primary collection and contextual details; reserve flow for genuinely linear work. Supporting is a real region, not merely a label.",
             "editor_surface": "Use surface=modal for a short focused create/edit task, side_sheet when surrounding context matters, inline for a persistent work area. Collections and details stay inline. The compiler owns openers, selection, form hydration, save/error and dismissal. No surface is mandatory for acceptance.",
@@ -2393,6 +2395,7 @@ def _normalize_relationship_identity_literals(
     *, resource: dict[str, Any], field_ref: str, target_ids: Mapping[str, str],
     commands: Sequence[dict[str, Any]], states: Sequence[dict[str, Any]],
     normalizations: list[dict[str, str]],
+    views: Sequence[dict[str, Any]] = (),
 ) -> None:
     # Record identity normalization must preserve every typed use of the foreign key.
     def normalize(container: dict[str, Any], path: str) -> None:
@@ -2426,6 +2429,12 @@ def _normalize_relationship_identity_literals(
             operand = predicate["operand"]
             if predicate["field_ref"] == field_ref and operand["kind"] == "value":
                 normalize(operand, f"$.representative_states[{index}].filters[{predicate_index}].operand.value")
+    for index, view in enumerate(views):
+        if view.get('resource_ref') != resource['id']:
+            continue
+        for filter_index, predicate in enumerate(view.get('scope_filters') or []):
+            if predicate['field_ref'] == field_ref:
+                normalize(predicate, f'$.views[{index}].scope_filters[{filter_index}].value')
 
 
 def _canonicalize_semantic_prototype_candidate_v2(
@@ -2443,6 +2452,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             view.setdefault("presentation_options", None)
             view.setdefault("field_display", [])
             view.setdefault("section", None)
+            view.setdefault("scope_filters", [])
             view.setdefault("media", None)
     try:
         Draft202012Validator(
@@ -2575,6 +2585,10 @@ def _canonicalize_semantic_prototype_candidate_v2(
             normalized_view["field_display"] = [
                 {**entry, "field_ref": field_refs_by_resource[raw_resource_id].get(entry["field_ref"], entry["field_ref"])}
                 for entry in raw_view.get("field_display") or []
+            ]
+            normalized_view["scope_filters"] = [
+                {**entry, "field_ref": field_refs_by_resource[raw_resource_id].get(entry["field_ref"], entry["field_ref"])}
+                for entry in raw_view.get("scope_filters") or []
             ]
             section = raw_view.get("section")
             normalized_view["section"] = {
@@ -2809,7 +2823,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             _normalize_relationship_identity_literals(
                 resource=from_resource, field_ref=from_field_id, target_ids=target_ids,
                 commands=normalized_commands, states=normalized_states,
-                normalizations=normalizations,
+                normalizations=normalizations, views=normalized_views,
             )
         normalized_relationships.append(normalized_relationship)
     _unique_v2_ids(normalized_relationships, "relationship")
@@ -3349,7 +3363,7 @@ def _semantic_v2_model_findings(
         matching_records = (
             []
             if empty_fixture
-            else _matching_state_records(resource.get("records") or [], filters)
+            else _matching_state_records(resource.get("records") or [], scoped_predicates(state, view))
         )
         count = len(matching_records)
         if count < minimum or (maximum is not None and count > maximum):
@@ -3426,6 +3440,10 @@ def _validate_semantic_prototype_v2(
             _fail(f"resource {resource_id!r} has no inspectable view")
         if not any(str(item["role"]) == "collection" for item in resource_views):
             _fail(f"resource {resource_id!r} requires a collection view")
+
+    scope_errors = scope_findings(document, valid_value=_field_value_is_valid)
+    if scope_errors:
+        _fail(scope_errors[0]['detail'])
 
     for relationship in relationships.values():
         target = resources.get(relationship["to_resource_ref"], {})
@@ -3519,7 +3537,7 @@ def _validate_semantic_prototype_v2(
                 if str(item["view_ref"]) in view_ids
             ],
             "representative_states": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "proof"}
+                legacy_state(item, views)
                 for item in states.values()
                 if str(item["view_ref"]) in view_ids
             ],
@@ -3887,7 +3905,7 @@ def _compile_semantic_prototype_v2(
                 if str(item["view_ref"]) in view_ids
             ],
             "representative_states": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "proof"}
+                legacy_state(item, views)
                 for item in resource_states
             ],
             "requirement_bindings": [],
@@ -4033,6 +4051,7 @@ def _compile_semantic_prototype_v2(
     _compile_editor_surfaces(document, webui, source_map, dictionaries)
     from .semantic_query_toolbar import compile_query_toolbars
     compile_query_toolbars(document, webui, source_map)
+    compile_query_scopes(document, webui, source_map)
     from .semantic_media import compile_media
     compile_media(document, webui, prototype_resources, source_map)
     compile_presentations(document, webui, source_map)
@@ -4169,6 +4188,7 @@ def compile_semantic_prototype_candidate(
         normalizations.extend(_normalize_v2_ownership(semantic_document, brief=brief))
         model_findings = _semantic_v2_model_findings(semantic_document)
         model_findings.extend(presentation_findings(semantic_document))
+        model_findings.extend(scope_findings(semantic_document, valid_value=_field_value_is_valid))
         from .semantic_bindings import binding_findings
         model_findings.extend(binding_findings(semantic_document, brief))
         if model_findings or requirement_findings:

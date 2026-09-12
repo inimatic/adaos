@@ -176,6 +176,15 @@ remain inline inside their owning section; large-project orchestration is separa
 
 ### Small-Prototype Content Composition
 
+Collection scope is separate from user query state. Semantic v2 `scope_filters`
+contains typed, permanent equality predicates; query controls narrow that scope
+on other fields and reset only their own state. A tab title is not a predicate.
+Compile these constraints into literal resource-query filters and include them
+when checking representative records. Empty-response fixtures still override
+the same collection, not its source data. Reject overlapping scope/query fields
+instead of silently overriding either. This supports any fixed-subset view
+without application-name branches or a new renderer component.
+
 Presentation is a typed capability, not a product recipe or a compulsory design
 checklist. Alongside list/table/cards, a collection may request a lane board,
 parent-linked tree, numeric chart, or expandable grouped collection. The semantic

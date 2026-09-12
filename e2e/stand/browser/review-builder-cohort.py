@@ -21,7 +21,7 @@ def main() -> int:
     parser.add_argument("--subnet", required=True)
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--attempt", type=int, default=1)
-    parser.add_argument("--probe", choices=("review", "interactions", "commands", "empty", "readonly"), default="review")
+    parser.add_argument("--probe", choices=("review", "interactions", "commands", "empty", "readonly", "capabilities"), default="review")
     parser.add_argument("--field-type", choices=("shortText", "longText", "date", "time", "number", "integer", "dropdown", "singleChoice"))
     args = parser.parse_args()
     if args.field_type and args.probe != "interactions":
@@ -40,7 +40,8 @@ def main() -> int:
         "client_dirty": bool(subprocess.check_output(["git", "-C", "src/adaos/integrations/adaos-client", "status", "--porcelain"], text=True).strip()),
     }
     scripts = {"review": "prototype-review.mjs", "empty": "prototype-review.mjs", "interactions": "prototype-interactions.mjs",
-               "commands": "prototype-command-probe.mjs", "readonly": "prototype-interactions.mjs"}
+               "commands": "prototype-command-probe.mjs", "readonly": "prototype-interactions.mjs",
+               "capabilities": "prototype-capabilities.mjs"}
     for checkpoint in sorted(args.run.glob(f"checkpoints/*/attempt-{args.attempt:02}.json")):
         case = checkpoint.parent.name
         if args.case and case not in args.case:

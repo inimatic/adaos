@@ -242,6 +242,7 @@
         "presentation_options": { "anyOf": [{ "$ref": "#/$defs/presentationOptions" }, { "type": "null" }] },
         "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
+        "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" }, "description": "Permanent equality predicates defining this collection, independent of user search/filter controls. Reset never removes these. Empty for an unrestricted view. Do not also offer a query control for the same field." },
         "filter": {
           "anyOf": [{ "$ref": "#/$defs/viewFilter" }, { "type": "null" }]
         },
@@ -250,6 +251,10 @@
           "anyOf": [{ "$ref": "#/$defs/emptyState" }, { "type": "null" }]
         }
       }
+    },
+    "scopeFilter": {
+      "type": "object", "additionalProperties": false, "required": ["field_ref", "value"],
+      "properties": { "field_ref": { "$ref": "#/$defs/id" }, "value": { "type": ["string", "number", "boolean"] } }
     },
     "viewSection": {
       "type": "object", "additionalProperties": false, "required": ["id", "title", "kind"],

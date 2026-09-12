@@ -1583,6 +1583,18 @@ def evaluate_ui_request(
                         for action in state_write_actions
                     )
                 }
+                toolbar_state_keys = {
+                    control['stateKey']
+                    for _, page in _page_schemas(webui)
+                    for widget in page.get('widgets') or []
+                    if isinstance(widget, Mapping) and widget.get('type') == 'ui.queryToolbar'
+                    for control in (widget.get('inputs') or {}).get('controls') or []
+                    if isinstance(control, Mapping) and isinstance(control.get('stateKey'), str)
+                    and control.get('kind') in {'search', 'filter'}
+                    and control.get('inputType') in {'search', 'text', 'date', 'number', 'select'}
+                }
+                state_writes.update(toolbar_state_keys)
+                executable_query_refs.update(query_state_refs.intersection(toolbar_state_keys))
                 postconditions.append(
                     {
                         "id": "kanban.query_binding",
@@ -1778,11 +1790,31 @@ def evaluate_ui_request(
                         page_path == "ui.application.desktop.pageSchema"
                         for page_path, _, _ in update_forms
                     )
+                    # A selection-backed details/toolbar command is a distinct valid path.
+                    selected_editor_entries = [
+                        action for _, candidate_page in _page_schemas(webui)
+                        for candidate in candidate_page.get('widgets') or []
+                        if isinstance(candidate, Mapping) and candidate is not board
+                        and candidate.get('type') in {'ui.actions', 'item.details'}
+                        for action in candidate.get('actions') or []
+                        if isinstance(action, Mapping) and action.get('type') == 'openModal'
+                        and str(action.get('on', '')).startswith('click:')
+                        and (action.get('params') or {}).get('modalId') in modal_edit_ids
+                        and any(
+                            action.get('enabledIf') == f"$state.{ref} !== ''"
+                            or any(button.get('id') == str(action['on'])[6:]
+                                   and button.get('enabledIf') == f"$state.{ref} !== ''"
+                                   for button in (candidate.get('inputs') or {}).get('buttons') or []
+                                   if isinstance(button, Mapping))
+                            for ref in edit_state_refs
+                        )
+                    ]
                     edit_selection_ok = bool(
                         edit_state_refs
                         and (
                             (inline_edit and edit_selection_events)
                             or (modal_events & edit_selection_events)
+                            or ('select' in edit_selection_events and selected_editor_entries)
                         )
                     )
                     postconditions.append(
@@ -1791,13 +1823,14 @@ def evaluate_ui_request(
                             "ok": edit_selection_ok,
                             "expected": (
                                 "the board writes the edited record id from $event.id on the same event that opens "
-                                "a modal editor, or on selection for an inline editor"
+                                "a modal editor, or on selection for an inline editor or guarded details/toolbar entry"
                             ),
                             "actual": {
                                 "stateRefs": sorted(edit_state_refs),
                                 "modalEvents": sorted(modal_events),
                                 "selectionEvents": sorted(edit_selection_events),
                                 "inline": inline_edit,
+                                "selectedEditorEntries": len(selected_editor_entries),
                             },
                         }
                     )

@@ -9,7 +9,7 @@ from .workflow import BuilderWorkflowError
 
 
 EXTENDED_PRESENTATIONS = frozenset({"board", "tree", "chart", "accordion"})
-VIEW_EXTRAS = frozenset({"surface", "media", "presentation_options", "field_display", "section"})
+VIEW_EXTRAS = frozenset({"surface", "media", "presentation_options", "field_display", "section", "scope_filters"})
 
 
 def legacy_view(view: Mapping) -> dict:
@@ -135,7 +135,13 @@ def compile_presentations(document: Mapping, webui: dict, source_map: dict) -> N
                 field_paths = {group: root + ".inputs.xKey", value: root + ".inputs.yKey"}
             elif presentation == "tree":
                 visible = [ref for ref in refs if ref != parent]
-                new_inputs = {"parentIdKey": parent, "idKey": "id", "hideRoot": True, "selectBranches": True}
+                selection = next((key for action in widget.get('actions', [])
+                                  if action.get('on') == 'select' and action.get('type') == 'updateState'
+                                  for key, expression in action.get('params', {}).items() if expression == '$event.id'), None)
+                new_inputs = {"parentIdKey": parent, "idKey": "id", "hideRoot": True,
+                              "selectionMode": "all", "wrapTitles": True}
+                if selection:
+                    new_inputs['selectedStateKey'] = selection
                 for ref, key in zip(visible, ("titleKey", "subtitleKey", "valueKey")):
                     new_inputs[key] = ref
                     field_paths[ref] = root + ".inputs." + key

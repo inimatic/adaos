@@ -2301,6 +2301,43 @@ def test_resource_board_query_binding_rejects_nested_event_object() -> None:
     assert query_binding["actual"]["executableRefs"] == []
 
 
+def test_resource_board_query_toolbar_writes_only_declared_owned_keys() -> None:
+    from adaos.services.ui_capabilities import evaluate_ui_request
+
+    webui = _resource_board_webui()
+    page = webui['ui']['application']['desktop']['pageSchema']
+    search = next(widget for widget in page['widgets'] if widget.get('id') == 'search')
+    search.update(type='ui.queryToolbar', actions=[], inputs={'controls': [
+        {'id': 'search', 'kind': 'search', 'inputType': 'search', 'label': 'Search', 'stateKey': 'searchQuery'},
+    ]})
+    for key, expected in [('searchQuery', True), ('unrelated', False)]:
+        search['inputs']['controls'][0]['stateKey'] = key
+        result = evaluate_ui_request('A kanban board with search and edit', webui, prototype_records=[])
+        condition = next(item for item in result['postconditions'] if item['id'] == 'kanban.query_binding')
+        assert condition['ok'] is expected
+
+
+def test_board_selection_can_open_guarded_editor_from_details() -> None:
+    from adaos.services.ui_capabilities import evaluate_ui_request
+
+    webui = _resource_board_webui()
+    application = webui['ui']['application']
+    page = application['desktop']['pageSchema']
+    editor = next(widget for widget in page['widgets'] if widget.get('id') == 'edit')
+    page['widgets'].remove(editor)
+    application['modals'] = {'edit-item': {'schema': {
+        'id': 'edit-item', 'layout': {'type': 'stack', 'areas': [{'id': 'main'}]}, 'widgets': [editor],
+    }}}
+    action = {'on': 'click:edit', 'type': 'openModal', 'params': {'modalId': 'edit-item'},
+              'enabledIf': "$state.selectedRecordId !== ''"}
+    page['widgets'].append({'id': 'details', 'type': 'item.details', 'area': 'main', 'actions': [action]})
+    for guard, expected in [("$state.selectedRecordId !== ''", True), ("$state.unrelated !== ''", False)]:
+        action['enabledIf'] = guard
+        result = evaluate_ui_request('A kanban board with search and edit', webui, prototype_records=[])
+        condition = next(item for item in result['postconditions'] if item['id'] == 'kanban.edit_selection')
+        assert condition['ok'] is expected
+
+
 def test_resource_query_requires_initial_state_for_query_references() -> None:
     webui = _resource_board_webui()
     page = webui["ui"]["application"]["desktop"]["pageSchema"]

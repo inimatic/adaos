@@ -45,6 +45,10 @@ def test_extended_collection_preserves_resource_query_and_field_provenance(prese
         assert widget['inputs']['reorderWithinLane'] is False
     elif presentation == 'accordion':
         assert widget['inputs']['groupDisplay'] == 'accordion'
+    elif presentation == 'tree':
+        assert widget['inputs']['selectionMode'] == 'all'
+        selected = widget['inputs']['selectedStateKey']
+        assert any(action.get('params', {}).get(selected) == '$event.id' for action in widget['actions'])
 
 
 def test_explicit_text_policy_survives_candidate_normalization():
