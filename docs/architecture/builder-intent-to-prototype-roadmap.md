@@ -1654,13 +1654,25 @@ cohort with their own request, schema, model settings and browser evidence.
   Experiment/base-revision metadata and adopt/discard exist, but E2E ownership,
   cleanup, resource data and grading remain case/project-scoped. Consolidation is
   deferred with large-project orchestration; it is not a configuration-only change.
-- [ ] `[must]` Finish known relationship/lookup and grader-observability defects,
+- [x] `[must]` Finish known relationship/lookup and grader-observability defects,
   then run matched GPT-5/low repeats and compare short/moderate prompts on the
   difficult cases. Record initial success, repair success, task success and cost.
+  Run 16 passes 16/16 fresh cases (two per archetype): 8 primary successes and
+  8 successes after one semantic repair, 24 model calls, no transport retries.
+  Run 17 compares a 803-character guided appointment prompt with the original
+  318-character prompt using the same outcome rubric. Both groups pass 2/2 and
+  both require one repair per case; elaboration alone did not remove repairs.
+- [ ] `[should]` Replace full-candidate regeneration for coverage-only omissions
+  with an immutable-candidate binding repair, or a structurally complete coverage
+  contract. Validate executable evidence, not merely the presence of a binding.
+  Run 16 queue attempt 1 omits state bindings; run 17 attempt 1 omits one visible
+  deferred-requirement binding. Preserve narrow state-repair invariants.
 - [x] `[must]` Audit generation inputs and Core/Client changes for subject-scoped
   branches, fixture leakage and rubric leakage before accepting the tranche.
-  Run 13 retains ten actual requests: two locale-specific stable contexts, the
-  same five dynamic keys, GPT-5/low/128000, and no unexpected dynamic keys.
+  Run 13 retains ten actual requests: primary/full-candidate context and one
+  state-repair context differing only in their output contract, not by domain or
+  locale. Primary requests use five dynamic keys and GPT-5/low/128000.
+  Repair inputs additionally contain the current candidate and structured findings.
   Generic semantic/Brief paths have no archetype-name branches; scenario creation
   uses `scenario_default`. Client checks pass for 21 generic sources and inventory
   consistency for 41 widgets. This is the tranche boundary, not a claim that all
@@ -1679,17 +1691,27 @@ cohort with their own request, schema, model settings and browser evidence.
   checks; undeclared endpoints and cycles fail. Tests cover descendant reset and
   preserving ancestor selection during reverse lookup. Run 15 attempt 2 browser
   proves board-record FK -> client collection on 1440/390px, not just highlighting.
-- [ ] `[should]` Complete browser qualification of descendant selection/editor
+- [x] `[should]` Complete browser qualification of descendant selection/editor
   invalidation on a fresh multi-level linked collection, beyond compiler tests.
+  Run 16 inspection attempt 1 verifies asset -> inspection -> check-item queries
+  on 1440/390px and reads the actual Client state to prove descendant selection
+  reset after changing the asset. Run 10 separately proves modal editor access.
 - [x] `[should]` Profile local resource queries independently of LLM waits.
   Browser run 05 observed roughly 0.5-3 seconds for local queries. Do not turn
   a longer browser wait into a claim that query latency is acceptable.
   `local-query-profile-20260912-01` identifies global definition enumeration and
   whole-file rewriting of 1000 traces on each two-row query. Instrumented calls
   took 1.23-1.38s; cProfile overhead prevents treating those as HTTP measurements.
-- [ ] `[should]` Remove avoidable definition enumeration and trace serialization
+- [x] `[should]` Remove avoidable definition enumeration and trace serialization
   from the query path; retain freshness, bounded retention and durable writes.
   Compare uninstrumented wall time and browser behavior before accepting a gain.
+  Direct prototype lookup and one serialized atomic trace write pass 33 resource
+  tests, including fresh revisions, missing resources, UTF-8 and 1000-trace
+  retention. Profiles 02/04 use the same two-row resource: median uninstrumented
+  in-process latency 0.731s -> 0.565s. This is not an HTTP latency benchmark.
+- [ ] `[should]` Replace whole-registry reads and whole-journal rewrites with
+  bounded lookup/append storage under the existing resource contracts; the local
+  query path still scales with retained test resources and trace history.
 - [x] `[should]` Calibrate grader consistency on retained stage-boundary examples:
   run 11 inspection attempt 2 describes the Prototype allowance as satisfied but
   emits `partial`. Preserve the original result; any regrade is separate evidence.
@@ -1699,6 +1721,14 @@ cohort with their own request, schema, model settings and browser evidence.
   failure is unchanged. This single example is not broad judge calibration.
 - [ ] `[should]` Broaden live judge calibration with positive and negative
   stage-boundary examples and repeat consistency checks.
+  Four live v17 primitive positive/negative probes pass in
+  `grader-v17-live-20260912`; broader mixed-stage calibration remains open.
+- [ ] `[should]` Resolve the effective Root model profile before applying model
+  output defaults. Explicit GPT-5 selection uses low/128000 in the qualified
+  pipeline; implicit server-selected models still use the legacy fallback.
+- [ ] `[should]` Improve generic relationship captions and renderer fallback
+  localization. Valid generated RU views may still show raw foreign keys or an
+  English built-in empty-details label; acceptance is not a claim of UX polish.
 - [x] `[should]` Discuss a finite vocabulary of composable layout strategies,
   distinguishing user-selectable preferences from hard acceptance requirements.
   See the canonical architecture's composable layout policy below its UX guidance.

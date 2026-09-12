@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -20,6 +21,25 @@ def _client(service: ResourceWorkbenchService) -> TestClient:
 
 def _headers() -> dict[str, str]:
     return {"X-AdaOS-Token": "dev-local-token"}
+
+
+def test_trace_append_preserves_existing_journal_retention_and_utf8(tmp_path: Path) -> None:
+    service = ResourceWorkbenchService(state_dir=tmp_path)
+    trace = {
+        "schema": "adaos.resource.trace.v1", "trace_id": "old", "resource_type": "demo.metric",
+        "semantic_type": "query", "status": "ready", "started_at": "2026-09-12T00:00:00Z",
+    }
+    history = [{**trace, "trace_id": str(index)} for index in range(1000)]
+    service.trace_path.parent.mkdir(parents=True, exist_ok=True)
+    service.trace_path.write_text(json.dumps({"schema": "adaos.resource.traces.v1", "items": history}), encoding="utf-8")
+    title = "\u041e\u0441\u043c\u043e\u0442\u0440"
+    appended = {**trace, "trace_id": "new", "result": {"title": title}}
+    service._append_trace(appended)
+    raw = service.trace_path.read_bytes()
+    assert title.encode("utf-8") in raw
+    assert raw.endswith(b"\n")
+    assert json.loads(raw)["items"] == [*history[1:], appended]
+    assert ResourceWorkbenchService(state_dir=tmp_path).traces(limit=1)[0] == appended
 
 
 def test_resource_definitions_validate_and_include_dev_tickets_and_demo_metrics(tmp_path: Path) -> None:

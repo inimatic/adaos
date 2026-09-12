@@ -9,7 +9,7 @@ from typing import Any, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 
-from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json, mutation_lock
 from adaos.services.builder.repair import BuilderRepairService
 from adaos.services.context_control import ContextAccessDenied, ContextConflict, ContextControlService
 from adaos.services.development_tickets import DevelopmentTicketService
@@ -736,6 +736,8 @@ class ResourceWorkbenchService:
 
     def definition(self, resource_type: str) -> dict[str, Any] | None:
         token = _text(resource_type)
+        if token.startswith("prototype."):
+            return self._prototypes().definition(token)
         for definition in self.definitions():
             if definition["resource_type"] == token:
                 return _clone(definition)
@@ -1591,7 +1593,11 @@ class ResourceWorkbenchService:
             state = self._read_trace_state()
             items = [dict(item) for item in state.get("items") or [] if isinstance(item, Mapping)]
             items.append(payload)
-            atomic_write_json(self.trace_path, {"schema": "adaos.resource.traces.v1", "items": items[-1000:]})
+            # Serialize the bounded journal once, avoiding thousands of small file writes.
+            encoded = json.dumps(
+                {"schema": "adaos.resource.traces.v1", "items": items[-1000:]}, ensure_ascii=False, indent=2
+            ) + "\n"
+            atomic_write_bytes(self.trace_path, encoded.encode("utf-8"))
 
     def _read_event_state(self) -> dict[str, Any]:
         if not self.event_path.is_file():

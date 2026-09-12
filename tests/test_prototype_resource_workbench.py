@@ -257,6 +257,22 @@ def test_prototype_resource_runs_generic_query_and_crud_across_service_instances
     assert all(item["id"] != created["id"] for item in _query(workbench)["items"])
 
 
+def test_prototype_lookup_does_not_enumerate_catalog_or_cache_revision(tmp_path, monkeypatch) -> None:
+    prototypes = PrototypeResourceService(state_dir=tmp_path)
+    prototypes.materialize(_bundle())
+    workbench = ResourceWorkbenchService(state_dir=tmp_path)
+
+    def forbidden_catalog(self):
+        raise AssertionError("A prototype lookup must not enumerate the full catalog")
+
+    monkeypatch.setattr(ResourceWorkbenchService, "definitions", forbidden_catalog)
+    assert workbench.definition("prototype.kanban.cards")["metadata"]["revision"] == "ui-001"
+    assert workbench.definition("prototype.missing") is None
+    assert _query(workbench)["items"]
+    prototypes.materialize(_bundle(revision="ui-002"))
+    assert workbench.definition("prototype.kanban.cards")["metadata"]["revision"] == "ui-002"
+
+
 def test_live_relationships_accept_new_targets_and_reject_dangling_writes(tmp_path) -> None:
     service = PrototypeResourceService(state_dir=tmp_path)
     source = _bundle()
