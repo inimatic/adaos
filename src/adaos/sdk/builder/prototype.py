@@ -249,7 +249,19 @@ def automation_handoff(**kwargs: Any) -> dict[str, Any]:
     return build_automation_handoff(**kwargs)
 
 
+def prepare_reference_repair(candidate: Mapping[str, Any], findings: list[Mapping[str, Any]]) -> dict[str, Any] | None:
+    from adaos.services.builder.semantic_repair import prepare_reference_repair as prepare
+    return prepare(candidate, findings)
+
+
+def apply_reference_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], findings: list[Mapping[str, Any]]) -> dict[str, Any]:
+    from adaos.services.builder.semantic_repair import apply_reference_repair as apply
+    return apply(candidate, repair, findings)
+
+
 __all__ = [
+    "prepare_reference_repair",
+    "apply_reference_repair",
     "prepare_binding_repair",
     "apply_binding_repair",
     "prepare_state_repair",

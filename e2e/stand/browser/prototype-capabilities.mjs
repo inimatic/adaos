@@ -79,6 +79,15 @@ try {
     try {
       await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 60_000 })
       await ready()
+      const singleActions = await page.locator('.adaptive-toolbar__item:only-child').evaluateAll(elements => elements.map(element => {
+        const label = element.querySelector('.adaptive-toolbar__label')
+        return { label: label?.textContent, visibleWidth: label?.clientWidth, textWidth: label?.scrollWidth,
+          freeWidth: element.parentElement.clientWidth - element.clientWidth }
+      }))
+      if (singleActions.some(item => item.textWidth > item.visibleWidth + 1 && item.freeWidth > item.textWidth - item.visibleWidth + 20)) {
+        throw new Error('A single action truncates its label despite available toolbar width')
+      }
+      sample.checks.push({ kind: 'single-action-label-space', actions: singleActions })
       if (navigation) {
         for (const button of navigation.inputs.buttons) {
           await host(navigation.id).locator(`[data-command-id=${JSON.stringify(button.id)}]`).click()
@@ -343,6 +352,27 @@ try {
           const board = host(widget.id)
           const card = board.locator('[data-webui-board-item-id]').first()
           await expect(card).toBeVisible()
+          await card.locator('.board-card__main').hover()
+          const contrast = await card.locator('.board-card__main').evaluate(element => {
+            const canvas = document.createElement('canvas')
+            canvas.width = canvas.height = 1
+            const paint = canvas.getContext('2d')
+            const style = getComputedStyle(element)
+            paint.fillStyle = getComputedStyle(element.closest('.board-card')).backgroundColor
+            paint.fillRect(0, 0, 1, 1)
+            paint.fillStyle = style.backgroundColor
+            paint.fillRect(0, 0, 1, 1)
+            const background = [...paint.getImageData(0, 0, 1, 1).data].slice(0, 3)
+            paint.fillStyle = style.color
+            paint.fillRect(0, 0, 1, 1)
+            const foreground = [...paint.getImageData(0, 0, 1, 1).data].slice(0, 3)
+            const luminance = rgb => rgb.map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
+              .reduce((sum, v, index) => sum + v * [.2126, .7152, .0722][index], 0)
+            const a = luminance(background), b = luminance(foreground)
+            return { background, foreground, ratio: (Math.max(a, b) + .05) / (Math.min(a, b) + .05) }
+          })
+          if (contrast.ratio < 4.5) throw new Error(`Unreadable board hover contrast: ${contrast.ratio}`)
+          sample.checks.push({ kind: 'board-hover-contrast', widget: widget.id, ...contrast })
           const record = await card.getAttribute('data-webui-board-item-id')
           const originalLane = await card.evaluate(element => element.closest('[data-webui-board-lane-id]').getAttribute('data-webui-board-lane-id'))
           const targetLane = widget.inputs.lanes.find(lane => lane.id !== originalLane).id
@@ -365,11 +395,28 @@ try {
           }
           const response = await pending
           if (!response.ok() || !(await response.json()).ok) throw new Error('Board move failed to persist')
+          const body = response.request().postDataJSON()
+          const laneKey = widget.inputs.laneKey || 'status'
+          if (!body.resource_type?.startsWith('prototype.') || body.record_id !== record
+            || Object.keys(body.payload).length !== 1 || body.payload[laneKey] !== targetLane) throw new Error('Unexpected board mutation scope')
+          try {
+            await page.reload({ waitUntil: 'domcontentloaded' })
+            await ready()
+            await reveal(widget)
+            await expect(board.locator(`[data-webui-board-lane-id=${JSON.stringify(targetLane)}] [data-webui-board-item-id=${JSON.stringify(record)}]`)).toBeVisible()
+            sample.checks.push({ kind: layout === 'compact' ? 'move-menu-persist-reload' : 'drag-persist-reload', widget: widget.id, record, originalLane, targetLane })
+          } finally {
+            const headers = Object.fromEntries(Object.entries(await response.request().allHeaders())
+              .filter(([key]) => !['content-length', 'host', 'origin'].includes(key)))
+            const restored = await context.request.post(`${hub}/api/resources/operate`, { headers,
+              data: { ...body, payload: { [laneKey]: originalLane } } })
+            if (!restored.ok() || !(await restored.json()).ok) throw new Error('Board fixture restoration failed')
+            sample.checks.push({ kind: 'fixture-restore', evidenceKind: 'stand_cleanup', record })
+          }
           await page.reload({ waitUntil: 'domcontentloaded' })
           await ready()
           await reveal(widget)
-          await expect(board.locator(`[data-webui-board-lane-id=${JSON.stringify(targetLane)}] [data-webui-board-item-id=${JSON.stringify(record)}]`)).toBeVisible()
-          sample.checks.push({ kind: layout === 'compact' ? 'move-menu-persist-reload' : 'drag-persist-reload', widget: widget.id, record, originalLane, targetLane })
+          await expect(board.locator(`[data-webui-board-lane-id=${JSON.stringify(originalLane)}] [data-webui-board-item-id=${JSON.stringify(record)}]`)).toBeVisible()
         }
       }
       const settings = widgets.find(widget => widget.id === 'prototype-settings')

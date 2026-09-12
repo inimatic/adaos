@@ -852,10 +852,14 @@ def test_strict_prototype_acceptance_requires_current_behavior_and_visual_eviden
         service.transition("scenario", "recipes", "automation_started")
 
 
+@pytest.mark.parametrize("with_records", [False, True])
 def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
     workflow_project: tuple[BuilderWorkflowService, Path],
     monkeypatch: pytest.MonkeyPatch,
+    with_records: bool,
 ) -> None:
+    from adaos.services.ui_capabilities import evaluate_ui_request
+
     service, root = workflow_project
     webui = {
         "schema": "adaos.webui.v1",
@@ -888,6 +892,21 @@ def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
             }
         },
     }
+    snapshots = []
+    if with_records:
+        for name in ("entries", "categories"):
+            resource_type = f"prototype.{name}"
+            webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"].append({
+                "id": name, "type": "ui.table", "area": "main",
+                "dataSource": {"kind": "resourceQuery", "resourceType": resource_type},
+                "inputs": {"columns": [{"key": "title", "label": "Title"}]},
+                "actions": [{"on": "click:edit", "type": "resourceOperation", "target": resource_type,
+                             "params": {"operation_id": "update", "record_id": "$event.id", "payload": {"title": "Edited"}}}],
+            })
+            snapshots.append({"resource_type": resource_type, "generation": 0, "record_count": 1,
+                              "records": [{"id": name, "title": name}],
+                              **{key: "sha256:" + "a" * 64 for key in ("definition_digest", "bundle_digest", "records_digest")}})
+    monkeypatch.setattr(BuilderWorkflowService, "_prototype_resource_snapshots", lambda self, **kwargs: list(snapshots))
     (root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
     locales = root / "assets" / "i18n"
     locales.mkdir(parents=True)
@@ -900,7 +919,11 @@ def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
 
     def evaluate(*args: object, **kwargs: object) -> dict[str, object]:
         observed["locale_dictionaries"] = kwargs.get("locale_dictionaries")
-        return {"ok": True, "qualification": {"requirements": {}}, "postconditions": []}
+        observed["prototype_resources"] = kwargs.get("prototype_resources")
+        result = evaluate_ui_request(*args, **kwargs)
+        if with_records:
+            assert result["qualification"]["requirements"]["prototype_resource"] is True
+        return result
 
     monkeypatch.setattr(
         "adaos.services.builder.prototype_acceptance.evaluate_ui_request",
@@ -912,7 +935,7 @@ def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
         "plan_change_set",
         metadata={
             "change_set_id": "CH-localized-prototype",
-            "request": "Show the recipe workspace.",
+            "request": "List entries and edit a selected entry." if with_records else "Show the recipe workspace.",
             "prototype_acceptance_required": True,
             "issues": [
                 {
@@ -956,8 +979,10 @@ def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
         "en": {"recipes.title": "Recipes"},
         "ru": {"recipes.title": "Рецепты"},
     }
+    assert observed["prototype_resources"] == snapshots
     resources = accepted["workflow"]["prototype"]["acceptance"]["prototype_resources"]
-    assert resources[0]["resource_type"] == "prototype.locale_dictionaries"
+    assert resources[-1]["resource_type"] == "prototype.locale_dictionaries"
+    assert len(resources) == len(snapshots) + 1
     history_acceptance = accepted["workflow"]["history"][-1]["metadata"]["acceptance"]
     assert set(history_acceptance) == {"acceptance_id", "revision", "digest"}
 

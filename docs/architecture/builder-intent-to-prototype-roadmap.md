@@ -2131,6 +2131,45 @@ prove the corrected handoff. Layout balance, compact action labels, attachment
 cell presentation and overlay-shell localization remain explicit UX debt, not
 claims of production readiness.
 
+Lifecycle run `small-lifecycle-gpt5-low-20260912-02` passes generation, grading and
+all four browser probes, then exposes a second acceptance integration defect:
+locale evidence was counted as a queried record source. The corrected workflow
+keeps locale digests bound without including them in record-source evaluation.
+The retained real prototype passes a read-only acceptance build; 246 Core tests
+pass, including localized zero-resource and two-resource workflow acceptance
+through the real evaluator. Automation has not yet been qualified by this result.
+
+Matched run `context-archetypes-gpt5-low-20260912-19` finishes at 14/16, with at
+least one passing result per archetype. Media-review repetition 2 has an invalid
+relationship field reference; its whole-candidate repair damages valid fixtures.
+Volunteer repetition 1 instead reaches the EU Root immediately (5ms queue) and
+hits the Root upstream deadline at 300s without response evidence. This is a
+Root-generated 504, not proof of an HTTP 504 returned by OpenAI. Keep transport
+failure separate from candidate correctness; do not raise the timeout as a fix.
+
+- [x] `[must]` Add digest-bound repair of only reported relationship field
+  references; preserve resources, fixtures, endpoints and other decisions.
+  Clarify that an implicit record identity is the literal reference `id`, not an
+  empty field. Core preservation tests and six DEV context/transport tests pass.
+- [ ] `[must]` Qualify sequential validation/repair on fresh runs without
+  rewriting valid candidates. Retained reference replay
+  `reference-repair-media-gpt5-low-20260912-01` fixes the reported field in 6.33s,
+  but full compilation then finds unresolved query bindings. It is a partial
+  repair, not a passing prototype; no old failure is relabeled.
+- [ ] `[should]` Resolve the measured English noun/verb ambiguity: the request
+  `List records and edit a selected record` spuriously adds a create obligation.
+  Preserve the user's explicit operations without manufacturing acceptance work.
+- [ ] `[should]` Add Root upstream phase evidence sufficient to distinguish
+  connection/header/first-token waits when an asynchronous provider job times out.
+
+Client presentation regression now verifies readable board hover contrast on
+dark and light themes, actual wide drag/compact move-menu persistence across
+reload, and restoration of the pre-probe lane. Single-action toolbars use their
+available width instead of an artificial narrow cap. Evidence:
+run 18 `browser/operations-work-queue-en-1/presentation-restore-regression/attempt-01`;
+lifecycle run 02 records the action-label check. These checks do not close the
+remaining live relationship-caption, shell-localization or full lifecycle gates.
+
 ## Could And Deferred
 
 - [ ] `[deferred]` Large-prototype decomposition, shared entity/navigation/locale

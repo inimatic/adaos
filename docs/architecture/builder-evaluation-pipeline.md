@@ -74,6 +74,10 @@ namespace can belong to the enclosing application: Core must verify that the
 declared aggregate manifest owns that component before collecting acceptance
 snapshots. A matching suffix, a dependency edge or a shared title is not ownership.
 The original resource owner, change, revision and content digests remain bound.
+Locale dictionaries remain separately bound acceptance evidence. They must not
+enter the set of queried record sources merely because their evidence identifier
+shares the `prototype.` prefix. Admission compares all evidence digests; resource
+evaluation receives only the exact record snapshots.
 
 The SDK adapter also admits `builder.workflow`, `prototype.accept`,
 `automation.start`, `automation.wait`, `trial.prepare`, `trial.decide` and

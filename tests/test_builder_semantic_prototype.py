@@ -2241,6 +2241,38 @@ def test_candidate_capacity_is_enforced_after_provider_projection() -> None:
     assert caught.value.findings[0]["path"] == "$.resources"
 
 
+def test_reference_repair_preserves_fixtures_and_all_unreported_decisions() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    valid = copy.deepcopy(candidate)
+    original_ref = candidate["relationships"][0]["to_field_ref"]
+    candidate["relationships"][0]["to_field_ref"] = ""
+    original = copy.deepcopy(candidate)
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    findings = caught.value.findings
+    plan = prototype_sdk.prepare_reference_repair(candidate, findings)
+    assert plan is not None
+    patch = {"schema": "adaos.builder.reference_repair.v1", "base_sha256": plan["base_sha256"],
+             "corrections": [{"relationship_ref": candidate["relationships"][0]["id"], "field": "to_field_ref", "value": original_ref}]}
+    result = prototype_sdk.apply_reference_repair(candidate, patch, findings)
+    assert result == valid
+    assert candidate == original
+    compile_semantic_prototype_candidate(result, brief=brief)
+    unchanged = prototype_sdk.apply_reference_repair(candidate, {**patch, "corrections": []}, findings)
+    with pytest.raises(BuilderWorkflowError):
+        compile_semantic_prototype_candidate(unchanged, brief=brief)
+    for invalid in ({**patch, "base_sha256": "stale"}, {**patch, "resources": []},
+                    {**patch, "corrections": [{**patch["corrections"][0], "field": "from_field_ref"}]},
+                    {**patch, "corrections": [{**patch["corrections"][0], "value": "invented"}]}):
+        with pytest.raises(ValidationError):
+            prototype_sdk.apply_reference_repair(candidate, invalid, findings)
+    with pytest.raises(BuilderWorkflowError, match="duplicate"):
+        prototype_sdk.apply_reference_repair(candidate, {**patch, "corrections": patch["corrections"] * 2}, findings)
+    assert prototype_sdk.prepare_reference_repair(candidate, [*findings, {"code": "semantic.state_proof_invalid"}]) is None
+    assert prototype_sdk.prepare_reference_repair(candidate, [{**findings[0], "path": "$.relationships[0].to_resource_ref"}]) is None
+
+
 def test_binding_repair_only_adds_existing_evidence_and_retains_every_other_decision() -> None:
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)

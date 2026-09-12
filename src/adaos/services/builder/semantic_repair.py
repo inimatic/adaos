@@ -21,6 +21,66 @@ def _digest(candidate: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(candidate, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def prepare_reference_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    import re
+
+    if not findings or any(item.get("code") != "semantic.relationship_reference_missing" for item in findings):
+        return None
+    relationships = candidate.get("relationships") or []
+    resources = {resource["id"]: resource for resource in candidate.get("resources", [])}
+    allowed: dict[tuple[str, str], list[str]] = {}
+    for finding in findings:
+        match = re.fullmatch(r"\$\.relationships\[(\d+)\]\.(from|to)_field_ref", str(finding.get("path") or ""))
+        if not match or int(match[1]) >= len(relationships):
+            return None
+        relationship = relationships[int(match[1])]
+        resource = resources.get(relationship.get(f"{match[2]}_resource_ref"))
+        if not resource:
+            return None
+        allowed[(relationship["id"], f"{match[2]}_field_ref")] = sorted({"id", *(field["id"] for field in resource["fields"])})
+    variants = [{"type": "object", "additionalProperties": False, "required": ["relationship_ref", "field", "value"],
+                 "properties": {"relationship_ref": {"type": "string", "enum": [identity]},
+                                "field": {"type": "string", "enum": [field]},
+                                "value": {"type": "string", "enum": values}}}
+                for (identity, field), values in sorted(allowed.items())]
+    digest = _digest(candidate)
+    return {"base_sha256": digest,
+            "allowed_relationship_fields": [{"relationship_ref": identity, "field": field, "values": values}
+                                            for (identity, field), values in sorted(allowed.items())],
+            "task": (
+                "Correct only the reported relationship field references, using existing fields on the declared resource. "
+                "The implicit record identity is the literal field reference id. Select the field whose existing values "
+                "actually implement the declared relationship cardinality; do not infer a link from similar labels. "
+                "Resource endpoints, cardinality, fixtures, views, commands, states, bindings and Automation obligations "
+                "are immutable. If no existing field expresses the intended relation, leave the correction absent; "
+                "full validation will report the remaining defect. Return only this patch, not a complete candidate."
+            ),
+            "output_schema": {"type": "object", "additionalProperties": False,
+                              "required": ["schema", "base_sha256", "corrections"],
+                              "properties": {"schema": {"type": "string", "enum": ["adaos.builder.reference_repair.v1"]},
+                                             "base_sha256": {"type": "string", "enum": [digest]},
+                                             "corrections": {"type": "array", "items": {"anyOf": variants}}}}}
+
+
+def apply_reference_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    plan = prepare_reference_repair(candidate, findings)
+    if plan is None:
+        raise BuilderWorkflowError("reference repair is not applicable to these findings")
+    Draft202012Validator(plan["output_schema"]).validate(repair)
+    result = copy.deepcopy(dict(candidate))
+    relationships = {item["id"]: item for item in result["relationships"]}
+    if len(relationships) != len(result["relationships"]):
+        raise BuilderWorkflowError("reference repair cannot resolve duplicate relationship identities")
+    changed: set[tuple[str, str]] = set()
+    for patch in repair["corrections"]:
+        identity = (patch["relationship_ref"], patch["field"])
+        if identity in changed:
+            raise BuilderWorkflowError("reference repair contains duplicate corrections")
+        changed.add(identity)
+        relationships[identity[0]][identity[1]] = patch["value"]
+    return result
+
+
 def prepare_binding_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
     codes = {"requirement.coverage_missing", "semantic.requirement_binding_incomplete"}
     if not findings or any(item.get("code") not in codes for item in findings):

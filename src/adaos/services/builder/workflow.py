@@ -2059,7 +2059,7 @@ class BuilderWorkflowService:
         if change is None:
             raise BuilderWorkflowError("prototype acceptance requires an active Change")
         webui, revision, webui_digest = self._prototype_webui_snapshot(object_type, object_id)
-        snapshots = self._prototype_resource_snapshots(
+        resource_snapshots = self._prototype_resource_snapshots(
             object_type=object_type,
             object_id=object_id,
             change_id=str(change.get("change_id") or ""),
@@ -2070,11 +2070,13 @@ class BuilderWorkflowService:
         locale_dictionaries, locale_snapshot = self._prototype_locale_snapshot(
             object_type, object_id, webui, revision
         )
+        # Locale assets are acceptance evidence, not queried record sources.
+        snapshots = list(resource_snapshots)
         if locale_snapshot is not None:
             snapshots.append(locale_snapshot)
         prototype_records = [
             dict(record)
-            for snapshot in snapshots
+            for snapshot in resource_snapshots
             for record in snapshot.get("records") or []
             if isinstance(record, Mapping)
         ]
@@ -2093,10 +2095,7 @@ class BuilderWorkflowService:
             visual_checks=visual_checks,
             prototype_records=prototype_records,
             prototype_resources=self._prototype_resource_evidence(snapshots),
-            prototype_resource_snapshots=[
-                item for item in snapshots
-                if str(item.get("resource_type") or "").startswith("prototype.")
-            ],
+            prototype_resource_snapshots=resource_snapshots,
             locale_dictionaries=locale_dictionaries,
         )
         governed_state = str(_mapping(current.get("governed")).get("state") or "").strip()
