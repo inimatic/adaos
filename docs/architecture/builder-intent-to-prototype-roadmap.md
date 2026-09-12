@@ -2076,6 +2076,26 @@ requirements belong to the visible evaluation case and its implementation brief.
 Applications development and large-project orchestration are not part of this
 tranche. Progress and blockers remain in this roadmap, not a parallel review doc.
 
+Parallel-work publication requested on 2026-09-12: DEV/Workspace handler and UI
+comparison found identical behavior (UI byte differences were line endings).
+After 106 SDK/scenario tests, `builder@0.2.124` passed Trial and promotion into
+WorkspaceLock 48, retaining scenario `0.2.89`, SDK `0.1.114`, skill `0.3.170`.
+Its exact source publication is registry commit
+`dd6329dc1c0d5c742645c17f03176fa367b400f3`; no in-progress Client changes or user
+project selection were included. Core/Client Git pushes remain deferred to final
+qualification.
+
+R10 progress: keyed SQLite reads and append-oriented traces are committed, with
+44 resource tests and retained legacy data. The live in-process two-record query
+now takes 19-21ms versus 576-655ms; HTTP/browser latency is not inferred from it.
+Presentation ingress and bounded repair checks pass 183 Core and 75 Client tests,
+plus six DEV Builder repair transport/context tests. Binding repair replay
+`binding-repair-queue-gpt5-low-20260912-01` resolves the original six missing
+state bindings: 10.3s wall, 933 output tokens including 576 reasoning tokens,
+1,232 output characters. Full compilation passes and only requirement bindings
+change. This single retained replay is not a fresh cohort or semantic grader pass;
+the eight-archetype and live-browser gates remain open.
+
 ## Could And Deferred
 
 - [ ] `[deferred]` Large-prototype decomposition, shared entity/navigation/locale

@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "2.2.0",
+  "catalog_version": "2.3.0",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -141,7 +141,7 @@
       "title": "List and card collection",
       "summary": "Rows, grouped rows, or a responsive card catalog without workflow-lane semantics.",
       "aliases": { "en": ["list", "cards", "catalog"], "ru": ["список", "карточки", "каталог"] },
-      "manifest": { "widget_type": "ui.list", "variants": ["list", "cards"], "canonical_value_i18n": ["titleI18nPrefix", "subtitleI18nPrefix", "previewI18nPrefix", "badgeI18nPrefix", "meta[*].valueI18nPrefix"] },
+      "manifest": { "widget_type": "ui.list", "variants": ["list", "cards"], "canonical_value_i18n": ["titleI18nPrefix", "subtitleI18nPrefix", "previewI18nPrefix", "badgeI18nPrefix", "meta[*].valueI18nPrefix"], "value_labels": "meta entries support valueLabels as authored choice fallbacks, or optionsDataSource.kind=resourceQuery with optionValuePath and optionLabelPaths for live related-record captions. Unknown identities remain visible as canonical values; display never changes stored IDs." },
       "data_shape": { "kind": "collection" },
       "events": ["select", "click", "add", "click:<buttonId>"],
       "responsive": { "desktop": "rows or auto-fit cards", "compact": "rows or narrower card tracks" },
@@ -154,7 +154,7 @@
       "title": "Dense table",
       "summary": "A dense comparison of typed textual, status, boolean, icon, and action columns.",
       "aliases": { "en": ["table", "rows", "columns"], "ru": ["таблица", "строки", "столбцы"] },
-      "manifest": { "widget_type": "ui.table" },
+      "manifest": { "widget_type": "ui.table", "column_display": "columns[*].overflow=wrap|truncate and align=start|center|end are retained at widget ingress. Date, datetime and number cells stay unbroken unless overflow is explicit. Columns support valueI18nPrefix with valueLabels fallback, or optionsDataSource.kind=resourceQuery with optionValuePath and optionLabelPaths for live related-record captions; canonical stored IDs are unchanged." },
       "data_shape": { "kind": "collection" },
       "events": ["select", "click:<buttonId>"],
       "responsive": { "desktop": "tabular", "compact": "bounded horizontal overflow" },
@@ -179,7 +179,7 @@
         "conditional_required": "Set required=true on the dependent field and use a string visibleIf expression such as $state.result === 'defect'. ui.form evaluates the expression against a snapshot that includes sibling form values and validates visible required fields before submit. Never use an object-shaped condition or synthesize errors with updateState.",
         "record_editor": "A resourceQuery with query.id=$state.<selection> loads the selected record into local fields. Empty selection means create mode, not the first returned record. inputs.buttons[*].id dispatches only matching actions[*].id; multiple unrelated submit mutations must never execute together. Declared button enabledIf controls availability. closeOnSuccess dismisses the editor only after a successful command.",
         "read_only_record": "inputs.readOnlyIf is evaluated against the stored selected record, not the draft or page state. The Prototype resource provider enforces the same declared read_only_when predicate before update/delete.",
-        "live_choices": "A choice field may use optionsDataSource.kind=resourceQuery, optionValuePath and optionLabelPaths. Related record invalidation refreshes options without resetting the draft; unavailable options block submission and expose retry. Prototype relationships validate current references atomically, including deletion of referenced targets. Collection filter options and displayed relationship labels remain seed-based pending their separate live-lookup qualification.",
+        "live_choices": "A choice field may use optionsDataSource.kind=resourceQuery, optionValuePath and optionLabelPaths. Related record invalidation refreshes options without resetting the draft; unavailable options block submission and expose retry. Prototype relationships validate current references atomically, including deletion of referenced targets. Collection filter options remain seed-based pending separate live-lookup qualification. Read-only captions in tables, list metadata and details support the same live source; absent captions expose the canonical identity.",
         "prototype_attachments": "fileUpload with fileStorage=prototype uploads bytes through the authenticated Preview resource endpoint and stores a string reference (or array for multiple=true). Submit waits for upload; failure retains the old value. Limits: 10 MiB/file, 64 MiB/resource. Without fileStorage, legacy forms collect metadata only."
       },
       "data_shape": { "kind": "record" },
@@ -193,7 +193,7 @@
       "title": "Selected item details",
       "summary": "A readable field projection for one selected or bound record.",
       "aliases": { "en": ["details", "record", "selected item"], "ru": ["детали", "запись", "выбранный элемент"] },
-      "manifest": { "widget_type": "item.details", "canonical_value_i18n": "inputs.fields[*].valueI18nPrefix", "media": "inputs.mediaKey binds an image/video/audio source on the selected record. Optional mediaKindKey selects image, video or audio; mediaPosterKey binds a poster. Native controls, loading, unavailable and empty states are provided. A filename field without mediaKey is not a viewer." },
+      "manifest": { "widget_type": "item.details", "canonical_value_i18n": "inputs.fields[*].valueI18nPrefix", "value_labels": "Field entries support valueLabels as authored choice fallbacks, or optionsDataSource.kind=resourceQuery with optionValuePath and optionLabelPaths for live related-record captions. Unknown identities remain visible; labels do not mutate records.", "media": "inputs.mediaKey binds an image/video/audio source on the selected record. Optional mediaKindKey selects image, video or audio; mediaPosterKey binds a poster. Native controls, loading, unavailable and empty states are provided. A filename field without mediaKey is not a viewer." },
       "data_shape": { "kind": "record_or_keyed_records" },
       "events": ["click:<actionId>"],
       "responsive": { "desktop": "detail surface", "compact": "detail surface" },

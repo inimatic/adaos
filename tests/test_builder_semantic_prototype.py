@@ -157,6 +157,34 @@ def test_explicit_relationship_labels_keep_all_declared_fields() -> None:
     assert next(field for field in fields if field["id"] == "work_owner_id")["optionLabelPaths"] == ["person_name", "person_phone"]
 
 
+@pytest.mark.parametrize("presentation", ["table", "list"])
+def test_related_names_compile_for_read_surfaces_and_preserve_record_ids(presentation) -> None:
+    brief, semantic = _multi_resource_fixture()
+    view = next(view for view in semantic["views"] if view["resource_ref"] == "work_items" and view["role"] == "collection")
+    view["presentation"] = presentation
+    if "work_owner_id" not in view["field_refs"]:
+        view["field_refs"].append("work_owner_id")
+    result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    widget = next(widget for widget in developer_prototypes._surface_widgets(result["webui"]) if widget["id"] == view["id"])
+    fields = widget["inputs"]["columns" if presentation == "table" else "meta"]
+    owner = next(field for field in fields if field["key"] == "work_owner_id")
+    assert owner["optionsDataSource"]["resourceType"] == "prototype.people"
+    assert owner["optionLabelPaths"] == ["person_name"]
+    original = semantic["resources"][0]["records"][0]["work_owner_id"]
+    assert result["prototype_resources"][0]["records"][0]["work_owner_id"] == original
+
+
+def test_choice_captions_have_authored_fallback_without_requiring_another_locale() -> None:
+    from adaos.services.builder.semantic_prototype import _choice_display
+
+    dictionaries = {"ru": {}}
+    result = _choice_display({"id": "status", "value_type": "choice", "options": [
+        {"value": "draft", "label": {"key": "draft", "ru": "\u0427\u0435\u0440\u043d\u043e\u0432\u0438\u043a"}},
+    ]}, dictionaries)
+    assert result["valueLabels"]["draft"] == dictionaries["ru"]["value.status.draft"]
+    assert "en" not in dictionaries
+
+
 @pytest.mark.parametrize("qualified", [False, True])
 def test_one_to_many_uses_the_many_side_foreign_key_without_requiring_children(qualified) -> None:
     brief, semantic = _multi_resource_fixture()
@@ -2211,6 +2239,54 @@ def test_candidate_capacity_is_enforced_after_provider_projection() -> None:
         compile_semantic_prototype_candidate(candidate, brief=brief)
     assert caught.value.findings[0]["code"] == "semantic.candidate_bounds"
     assert caught.value.findings[0]["path"] == "$.resources"
+
+
+def test_binding_repair_only_adds_existing_evidence_and_retains_every_other_decision() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    original = copy.deepcopy(candidate)
+    missing = candidate["requirement_bindings"].pop()
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    findings = caught.value.findings
+    plan = prototype_sdk.prepare_binding_repair(candidate, findings)
+    assert plan is not None
+    patch = {"schema": "adaos.builder.binding_repair.v1", "base_sha256": plan["base_sha256"],
+             "bindings": [{"requirement_ref": missing["requirement_ref"], "add_semantic_refs": missing["semantic_refs"]}]}
+    repaired = prototype_sdk.apply_binding_repair(candidate, patch, findings)
+    assert repaired == original
+    assert candidate != original
+    compile_semantic_prototype_candidate(repaired, brief=brief)
+    unchanged = prototype_sdk.apply_binding_repair(candidate, {**patch, "bindings": []}, findings)
+    with pytest.raises(BuilderWorkflowError):
+        compile_semantic_prototype_candidate(unchanged, brief=brief)
+    for invalid in ({**patch, "base_sha256": "stale"}, {**patch, "resources": []},
+                    {**patch, "bindings": [{"requirement_ref": "unreported", "add_semantic_refs": missing["semantic_refs"]}]},
+                    {**patch, "bindings": [{"requirement_ref": missing["requirement_ref"], "add_semantic_refs": [{"kind": "view", "id": "invented"}]}]}):
+        with pytest.raises(ValidationError):
+            prototype_sdk.apply_binding_repair(candidate, invalid, findings)
+    with pytest.raises(BuilderWorkflowError, match="duplicate"):
+        prototype_sdk.apply_binding_repair(candidate, {**patch, "bindings": patch["bindings"] * 2}, findings)
+    assert prototype_sdk.prepare_binding_repair(candidate, [{"code": "semantic.compiler_contract_invalid"}]) is None
+    assert prototype_sdk.prepare_binding_repair(candidate, [*findings, {"code": "semantic.state_proof_invalid"}]) is None
+
+
+def test_binding_repair_augments_incomplete_binding_without_removing_old_references() -> None:
+    _, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    original = copy.deepcopy(candidate)
+    binding = candidate["requirement_bindings"][0]
+    findings = [{"code": "semantic.requirement_binding_incomplete", "requirement_ref": binding["requirement_ref"]}]
+    plan = prototype_sdk.prepare_binding_repair(candidate, findings)
+    addition = {"kind": "view", "id": candidate["views"][-1]["id"]}
+    patch = {"schema": "adaos.builder.binding_repair.v1", "base_sha256": plan["base_sha256"],
+             "bindings": [{"requirement_ref": binding["requirement_ref"], "add_semantic_refs": [*binding["semantic_refs"], addition]}]}
+    result = prototype_sdk.apply_binding_repair(candidate, patch, findings)
+    refs = result["requirement_bindings"][0]["semantic_refs"]
+    assert refs[:len(binding["semantic_refs"])] == binding["semantic_refs"]
+    assert refs.count(addition) == 1
+    assert candidate == original
+    assert {k: v for k, v in result.items() if k != "requirement_bindings"} == {k: v for k, v in candidate.items() if k != "requirement_bindings"}
 
 
 def test_state_repair_preserves_fixtures_commands_and_other_states() -> None:

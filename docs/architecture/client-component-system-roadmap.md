@@ -485,6 +485,25 @@ modal dismissal and edit round trips; the generated source was not hand-patched.
 Exit gate: each new primitive improves matched task outcomes without adding
 domain branches or regressing Client conformance, bundle, or latency gates.
 
+## Readable Resource Projections
+
+- [x] `[must]` Preserve explicit column wrapping and alignment through normal
+  widget input parsing, not only direct component-property tests. Keep typed
+  dates and numbers unbroken by default without overriding explicit overflow.
+- [x] `[must]` Share live related-record caption projection across table cells,
+  list metadata and details; preserve scalar canonical IDs, invalidate on source
+  changes and release subscriptions. Choice captions retain the authored locale
+  as a fallback without demanding another language from generation.
+- [ ] `[must]` Qualify rename, removal, reload and unavailable lookups through
+  real browser surfaces in both layouts. Unit tests do not prove HTTP latency
+  or live materialization. Collection-filter lookups and datasets exceeding the
+  current 100-record lookup window remain separate debt.
+
+Catalog 2.3.0 describes these additive display inputs. Semantic compilation uses
+the same resource-backed label contract as form selectors, with source-map links.
+Host language remains the user's setting; evaluation browsers must set their
+declared locale rather than changing a user's browser preference implicitly.
+
 ## Deferred
 
 - [ ] `[deferred]` Generate or ship arbitrary Angular/JavaScript renderer code

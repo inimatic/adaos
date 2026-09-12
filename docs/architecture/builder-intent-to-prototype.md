@@ -259,8 +259,13 @@ or empty-state presentation of their views may change. Fixtures, commands,
 bindings and unreported states remain immutable, and the assembled candidate
 passes the full compiler again. Keep raw patch output as evidence. Compiler
 contract defects stop this route instead of consuming another model generation.
+Missing or incomplete requirement bindings have a separate additive contract.
+It authorizes only reported requirement IDs and existing semantic identities;
+it cannot delete evidence, invent UI, add gaps or remove Automation obligations.
+The original digest guards merging, and full compiler/acceptance checks run on
+the merged candidate. Missing behavior remains a defect, not a successful patch.
 Other repair classes still use full candidates until their own bounded contracts
-are qualified; do not describe state-only repair as a general incremental editor.
+are qualified; neither bounded contract is a general incremental editor.
 
 ## Architectural Constraints
 

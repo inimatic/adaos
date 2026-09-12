@@ -1703,15 +1703,19 @@ def _text_locales(value: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(locale for locale in ("en", "ru") if locale in value)
 
 
-def _choice_display(field: Mapping[str, Any], dictionaries: dict[str, dict[str, str]]) -> dict[str, str]:
+def _choice_display(field: Mapping[str, Any], dictionaries: dict[str, dict[str, str]]) -> dict[str, Any]:
     if field["value_type"] not in {"choice", "multi_choice"}:
         return {}
     prefix = f"value.{field['id']}."
+    labels: dict[str, str] = {}
     for option in field.get("options") or []:
+        fallback_locale = next((locale for locale in dictionaries if locale in option["label"]), None)
+        if fallback_locale:
+            labels[str(option["value"])] = str(option["label"][fallback_locale])
         for locale in dictionaries:
             if locale in option["label"]:
                 dictionaries[locale][prefix + str(option["value"])] = str(option["label"][locale])
-    return {"valueI18nPrefix": prefix}
+    return {"valueI18nPrefix": prefix, "valueLabels": labels}
 
 
 def _nonempty_expression(ref: str, fields: Mapping[str, Any]) -> str:
@@ -1986,6 +1990,7 @@ def _compile_semantic_prototype_v1(
                             "label": label,
                             "label_i18n": label_i18n,
                             **_choice_display(fields[field_id], dictionaries),
+                            **({"kind": fields[field_id]["value_type"]} if fields[field_id]["value_type"] in {"date", "number", "boolean"} else {}),
                         }
                     )
                     source_map.setdefault(f"field:{field_id}", []).append(
@@ -3992,6 +3997,17 @@ def _compile_semantic_prototype_v2(
                     scalar = "number" if field["value_type"] == "number" else "boolean" if field["value_type"] == "boolean" else "string"
                     properties[field["id"]] = {"type": [scalar, "null"]}
             for widget in page["widgets"]:
+                display_entries = {
+                    "ui.table": "columns", "ui.list": "meta", "item.details": "fields",
+                }.get(widget["type"])
+                for entry in widget.get("inputs", {}).get(display_entries, []) if display_entries else []:
+                    field_id = entry.get("key") or entry.get("path") or entry.get("id")
+                    if field_id in lookups:
+                        entry.update(copy.deepcopy(lookups[field_id]))
+                        target_type = lookups[field_id]["optionsDataSource"]["resourceType"]
+                        target_id = next(key for key in resources if _runtime_resource_type(key, project_ref) == target_type)
+                        source_map.setdefault(f"resource:{target_id}", []).append(
+                            f"ui.application.desktop.pageSchema.widgets.@{widget['id']}.inputs.{display_entries}.@{field_id}.optionsDataSource.resourceType")
                 if widget["type"] != "ui.form":
                     continue
                 for field in widget["inputs"]["fields"]:

@@ -1,4 +1,4 @@
-"""Bounded state-proof repairs that cannot rewrite unrelated design decisions."""
+"""Bounded semantic repairs that cannot rewrite unrelated design decisions."""
 
 from __future__ import annotations
 
@@ -19,6 +19,84 @@ from .workflow import BuilderWorkflowError
 
 def _digest(candidate: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(candidate, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def prepare_binding_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    codes = {"requirement.coverage_missing", "semantic.requirement_binding_incomplete"}
+    if not findings or any(item.get("code") not in codes for item in findings):
+        return None
+    requirements = sorted({str(ref) for finding in findings
+                           for ref in ([finding["requirement_ref"]] if finding.get("requirement_ref") else finding.get("requirement_refs", []))})
+    if not requirements:
+        return None
+    identities = {kind: [item["id"] for item in candidate.get(key, [])]
+                  for kind, key in (("resource", "resources"), ("relationship", "relationships"),
+                                    ("view", "views"), ("command", "commands"), ("state", "representative_states"))}
+    identities["field"] = [field["id"] for resource in candidate.get("resources", []) for field in resource["fields"]]
+    identities["query"] = [query["id"] for view in candidate.get("views", []) for query in view.get("query_controls", [])]
+    variants = [{"type": "object", "additionalProperties": False, "required": ["kind", "id"],
+                 "properties": {"kind": {"type": "string", "enum": [kind]},
+                                "id": {"type": "string", "enum": sorted(set(ids))}}}
+                for kind, ids in identities.items() if ids]
+    if not variants:
+        return None
+    digest = _digest(candidate)
+    return {
+        "base_sha256": digest,
+        "allowed_requirement_refs": requirements,
+        "task": (
+            "Add evidence references only for the reported missing or incomplete requirement bindings. "
+            "Choose existing semantic identities that actually demonstrate the requested behavior, not merely related names. "
+            "Each patch's add_semantic_refs augments the original binding; all existing references are preserved. "
+            "Resources, fixtures, views, states, commands, capability gaps and automation obligations are immutable. "
+            "Do not claim Automation behavior is implemented by a visible Prototype example. "
+            "If the needed evidence does not exist, leave that binding unchanged; full validation will report the remaining defect. "
+            "Return only the bounded patch, not a new candidate. The merged candidate undergoes full compilation and acceptance."
+        ),
+        "output_schema": {
+            "type": "object", "additionalProperties": False,
+            "required": ["schema", "base_sha256", "bindings"],
+            "properties": {
+                "schema": {"type": "string", "enum": ["adaos.builder.binding_repair.v1"]},
+                "base_sha256": {"type": "string", "enum": [digest]},
+                "bindings": {"type": "array", "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["requirement_ref", "add_semantic_refs"],
+                    "properties": {
+                        "requirement_ref": {"type": "string", "enum": requirements},
+                        "add_semantic_refs": {"type": "array", "items": {"anyOf": variants}},
+                    },
+                }},
+            },
+        },
+    }
+
+
+def apply_binding_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    plan = prepare_binding_repair(candidate, findings)
+    if plan is None:
+        raise BuilderWorkflowError("binding repair is not applicable to these findings")
+    Draft202012Validator(plan["output_schema"]).validate(repair)
+    result = copy.deepcopy(dict(candidate))
+    bindings = {item["requirement_ref"]: item for item in result["requirement_bindings"]}
+    if len(bindings) != len(result["requirement_bindings"]):
+        raise BuilderWorkflowError("binding repair cannot resolve duplicate source bindings")
+    changed: set[str] = set()
+    for patch in repair["bindings"]:
+        requirement = patch["requirement_ref"]
+        if requirement in changed:
+            raise BuilderWorkflowError("binding repair contains duplicate requirements")
+        changed.add(requirement)
+        if not patch["add_semantic_refs"]:
+            continue
+        if requirement not in bindings:
+            bindings[requirement] = {"requirement_ref": requirement, "semantic_refs": []}
+            result["requirement_bindings"].append(bindings[requirement])
+        refs = bindings[requirement]["semantic_refs"]
+        for ref in patch["add_semantic_refs"]:
+            if ref not in refs:
+                refs.append(copy.deepcopy(ref))
+    return result
 
 
 def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]], *, legacy: bool = False, version: int | None = None) -> dict[str, Any] | None:

@@ -128,6 +128,16 @@ def compile_semantic_candidate(
     )
 
 
+def prepare_binding_repair(candidate: Mapping[str, Any], findings: list[dict[str, Any]]) -> dict[str, Any] | None:
+    from adaos.services.builder.semantic_repair import prepare_binding_repair as prepare
+    return prepare(candidate, findings)
+
+
+def apply_binding_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], findings: list[dict[str, Any]]) -> dict[str, Any]:
+    from adaos.services.builder.semantic_repair import apply_binding_repair as apply
+    return apply(candidate, repair, findings)
+
+
 def prepare_state_repair(candidate: Mapping[str, Any], findings: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Select a bounded repair contract without changing candidate data."""
     from adaos.services.builder.semantic_repair import prepare_state_repair as prepare
@@ -240,6 +250,10 @@ def automation_handoff(**kwargs: Any) -> dict[str, Any]:
 
 
 __all__ = [
+    "prepare_binding_repair",
+    "apply_binding_repair",
+    "prepare_state_repair",
+    "apply_state_repair",
     "candidate_status",
     "check_spatial_constraint",
     "compile_semantic",
