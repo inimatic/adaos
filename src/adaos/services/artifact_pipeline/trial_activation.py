@@ -754,7 +754,10 @@ class TrialActivationStore:
             )
             if str(target.get("scenario_id") or "") != scenario:
                 continue
-            if expected_revision and str(release.get("version") or "") != expected_revision:
+            candidate = payload.get("candidate_ref") if isinstance(payload.get("candidate_ref"), Mapping) else {}
+            if expected_revision and expected_revision not in {
+                str(release.get("version") or ""), str(candidate.get("candidate_id") or "")
+            }:
                 continue
             if expected_webspace and str(target.get("webspace_id") or "") != expected_webspace:
                 continue

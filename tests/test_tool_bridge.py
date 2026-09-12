@@ -22,7 +22,8 @@ from adaos.apps.api import tool_bridge as tool_bridge_module
 
 
 @pytest.fixture(autouse=True)
-def _reset_tool_bridge_runtime_guards() -> None:
+def _reset_tool_bridge_runtime_guards(monkeypatch) -> None:
+    monkeypatch.setattr(tool_bridge_module, "_existing_trial_preview_target", lambda *args: None)
     if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LAST_SYNC_AT"):
         tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
     if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LOCKS"):
@@ -80,6 +81,35 @@ def _fake_ctx() -> SimpleNamespace:
         settings=None,
         bus=None,
     )
+
+
+def test_trial_owned_tool_cannot_fall_back_to_dev_or_workspace(tmp_path, monkeypatch):
+    from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+
+    monkeypatch.setattr(tool_bridge_module, "_existing_trial_preview_target",
+                        lambda *args: {"stage": "trial", "object_id": "example", "revision": "candidate-1"})
+    monkeypatch.setattr(TrialActivationStore, "find_for_target", lambda self, **kwargs: {
+        "candidate_ref": {"candidate_id": "candidate-1"}, "package_refs": [{"kind": "skill", "artifact_id": "owned"}]})
+    ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path))
+    for dev in (False, True):
+        body = tool_bridge_module.ToolCall(tool="owned:read", dev=dev, context={"webspace_id": "preview"})
+        with pytest.raises(HTTPException) as error:
+            tool_bridge_module._reject_unavailable_trial_execution(body, ctx)
+        assert error.value.status_code == 409
+        assert error.value.detail["error"] == "trial_runtime_unavailable"
+    tool_bridge_module._reject_unavailable_trial_execution(tool_bridge_module.ToolCall(tool="shell:read"), ctx)
+
+
+def test_trial_admission_precedes_idempotency_replay(monkeypatch):
+    async def allow(*args):
+        pass
+    def deny(*args):
+        raise HTTPException(status_code=409, detail={"error": "trial_runtime_unavailable"})
+    monkeypatch.setattr(tool_bridge_module, "_authorize_scoped_tool_call", allow)
+    monkeypatch.setattr(tool_bridge_module, "_reject_unavailable_trial_execution", deny)
+    monkeypatch.setattr(tool_bridge_module, "_tool_call_idempotency_begin", lambda *args: pytest.fail("must not replay another runtime"))
+    with pytest.raises(HTTPException):
+        asyncio.run(tool_bridge_module._call_tool_with_identity(tool_bridge_module.ToolCall(tool="owned:read"), None, Response(), _fake_ctx()))
 
 
 def test_workspace_autosync_skips_project_owned_skill(monkeypatch) -> None:

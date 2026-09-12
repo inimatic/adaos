@@ -1807,6 +1807,7 @@ async def _authorize_scoped_tool_call(body: ToolCall, ctx: AgentContext) -> None
 async def _call_tool_with_identity(body: ToolCall, request: Request, response: Response, ctx: AgentContext):
     # Authorization precedes cached results as well as new execution.
     await _authorize_scoped_tool_call(body, ctx)
+    await asyncio.to_thread(_reject_unavailable_trial_execution, body, ctx)
     resolved_timeout = _request_tool_call_timeout_s(body, request)
     if resolved_timeout is not None and resolved_timeout != body.timeout:
         body = body.model_copy(update={"timeout": resolved_timeout})
@@ -1837,6 +1838,37 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
         raise
     _tool_call_idempotency_store_result(entry, result)
     return result
+
+
+def _existing_trial_preview_target(body: ToolCall, ctx: AgentContext) -> dict[str, Any] | None:
+    paths = getattr(ctx, "paths", None)
+    if paths is None:
+        return None
+    from adaos.services.builder.workbench import BuilderWorkbenchService
+
+    webspace = _resolve_tool_webspace_id(body.arguments or {}, context=body.context)
+    return BuilderWorkbenchService(state_dir=Path(paths.state_dir())).existing_preview_target(webspace)
+
+
+def _reject_unavailable_trial_execution(body: ToolCall, ctx: AgentContext) -> None:
+    """Never run a Trial's tool against mutable DEV or stable source as fallback."""
+    target = _existing_trial_preview_target(body, ctx)
+    if not target or target.get("stage") != "trial":
+        return
+    from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+
+    state_dir = Path(ctx.paths.state_dir())
+    activation = TrialActivationStore(state_dir / "artifact_pipeline/trial-activations").find_for_target(
+        scenario_id=str(target.get("object_id") or ""), revision=target.get("revision"))
+    skill = body.tool.partition(":")[0]
+    if activation and not any(item.get("kind") == "skill" and item.get("artifact_id") == skill
+                              for item in activation.get("package_refs", [])):
+        return
+    raise HTTPException(status_code=409, detail={
+        "error": "trial_runtime_unavailable",
+        "message": "The selected Trial has no admitted isolated skill executor. DEV and stable fallback are disabled.",
+        "candidate_id": (activation or {}).get("candidate_ref", {}).get("candidate_id"),
+    })
 
 
 async def _call_tool_impl(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):

@@ -2441,6 +2441,35 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
   Automation/SDK/E2E regression: 192 tests pass in 188.04s
   (`automation-correction-regression-20260913-01.xml`). Live qualification remains
   part of the retained lifecycle, not a fresh first-pass result.
+- [x] `[must]` Qualify the governed correction against retained lifecycle session
+  `automation.scenario.test_-20260912-e2eed5df95b6ac7_146586eb`.
+  Continuation `package-isolation-06` completed Automation iteration 5 and
+  prepared Trial `test_-20260912-e2eed5df95b6ac7_146586eb-0-1-1-f62ac8acca49`.
+  Builder moved the cross-component assertion to the owning scenario without
+  dropping checks or reapproving the Prototype. Submit/wait/prepare: 7.69s /
+  130.62s / 2.84s; 178,476 input tokens (152,576 cached), 2,005 output tokens.
+  This is a recorded intervention, not a fresh first-pass success.
+- [x] `[must]` Resolve selected Trial candidates by exact candidate ID as well as
+  legacy release version; carry stage/label through owner-side materialization.
+  Add a fail-closed tool ingress guard before idempotent replay while isolated
+  Trial execution is unavailable. Focused Core regression: 209 checks pass
+  (`trial-source-boundary-regression-20260913-03.xml`). This is boundary protection,
+  not execution qualification.
+- [ ] `[must]` Admit an isolated Trial executor against the selected release lock,
+  with candidate-owned source/data, caller authorization and no DEV/stable or
+  cross-node fallback. Current activation health verifies package materialization
+  only and explicitly skips runtime reload. Do not accept/promote the candidate
+  on that evidence. Include module/environment, SDK service and cache boundaries.
+- [ ] `[must]` Qualify live owner-materialized Trial UI and HTTP behavior, then
+  stable installation and a compatible update preserving real records. Retained
+  `trial-browser-06` opened the Builder host, not its paired preview; corrected
+  `trial-browser-07` rendered the application but had no source identity proof.
+  Neither is a passing Trial execution receipt. The independent declarative
+  HTTP probe is prepared in `e2e/stand/check-application-tools.py`; live business
+  and reader/writer checks remain outstanding.
+- [ ] `[must]` Verify runtime cache identity and unavailable-Trial presentation in
+  the live Client. DEV results must not survive as Trial data after a source
+  change or an admission failure. Retain ordinary transport stale-value recovery.
 - [ ] `[should]` Resolve the isolated Builder browser's node-status 401/Limited
   indicator separately from scenario rendering and source publication health.
 

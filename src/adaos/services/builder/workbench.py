@@ -1128,6 +1128,17 @@ class BuilderWorkbenchService:
         _schedule_projection_publish(self, source_id, preview_state=preview_state)
         return binding
 
+    def existing_preview_target(self, webspace_id: str) -> dict[str, Any] | None:
+        """Read execution intent without creating topology or refreshing UI state."""
+        incoming = self.relationships.get_incoming(safe_source_webspace_id(webspace_id))
+        if incoming is None:
+            return None
+        binding = _read_json(self.binding_path(incoming.source_webspace_id))
+        if str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or "") != webspace_id:
+            return None
+        target = binding.get("preview_target")
+        return dict(target) if isinstance(target, Mapping) else None
+
     def get_workspace_binding(self, source_webspace_id: str | None = None) -> dict[str, Any]:
         source_id = self.resolve_source_webspace_id(source_webspace_id)
         existing = _read_json(self.binding_path(source_id))

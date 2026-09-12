@@ -23,6 +23,21 @@ from adaos.services.development_feedback import DevelopmentFeedbackService
 from adaos.services.development_tickets import DevelopmentTicketService
 
 
+def test_existing_preview_target_does_not_create_or_repair_topology(tmp_path):
+    relations = SimpleNamespace(
+        get_incoming=lambda token: SimpleNamespace(source_webspace_id="host") if token == "preview" else None,
+    )
+    service = BuilderWorkbenchService(state_dir=tmp_path, relationship_registry=relations)
+    path = service.binding_path("host")
+    path.parent.mkdir(parents=True)
+    value = {"preview_webspace_id": "preview", "preview_target": {"stage": "trial", "revision": "candidate"}}
+    path.write_text(json.dumps(value), encoding="utf-8")
+    before = path.stat().st_mtime_ns
+    assert service.existing_preview_target("preview") == value["preview_target"]
+    assert service.existing_preview_target("missing") is None
+    assert path.stat().st_mtime_ns == before
+
+
 def test_preview_webspace_id_is_opaque_and_source_ids_are_not_parsed() -> None:
     assert safe_source_webspace_id("desktop") == "desktop"
     assert safe_source_webspace_id("Prompt IDE / Lab") == "Prompt-IDE-Lab"

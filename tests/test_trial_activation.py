@@ -101,6 +101,24 @@ def test_runtime_trial_allows_same_skill_digest_or_closed_candidate_consumer() -
     )
 
 
+def test_trial_preview_resolves_exact_candidate_as_well_as_legacy_version(tmp_path):
+    from adaos.services.artifact_pipeline.trial_activation import TRIAL_ACTIVATION_SCHEMA, TrialActivationStore
+
+    store = TrialActivationStore(tmp_path)
+    for index in (1, 2):
+        store.save({"schema": TRIAL_ACTIVATION_SCHEMA, "candidate_ref": {"candidate_id": f"candidate-{index}"},
+                    "status": "active", "target": {"scenario_id": "example", "webspace_id": "preview"},
+                    "release_ref": {"version": "1.0.0"}, "updated_at": str(index)})
+    exact = store.find_for_target(scenario_id="example", revision="candidate-1", webspace_id="preview")
+    assert exact["candidate_ref"]["candidate_id"] == "candidate-1"
+    assert store.find_for_target(scenario_id="example", revision="1.0.0")["candidate_ref"]["candidate_id"] == "candidate-2"
+    assert store.find_for_target(scenario_id="example", revision="missing") is None
+    assert store.find_for_target(scenario_id="other", revision="candidate-1") is None
+    assert store.find_for_target(scenario_id="example", revision="candidate-1", webspace_id="other") is None
+    store.update("candidate-1", status="rejected")
+    assert store.find_for_target(scenario_id="example", revision="candidate-1") is None
+
+
 def test_trial_workspace_uses_workspace_shaped_sibling_root(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
 

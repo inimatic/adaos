@@ -10,6 +10,8 @@ const selectWidget = process.env.ADAOS_E2E_SELECT_WIDGET || ''
 const locale = process.env.ADAOS_E2E_LOCALE || 'en'
 const emptyMode = process.env.ADAOS_E2E_EMPTY_STATES === '1'
 const spaceKind = process.env.ADAOS_E2E_SPACE_KIND || 'development'
+const reviewStage = process.env.ADAOS_E2E_REVIEW_STAGE || 'prototype'
+if (!['prototype', 'automation', 'trial', 'publication'].includes(reviewStage)) throw new Error('Unsupported review stage')
 if (!['development', 'workspace'].includes(spaceKind)) throw new Error('Unsupported review space')
 if (emptyMode && spaceKind !== 'development') throw new Error('Empty fixture probes require development space')
 const dictionaryProbe = process.env.ADAOS_E2E_DICTIONARY_PROBE === '1'
@@ -94,6 +96,7 @@ try {
     let failure = null
     const mediaChecks = []
     try {
+      console.log(`${layout}: opening ${reviewStage} ${webspace}`)
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
       await page.waitForFunction(expected => {
         const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
@@ -101,6 +104,7 @@ try {
       }, scenario, { timeout: 60_000 })
       await page.locator('ada-page-widget-host, ada-widget').first().waitFor({ timeout: 15_000 })
       await page.evaluate(() => document.fonts.ready)
+      console.log(`${layout}: materialization and fonts ready`)
       if (dictionaryProbe) {
         await page.waitForFunction(([key, value]) => {
           const component = window.ng?.getComponent(document.querySelector('ada-table-widget, ada-list-widget, ada-details-widget'))
@@ -155,6 +159,7 @@ try {
       viewportWidth: innerWidth,
       documentWidth: document.documentElement.scrollWidth,
       currentScenario: window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization?.currentScenario,
+      materialization: window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization,
       widgets: document.querySelectorAll('ada-page-widget-host, ada-widget').length,
       loadingIndicators: document.querySelectorAll('ion-spinner').length,
       tables: document.querySelectorAll('ada-table-widget').length,
@@ -200,7 +205,7 @@ try {
   }
 } finally { await browser.close() }
 await fs.writeFile(path.join(output, 'review.json'), JSON.stringify({
-  stage: 'prototype', scenario, webspace, url: url.href, samples,
+  stage: reviewStage, scenario, webspace, url: url.href, samples,
   note: 'Screenshots and diagnostics are review evidence, not an automatic approval.',
 }, null, 2) + '\n', 'utf8')
 console.log(JSON.stringify(samples.map(({ text, ...sample }) => sample), null, 2))

@@ -16,7 +16,7 @@ import uuid
 from collections import Counter
 from functools import partial
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any, Iterator, Literal, Mapping, Optional
 
 import anyio
 import requests
@@ -3467,6 +3467,8 @@ class WebspaceYjsActionRequest(BaseModel):
 class BuilderRevisionMaterializationRequest(BaseModel):
     scenario_id: str = Field(..., min_length=1, max_length=256)
     revision: str | None = Field(default=None, max_length=128)
+    preview_stage: Literal["prototype", "automation", "trial", "publication"] | None = None
+    preview_label: str | None = Field(default=None, max_length=1024)
     source_fingerprint: str | None = Field(default=None, max_length=256)
     user_id: str = Field(default="guest", min_length=1, max_length=256)
     roles: list[str] = Field(default_factory=list, max_length=64)
@@ -6159,6 +6161,8 @@ async def node_yjs_builder_materialize(
     result = await apply_builder_revision_materialization(
         target_webspace_id,
         scenario_id=scenario_id,
+        preview_stage=payload.preview_stage,
+        preview_label=payload.preview_label,
         revision=str(payload.revision or "").strip() or None,
         source_fingerprint=str(payload.source_fingerprint or "").strip() or None,
         user_id=str(payload.user_id or "guest").strip() or "guest",

@@ -611,6 +611,8 @@ def test_node_yjs_builder_materialize_runs_in_owner_runtime(monkeypatch) -> None
             node_api_module.BuilderRevisionMaterializationRequest(
                 scenario_id="applications",
                 revision="027",
+                preview_stage="trial",
+                preview_label="Exact Trial",
                 source_fingerprint="fp-027",
                 source_webspace_id="desktop",
                 draft_id="draft.applications",
@@ -626,6 +628,8 @@ def test_node_yjs_builder_materialize_runs_in_owner_runtime(monkeypatch) -> None
     assert captured[0]["webspace_id"] == "desktop-dev"
     assert captured[0]["scenario_id"] == "applications"
     assert captured[0]["revision"] == "027"
+    assert captured[0]["preview_stage"] == "trial"
+    assert captured[0]["preview_label"] == "Exact Trial"
     assert captured[0]["event_payload"]["source_webspace_id"] == "desktop"
     assert captured[0]["event_payload"]["_meta"]["cmd_id"] == "builder.ui.applications.027"
 

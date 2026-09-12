@@ -1,0 +1,89 @@
+schema: adaos.e2e.application_tools.v1
+description: Independent stable-runtime application checks on a DEV node. Not supplied to generation. Retain test records for browser and update review.
+steps:
+  - id: anonymous-denied
+    caller: anonymous
+    tool: read_records
+    arguments: {kind: asset}
+    expect: {values: {http_status: 401}}
+  - id: fresh-install-empty
+    caller: reader
+    tool: read_records
+    arguments: {kind: asset}
+    expect: {values: {http_status: 200, body.result.items: []}}
+  - id: reader-direct-write-denied
+    caller: reader
+    tool: write_record
+    arguments: {kind: asset, values: {name: "Denied ${case_instance_id}"}}
+    expect: {values: {http_status: 403}}
+  - id: read-tool-cannot-write
+    caller: reader
+    tool: read_records
+    arguments: {kind: asset, operation: save}
+    expect: {values: {http_status: 200, body.result.ok: false, body.result.error: validation}}
+  - id: create-asset
+    tool: write_record
+    arguments: {kind: asset, values: {name: "HTTP ${case_instance_id}", location: "Test bay"}}
+    expect: {values: {http_status: 200, body.result.ok: true, body.result.item.revision: 1}, paths_present: [body.result.item.id]}
+  - id: invalid-parent
+    tool: write_record
+    arguments: {kind: inspection, values: {asset_id: "missing-${case_instance_id}"}}
+    expect: {values: {http_status: 200, body.result.ok: false, body.result.error: not_found}}
+  - id: create-inspection
+    tool: write_record
+    arguments: {kind: inspection, values: {asset_id: $steps.create-asset.body.result.item.id}}
+    expect: {values: {http_status: 200, body.result.ok: true, body.result.item.status: in_progress}, paths_present: [body.result.item.id]}
+  - id: restrict-parent-delete
+    tool: write_record
+    arguments: {kind: asset, operation: delete, id: $steps.create-asset.body.result.item.id, revision: 1}
+    expect: {values: {http_status: 200, body.result.error: dependencies_exist}}
+  - id: empty-completion-denied
+    tool: write_record
+    arguments: {kind: inspection, operation: complete, id: $steps.create-inspection.body.result.item.id, revision: 1}
+    expect: {values: {http_status: 200, body.result.error: incomplete_inspection}}
+  - id: create-item
+    tool: write_record
+    arguments:
+      kind: check_item
+      values: {inspection_id: $steps.create-inspection.body.result.item.id, title: "Pressure check", result: defect, comment: ""}
+    expect: {values: {http_status: 200, body.result.ok: true}, paths_present: [body.result.item.id]}
+  - id: defect-completion-denied
+    tool: write_record
+    arguments: {kind: inspection, operation: complete, id: $steps.create-inspection.body.result.item.id, revision: 1}
+    expect:
+      values: {http_status: 200, body.result.error: incomplete_inspection, body.result.problem_items.0.id: $steps.create-item.body.result.item.id}
+  - id: still-draft
+    caller: reader
+    tool: read_records
+    arguments: {kind: inspection, operation: get, id: $steps.create-inspection.body.result.item.id}
+    expect: {values: {http_status: 200, body.result.item.status: in_progress, body.result.item.revision: 1}}
+  - id: invalid-photo-link
+    tool: write_record
+    arguments: {kind: check_item, id: $steps.create-item.body.result.item.id, revision: 1, values: {photo: "blob:transient"}}
+    expect: {values: {http_status: 200, body.result.error: attachment_error}}
+  - id: update-item
+    tool: write_record
+    arguments:
+      kind: check_item
+      id: $steps.create-item.body.result.item.id
+      revision: 1
+      values: {comment: "Leak recorded", measurement: 4.5, photo: "https://example.org/defect.jpg"}
+    expect: {values: {http_status: 200, body.result.ok: true, body.result.item.revision: 2}}
+  - id: stale-write-denied
+    tool: write_record
+    arguments: {kind: check_item, id: $steps.create-item.body.result.item.id, revision: 1, values: {comment: "Must not overwrite"}}
+    expect: {values: {http_status: 200, body.result.error: revision_conflict}}
+  - id: complete-inspection
+    tool: write_record
+    arguments: {kind: inspection, operation: complete, id: $steps.create-inspection.body.result.item.id, revision: 1}
+    expect: {values: {http_status: 200, body.result.ok: true, body.result.item.status: completed, body.result.item.revision: 2}}
+  - id: completed-item-readonly
+    tool: write_record
+    arguments: {kind: check_item, id: $steps.create-item.body.result.item.id, revision: 2, values: {comment: "Must not edit"}}
+    expect: {values: {http_status: 200, body.result.error: completed_read_only}}
+  - id: reader-reopens-item
+    caller: reader
+    tool: read_records
+    arguments: {kind: check_item, operation: get, id: $steps.create-item.body.result.item.id}
+    expect:
+      values: {http_status: 200, body.result.item.revision: 2, body.result.item.comment: "Leak recorded", body.result.item.measurement: 4.5, body.result.item.photo: "https://example.org/defect.jpg", body.result.item.read_only: true}

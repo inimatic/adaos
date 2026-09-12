@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from adaos.sdk.builder import preview
 from adaos.services.builder.workbench import _preview_state_projection
 
@@ -116,6 +118,8 @@ def test_materialize_revision_via_owner_uses_active_local_control(monkeypatch) -
         "desktop-dev",
         scenario_id="applications",
         revision="027",
+        preview_stage="prototype",
+        preview_label="Preview 027",
         source_fingerprint="fp-027",
         event_payload={
             "source_webspace_id": "desktop",
@@ -134,6 +138,8 @@ def test_materialize_revision_via_owner_uses_active_local_control(monkeypatch) -
     }
     assert captured["json"]["scenario_id"] == "applications"
     assert captured["json"]["revision"] == "027"
+    assert captured["json"]["preview_stage"] == "prototype"
+    assert captured["json"]["preview_label"] == "Preview 027"
     assert captured["json"]["request_id"] == "builder.ui.applications.027"
     assert captured["trust_env"] is False
     assert captured["closed"] is True
@@ -288,7 +294,8 @@ def test_skill_preview_state_keeps_component_presentation_context() -> None:
     }
 
 
-def test_select_target_materializes_exact_trial_candidate(monkeypatch) -> None:
+@pytest.mark.parametrize("via_owner", [False, True])
+def test_select_target_materializes_exact_trial_candidate(monkeypatch, via_owner) -> None:
     from adaos.services.builder.workflow import BuilderWorkflowService
 
     service = _Workbench()
@@ -325,7 +332,7 @@ def test_select_target_materializes_exact_trial_candidate(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         preview,
-        "materialize_revision",
+        "materialize_revision_via_owner" if via_owner else "materialize_revision",
         lambda **kwargs: materializations.append(dict(kwargs))
         or {"ok": True, "materialization": {"ready": True}},
     )
@@ -336,6 +343,7 @@ def test_select_target_materializes_exact_trial_candidate(monkeypatch) -> None:
         "recipes",
         stage="trial",
         source_webspace_id="desktop",
+        via_owner=via_owner,
     )
 
     assert result["target"]["stage"] == "trial"

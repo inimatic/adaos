@@ -443,6 +443,24 @@ stale targets and ambiguous replay instead of submitting duplicate model work.
 The service checks optional expected-session preconditions before a follow-up;
 these checks do not constitute a distributed exactly-once submission contract.
 
+Trial materialization is not Trial execution. The selected candidate must bind
+UI, tool declarations, executable packages and data scope to the same immutable
+release and WorkspaceLock. Owner-side materialization receives the explicit stage
+and candidate identity; a CLI-local YDoc update is not evidence of a live preview.
+When an isolated executor is unavailable, Trial-owned tool calls fail closed
+before idempotent replay, DEV/stable resolution or cross-node fallback. Platform
+shell tools outside the candidate remain separate from application execution.
+Client runtime read and stale-value caches include materialization identity, not
+only webspace and query arguments. Missing runtime admission is an error, not a
+transport reconnect and not permission to display another stage's records.
+
+Runtime qualification must record the executed package digest, data root and
+caller scope, and demonstrate that same-named DEV/stable packages and data are
+untouched. A subprocess or scoped context alone is insufficient if SDK services,
+capability registries, credentials, module caches or environment still resolve
+the shared runtime. Exercise reader/writer denial and accepted business behavior
+before Trial acceptance; then independently test stable installation and update.
+
 Application-owned transactions and business invariants are ordinary Automation
 implementation work. A skill may use standard-library storage transactions under
 its admitted persistent data root; the absence of a Core domain-policy registry

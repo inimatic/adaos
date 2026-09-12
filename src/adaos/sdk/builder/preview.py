@@ -611,6 +611,7 @@ def select_target(
     revision: str | None = None,
     source_webspace_id: str = "desktop",
     follow_active: bool = False,
+    via_owner: bool = False,
 ) -> dict[str, Any]:
     """Materialize an explicit Lifecycle snapshot without changing its active phase."""
 
@@ -733,7 +734,8 @@ def select_target(
         "publication": "public",
     }[stage_token]
     label = f"{prefix}: {project_id} · {display_revision or target_revision or 'current'}"
-    materialized = materialize_revision(
+    materializer = materialize_revision_via_owner if via_owner else materialize_revision
+    materialized = materializer(
         webspace_id=preview_id,
         scenario_id=project_id,
         revision=target_revision or None,
@@ -971,6 +973,8 @@ def materialize_revision_via_owner(
     *,
     scenario_id: str,
     revision: str | None = None,
+    preview_stage: str | None = None,
+    preview_label: str | None = None,
     source_fingerprint: str | None = None,
     user_id: str = "guest",
     roles: list[str] | None = None,
@@ -986,9 +990,13 @@ def materialize_revision_via_owner(
 
     base_url = resolve_control_base_url(prefer_local=True)
     token = resolve_control_token(base_url=base_url)
+    if preview_stage not in {None, "prototype", "automation", "trial", "publication"}:
+        raise ValueError("unsupported Builder preview stage")
     source_event = event_payload if isinstance(event_payload, Mapping) else {}
     meta = source_event.get("_meta") if isinstance(source_event.get("_meta"), Mapping) else {}
     body = {
+        "preview_stage": preview_stage,
+        "preview_label": preview_label,
         "scenario_id": str(scenario_id or "").strip(),
         "revision": str(revision or "").strip() or None,
         "source_fingerprint": str(source_fingerprint or "").strip() or None,
