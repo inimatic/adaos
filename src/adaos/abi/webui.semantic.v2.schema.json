@@ -313,7 +313,7 @@
     },
     "selectionFilter": {
       "type": "object", "additionalProperties": false, "required": ["field_ref", "source_view_ref"],
-      "properties": { "field_ref": { "$ref": "#/$defs/id" }, "source_view_ref": { "$ref": "#/$defs/id" } }
+      "properties": { "field_ref": { "$ref": "#/$defs/id" }, "source_view_ref": { "$ref": "#/$defs/id" }, "source_field_ref": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] } }
     },
     "queryControl": {
       "type": "object",

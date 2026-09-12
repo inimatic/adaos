@@ -925,7 +925,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
                           "placement": "query_controls, filter and empty_state belong to collection views only. Details and editors have query_controls=[] and filter=null; put search on their owning collection. Equality filters accept only field_types, not long_text, markdown or array fields. Search has field_ref=null; use it for free text rather than adding an unsupported equality filter."},
         "command_ownership": "Every command, including delete or a fixed-value transition, belongs to an editor view. A collection or details view is not a command owner. For a focused action use an editor with surface=modal/side_sheet and the necessary context fields; Core provides its opener and selected record. Editable inputs must be included in both the editor's field_refs and the command's input_field_refs.",
         "view_roles": "A collection browses repeated records and owns its presentation, query controls, empty state and selection links. Details projects fields from one selected record of the SAME resource; it is not a grouped collection or relationship lookup. An editor owns commands and their inputs. Details/editor have presentation=null, presentation_options=null, selection_filter=null, filter=null, empty_state=null and query_controls=[], field_display=[], scope_filters=[]. Use a collection, not details, for selectable or grouped summaries.",
-        "selection_links": "When selecting a row or tree node must change another collection, set that target's selection_filter={field_ref: its foreign key, source_view_ref: the source collection id}. Declare the relationship to the source resource's implicit id. Core owns runtime selection state; do not guess state_ref names. No selection shows all records. A separate dropdown is not the same as following the selected row. Do not also expose a resettable filter on this linked field. Prefer selection_filter over legacy filter for new linked views.",
+        "selection_links": "When selecting a row or tree node must change another collection, set that target's selection_filter={field_ref: target field, source_view_ref: source collection id, source_field_ref: selected source field (null means id)}. Parent-to-children uses target FK/source id; selected child-to-parent uses target id/source FK. Both require the declared FK/id relationship, not matching names. Links must be acyclic. Core owns selection state and clears descendant selections when their parent changes; do not guess state_ref names. No selection shows all records. A dropdown is not following a selected row. Do not expose other filters on this linked field. Prefer selection_filter over legacy filter.",
         "deferred_computations": "When a requested computation or rule is deferred, show plausible representative OUTPUT values and their meaning in an inspectable view. A description or raw inputs alone do not illustrate the requested result. Clearly disclose that these values are fixtures, not live calculations. Do not build data concepts used only by future Automation.",
         "command_guards": "Guards reference fields of the command's own editor resource only. A predicate over several related records is not a single-record field guard; preserve such business rules for Automation with visible representative outcomes.",
         "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
@@ -2614,6 +2614,12 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 "field_ref": field_refs_by_resource[raw_resource_id].get(link["field_ref"], link["field_ref"]),
                 "source_view_ref": _canonical_candidate_identifier(link["source_view_ref"], namespace="view"),
             } if link else None
+            if link and "source_field_ref" in link:
+                source_view = next((item for item in raw_views if item.get("id") == link["source_view_ref"]), {})
+                source_fields = field_refs_by_resource.get(source_view.get("resource_ref"), {})
+                normalized_view["selection_filter"]["source_field_ref"] = source_fields.get(
+                    link["source_field_ref"], link["source_field_ref"]
+                )
             section = raw_view.get("section")
             normalized_view["section"] = {
                 "id": _canonical_candidate_identifier(section["id"], namespace="section"),

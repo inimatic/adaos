@@ -177,14 +177,20 @@ remain inline inside their owning section; large-project orchestration is separa
 ### Small-Prototype Content Composition
 
 Linked navigation uses semantic v2 `selection_filter`: a target collection names
-its foreign key and the source collection (`source_view_ref`), not a guessed
-runtime state variable. The relationship must target the source record's implicit
-identity. Core resolves the source's actual selection action and the target query;
+its target field, source collection (`source_view_ref`) and optional
+`source_field_ref` (null/omitted means implicit `id`), not a guessed runtime state
+variable. A declared FK/id relationship supports both parent-to-children and
+selected-child-to-parent lookup; matching field names are not sufficient.
+Links must be acyclic. Core resolves the source's actual selection action and the target query;
 no selection shows the unrestricted collection. A linked predicate cannot overlap
 a resettable or fixed filter on the same field. Charts cannot act as selection
 sources. Row selection that drives related content does not also open an editor;
 editing remains an explicit action. Browser qualification must prove both ends
 of the link, not only a highlighted row and an independent dropdown.
+Changing a parent clears descendant record selections and their captured FK
+values. A reverse lookup must not clear the ancestor selection. Selection values
+remain resource-scoped across representations; large independent workspaces and
+branch-local selection are outside this small-prototype contract.
 
 Collection scope is separate from user query state. Semantic v2 `scope_filters`
 contains typed, permanent equality predicates; query controls narrow that scope

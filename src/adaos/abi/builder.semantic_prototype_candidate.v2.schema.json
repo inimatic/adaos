@@ -243,7 +243,7 @@
         "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" }, "description": "Permanent equality predicates defining this collection, independent of user search/filter controls. Reset never removes these. Empty for an unrestricted view. Do not also offer a query control for the same field." },
-        "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }], "description": "Filter this collection's foreign key by the record selected in source_view_ref. A declared relationship to the source resource's implicit id is required. Null leaves it unlinked. No selection shows all records. Do not duplicate this field in query_controls, scope_filters or legacy filter." },
+        "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }], "description": "Match this collection's field_ref to source_field_ref (null means id) of the selected source record. Requires a declared FK/id relationship in either direction. Null leaves it unlinked. No selection shows all records. Do not duplicate this field in other filters." },
         "filter": {
           "anyOf": [{ "$ref": "#/$defs/viewFilter" }, { "type": "null" }]
         },
@@ -255,7 +255,7 @@
     },
     "selectionFilter": {
       "type": "object", "additionalProperties": false, "required": ["field_ref", "source_view_ref"],
-      "properties": { "field_ref": { "$ref": "#/$defs/id" }, "source_view_ref": { "$ref": "#/$defs/id" } }
+      "properties": { "field_ref": { "$ref": "#/$defs/id" }, "source_view_ref": { "$ref": "#/$defs/id" }, "source_field_ref": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }], "description": "Selected source record field, not the target field. Null or omitted means implicit id." } }
     },
     "scopeFilter": {
       "type": "object", "additionalProperties": false, "required": ["field_ref", "value"],

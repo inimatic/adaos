@@ -55,6 +55,13 @@ try {
         endpoint: response.url(), status: response.status(), query: request.postDataJSON() })
     })
     const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).last()
+    const collectionIds = target => {
+      if (target.type === 'ui.table') return host(target.id).locator('ada-table-widget').evaluate(element =>
+        window.ng.getComponent(element).rows.map(row => row.id).sort())
+      if (target.type === 'ui.list') return host(target.id).locator('ada-list-widget').evaluate(element =>
+        window.ng.getComponent(element).latestItems.map(row => row.id).sort())
+      throw new Error(`Unexercised related collection: ${target.type}`)
+    }
     const ready = async () => page.waitForFunction(expected => {
       const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
       return sync?.materializationReady && sync.materialization?.currentScenario === expected
@@ -86,18 +93,21 @@ try {
           await reveal(widget)
           const rows = host(widget.id).locator('tr.row-selectable')
           await expect(rows.first()).toBeVisible({ timeout: 20_000 })
-          const available = await host(widget.id).locator('ada-table-widget').evaluate(element => window.ng.getComponent(element).pagedRows.map(row => row.id))
+          const available = await host(widget.id).locator('ada-table-widget').evaluate(element => window.ng.getComponent(element).pagedRows)
           for (const index of available.slice(0, 2).map((_, index) => index).reverse()) {
+            await reveal(widget)
             await rows.nth(index).click()
             await expect(page.locator('ion-modal:visible')).toHaveCount(0)
             for (const view of tableLinks) {
               const target = widgets.find(item => item.id === view.id)
+              await reveal(target)
+              const sourceField = view.selection_filter.source_field_ref || 'id'
               const expected = semantic.resources.find(resource => resource.id === view.resource_ref).records
-                .filter(item => item[view.selection_filter.field_ref] === available[index]).map(item => item.id).sort()
-              if (target.type !== 'ui.table') throw new Error(`Unexercised related table target: ${target.type}`)
-              await expect.poll(() => host(target.id).locator('ada-table-widget').evaluate(element =>
-                window.ng.getComponent(element).rows.map(row => row.id).sort()), { timeout: 20_000 }).toEqual(expected)
-              sample.checks.push({ kind: 'table-related-selection', source: widget.id, target: target.id, selected: available[index], records: expected })
+                .filter(item => item[view.selection_filter.field_ref] === available[index][sourceField]
+                  && (view.scope_filters || []).every(filter => item[filter.field_ref] === filter.value)).map(item => item.id).sort()
+              await expect.poll(() => collectionIds(target), { timeout: 20_000 }).toEqual(expected)
+              sample.checks.push({ kind: 'table-related-selection', source: widget.id, target: target.id,
+                selected: available[index].id, sourceField, records: expected })
             }
           }
           const sourceView = semantic.views.find(view => view.id === widget.id)

@@ -156,6 +156,69 @@ def test_record_presentation_error_explains_the_role_not_a_lost_presentation():
     assert any('use a collection for grouped records' in item['detail'] for item in findings)
 
 
+@pytest.mark.parametrize('inverse', [False, True])
+def test_selection_can_lookup_parent_using_selected_source_foreign_key(inverse):
+    brief, semantic = _multi_resource_fixture()
+    source = semantic['views'][0]
+    target = next(view for view in semantic['views'] if view['id'] == 'people-list')
+    target['selection_filter'] = {'field_ref': 'id', 'source_view_ref': source['id'],
+                                  'source_field_ref': 'work_owner_id'}
+    if inverse:
+        semantic['relationships'][0].update(from_resource_ref='people', from_field_ref='id',
+                                           to_resource_ref='work_items', to_field_ref='work_owner_id',
+                                           cardinality='one_to_many')
+    alternative = copy.deepcopy(source)
+    alternative['id'] = 'alternative-source'
+    semantic['views'].append(alternative)
+    result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    page = result['webui']['ui']['application']['desktop']['pageSchema']
+    widgets = {widget['id']: widget for widget in page['widgets']}
+    reference = widgets[target['id']]['dataSource']['query']['filters']['id']
+    key = reference.removeprefix('$state.')
+    assert page['initialState'][key] == ''
+    for source_id in (source['id'], alternative['id']):
+        assert any(action.get('params', {}).get(key) == '$event.work_owner_id'
+                   for action in widgets[source_id]['actions'])
+
+
+def test_selection_cascade_clears_child_but_preserves_ancestor_lookup():
+    brief, semantic = _multi_resource_fixture()
+    child = semantic['views'][0]
+    child['selection_filter'] = {'field_ref': 'work_owner_id', 'source_view_ref': 'people-list'}
+    lookup = copy.deepcopy(next(view for view in semantic['views'] if view['id'] == 'people-list'))
+    lookup.update(id='people-lookup', selection_filter={
+        'field_ref': 'id', 'source_view_ref': child['id'], 'source_field_ref': 'work_owner_id'})
+    semantic['views'].append(lookup)
+    result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    widgets = {widget['id']: widget for widget in result['webui']['ui']['application']['desktop']['pageSchema']['widgets']}
+    def selection_action(view_id):
+        return next(action['params'] for action in widgets[view_id]['actions']
+                    if action['type'] == 'updateState' and action['on'] == 'select')
+    parent = selection_action('people-list')
+    selected_parent = next(key for key, value in parent.items() if value == '$event.id')
+    selected_child = next(key for key, value in selection_action(child['id']).items() if value == '$event.id')
+    selected_fk = widgets[lookup['id']]['dataSource']['query']['filters']['id'].removeprefix('$state.')
+    assert parent[selected_child] == ''
+    assert parent[selected_fk] == ''
+    assert selected_parent not in selection_action(child['id'])
+    assert selection_action(child['id'])[selected_fk] == '$event.work_owner_id'
+
+
+@pytest.mark.parametrize('broken', ['unknown_source_field', 'unrelated_source_field', 'cycle'])
+def test_reverse_selection_rejects_invalid_endpoints_and_cycles(broken):
+    brief, semantic = _multi_resource_fixture()
+    child = semantic['views'][0]
+    target = next(view for view in semantic['views'] if view['id'] == 'people-list')
+    target['selection_filter'] = {'field_ref': 'id', 'source_view_ref': child['id'],
+                                  'source_field_ref': 'work_owner_id'}
+    if broken == 'cycle':
+        child['selection_filter'] = {'field_ref': 'work_owner_id', 'source_view_ref': target['id']}
+    else:
+        target['selection_filter']['source_field_ref'] = 'absent' if broken == 'unknown_source_field' else 'title'
+    with pytest.raises(BuilderWorkflowError, match='selection_filter'):
+        compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+
+
 @pytest.mark.parametrize('broken', ['missing_source', 'chart_source', 'wrong_key', 'filter_conflict', 'editor_target'])
 def test_selection_filter_rejects_unexecutable_links(broken):
     brief, semantic = _multi_resource_fixture()
