@@ -11,6 +11,7 @@ if (process.env.ENV_TYPE !== 'dev' || !search || !scenario || !webspace || !subn
 const output = path.resolve(process.env.ADAOS_E2E_OUTPUT || 'artifacts/builder-project-review')
 const hub = process.env.ADAOS_E2E_HUB_URL || 'http://127.0.0.1:8777'
 const spaceKind = process.env.ADAOS_E2E_SPACE_KIND || 'development'
+const expectedPreviewText = process.env.ADAOS_E2E_PREVIEW_TEXT
 if (!['development', 'workspace'].includes(spaceKind)) throw new Error('Unsupported Builder space')
 const url = new URL(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
 for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo',
@@ -143,6 +144,11 @@ try {
       const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
       return sync?.materializationReady && sync.materialization.currentScenario === expected
     }, scenario, { timeout: 60_000 })
+    if (expectedPreviewText) {
+      const hydrationStarted = Date.now()
+      await popup.waitForFunction(expected => document.body.innerText.includes(expected), expectedPreviewText, { timeout: 30_000 })
+      report.previewHydration = { expectedText: expectedPreviewText, elapsedMs: Date.now() - hydrationStarted }
+    }
     report.previewText = await popup.locator('body').innerText()
     await popup.screenshot({ path: path.join(output, 'opened-preview.png'), fullPage: true })
     report.passed = true

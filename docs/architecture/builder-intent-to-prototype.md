@@ -606,6 +606,20 @@ invention remains a model/user decision.
 
 ## Component Contract And Client Growth
 
+### Preview Navigation And Publication
+
+Opening a preview is an identity-scoped navigation command, not a read of the
+host's last preview URL. It must retain an explicitly selected revision of the
+same application, or select and materialize the requested application before
+returning its destination. An empty or unrelated binding must never silently
+open Builder as the application's preview. Read-only preview status remains a
+separate operation.
+
+Promotion evidence must cover both exact source/runtime versions and the live
+Client projection. A healthy manifest does not prove that an existing webspace
+has refreshed its scenario and modals. Verify the selected application's actual
+destination, not merely a successful navigation response or a nonblank page.
+
 ### Locale And Interaction Policy
 
 An initial Prototype uses the user's current language. Stable localization

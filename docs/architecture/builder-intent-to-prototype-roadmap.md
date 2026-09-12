@@ -1944,6 +1944,48 @@ The parity contract now expresses that forward replacement and requires the
 review modal, while its reference profile retains the old binding. Both current
 sources pass; this comparison does not itself assert a completed promotion.
 
+The 2026-09-12 promotion check exposed a separate navigation defect: the picker
+selected a test application, but Open preview read an empty host binding and
+opened Builder. DEV now uses an identity-scoped `open_preview` command, preserving
+a matching pinned revision and materializing an unselected application before
+returning its URL. Both scenario descriptors bind the selected application to
+this command. SDK/scenario regression tests pass 106 cases; the DEV browser
+checks sorting, pagination, reload, persisted preferences and the actual selected
+scenario in the new window (`builder-preview-open-dev-20260912`).
+
+The final exact checkpoint is `builder@0.2.121`, release digest
+`sha256:06ff92fdb7455826ebd57d215f8d54c120107bdf60569ba1243fbad8930b4382`.
+Trial `builder-0-2-121-bad8930b4382` was accepted and promoted into WorkspaceLock
+47; all three runtime/source health checks match scenario `0.2.89`, SDK `0.1.114`
+and Builder skill `0.3.170`. The exact-candidate source publication is registry
+commit `4d722892eb1eaa50353d8574957f48d7be16c53c`. Workspace browser navigation,
+sorting, reload and persisted table preferences pass in
+`builder-preview-open-workspace-20260912`. Its screenshot precedes resource
+hydration and is not independent proof of populated application data.
+The follow-up `builder-preview-open-workspace-hydrated-20260912` passes an
+explicit fixture-text assertion before the screenshot (354ms after scenario
+materialization). This proves populated data, not completion of every asynchronous
+lookup. The capture also preserves UX debt: raw relationship/status values,
+English host fallback labels and narrow date columns need presentation review.
+Subsequent public DEV and Workspace project pushes succeeded (`0.2.122` and
+`0.2.123` respectively); these source checkpoints do not replace the exact
+installed `0.2.121` release. The shared `adaos_builder` aggregate was pushed too.
+
+- [ ] `[must]` Add live scenario/modal projection identity to the automated
+  publication health gate. Initial Workspace browser attempts retained the old
+  picker despite correct source versions; retain these failed receipts rather
+  than equating manifest health with Client freshness. The current promotion
+  qualification includes a separate real-browser check.
+
+Final regression sweep selected 931 Builder tests: 925 passed, four skipped and
+two failed only because test expectations still named grader 16 instead of 17.
+After correcting those expectations, all 43 tests in `test_builder_e2e.py` passed;
+both reports are retained rather than relabeling the original sweep as green.
+The 33 resource/prototype workbench tests also pass. Client boundary checks cover
+21 generic sources and 41 inventory widgets; its production build completed in
+72.930s. Existing SCSS budget and CommonJS warnings remain visible, with no budget
+increase to suppress them.
+
 DEV Builder Conversation ingress changes were tested and locally checkpointed
 as `builder@0.2.116`, source
 `sha256:04a46de7d758b097cccad9047591f8f521037f507abb353d229debe32e055066`.
