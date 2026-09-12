@@ -43,7 +43,7 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
     if len(views) != len(view_ids):
         return None
     locales = tuple(locale for locale in ("en", "ru") if locale in candidate["title"])
-    available = semantic_prototype_provider_contract(version="v2", locales=locales)["$defs"]
+    available = semantic_prototype_provider_contract(version="v2", locales=locales, _view_variants=False)["$defs"]
     definitions: dict[str, Any] = {}
 
     def include(name: str) -> None:

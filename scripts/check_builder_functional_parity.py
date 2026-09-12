@@ -79,12 +79,17 @@ def inspect(
         str(item.get("value")) for item in kind_field.get("options", [])
     }
     required_bindings = set(contract["required_bindings"])
+    required_modals = set(contract["required_modal_ids"])
     if include_forward:
         required_bindings.update(contract.get("forward_required_bindings", []))
+        for previous, current in contract.get("forward_binding_replacements", {}).items():
+            required_bindings.discard(previous)
+            required_bindings.add(current)
+        required_modals.update(contract.get("forward_required_modal_ids", []))
     forbidden_bindings = set(contract.get("forbidden_bindings", []))
     return {
         "missing_widgets": sorted(set(contract["required_widget_ids"]) - widget_ids),
-        "missing_modals": sorted(set(contract["required_modal_ids"]) - modal_ids),
+        "missing_modals": sorted(required_modals - modal_ids),
         "missing_bindings": sorted(required_bindings - bindings),
         "missing_lifecycle_buttons": sorted(
             set(contract["required_lifecycle_buttons"]) - lifecycle_buttons

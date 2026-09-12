@@ -802,7 +802,7 @@ _PROVIDER_OMITTED_ASSERTIONS = frozenset({
 })
 
 
-def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru"), brief: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru"), brief: Mapping[str, Any] | None = None, _view_variants: bool = True) -> dict[str, Any]:
     """Return the candidate schema projected to the provider strict subset."""
 
     contract = semantic_prototype_candidate_contract(version=version)
@@ -821,6 +821,20 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
         contract["$defs"]["view"]["required"].extend(["presentation_options", "field_display", "section", "scope_filters", "selection_filter"])
+        if _view_variants:
+            # Record projections cannot use collection presentations or query links.
+            # Keep retained authoring/patch shapes compatible; constrain fresh output.
+            collection = copy.deepcopy(contract["$defs"]["view"])
+            collection["properties"]["role"] = {"type": "string", "enum": ["collection"]}
+            collection["properties"]["surface"] = {"type": "string", "enum": ["inline"]}
+            collection["properties"]["presentation"] = copy.deepcopy(
+                collection["properties"]["presentation"]["anyOf"][0]
+            )
+            record = copy.deepcopy(contract["$defs"]["view"])
+            record["properties"]["role"] = {"type": "string", "enum": ["details", "editor"]}
+            for name in ("presentation", "presentation_options", "selection_filter", "filter", "empty_state"):
+                record["properties"][name] = {"type": "null"}
+            contract["$defs"]["view"] = {"anyOf": [collection, record]}
         if brief is not None:
             inventory = prototype_requirement_inventory(brief)
             for name, allowed in (
@@ -910,6 +924,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality",
                           "placement": "query_controls, filter and empty_state belong to collection views only. Details and editors have query_controls=[] and filter=null; put search on their owning collection. Equality filters accept only field_types, not long_text, markdown or array fields. Search has field_ref=null; use it for free text rather than adding an unsupported equality filter."},
         "command_ownership": "Every command, including delete or a fixed-value transition, belongs to an editor view. A collection or details view is not a command owner. For a focused action use an editor with surface=modal/side_sheet and the necessary context fields; Core provides its opener and selected record. Editable inputs must be included in both the editor's field_refs and the command's input_field_refs.",
+        "view_roles": "A collection browses repeated records and owns its presentation, query controls, empty state and selection links. Details projects fields from one selected record of the SAME resource; it is not a grouped collection or relationship lookup. An editor owns commands and their inputs. Details/editor have presentation=null, presentation_options=null, selection_filter=null, filter=null, empty_state=null and query_controls=[], field_display=[], scope_filters=[]. Use a collection, not details, for selectable or grouped summaries.",
         "selection_links": "When selecting a row or tree node must change another collection, set that target's selection_filter={field_ref: its foreign key, source_view_ref: the source collection id}. Declare the relationship to the source resource's implicit id. Core owns runtime selection state; do not guess state_ref names. No selection shows all records. A separate dropdown is not the same as following the selected row. Do not also expose a resettable filter on this linked field. Prefer selection_filter over legacy filter for new linked views.",
         "deferred_computations": "When a requested computation or rule is deferred, show plausible representative OUTPUT values and their meaning in an inspectable view. A description or raw inputs alone do not illustrate the requested result. Clearly disclose that these values are fixtures, not live calculations. Do not build data concepts used only by future Automation.",
         "command_guards": "Guards reference fields of the command's own editor resource only. A predicate over several related records is not a single-record field guard; preserve such business rules for Automation with visible representative outcomes.",
@@ -2460,7 +2475,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             view.setdefault("media", None)
     try:
         Draft202012Validator(
-            semantic_prototype_provider_contract(version="v2", locales=_text_locales(candidate["title"]))
+            semantic_prototype_provider_contract(version="v2", locales=_text_locales(candidate["title"]), _view_variants=False)
         ).validate(candidate)
     except ValidationError as exc:
         path = ".".join(str(item) for item in exc.absolute_path)

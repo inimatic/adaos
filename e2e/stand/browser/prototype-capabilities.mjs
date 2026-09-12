@@ -162,6 +162,15 @@ try {
           await reveal(widget)
           const nodes = host(widget.id).locator('.tree-widget__node')
           await expect(nodes.first()).toBeVisible()
+          const expander = host(widget.id).locator('button.t-button').first()
+          if (await expander.count()) {
+            const before = await nodes.filter({ visible: true }).count()
+            await expander.click()
+            await expect.poll(() => nodes.filter({ visible: true }).count()).toBeLessThan(before)
+            await expander.click()
+            await expect.poll(() => nodes.filter({ visible: true }).count()).toBe(before)
+            sample.checks.push({ kind: 'tree-expand-collapse', widget: widget.id })
+          }
           await nodes.first().click()
           await expect(nodes.first()).toHaveClass(/is-selected/)
           sample.checks.push({ kind: 'tree-selection', widget: widget.id, count: await nodes.count() })
@@ -209,13 +218,26 @@ try {
           }
           const text = await host(widget.id).locator('.note-card-meta-item, .list-row-meta-item').evaluateAll(elements => elements.map(element => {
             const style = getComputedStyle(element)
+            const parent = getComputedStyle(element.parentElement)
             return { value: element.textContent, overflow: element.classList.contains('text-truncate') ? 'truncate' : 'wrap',
-              whiteSpace: style.whiteSpace, align: style.textAlign, width: element.clientWidth, scrollWidth: element.scrollWidth }
+              whiteSpace: style.whiteSpace, align: style.textAlign, requestedAlign: element.style.textAlign,
+              width: element.clientWidth, outerWidth: element.getBoundingClientRect().width,
+              parentWidth: element.parentElement.clientWidth - parseFloat(parent.paddingLeft) - parseFloat(parent.paddingRight),
+              scrollWidth: element.scrollWidth }
           }))
+          sample.checks.push({ kind: 'text-measurements', widget: widget.id, text })
           if (text.some(item => item.overflow === 'wrap' && (item.whiteSpace === 'nowrap' || item.scrollWidth > item.width + 1))) {
             throw new Error('Wrapping metadata is clipped horizontally')
           }
-          sample.checks.push({ kind: 'text-display', widget: widget.id, text })
+          if (text.some(item => item.requestedAlign && item.align !== item.requestedAlign
+            || ['center', 'end'].includes(item.requestedAlign) && item.outerWidth < item.parentWidth - 1)) {
+            throw new Error('Metadata alignment does not use the available width')
+          }
+          const titles = await host(widget.id).locator('.note-card-title.text-truncate').evaluateAll(elements => elements.map(element => ({
+            value: element.textContent, title: element.getAttribute('title'), whiteSpace: getComputedStyle(element).whiteSpace,
+          })))
+          if (titles.some(item => item.whiteSpace !== 'nowrap' || item.value !== item.title)) throw new Error('Truncated title loses its full text')
+          sample.checks.push({ kind: 'text-display', widget: widget.id, text, titles })
           const scope = view.scope_filters?.find(filter => typeof filter.value === 'boolean')
           const editorEntry = scope && Object.entries(application.modals || {}).flatMap(([modalId, modal]) =>
             (modal.schema?.widgets || []).map(form => ({ modalId, form }))).find(({ form }) => form.type === 'ui.form'

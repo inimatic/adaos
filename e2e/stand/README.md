@@ -128,3 +128,12 @@ It creates no application, retains exact request/response and requires
 `ENV_TYPE=dev`. A quota failure is inconclusive for schema support. Generation,
 artifact replay, regrading, browser review and mutation probes remain distinct
 evidence classes; none is a substitute for another.
+
+`checkpoint-projects.py --space dev|workspace --subnet <active-subnet> --output
+e2e/artifacts/<new-batch>` uses the public `adaos [dev] project push` chain for
+each eligible project. It is local-only unless `--publish` is explicit; Workspace
+eligibility is restricted to projects in the already-fetched `origin/main`.
+Fetch/review that remote first. `--project` narrows the set and `--exclude` removes
+an explicitly separately handled project. `--resume` reuses the identical batch,
+skips successful receipts and retains each failed attempt's UTF-8 logs. It does
+not approve a Prototype, promote test applications or push AdaOS/Client Git.

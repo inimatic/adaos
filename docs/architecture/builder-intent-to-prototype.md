@@ -204,6 +204,14 @@ choice field. Ordering within a lane is not implied. A chart plots numeric
 records; it must not manufacture calculated aggregates or replace missing values
 with zero. Unsupported behavior remains an explicit capability gap.
 
+Provider output uses separate collection and record-view schema alternatives.
+Collections require a presentation and inline placement. Record details/editors
+cannot declare collection presentations, presentation options, query filters,
+selection links or collection-empty states. This prevents incompatible shapes at
+generation time without introducing application-specific instructions. Retained
+authoring documents still receive explicit compiler diagnostics; schema validity
+alone does not prove relationships, usable controls or task completeness.
+
 `view.section` optionally partitions views into tabs or application-settings
 modals; absent/null sections remain shared. Section identity, title and kind
 must agree across their member views. This reuses normal page state, visibility,

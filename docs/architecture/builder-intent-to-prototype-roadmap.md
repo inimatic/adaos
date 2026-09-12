@@ -1620,11 +1620,19 @@ cohort with their own request, schema, model settings and browser evidence.
   test the inspection/check-item example without domain-specific compiler rules.
   Run 10 browser verifies both linked table levels and the separate inspection
   editor on 1440/390px. Hidden Ionic modal hosts do not count as opened dialogs.
-- [ ] `[must]` Expose per-view text wrapping/truncation and alignment, preserving
+- [x] `[must]` Expose per-view text wrapping/truncation and alignment, preserving
   complete values and an accessible route to any deliberately truncated text.
-- [ ] `[must]` Qualify tabs, modals, hierarchical navigation, accordion disclosure,
+  Fresh capability run 07 passes primary generation and 1440/390px browser checks:
+  wrapped descriptions, truncated titles with complete title text, centered labels
+  and end-aligned numbers. Geometry compares border boxes with available content
+  width, not a badge's border-excluding clientWidth with its parent's full width.
+- [x] `[must]` Qualify tabs, modals, hierarchical navigation, accordion disclosure,
   numeric charts and board drag/move through schema, lowering and browser tasks.
   A rendered control alone does not qualify persistence or drag semantics.
+  Run 05 includes tree expand/collapse, selection-consumer links, accordion toggle,
+  scoped Favorites mutation/reload and actual settings changes on both viewports.
+  Desktop board dragging and compact Move menu are separate proofs; touch dragging,
+  within-lane ordering and arbitrary draggable canvases are not qualified.
 - [x] `[must]` Separate permanent typed collection scope from resettable filters.
   `scope_filters` compiles to literal queries, participates in state evidence,
   and rejects duplicate, invalid or conflicting fields (six regression tests).
@@ -1651,6 +1659,21 @@ cohort with their own request, schema, model settings and browser evidence.
   difficult cases. Record initial success, repair success, task success and cost.
 - [ ] `[must]` Audit generation inputs and Core/Client changes for subject-scoped
   branches, fixture leakage and rubric leakage before accepting the tranche.
+- [x] `[must]` Separate collection/record presentation shapes in the
+  provider contract; preserve useful structured diagnostics for retained invalid
+  candidates. Run 11's budget repair repeats an accordion on a record-details view.
+  Nested alternatives now reject that combination before generation. Full
+  semantic validation remains mandatory; reference and task correctness cannot
+  be guaranteed by this structural constraint.
+- [ ] `[should]` Extend typed selection links to reverse foreign-key lookup and
+  invalidate dependent selections when their ancestor changes. Test both query
+  identity and editor availability; highlighted stale descendants are not proof.
+- [ ] `[should]` Profile local resource queries independently of LLM waits.
+  Browser run 05 observed roughly 0.5-3 seconds for local queries. Do not turn
+  a longer browser wait into a claim that query latency is acceptable.
+- [ ] `[should]` Calibrate grader consistency on retained stage-boundary examples:
+  run 11 inspection attempt 2 describes the Prototype allowance as satisfied but
+  emits `partial`. Preserve the original result; any regrade is separate evidence.
 - [x] `[should]` Discuss a finite vocabulary of composable layout strategies,
   distinguishing user-selectable preferences from hard acceptance requirements.
   See the canonical architecture's composable layout policy below its UX guidance.
@@ -1684,7 +1707,7 @@ baseline, not snapshot the transient empty response.
 - [x] `[must]` Fix technological transcript storage without a Router subscriber;
   use opt-in durable scoped IO append, preserve thread context, avoid per-project
   E2E message-ID reuse, and report scheduled versus persisted honestly. SDK and
-  Builder tests pass; the browser-visible end-to-end checkbox above remains open.
+  Builder tests pass; subsequent run 04 closes the browser-visible check above.
 - [x] `[must]` Remove false operational obligations from descriptive empty-search
   state clauses in the Brief compiler. Runs 01/03 required unnecessary full
   semantic repairs for a second search binding. Preserve the state requirement
@@ -1697,8 +1720,9 @@ query disclosure, date filtering/reset and five numeric graph points (including
 zero) on both viewports. Earlier probe failures caught unrelated requests and
 remain retained alongside the corrected harness result. Library tree selection
 revealed missing selection-state display wiring; compiler lowering now emits
-the Client's actual `selectedStateKey` and `selectionMode` inputs. Fresh tree,
-fixed-subset, settings and drag/persistence qualification is still pending.
+the Client's actual `selectedStateKey` and `selectionMode` inputs. At that
+checkpoint, fresh tree, fixed-subset, settings and drag/persistence qualification
+was still pending; subsequent run 05 evidence is recorded below.
 
 Run 04 reached 3/3 generation/validation/grading passes (grader v15). The library
 passed on its primary answer; board/readings needed a full repair. Browser checks
@@ -1749,6 +1773,39 @@ CRUD/search keywords. The retained answer replays successfully; that is compiler
 evidence, not a relabeled successful fresh run. Fresh text-policy verification
 remains open. Broad local Builder tests: 732 passed, four explicit live-grader
 probes skipped. Client: 71 focused tests; generic boundary/inventory checks pass.
+
+Matched run 11 completed 16 attempts: nine primary candidates compiled, five more
+compiled after repair, and 12 passed the task grader. The original 12/16 result
+is retained, not an eight-archetype reliability claim. Appointments failed once
+on a relationship/label repair and once on the requested client-detail task;
+budget failed on mixed record/collection presentation; inspection's second grade
+was inconsistent at the explicit Prototype/Automation boundary. The other five
+archetypes passed both attempts. Model calls: 23; fresh/cached input:
+65,672/126,464 tokens; output: 124,119 including 49,920 reasoning tokens.
+Median total case time: 77.83s; observed maximum: 128.37s. Grading is separate:
+14 calls, 196,401 fresh input and 16,622 output tokens.
+
+Input inspection confirmed the primary dynamic keys are instruction,
+output_locales, prototype_brief, scenario_id and title, without rubrics or prior
+application implementations. User design prompts in this cohort are about
+288-413 characters; capability prompts are 519-593 characters. This is not a
+matched short/moderate prompt experiment and cannot establish a length effect.
+
+The ordinary selected-GPT-5 semantic path previously defaulted to minimal/8000,
+unlike the explicit E2E low/128000 settings. Its default now matches the evaluated
+low/128000 regime; explicit metadata/environment limits remain authoritative.
+The legacy environment clamp must not silently turn an explicit semantic GPT-5
+limit of 32000 into 12000. This change does not resolve server-selected model
+identity when the local request leaves the model unspecified; effective-option
+telemetry and profile resolution remain required.
+
+Builder pre-promotion comparison found no Workspace-only handler functions or
+owned/dependency components. DEV adds context/repair contracts, locale selection,
+durable Conversation and a sortable/reloadable project table. Both source UIs
+already use evidence-bearing accept_prototype instead of direct stabilization.
+The parity contract now expresses that forward replacement and requires the
+review modal, while its reference profile retains the old binding. Both current
+sources pass; this comparison does not itself assert a completed promotion.
 
 DEV Builder Conversation ingress changes were tested and locally checkpointed
 as `builder@0.2.116`, source

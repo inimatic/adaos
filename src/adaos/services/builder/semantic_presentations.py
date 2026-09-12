@@ -38,7 +38,9 @@ def presentation_findings(document: Mapping) -> list[dict]:
         visible = view["field_refs"]
         presentation = view.get("presentation")
         options = view.get("presentation_options") or {}
-        if options and presentation not in EXTENDED_PRESENTATIONS:
+        if options and view['role'] != 'collection':
+            reject("Record details/editor views require presentation_options=null; use a collection for grouped records")
+        elif options and presentation not in EXTENDED_PRESENTATIONS:
             reject("presentation_options require board, tree, chart or accordion")
         if view.get("field_display") and (view["role"] != "collection" or presentation not in {"list", "table", "cards", "accordion"}):
             reject("field_display requires a list, table, cards or accordion collection")

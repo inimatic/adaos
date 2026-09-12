@@ -920,6 +920,41 @@ def test_provider_references_have_no_sibling_keywords(version) -> None:
         assert semantic_prototype_generation_guidance()["relationships"]
 
 
+@pytest.mark.parametrize("role", ["details", "editor"])
+def test_provider_record_views_cannot_claim_collection_presentations(role) -> None:
+    import jsonschema
+
+    _, semantic = _multi_resource_fixture()
+    view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == role))
+    view.update(surface="inline", media=None, presentation_options=None,
+                field_display=[], section=None, scope_filters=[], selection_filter=None)
+    contract = semantic_prototype_provider_contract(version="v2")
+    validator = jsonschema.Draft202012Validator({"$ref": "#/$defs/view", "$defs": contract["$defs"]})
+    validator.validate(view)
+    view["presentation"] = "accordion"
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(view)
+    view["presentation"] = None
+    view["selection_filter"] = {"field_ref": "owner", "source_view_ref": "people"}
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(view)
+
+
+def test_provider_collection_requires_a_presentation_and_inline_surface() -> None:
+    import jsonschema
+
+    _, semantic = _multi_resource_fixture()
+    view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == "collection"))
+    view.update(surface="inline", media=None, presentation_options=None,
+                field_display=[], section=None, scope_filters=[], selection_filter=None)
+    contract = semantic_prototype_provider_contract(version="v2")
+    validator = jsonschema.Draft202012Validator({"$ref": "#/$defs/view", "$defs": contract["$defs"]})
+    validator.validate(view)
+    view["presentation"] = None
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(view)
+
+
 def test_semantic_model_contract_is_strict_and_bounded() -> None:
     contract = semantic_prototype_candidate_contract()
 

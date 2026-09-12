@@ -48,7 +48,7 @@ def test_parity_inspector_accepts_complete_recovered_contract() -> None:
     }
     bindings = list(CONTRACT["required_bindings"]) + list(
         CONTRACT["forward_required_bindings"]
-    )
+    ) + list(CONTRACT.get("forward_binding_replacements", {}).values())
     project_tree["actions"] = [
         (
             {"type": "stream", "kind": "stream", "receiver": item.removeprefix("stream:")}
@@ -58,6 +58,7 @@ def test_parity_inspector_accepts_complete_recovered_contract() -> None:
         for item in bindings
     ]
     modals = {item: {"schema": {"widgets": []}} for item in CONTRACT["required_modal_ids"]}
+    modals.update({item: {"schema": {"widgets": []}} for item in CONTRACT.get("forward_required_modal_ids", [])})
     modals["new-project"]["schema"]["widgets"] = [
         {
             "id": "new-project-form",
@@ -83,6 +84,22 @@ def test_parity_inspector_accepts_complete_recovered_contract() -> None:
     }
 
     assert not any(inspect(webui, CONTRACT).values())
+
+    project_tree["actions"] = [
+        item for item in project_tree["actions"]
+        if item.get("target") != "builder_sdk_control_skill.transition_workflow"
+    ]
+    assert not any(inspect(webui, CONTRACT).values())
+    assert "builder_sdk_control_skill.transition_workflow" in inspect(
+        webui, CONTRACT, include_forward=False
+    )["missing_bindings"]
+    project_tree["actions"] = [
+        item for item in project_tree["actions"]
+        if item.get("target") != "builder_sdk_control_skill.accept_prototype"
+    ]
+    assert "builder_sdk_control_skill.accept_prototype" in inspect(webui, CONTRACT)["missing_bindings"]
+    del modals["prototype-review"]
+    assert "prototype-review" in inspect(webui, CONTRACT)["missing_modals"]
 
 
 def test_parity_inspector_reports_schema_valid_control_plane_loss() -> None:

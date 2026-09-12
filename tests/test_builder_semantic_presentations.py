@@ -146,6 +146,16 @@ def test_selection_filter_resolves_source_action_and_preserves_independent_queri
     assert result['semantic_document']['views'][0]['selection_filter'] == view['selection_filter']
 
 
+def test_record_presentation_error_explains_the_role_not_a_lost_presentation():
+    from adaos.services.builder.semantic_presentations import presentation_findings
+
+    _, semantic = _multi_resource_fixture()
+    view = next(view for view in semantic['views'] if view['role'] == 'details')
+    view['presentation_options'] = {'group_field_ref': view['field_refs'][0]}
+    findings = presentation_findings(semantic)
+    assert any('use a collection for grouped records' in item['detail'] for item in findings)
+
+
 @pytest.mark.parametrize('broken', ['missing_source', 'chart_source', 'wrong_key', 'filter_conflict', 'editor_target'])
 def test_selection_filter_rejects_unexecutable_links(broken):
     brief, semantic = _multi_resource_fixture()
