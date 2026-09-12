@@ -630,6 +630,7 @@
         "ui.table",
         "ui.form",
         "ui.actions",
+        "ui.queryToolbar",
         "ui.jsonViewer",
         "item.textEditor",
         "item.codeViewer",
@@ -920,6 +921,10 @@
           }
         },
         {
+          "if": { "properties": { "type": { "const": "ui.queryToolbar" } } },
+          "then": { "properties": { "inputs": { "$ref": "#/$defs/queryToolbarInputs" } }, "required": ["inputs"] }
+        },
+        {
           "if": { "properties": { "type": { "const": "input.toggle" } } },
           "then": {
             "properties": {
@@ -930,6 +935,34 @@
       ]
     },
 
+    "queryToolbarInputs": {
+      "type": "object", "additionalProperties": false, "required": ["controls"],
+      "properties": {
+        "controls": {
+          "type": "array", "minItems": 1, "maxItems": 12,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["id", "label", "kind", "stateKey", "inputType"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "label": { "type": "string" }, "label_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+              "kind": { "enum": ["search", "filter"] },
+              "stateKey": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+              "inputType": { "enum": ["search", "text", "date", "number", "select"] },
+              "options": { "type": "array", "items": {
+                "type": "object", "additionalProperties": false, "required": ["value", "label"],
+                "properties": {
+                  "value": { "type": ["string", "number", "boolean"] },
+                  "label": { "type": "string" }, "label_i18n": { "$ref": "#/$defs/i18nTextSpec" }
+                }
+              } }
+            },
+            "allOf": [{ "if": { "properties": { "inputType": { "const": "select" } } },
+                        "then": { "required": ["options"] } }]
+          }
+        }
+      }
+    },
     "registry": {
       "type": "object",
       "additionalProperties": true,
@@ -1269,6 +1302,10 @@
               "inputs": { "$ref": "#/$defs/detailsInputs" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "const": "ui.queryToolbar" } } },
+          "then": { "properties": { "inputs": { "$ref": "#/$defs/queryToolbarInputs" } }, "required": ["inputs"] }
         },
         {
           "if": { "properties": { "type": { "enum": ["ui.actions", "input.commandBar"] } } },
@@ -1768,6 +1805,7 @@
         "showCounts": { "type": "boolean" },
         "compact": { "type": "boolean" },
         "dragDrop": { "type": "boolean" },
+        "reorderWithinLane": { "type": "boolean" },
         "loadingText": { "type": "string" },
         "loadingText_i18n": { "$ref": "#/$defs/i18nTextSpec" },
         "emptyText": { "type": "string" },

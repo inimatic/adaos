@@ -224,6 +224,19 @@
       "postconditions": ["Every declared button has an executable or explicitly disabled action contract."]
     },
     {
+      "id": "ui.queryToolbar",
+      "kind": "component",
+      "title": "Collection search and filters",
+      "summary": "Compact page-scoped query controls with filter disclosure, active values and atomic reset.",
+      "aliases": { "en": ["search", "filters", "query toolbar"], "ru": ["поиск", "фильтры"] },
+      "manifest": { "widget_type": "ui.queryToolbar" },
+      "data_shape": { "kind": "none" },
+      "events": [],
+      "responsive": { "desktop": "search and commands in one row, expandable filter grid", "compact": "wraps within available width" },
+      "interactions": { "state": "Each inputs.controls entry binds one stateKey in the current page scope. Bind the collection resourceQuery to the same $state key. Date commits on native change; numbers and boolean options retain their types." },
+      "postconditions": ["Reset clears all owned query keys in one update without clearing unrelated page state."]
+    },
+    {
       "id": "input.toggle",
       "kind": "component",
       "title": "Boolean toggle",

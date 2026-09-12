@@ -50,6 +50,8 @@ def test_submit_request_admits_intent_and_brief_before_execution() -> None:
     assert payload["_meta"]["prototype_brief_digest"].startswith("sha256:")
     assert payload["_meta"]["prototype_intent"]["statement"].startswith("List")
     assert payload["_meta"]["prototype_brief"] == result["sdk"]["brief"]
+    assert payload["_meta"]["prototype_request_source"] == "e2e"
+    assert payload["_meta"]["message_id"] == "message-1"
     assert result["sdk"]["intent"]["source"]["kind"] == "e2e"
     assert result["sdk"]["execution_adapter"] == "fake.prototype.v1"
     assert [item["kind"] for item in result["sdk"]["brief"]["operations"]] == [

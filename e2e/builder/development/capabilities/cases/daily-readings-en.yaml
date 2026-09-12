@@ -1,0 +1,49 @@
+schema: adaos.builder.e2e_case.v1
+case_id: daily-readings-en
+title: "Daily readings"
+description: Human-specified behavior for generic UI capability qualification.
+locale: en
+tags: [visible, capabilities]
+requirements:
+  primary_jobs:
+    - statement: "Edit recorded measurements"
+      acceptance: "Create and update persist date, numeric measurement and note on the targeted record."
+    - statement: "Filter by calendar date"
+      acceptance: "Selecting a date filters records and clearing restores them."
+    - statement: "Switch table and graph"
+      acceptance: "Tabs provide table and real numeric line graph of the same measurement records."
+    - statement: "Inspect plotted values"
+      acceptance: "Graph and readable numeric list correspond to recorded values, including zero, without invented aggregates."
+    - statement: "Read notes and numbers"
+      acceptance: "Long notes wrap and remain complete; numeric table cells align to the right."
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: "Create a new application \"Daily readings ${case_instance_id}\" for recording a daily measurement."
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: "Build a working first version with two tabs: Readings and Trend. Readings has a compact search/date filter area and a table with day, numeric measurement and a note. I can add and edit a reading in a separate window. Choosing a date in the calendar must filter the table. Trend is a line graph of the recorded values by day, with a readable list of the plotted numbers. Do not invent totals or projections. Show several representative dates and values, including zero, and long notes that wrap rather than being cut off. Align numeric table values to the right. Include an empty search result."
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+  - id: grade
+    type: prototype.grade
+    input: {scenario_id: $steps.create.scenario_id, threshold: 0.85}
+    expect: {values: {ok: true, passed: true}}
+cleanup: {policy: always, retain_on_failure: true}

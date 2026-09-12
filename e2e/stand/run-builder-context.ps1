@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$RunId,
     [ValidateSet('minimal','low','medium','high')][string]$Effort = 'low',
     [ValidateRange(1,20)][int]$Repetitions = 2,
+    [string]$Suite = 'e2e/builder/development/archetypes/suite.yaml',
     [string[]]$Cases = @()
 )
 $ErrorActionPreference = 'Stop'
@@ -16,7 +17,7 @@ try {
     $env:ADAOS_BUILDER_LLM_REPAIR_JOB_TIMEOUT_S = '600'
     $env:PYTHONIOENCODING = 'utf-8'
     $arguments = @('-c', 'from adaos.apps.cli.app import app; app()', 'builder', 'e2e',
-        'e2e/builder/development/archetypes/suite.yaml', '--run-id', $RunId,
+        $Suite, '--run-id', $RunId,
         '--repetitions', $Repetitions, '--browser', 'off')
     foreach ($case in $Cases) { $arguments += @('--case', $case) }
     & .venv/Scripts/python.exe @arguments

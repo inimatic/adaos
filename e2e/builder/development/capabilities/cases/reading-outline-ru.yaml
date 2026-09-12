@@ -1,0 +1,49 @@
+schema: adaos.builder.e2e_case.v1
+case_id: reading-outline-ru
+title: "Читальный каталог"
+description: Human-specified behavior for generic UI capability qualification.
+locale: ru
+tags: [visible, capabilities]
+requirements:
+  primary_jobs:
+    - statement: "Навигация по папкам"
+      acceptance: "Раскрываемое дерево содержит вложенные папки; выбор папки показывает связанные материалы."
+    - statement: "Редактирование материалов"
+      acceptance: "Добавление и редактирование доступны в отдельном окне и сохраняют данные."
+    - statement: "Избранные материалы"
+      acceptance: "Отметка избранного сохраняется, отдельная вкладка показывает только отмеченные материалы."
+    - statement: "Сворачиваемые группы"
+      acceptance: "На вкладке избранного группы по автору можно независимо раскрывать и сворачивать."
+    - statement: "Читаемые описания и поиск"
+      acceptance: "Длинные описания доступны полностью через перенос строк; поиск изменяет набор материалов."
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: "Создай новое приложение \"Читальный каталог ${case_instance_id}\"."
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: "Сделай рабочий каталог материалов для чтения. Слева нужно раскрываемое дерево папок с вложенными папками, а рядом материалы выбранной папки. У материала есть название, автор, краткое описание и отметка избранного. Добавление и редактирование материала открывай в отдельном окне. На отдельной вкладке Избранное покажи отмеченные материалы группами по автору, чтобы каждую группу можно было свернуть и развернуть. Нужен поиск по материалам. Длинное описание должно переноситься на несколько строк. Добавь правдоподобные примеры с двумя уровнями папок и состояние пустой папки."
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+  - id: grade
+    type: prototype.grade
+    input: {scenario_id: $steps.create.scenario_id, threshold: 0.85}
+    expect: {values: {ok: true, passed: true}}
+cleanup: {policy: always, retain_on_failure: true}

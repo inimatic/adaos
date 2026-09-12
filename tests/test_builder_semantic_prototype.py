@@ -2298,8 +2298,60 @@ def test_numeric_filter_compiles_to_number_input() -> None:
     view = next(view for view in semantic["views"] if view["resource_ref"] == resource["id"] and view["role"] == "collection")
     view["query_controls"] = [{"id": "number-filter", "kind": "filter", "field_ref": number["id"], "label": _text("quantity", "Quantity", "Количество")}]
     compiled = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
-    widget = next(widget for widget in compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["widgets"] if widget["id"] == "query-number-filter")
-    assert widget["inputs"]["inputType"] == "number"
+    page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
+    widget = next(widget for widget in page["widgets"] if widget["id"] == f"queries-{view['id']}")
+    control = widget["inputs"]["controls"][0]
+    assert control["inputType"] == "number"
+    assert control["stateKey"] == "query_number_filter"
+    assert compiled["source_map"]["query:number-filter"] == [
+        f"ui.application.desktop.pageSchema.widgets.@queries-{view['id']}.inputs.controls.@query-number-filter"
+    ]
+    collection = next(widget for widget in page["widgets"] if widget["id"] == view["id"])
+    assert collection["dataSource"]["query"]["filters"][number["id"]] == "$state.query_number_filter"
+
+
+def test_query_toolbar_preserves_typed_options_and_search_binding() -> None:
+    brief, semantic = _multi_resource_fixture()
+    view = next(view for view in semantic["views"] if view["role"] == "collection")
+    view["query_controls"] = [
+        {"id": "find", "kind": "search", "field_ref": None, "label": _text("find", "Find", "Поиск")},
+        {"id": "status-filter", "kind": "filter", "field_ref": "result", "label": _text("status", "Status", "Статус")},
+    ]
+    compiled = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    widgets = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    toolbar = next(widget for widget in widgets if widget["type"] == "ui.queryToolbar")
+    search, selector = toolbar["inputs"]["controls"]
+    assert search["inputType"] == "search"
+    assert selector["inputType"] == "select"
+    assert selector["options"][0]["value"] == ""
+    assert len(selector["options"]) > 1
+    assert not any(widget["id"].startswith("query-") for widget in widgets)
+    assert next(widget for widget in widgets if widget["id"] == view["id"])["dataSource"]["query"]["search"] == "$state.query_find"
+
+
+def test_collection_selection_keeps_related_context_without_opening_editor() -> None:
+    from adaos.services.builder.semantic_prototype import _compile_editor_surfaces
+
+    # The same selection drives another resource's collection, not only an editor.
+    document = {"views": [
+        {"id": "parents", "resource_ref": "parents", "role": "collection", "region_role": "primary"},
+        {"id": "children", "resource_ref": "children", "role": "collection", "region_role": "supporting",
+         "filter": {"state_ref": "selected_parents_id", "field_ref": "parent_id"}},
+        {"id": "edit", "resource_ref": "parents", "role": "editor", "region_role": "primary", "surface": "modal"},
+    ], "commands": [{"view_ref": "edit", "kind": "update"}]}
+    webui = {"ui": {"application": {"desktop": {"pageSchema": {"widgets": [
+        {"id": "parents", "area": "primary", "actions": [{"on": "select", "type": "updateState"}]},
+        {"id": "children", "area": "supporting"},
+        {"id": "edit", "area": "primary", "title": "Edit", "title_i18n": {"key": "edit"},
+         "inputs": {"selectedStateKey": "selected_parents_id"}},
+    ]}}}}}
+    _compile_editor_surfaces(document, webui, {}, {"en": {}})
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    parent = next(widget for widget in widgets if widget["id"] == "parents")
+    assert not any(action["type"] == "openModal" for action in parent["actions"])
+    toolbar = next(widget for widget in widgets if widget["id"] == "open-edit")
+    assert [button["id"] for button in toolbar["inputs"]["buttons"]] == ["edit"]
+    assert toolbar["inputs"]["buttons"][0]["enabledIf"] == "$state.selected_parents_id !== ''"
 
 
 def test_record_lock_and_attachment_capture_share_typed_provider_contracts() -> None:

@@ -4,7 +4,7 @@ Status: corrective target architecture. The current implementation is a
 transitional, recipe-guided prototype path and does not yet satisfy this
 contract.
 
-Last reviewed: 2026-09-11.
+Last reviewed: 2026-09-12.
 
 This page owns how Builder turns an ordinary user request into an executable
 Prototype. [AdaOS Builder](builder.md) continues to own the complete governed
@@ -172,7 +172,43 @@ Semantic editor views select `inline`, `modal` or `side_sheet`; omitted surfaces
 on existing documents retain inline behavior. A short focused edit can use a
 modal, contextual editing can use a side sheet, and a persistent work area can
 remain inline. The choice itself is not a gate. Collections/details currently
-remain inline; broader navigation and large-project orchestration are separate.
+remain inline inside their owning section; large-project orchestration is separate.
+
+### Small-Prototype Content Composition
+
+Presentation is a typed capability, not a product recipe or a compulsory design
+checklist. Alongside list/table/cards, a collection may request a lane board,
+parent-linked tree, numeric chart, or expandable grouped collection. The semantic
+contract names record fields; Core maps them to existing Client renderers and
+checks their actual data/event contracts. A board move persists its declared
+choice field. Ordering within a lane is not implied. A chart plots numeric
+records; it must not manufacture calculated aggregates or replace missing values
+with zero. Unsupported behavior remains an explicit capability gap.
+
+`view.section` optionally partitions views into tabs or application-settings
+modals; absent/null sections remain shared. Section identity, title and kind
+must agree across their member views. This reuses normal page state, visibility,
+modal and resource-operation contracts, not a parallel renderer. Settings are
+real prototype data/editing surfaces and do not grant external effects or replace
+the shell's device/assistant settings. Section composition is useful on small
+applications without enabling deferred large-project orchestration.
+
+Core groups a collection's query controls into one responsive query toolbar.
+Search stays available; additional filters use explicit disclosure with visible
+active values and an atomic reset of owned page-state keys. Native date changes
+commit without requiring focus loss. False and zero are values, not empty filters.
+Selection that drives a related collection must not also open an editor without
+an explicit command. Short isolated edit tasks may still use direct row editing.
+
+Visible text wraps by default. `field_display` can opt into truncation or choose
+start/center/end alignment per list/card/table field without changing stored data.
+Truncated content must remain inspectable. Model guidance explains these choices
+without requiring every prototype to use every component. Runtime qualification
+must cover desktop/mobile behavior, not only schema admission.
+
+SDK/E2E turns carry explicit ingress provenance and stable message identity.
+Builder projects these instructions into the same project topic as its results;
+browser/voice ingress already recorded by the chat transport is not duplicated.
 
 Core compiles openers, record selection, typed fields, separate command IDs,
 availability guards and source maps. The Client hydrates only the selected

@@ -1590,6 +1590,57 @@ assumptions inferred from a provider name or a valid JSON response.
 
 ## R9. Cutover And Cleanup
 
+### Small-Prototype Capability Qualification (2026-09-12)
+
+This tranche extends small prototypes, not deferred large-project orchestration.
+Keep generation generic and use human behavioral prompts, never renderer IDs.
+Retain the existing eight-archetype cohort; extra capability cases form a separate
+cohort with their own request, schema, model settings and browser evidence.
+
+- [x] `[must]` Implement the foundation contracts: native date commit, typed query
+  toolbar, explicit related-context editing, text display policy, board/tree/chart/
+  accordion lowering and optional tab/settings sections. Offline compiler and
+  component tests are not browser or fresh-generation qualification.
+- [x] `[must]` Preserve SDK/E2E prompt provenance for Builder project Conversation;
+  exclude already-recorded browser ingress and retain idempotent message identity.
+- [x] `[must]` Verify the restored GPT-5 provider with a structured-output canary:
+  nested alternatives and array/string/number bounds passed through Root in
+  `structured-bounds-gpt5-20260912-02`. This does not qualify new UI generation.
+
+- [ ] `[must]` Fix date filters for native calendar commits as well as keyboard
+  edits, without duplicate blur actions or changes to explicit manual commit.
+- [ ] `[must]` Provide a compact, extensible collection query toolbar with
+  responsive disclosure, active-filter visibility and reset; reuse the same
+  primitive for lists, tables and other collection presentations.
+- [ ] `[must]` Separate row selection, related-detail navigation and editing.
+  Declare explicit actions when selection has multiple useful consequences;
+  test the inspection/check-item example without domain-specific compiler rules.
+- [ ] `[must]` Expose per-view text wrapping/truncation and alignment, preserving
+  complete values and an accessible route to any deliberately truncated text.
+- [ ] `[must]` Qualify tabs, modals, hierarchical navigation, accordion disclosure,
+  numeric charts and board drag/move through schema, lowering and browser tasks.
+  A rendered control alone does not qualify persistence or drag semantics.
+- [ ] `[must]` Expose application settings through the existing host contract;
+  test their actual effect and persistence scope rather than a Settings heading.
+- [ ] `[must]` Make Builder Conversation retain project-scoped user instructions
+  and generation results, including technological E2E entrypoints, without
+  inheriting another project's transcript or duplicating chat messages.
+- [ ] `[should]` Inspect existing prototype inheritance/revision isolation before
+  consolidating test applications. Reuse one project only if current source,
+  runtime data and evaluation identities already isolate revisions safely.
+- [ ] `[must]` Finish known relationship/lookup and grader-observability defects,
+  then run matched GPT-5/low repeats and compare short/moderate prompts on the
+  difficult cases. Record initial success, repair success, task success and cost.
+- [ ] `[must]` Audit generation inputs and Core/Client changes for subject-scoped
+  branches, fixture leakage and rubric leakage before accepting the tranche.
+- [ ] `[should]` Discuss a finite vocabulary of composable layout strategies,
+  distinguishing user-selectable preferences from hard acceptance requirements.
+
+Design references: [Carbon data-table usage](https://carbondesignsystem.com/components/data-table/usage/)
+separates row, selection and toolbar actions; [PatternFly toolbar guidance](https://www.patternfly.org/components/toolbar/design-guidelines/)
+provides responsive grouping and filter disclosure. Adapt these generic patterns
+to AdaOS rather than introducing either system's component framework.
+
 Promotion evidence (2026-09-11): the pre-promotion comparison found no
 Workspace-only product capability that needed to be carried forward. The four
 Workspace-only helpers were shopping-list, todo-list, and Applications-specific

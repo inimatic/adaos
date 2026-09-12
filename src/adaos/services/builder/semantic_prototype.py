@@ -20,6 +20,7 @@ from .prototype_context import prototype_state_requirements, prototype_requireme
 from .prototype_stage import automation_obligations, PROTOTYPE_STAGE_CONTRACT
 from .prototype_contracts import STATE_PROOF_RULES
 from .workflow import BuilderWorkflowError
+from .semantic_presentations import legacy_view, view_extras, presentation_findings, compile_presentations
 
 
 FILTER_VALUE_TYPES = frozenset({"boolean", "choice", "date", "number", "short_text"})
@@ -817,6 +818,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         contract["$defs"]["relationship"]["required"].append("label_field_refs")
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
+        contract["$defs"]["view"]["required"].extend(["presentation_options", "field_display", "section"])
         if brief is not None:
             inventory = prototype_requirement_inventory(brief)
             for name, allowed in (
@@ -912,6 +914,10 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "interactions": "Reuse local CRUD, live relationship selectors, query controls, confirmation and field guards. Commands belong to an editor; selection/details require a collection, but lookup-only resources need no standalone view. Foreign-key collections need a reachable relationship filter when the workflow requires inspecting one selected item's linked records; an unfiltered list of raw IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
         "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references: sample://image, sample://video, sample://document (downloadable text), sample://unavailable. Do not invent local paths for files that do not exist. attachment/attachments fields capture real local bytes, store references and render download links in details; documents do not require mediaKey or an image viewer. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading.",
         "ux_recommendations": {
+            "collection_presentations": "Use board for lanes of a choice field; presentation_options.draggable enables persisted moves between lanes, not ordering inside a lane. Use tree for nullable parent record ids, accordion for expandable groups, chart for one numeric point per record (group_field_ref=x, value_field_ref=y). Charts do not calculate aggregates. Plain lists/tables/cards remain valid choices. These are capabilities, not a mandatory checklist.",
+            "sections": "A view.section optionally groups related views into a tab or an application settings modal. Reuse the same id, kind and title within one section; null keeps shared content. Prefer tabs for distinct tasks and modals for focused editing. Settings contain real local resources/commands, not automatically implemented external effects. Do not invent additional sections just to fill the screen.",
+            "query_toolbar": "Each collection's query_controls compile into one compact responsive search/filter toolbar with disclosure, active values and reset. Do not create separate resources or views for filter widgets.",
+            "text": "Text wraps by default in list/card metadata and table cells. field_display can explicitly request wrap or truncate and start/center/end alignment per visible field. Keep essential values readable; use truncation only for compact summaries with details available.",
             "editor_inputs": "Only fields consumed by this editor's command input_field_refs are writable here. Other listed fields are read-only context; fixed_values are not editable inputs. A field may be writable in one editor and read-only in another.",
             "layout": "layout=flow stacks regions; split/focus_detail places primary beside supporting on desktop, stacked on mobile; grid groups equal-priority regions. region_role is actual placement: primary for the main task, supporting for selected details or secondary work, actions for a footer. Putting every view in primary creates one long column even in split. Prefer one primary collection and contextual details; reserve flow for genuinely linear work. Supporting is a real region, not merely a label.",
             "editor_surface": "Use surface=modal for a short focused create/edit task, side_sheet when surrounding context matters, inline for a persistent work area. Collections and details stay inline. The compiler owns openers, selection, form hydration, save/error and dismissal. No surface is mandatory for acceptance.",
@@ -2434,6 +2440,9 @@ def _canonicalize_semantic_prototype_candidate_v2(
     for view in candidate.get("views") or []:
         if isinstance(view, dict):
             view.setdefault("surface", "inline")
+            view.setdefault("presentation_options", None)
+            view.setdefault("field_display", [])
+            view.setdefault("section", None)
             view.setdefault("media", None)
     try:
         Draft202012Validator(
@@ -2495,7 +2504,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             "layout": candidate["layout"],
             "resource": copy.deepcopy(resource),
             "views": [
-                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface", "media"}}
+                    legacy_view(item)
                 for item in resource_views
             ],
             "commands": copy.deepcopy(resource_commands),
@@ -2558,6 +2567,23 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 key: field_refs_by_resource[raw_resource_id].get(str(ref), _canonical_candidate_identifier(ref, namespace="field")) if ref else None
                 for key, ref in raw_view["media"].items()
             } if raw_view.get("media") else None
+            normalized_view["presentation_options"] = {
+                key: (field_refs_by_resource[raw_resource_id].get(str(ref), str(ref)) if ref else None)
+                if key.endswith("_field_ref") else ref
+                for key, ref in raw_view["presentation_options"].items()
+            } if raw_view.get("presentation_options") else None
+            normalized_view["field_display"] = [
+                {**entry, "field_ref": field_refs_by_resource[raw_resource_id].get(entry["field_ref"], entry["field_ref"])}
+                for entry in raw_view.get("field_display") or []
+            ]
+            section = raw_view.get("section")
+            normalized_view["section"] = {
+                "id": _canonical_candidate_identifier(section["id"], namespace="section"),
+                "kind": section["kind"],
+                "title": _candidate_localized_text(section["title"], key="section." + _canonical_candidate_identifier(section["id"], namespace="section")),
+            } if section else None
+            if raw_view.get("presentation") in {"board", "tree", "chart", "accordion"} and role == "collection":
+                normalized_view["presentation"] = raw_view["presentation"]
             view_ids[str(raw_view.get("id") or "")] = str(normalized_view["id"])
             for raw_control, normalized_control in zip(
                 raw_view.get("query_controls") or [],
@@ -2926,7 +2952,7 @@ def _lower_semantic_prototype_candidate_v2(
                 "layout": candidate["layout"],
                 "resource": copy.deepcopy(resource),
                 "views": [
-                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface", "media"}}
+                    legacy_view(item)
                     for item in views
                 ],
                 "commands": copy.deepcopy(commands),
@@ -2941,7 +2967,7 @@ def _lower_semantic_prototype_candidate_v2(
         )
         lowered_resources.append(dict(lowered["resource"]))
         for original, view in zip(views, lowered["views"], strict=True):
-            lowered_views.append({**dict(view), "resource_ref": resource_id, "surface": original.get("surface", "inline"), "media": copy.deepcopy(original.get("media"))})
+            lowered_views.append({**dict(view), "resource_ref": resource_id, **view_extras(original)})
         lowered_commands.extend(dict(item) for item in lowered["commands"])
         for original, state in zip(states, lowered["representative_states"], strict=True):
             lowered_states.append(
@@ -3484,7 +3510,7 @@ def _validate_semantic_prototype_v2(
             "layout": copy.deepcopy(document["layout"]),
             "resource": copy.deepcopy(resource),
             "views": [
-                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface", "media"}}
+                    legacy_view(item)
                 for item in resource_views
             ],
             "commands": [
@@ -3779,6 +3805,11 @@ def _compile_editor_surfaces(
             collections = [item for item in document["views"] if item["resource_ref"] == view["resource_ref"] and item["role"] == "collection"]
             details = [item for item in document["views"] if item["resource_ref"] == view["resource_ref"] and item["role"] == "details"]
             edit_views = [item for item in document["views"] if item["resource_ref"] == view["resource_ref"] and item["role"] == "editor" and any(command["kind"] != "create" and command["view_ref"] == item["id"] for command in document["commands"])]
+            related_context = any(
+                item["resource_ref"] != view["resource_ref"]
+                and (item.get("filter") or {}).get("state_ref") == selection
+                for item in document["views"]
+            )
             if surface != "inline" and any(button["id"] == "edit" for button in toolbar["inputs"]["buttons"]):
                 if details:
                     for detail_view in details:
@@ -3788,11 +3819,11 @@ def _compile_editor_surfaces(
                             "type": "openModal", "params": {"modalId": modal_id},
                             "enabledIf": f"$state.{selection} !== ''",
                         })
-                elif len(edit_views) == 1:
+                elif len(edit_views) == 1 and not related_context:
                     for collection_view in collections:
                         collection_widget = next(widget for widget in widgets if widget["id"] == collection_view["id"])
                         collection_widget["actions"].append({"on": "select", "type": "openModal", "params": {"modalId": modal_id}})
-                if details or (collections and len(edit_views) == 1):
+                if details or (collections and len(edit_views) == 1 and not related_context):
                     toolbar["inputs"]["buttons"] = [button for button in toolbar["inputs"]["buttons"] if button["id"] != "edit"]
                     toolbar["actions"] = [action for action in toolbar["actions"] if action["on"] != "click:edit"]
             if not toolbar["inputs"]["buttons"]:
@@ -3847,7 +3878,7 @@ def _compile_semantic_prototype_v2(
             "layout": copy.deepcopy(document["layout"]),
             "resource": copy.deepcopy(resource),
             "views": [
-                    {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"resource_ref", "surface", "media"}}
+                    legacy_view(item)
                 for item in resource_views
             ],
             "commands": [
@@ -4000,8 +4031,13 @@ def _compile_semantic_prototype_v2(
         "ui": {"application": {"desktop": {"pageSchema": page_schema}}},
     }
     _compile_editor_surfaces(document, webui, source_map, dictionaries)
+    from .semantic_query_toolbar import compile_query_toolbars
+    compile_query_toolbars(document, webui, source_map)
     from .semantic_media import compile_media
     compile_media(document, webui, prototype_resources, source_map)
+    compile_presentations(document, webui, source_map)
+    from .semantic_sections import compile_sections
+    compile_sections(document, webui, source_map, dictionaries, localize=_localized)
     for check in state_checks:
         check["observable_runtime_refs"] = copy.deepcopy(source_map.get(f"state:{check['state_id']}") or [])
     try:
@@ -4132,6 +4168,7 @@ def compile_semantic_prototype_candidate(
         )
         normalizations.extend(_normalize_v2_ownership(semantic_document, brief=brief))
         model_findings = _semantic_v2_model_findings(semantic_document)
+        model_findings.extend(presentation_findings(semantic_document))
         from .semantic_bindings import binding_findings
         model_findings.extend(binding_findings(semantic_document, brief))
         if model_findings or requirement_findings:

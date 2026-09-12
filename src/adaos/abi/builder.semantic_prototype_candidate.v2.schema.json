@@ -233,12 +233,15 @@
         "media": { "anyOf": [{ "$ref": "#/$defs/media" }, { "type": "null" }] },
         "presentation": {
           "anyOf": [
-            { "type": "string", "enum": ["list", "table", "cards"] },
+            { "type": "string", "enum": ["list", "table", "cards", "board", "tree", "chart", "accordion"] },
             { "type": "null" }
           ]
         },
         "title": { "$ref": "#/$defs/localizedText" },
         "field_refs": { "type": "array", "maxItems": 24, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "presentation_options": { "anyOf": [{ "$ref": "#/$defs/presentationOptions" }, { "type": "null" }] },
+        "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
+        "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
         "filter": {
           "anyOf": [{ "$ref": "#/$defs/viewFilter" }, { "type": "null" }]
         },
@@ -247,6 +250,34 @@
           "anyOf": [{ "$ref": "#/$defs/emptyState" }, { "type": "null" }]
         }
       }
+    },
+    "viewSection": {
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "title": { "$ref": "#/$defs/localizedText" },
+        "kind": { "enum": ["tab", "settings"] }
+      },
+      "description": "Optional content partition. Views with the same section id share a tab or an application Settings modal. Repeat the same title/kind for that id. Null keeps a view shared. The compiler supplies navigation and retains selection. Settings still use real resources and commands; this does not implement external effects."
+    },
+    "presentationOptions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["group_field_ref", "parent_field_ref", "value_field_ref", "draggable"],
+      "properties": {
+        "group_field_ref": { "type": ["string", "null"] },
+        "parent_field_ref": { "type": ["string", "null"] },
+        "value_field_ref": { "type": ["string", "null"] },
+        "draggable": { "type": "boolean" }
+      },
+      "description": "Board: group_field_ref is a writable string choice for lanes; draggable persists lane changes (not rank within a lane). Accordion: group_field_ref groups expandable records. Tree: parent_field_ref links nullable parent record ids. Chart: group_field_ref is the x label, value_field_ref is a number; one point per record, no invented aggregation. Otherwise null."
+    },
+    "fieldDisplay": {
+      "type": "object", "additionalProperties": false, "required": ["field_ref", "overflow", "align"],
+      "properties": {
+        "field_ref": { "$ref": "#/$defs/id" },
+        "overflow": { "enum": ["wrap", "truncate"] },
+        "align": { "enum": ["start", "center", "end"] }
+      },
+      "description": "Optional per-visible-field text policy for lists/cards/tables. Wrap is the default; truncate is an explicit compact summary with full text available on hover."
     },
     "media": {
       "type": "object", "additionalProperties": false,

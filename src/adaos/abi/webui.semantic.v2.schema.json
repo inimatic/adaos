@@ -275,7 +275,10 @@
         "media": { "anyOf": [{ "$ref": "#/$defs/media" }, { "type": "null" }] },
         "region_role": { "enum": ["primary", "supporting", "actions"] },
         "surface": { "enum": ["inline", "modal", "side_sheet"] },
-        "presentation": { "enum": ["list", "table", "cards"] },
+        "presentation": { "enum": ["list", "table", "cards", "board", "tree", "chart", "accordion"] },
+        "presentation_options": { "anyOf": [{ "$ref": "#/$defs/presentationOptions" }, { "type": "null" }] },
+        "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
+        "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
         "title": { "$ref": "#/$defs/localizedText" },
         "field_refs": {
           "type": "array",
@@ -335,6 +338,31 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/id" }
         }
+      }
+    },
+    "viewSection": {
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "title": { "$ref": "#/$defs/localizedText" },
+        "kind": { "enum": ["tab", "settings"] }
+      }
+    },
+    "presentationOptions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["group_field_ref", "parent_field_ref", "value_field_ref", "draggable"],
+      "properties": {
+        "group_field_ref": { "type": ["string", "null"] },
+        "parent_field_ref": { "type": ["string", "null"] },
+        "value_field_ref": { "type": ["string", "null"] },
+        "draggable": { "type": "boolean" }
+      }
+    },
+    "fieldDisplay": {
+      "type": "object", "additionalProperties": false, "required": ["field_ref", "overflow", "align"],
+      "properties": {
+        "field_ref": { "$ref": "#/$defs/id" },
+        "overflow": { "enum": ["wrap", "truncate"] },
+        "align": { "enum": ["start", "center", "end"] }
       }
     },
     "media": {

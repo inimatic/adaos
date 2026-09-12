@@ -1,0 +1,24 @@
+schema: adaos.builder.e2e_suite.v1
+suite_id: builder-visible-ui-capabilities
+version: "1"
+title: Small prototype interaction capabilities
+description: Human behavioral prompts for component composition, independent of the eight-archetype baseline.
+cohort: development
+case_refs:
+  - cases/team-board-en.yaml
+  - cases/reading-outline-ru.yaml
+  - cases/daily-readings-en.yaml
+defaults:
+  adapter: sdk.v1
+  profile: generic
+  generation_contract: semantic.v2
+  repetitions: 1
+  timeout_seconds: 1250
+  browser: "off"
+  grader_model: gpt-4.1
+  require_client_profile: true
+  retain_test_projects: true
+  domain_packs: []
+tags: [visible, capabilities, generic]
+gates:
+  outcome_grade_required: true

@@ -1,0 +1,49 @@
+schema: adaos.builder.e2e_case.v1
+case_id: team-board-en
+title: "Team board"
+description: Human-specified behavior for generic UI capability qualification.
+locale: en
+tags: [visible, capabilities]
+requirements:
+  primary_jobs:
+    - statement: "Move tasks between columns"
+      acceptance: "Dragging updates the stored lane value. A decorative multi-column list alone does not satisfy this request."
+    - statement: "Search and filter tasks"
+      acceptance: "Title search and owner filter narrow the collection; clearing restores it."
+    - statement: "Inspect, create and edit tasks"
+      acceptance: "Details and focused editing are reachable and mutations target the selected record."
+    - statement: "Switch task views"
+      acceptance: "Board and table tabs show the same underlying task records."
+    - statement: "Store application settings"
+      acceptance: "A reachable settings window edits and persists local contact email and working agreement. No email delivery is expected."
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: "Create a new application \"Team board ${case_instance_id}\" for a small team."
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: "Make a working first version with a board of tasks in Queued, In progress and Done. Let me drag a task into another column and keep its new status after reopening. Search by title and filter by owner. Clicking a task opens its details; editing or adding a task uses a focused window. Use separate Board and All tasks tabs, with a table in All tasks. An application settings window stores the team's contact email and a short working agreement locally; do not send email. Include a few realistic tasks and an empty-search state."
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+  - id: grade
+    type: prototype.grade
+    input: {scenario_id: $steps.create.scenario_id, threshold: 0.85}
+    expect: {values: {ok: true, passed: true}}
+cleanup: {policy: always, retain_on_failure: true}

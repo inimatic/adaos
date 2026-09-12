@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, Literal, Protocol
+from uuid import uuid4
 
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief
 
@@ -48,6 +49,7 @@ def submit_request(
         raise ValueError("Builder Prototype request webspace_id is required")
     language = str(locale or "").strip().lower() or "en"
     meta = dict(metadata) if isinstance(metadata, Mapping) else {}
+    meta.setdefault("message_id", f"m.builder.request.{uuid4().hex}")
     intent = capture_intent(
         text,
         locale=language,
@@ -71,6 +73,7 @@ def submit_request(
             "prototype_brief_digest": brief["digest"],
             "prototype_intent": intent,
             "prototype_brief": brief,
+            "prototype_request_source": source_kind,
         },
     }
     execution = port.submit_turn(payload, timeout_seconds=max(0.1, timeout_seconds))

@@ -2,7 +2,7 @@
 
 Status: active prerequisite and growth roadmap for the universal AdaOS Client.
 
-Last reviewed: 2026-09-11.
+Last reviewed: 2026-09-12.
 
 Architecture owner: [Web UI Architecture](web-ui-architecture.md).
 Builder dependency: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
@@ -33,6 +33,22 @@ after the clean baseline from the observed cross-domain gap taxonomy.
 - `deferred`: deliberately excluded from the current correction.
 
 ## Current Audit
+
+Small-prototype qualification, 2026-09-12:
+
+- [x] `[must]` Add a generic responsive query toolbar with page-scoped state,
+  typed options, native-calendar commits, active filters and isolated reset.
+- [x] `[must]` Fix standalone date input commits without changing manual-save mode.
+- [x] `[must]` Expose per-field wrapping/truncation/alignment and read typed chart
+  points from resource-query collections; do not coerce missing values to zero.
+- [x] `[must]` Distinguish persisted board lane moves from unsupported rank changes.
+- [ ] `[must]` Qualify the above through freshly generated small prototypes in the
+  local browser, including mobile, actual mutations, sections and settings.
+- [ ] `[must]` Extend the boundary audit beyond its current 15 checked sources;
+  inspect residual product-specific layout selectors before a clean-baseline claim.
+
+Builder owns the semantic adapters and generation experiments in its
+[capability qualification checklist](builder-intent-to-prototype-roadmap.md#small-prototype-capability-qualification-2026-09-12).
 
 The current Client is a useful compatibility runtime, but not yet a clean
 generic baseline:
