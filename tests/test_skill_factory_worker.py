@@ -6646,8 +6646,10 @@ def test_worker_reports_progress_to_automation_callback(tmp_path: Path) -> None:
     assert projected == [("task.1", "tests_running", "Running validation")]
 
 
+@pytest.mark.parametrize("aggregate_owner", [False, True])
 def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     tmp_path: Path,
+    aggregate_owner: bool,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
@@ -6705,11 +6707,12 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     ]
     spec = derive_board_resource_spec(webui, records)
     service = PrototypeResourceService(state_dir=state_dir)
+    owner = "project:operations" if aggregate_owner else f"scenario:{project_id}"
     digest = prototype_webui_digest(webui)
     materialized = service.materialize(
         {
             "schema": "adaos.builder.prototype_resource.v1",
-            "project_ref": f"scenario:{project_id}",
+            "project_ref": owner,
             "change_id": "change-flowboard",
             "revision": "007",
             "webui_digest": digest,
@@ -6717,7 +6720,7 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
         }
     )
     snapshot = service.acceptance_snapshots(
-        project_ref=f"scenario:{project_id}",
+        project_ref=owner,
         change_id="change-flowboard",
         revision="007",
         webui_digest=digest,
@@ -6761,7 +6764,7 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
         "realize_request": {
             "artifacts": {
                 "companion_skill_ids": [companion],
-                "implementation_brief": "Implement the accepted prototype.",
+                "implementation_brief": "",
                 "context_packet": context_packet,
             }
         },
@@ -6784,12 +6787,21 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
         dev_scenarios_root=tmp_path / "dev" / "scenarios",
     )
 
+    if aggregate_owner:
+        owner_root = tmp_path / "dev/projects/operations"
+        owner_root.mkdir(parents=True)
+        (owner_root / "project.yaml").write_text(json.dumps({"id": "operations", "components": {
+            "owned": [{"ref": f"scenario:{project_id}"}, {"ref": f"skill:{companion}"}]}}), encoding="utf-8")
+    context_packet["artifacts"]["prototype"]["acceptance"]["prototype_resources"].append({
+        "resource_type": "prototype.locale_dictionaries"})
     packet = worker._build_packet(assignment, workspace, tmp_path / "input")
     handoff = packet["prototype_resource_handoff"]
     resource = handoff["resources"][0]
 
     assert resource["target_resource_type"] == "skill.flowboard_skill.work_items"
-    assert resource["bundle"]["seed"] == materialized["state"]["records"]
+    assert resource["bundle"]["seed"] == []
+    assert materialized["state"]["records"]
+    assert len(handoff["resources"]) == 1
     assert resource["bundle"]["resource_definition"]["authority"] == {
         "provider": "local_crud",
         "binding": companion,
@@ -6842,6 +6854,48 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     )
     assert errors == []
     assert checks[0]["kind"] == "prototype_resource_handoff.exact"
+
+    assignment["realize_request"]["artifacts"]["implementation_brief"] = "Implement server-side policy and persistence."
+    blueprint = worker._prototype_resource_handoff_from_assignment(assignment, workspace)
+    assert blueprint["mode"] == "implementation_blueprint"
+    assert blueprint["completion"]["model_required"] is True
+    with pytest.raises(ValueError, match="blueprint"):
+        worker._apply_prototype_resource_handoff(workspace, blueprint)
+    checks, errors = [], []
+    worker._validate_prototype_resource_handoff(assignment, workspace, checks, errors)
+    assert not errors
+    assert checks[0]["kind"] == "prototype_resource_handoff.detached"
+    worker._build_packet(assignment, workspace, tmp_path / "input-blueprint")
+    prompt = (tmp_path / "input-blueprint/task.md").read_text(encoding="utf-8")
+    assert "Do not create custom CRUD handlers" not in prompt
+    assert "Fresh installation starts with empty user data" in prompt
+    declaration = workspace / "skills" / companion / "resources/work_items.resource.json"
+    empty_bundle = json.loads(declaration.read_text(encoding="utf-8"))
+    seeded_bundle = {**empty_bundle, "seed": materialized["state"]["records"]}
+    declaration.write_text(json.dumps(seeded_bundle), encoding="utf-8")
+    checks, errors = [], []
+    worker._validate_prototype_resource_handoff(assignment, workspace, checks, errors)
+    assert any("must not seed production" in item for item in errors)
+    declaration.write_text(json.dumps(empty_bundle), encoding="utf-8")
+    webui_path = workspace / "scenarios" / project_id / "webui.json"
+    realized_text = webui_path.read_text(encoding="utf-8")
+    webui_path.write_text(json.dumps(webui), encoding="utf-8")
+    checks, errors = [], []
+    worker._validate_prototype_resource_handoff(assignment, workspace, checks, errors)
+    assert any("disposable resource bindings" in item for item in errors)
+    webui_path.write_text(realized_text, encoding="utf-8")
+    assignment["realize_request"]["artifacts"]["implementation_brief"] = ""
+
+    for field, expected_reason in (("iteration_instruction", "iteration_requires_realization"),):
+        assignment["realize_request"]["artifacts"][field] = "Preserve permission failures in the editor."
+        completion = worker._prototype_resource_handoff_from_assignment(assignment, workspace)["completion"]
+        assert completion["model_required"] and expected_reason in completion["reasons"]
+        assignment["realize_request"]["artifacts"].pop(field)
+    obligations = [{"requirement_ref": "job:completion", "acceptance": "Reject incomplete records"}]
+    context_packet["artifacts"]["prototype"]["acceptance"]["automation_requirements"] = obligations
+    completion = worker._prototype_resource_handoff_from_assignment(assignment, workspace)["completion"]
+    assert completion["model_required"] and "pending_automation_requirements" in completion["reasons"]
+    context_packet["artifacts"]["prototype"]["acceptance"].pop("automation_requirements")
 
     (workspace / "skills" / companion / "resources" / "work_items.resource.json").unlink()
     checks = []

@@ -2849,6 +2849,10 @@ class BuilderAutomationService:
     def _prototype_requires_resource_provider(
         prototype_acceptance: Mapping[str, Any] | None,
     ) -> bool:
+        from adaos.services.builder.prototype_stage import prototype_record_evidence
+
+        if prototype_record_evidence(prototype_acceptance or {}):
+            return True
         acceptance = (
             prototype_acceptance
             if isinstance(prototype_acceptance, Mapping)
@@ -3558,6 +3562,13 @@ class BuilderAutomationService:
                 "codex_usage_accounting",
             ):
                 session.pop(stale_key, None)
+            provider_artifacts = self._ensure_resource_provider_companion(
+                kind=str(session["object_type"]), project_id=str(session["object_id"]),
+                links=dict(session.get("links") or {}),
+                prototype_acceptance=session.get("prototype_acceptance"),
+                implementation_brief=str(session.get("implementation_brief") or ""),
+            )
+            session.setdefault("created_artifacts", []).extend(provider_artifacts)
             self._refresh_session_companion_skill_ids(session)
             self._capture_preview_binding(session)
             submitted = self._submit(session, iteration_instruction=instruction)
@@ -6762,6 +6773,7 @@ class BuilderAutomationService:
             str(criterion).strip()
             for issue in execution_change.get("issues") or []
             if isinstance(issue, Mapping) and issue.get("status") != "deferred"
+            and (issue.get("lane") != "prototype" or not session.get("prototype_acceptance"))
             for criterion in issue.get("acceptance_criteria") or []
             if str(criterion).strip()
         ]

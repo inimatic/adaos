@@ -2187,7 +2187,7 @@ misses the semantic-v2 resource requirements and creates no companion skill.
   declared lifecycle tail, preserving parent digest, original verdict, owned
   targets, explicit review, per-step results and redacted UTF-8 evidence.
   This is not a fresh cohort or a general replacement for runner resume.
-- [ ] `[must]` Resolve provider scaffolding from the actual accepted record
+- [x] `[must]` Resolve provider scaffolding from the actual accepted record
   resources, excluding locale evidence. Share aggregate-owner verification with
   the worker instead of reintroducing the component/aggregate mismatch there.
 - [ ] `[must]` Remove implicit Prototype-fixture seeding from production
@@ -2199,6 +2199,18 @@ misses the semantic-v2 resource requirements and creates no companion skill.
   of implementation acceptance. The observed request also acquired an invented
   offline/camera obligation from an actor description; do not promote model
   speculation into required production scope.
+
+Handoff regression verification: 355 workflow/Automation/worker tests pass in
+360.14s, with additional focused negative checks for production seeds,
+disposable bindings, pending rules and follow-up instructions. Scaffolding now
+uses accepted record evidence, excludes locale snapshots and shares manifest-bound
+aggregate ownership with review. The retained run 03 retry creates its companion
+and reaches real model execution; no new Prototype or rewritten baseline is used.
+Generated resource bundles start empty. Explicit implementation briefs, pending
+business rules and follow-up instructions select implementation, not a zero-model
+resource rewrite. The blueprint gate checks detachment only, not business-rule
+correctness. Empty-install browser verification and provenance of speculative
+requirements remain open, so the broader items above are not yet complete.
 
 Local Client production build passes in 70.13s with existing stylesheet-budget
 and dependency warnings; 29 focused renderer tests pass. Core/Client commits

@@ -51,6 +51,12 @@ def prototype_automation_requirements(webui: Mapping[str, Any]) -> list[dict[str
     return copy.deepcopy(builder.get("automation_requirements") or [])
 
 
+def prototype_record_evidence(acceptance: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Exclude locale evidence from provider scaffolding and data promotion."""
+    return [copy.deepcopy(dict(item)) for item in acceptance.get("prototype_resources") or []
+            if isinstance(item, Mapping) and item.get("resource_type") != "prototype.locale_dictionaries"]
+
+
 def automation_acceptance_checks(acceptance: Mapping[str, Any]) -> list[str]:
     return [
         f"Implement and test {item['requirement_ref']}: {item['statement']}. "

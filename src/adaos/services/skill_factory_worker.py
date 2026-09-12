@@ -3957,7 +3957,7 @@ class LocalSkillFactoryWorker:
                 if descriptor_working_set
                 else None
             )
-            if prototype_resource_handoff:
+            if prototype_resource_handoff and deterministic_resource_realization:
                 failure_stage = "prototype_resource_handoff"
                 prototype_resource_receipt = self._apply_prototype_resource_handoff(
                     workspace,
@@ -5412,6 +5412,8 @@ class LocalSkillFactoryWorker:
         *,
         target_id: str,
         handoff: Mapping[str, Any],
+        implementation_brief: str = "",
+        iteration_instruction: str = "",
     ) -> dict[str, Any]:
         webui_path = workspace / "scenarios" / target_id / "webui.json"
         if not webui_path.is_file():
@@ -5452,6 +5454,12 @@ class LocalSkillFactoryWorker:
             *sorted(implementation_bindings),
             *[f"uncovered_prototype_resource:{item}" for item in uncovered],
         ]
+        if str(implementation_brief).strip():
+            reasons.append("implementation_brief_requires_realization")
+        if str(iteration_instruction).strip():
+            reasons.append("iteration_requires_realization")
+        if handoff.get("automation_requirements"):
+            reasons.append("pending_automation_requirements")
         return {
             "strategy": (
                 "codex"
@@ -5493,7 +5501,13 @@ class LocalSkillFactoryWorker:
             workspace,
             target_id=target_id,
             handoff=handoff,
+            implementation_brief=str(
+                artifacts.get("implementation_brief")
+                or dict(request.get("source") or {}).get("text") or ""
+            ),
+            iteration_instruction=str(artifacts.get("iteration_instruction") or ""),
         )
+        handoff["mode"] = "implementation_blueprint" if handoff["completion"]["model_required"] else "exact_local_crud"
         return handoff
 
     def _apply_prototype_resource_handoff(
@@ -5501,6 +5515,8 @@ class LocalSkillFactoryWorker:
         workspace: Path,
         handoff: Mapping[str, Any],
     ) -> dict[str, Any]:
+        if handoff.get("mode") == "implementation_blueprint":
+            raise ValueError("implementation blueprint cannot be applied as completed Automation")
         if str(handoff.get("schema") or "").strip() != (
             "adaos.builder.resource_implementation_handoff.v1"
         ):
@@ -5649,6 +5665,37 @@ class LocalSkillFactoryWorker:
         except Exception as exc:
             errors.append(f"prototype resource handoff closure: {type(exc).__name__}: {exc}")
             return
+        if handoff.get("mode") == "implementation_blueprint":
+            prototype_refs: set[str] = set()
+
+            def visit(value: Any) -> None:
+                if isinstance(value, Mapping):
+                    for marker, kind, key in (("kind", "resourceQuery", "resourceType"),
+                                               ("type", "resourceOperation", "target")):
+                        ref = str(value.get(key) or "")
+                        if value.get(marker) == kind and ref.startswith("prototype."):
+                            prototype_refs.add(ref)
+                    for child in value.values():
+                        visit(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        visit(child)
+
+            visit(webui)
+            if prototype_refs:
+                errors.append("implementation retains disposable resource bindings: " + ", ".join(sorted(prototype_refs)))
+            for relative in declared:
+                declaration = (manifest_path.parent / relative).resolve()
+                if not declaration.is_relative_to(manifest_path.parent.resolve()):
+                    errors.append("implementation resource declaration escapes its owner")
+                elif not declaration.is_file():
+                    errors.append(f"implementation resource declaration is missing: {relative}")
+                elif _read_json(declaration).get("seed"):
+                    errors.append("implementation must not seed production data without a separate installation data policy")
+            if not errors:
+                checks.append({"kind": "prototype_resource_handoff.detached", "ok": True,
+                               "scope": "disposable binding and installation seed boundary; not business-rule verification"})
+            return
         for raw in handoff.get("resources") or []:
             resource = dict(raw)
             relative = str(resource.get("declaration_path") or "").replace("\\", "/").strip("/")
@@ -5691,12 +5738,11 @@ class LocalSkillFactoryWorker:
         companion_skill_ids: Sequence[str],
         context_packet: Mapping[str, Any],
     ) -> dict[str, Any] | None:
+        from adaos.services.builder.prototype_stage import prototype_record_evidence
+        from adaos.services.builder.workflow import resolve_prototype_resource_owner
+
         acceptance = _prototype_acceptance_from_context(context_packet)
-        expected_resources = [
-            dict(item)
-            for item in acceptance.get("prototype_resources") or []
-            if isinstance(item, Mapping)
-        ]
+        expected_resources = prototype_record_evidence(acceptance)
         if not expected_resources:
             return None
         if target_type != "scenario" or not companion_skill_ids:
@@ -5719,7 +5765,8 @@ class LocalSkillFactoryWorker:
             if str(item.get("resource_type") or "").strip()
         ]
         snapshots = service.acceptance_snapshots(
-            project_ref=project_ref,
+            project_ref=resolve_prototype_resource_owner(service, resource_types,
+                component_ref=project_ref, dev_projects_root=self.dev_scenarios_root.parent / "projects"),
             change_id=change_id,
             revision=revision,
             webui_digest=webui_digest,
@@ -5820,7 +5867,7 @@ class LocalSkillFactoryWorker:
                         "owner_ref": f"skill:{companion}",
                         "seed_policy": "if_missing",
                         "resource_definition": production_definition,
-                        "seed": copy.deepcopy(snapshot.get("records") or []),
+                        "seed": [],
                     },
                     "webui_rewrites": [
                         {"from": prototype_type, "to": production_type}
@@ -5840,6 +5887,8 @@ class LocalSkillFactoryWorker:
             "change_id": change_id,
             "revision": revision,
             "companion_skill_id": companion,
+            "automation_requirements": copy.deepcopy(acceptance.get("automation_requirements") or []),
+            "data_policy": "empty_installation; prototype records are test evidence, not installation seeds",
             "manifest_field": "resource_runtime.declarations",
             "resources": resources,
         }
@@ -6182,7 +6231,22 @@ authoritative files and trusted worker checks remain decisive.
             else ""
         )
         resource_implementation_section = (
-            """## Accepted resource implementation handoff
+            """## Accepted resource implementation blueprint
+
+Read `prototype-resource-handoff.json` for the reviewed resource shapes and
+pending Automation obligations. The proposed local CRUD declarations are a
+starting point, not proof of implementation. Implement the explicit brief using
+supported SDK/ABI mechanisms, including server-side rules and failure tests.
+You may adapt these declarations or replace disposable bindings with your owned
+skill's supported data/operation interfaces. Preserve the accepted user workflows,
+not the disposable storage implementation. Do not leave executable `prototype.*`
+queries or operations. Fresh installation starts with empty user data; representative
+Prototype records are test fixtures only. Keep working data outside package files
+so updates preserve it. State any missing platform contract as a blocker rather
+than bypassing permissions or presenting simulated checks as real enforcement.
+"""
+            if prototype_resource_handoff and prototype_resource_handoff.get("mode") == "implementation_blueprint"
+            else """## Accepted resource implementation handoff
 
 `prototype-resource-handoff.json` is the machine-generated, acceptance-bound
 mapping from disposable Prototype resources to skill-owned production

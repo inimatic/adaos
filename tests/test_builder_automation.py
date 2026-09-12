@@ -3806,9 +3806,11 @@ def test_accepted_prototype_validation_rejects_stale_or_broad_acceptance(
     assert result == {}
 
 
+@pytest.mark.parametrize("semantic", [False, True])
 def test_writable_resource_prototype_materializes_project_owned_provider_skill(
     tmp_path: Path,
     monkeypatch,
+    semantic: bool,
 ) -> None:
     from adaos.sdk.developer import compositions
 
@@ -3823,6 +3825,10 @@ def test_writable_resource_prototype_materializes_project_owned_provider_skill(
             }
         }
     }
+    if semantic:
+        acceptance = {"prototype_resources": [{"resource_type": "prototype.entries"},
+                                              {"resource_type": "prototype.locale_dictionaries"}],
+                      "deterministic_evaluation": {"qualification": {"requirements": {"prototype_resource": True}}}}
     monkeypatch.setattr(
         type(service._workflow()),
         "require_current_prototype_acceptance",
@@ -3859,6 +3865,11 @@ def test_writable_resource_prototype_materializes_project_owned_provider_skill(
     assert started["session"]["created_artifacts"][0]["source"] == (
         "accepted_resource_provider_scaffold"
     )
+
+
+def test_locale_evidence_alone_does_not_require_a_resource_provider():
+    assert not BuilderAutomationService._prototype_requires_resource_provider({
+        "prototype_resources": [{"resource_type": "prototype.locale_dictionaries"}]})
 
 
 def test_persisted_automation_state_drops_singular_companion_alias(tmp_path: Path) -> None:

@@ -45,6 +45,8 @@ def main():
     parser.add_argument("checkpoint", type=Path)
     parser.add_argument("case", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--retry-failed-automation", action="store_true",
+                        help="Retry the unchanged, owned Automation session after a terminal executor failure")
     args = parser.parse_args()
     raw = args.checkpoint.read_bytes()
     checkpoint = json.loads(raw)
@@ -61,7 +63,7 @@ def main():
               "parent_checkpoint": str(args.checkpoint.resolve()), "parent_sha256": hashlib.sha256(raw).hexdigest(),
               "core_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
               "core_status": subprocess.check_output(["git", "status", "--short"], text=True).strip(),
-              "steps": [], "ok": False}
+              "retry_failed_automation": args.retry_failed_automation, "steps": [], "ok": False}
     for declaration in tail:
         step_id = declaration["id"]
         inputs = _resolve_value(declaration.get("input") or {}, context)
@@ -71,6 +73,17 @@ def main():
         print(f"{step_id}: started", flush=True)
         try:
             result = execute(declaration["type"], inputs, {**context, "step_id": step_id})
+            if (args.retry_failed_automation and declaration["type"] == "automation.start"
+                    and result.get("duplicate") and (result.get("session") or {}).get("status") == "failed"):
+                from adaos.sdk.builder import automation
+
+                previous = result["session"]
+                _write_json(output / f"{step_id}-previous.json", redact_value(result))
+                result = automation.retry_failed(
+                    object_type=str(inputs.get("object_type") or "scenario"), object_id=inputs["object_id"],
+                    webspace_id=context["webspace_id"], conversation_id=previous["conversation_id"],
+                    execution_budget=inputs.get("execution_budget"))
+                result["retried_session_id"] = previous.get("session_id")
             findings = _expectation_findings(result, declaration.get("expect") or {})
             passed = result.get("ok") is not False and not findings
         except Exception as exc:
