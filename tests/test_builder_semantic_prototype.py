@@ -211,12 +211,104 @@ def test_ambiguous_binding_field_needs_one_explicit_owner(owner_refs, expected) 
 @pytest.mark.parametrize("resources,pattern", [
     ([{"id": "a", "fields": [{"id": "name"}, {"id": "name"}]}], "resource-local field"),
     ([{"id": "a", "fields": [{"id": "name"}, {"id": "a.name"}]}, {"id": "b", "fields": [{"id": "name"}]}], "qualified field"),
-    ([{"id": "a", "fields": [{"id": "id"}]}, {"id": "b", "fields": [{"id": "id"}]}], "record metadata"),
+    ([{"id": "a", "fields": [{"id": "revision"}]}, {"id": "b", "fields": [{"id": "revision"}]}], "record metadata"),
 ])
 def test_field_namespace_does_not_hide_identity_or_declaration_collisions(resources, pattern) -> None:
     from adaos.services.builder.semantic_prototype import _candidate_v2_field_namespaces
     with pytest.raises(BuilderWorkflowError, match=pattern):
         _candidate_v2_field_namespaces(resources)
+
+
+def test_explicit_record_identity_survives_normalization_across_resources_and_predicates() -> None:
+    brief, semantic = _multi_resource_fixture()
+    for resource in semantic["resources"]:
+        resource["fields"].insert(0, {"id": "id", "label": _text("record.id", "ID", "ID"),
+                                      "value_type": "short_text", "editable": False, "required": False})
+    target = semantic["resources"][1]
+    for index, record in enumerate(target["records"], 1):
+        record["id"] = f"Person {index}"
+        semantic["resources"][0]["records"][index - 1]["work_owner_id"] = record["id"]
+    target["read_only_when"] = {"field_ref": "id", "operator": "equals", "value": "Person 1"}
+    view = next(view for view in semantic["views"] if view["resource_ref"] == target["id"])
+    view["field_refs"].append("id")
+    semantic["representative_states"].append({"id": "first-person", "label": _text("first", "First", "First"),
+        "view_ref": view["id"], "filters": [{"field_ref": "id", "operator": "eq", "value": "Person 1"}],
+        "min_items": 1, "max_items": 1, "proof": {"kind": "field_predicate", "visible_field_refs": ["id"]}})
+    candidate = _multi_resource_candidate(semantic)
+    original = copy.deepcopy(candidate)
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert candidate == original
+    document = compiled["semantic_document"]
+    assert [record["id"] for record in document["resources"][1]["records"]] == ["Person.1", "Person.2"]
+    assert [record["work_owner_id"] for record in document["resources"][0]["records"]] == ["Person.1", "Person.2"]
+    assert document["resources"][1]["read_only_when"]["value"] == "Person.1"
+    assert document["representative_states"][-1]["filters"][0]["value"] == "Person.1"
+    assert len([item for item in compiled["normalizations"] if item["kind"] == "record_identity_value"]) == 2
+    assert compile_semantic_prototype(document)["prototype_resources"] == compiled["prototype_resources"]
+
+
+@pytest.mark.parametrize("invalid", ["mismatch", "editable", "number"])
+def test_explicit_identity_cannot_disagree_with_or_mutate_metadata(invalid) -> None:
+    brief, semantic = _multi_resource_fixture()
+    resource = semantic["resources"][0]
+    resource["fields"].insert(0, {"id": "id", "label": _text("record.id", "ID", "ID"),
+                                  "value_type": "number" if invalid == "number" else "short_text",
+                                  "editable": invalid == "editable", "required": False})
+    candidate = _multi_resource_candidate(semantic)
+    if invalid == "mismatch":
+        for record in candidate["resources"][0]["records"]:
+            record["values"][0] = "different identity"
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    if invalid == "mismatch":
+        assert len([item for item in caught.value.findings if item["code"] == "semantic.record_identity_mismatch"]) == len(resource["records"])
+
+
+def test_fixture_arity_reports_every_resource_and_expected_field_order() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    for resource in candidate["resources"]:
+        resource["records"][0]["values"].pop()
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    findings = [item for item in caught.value.findings if item["code"] == "semantic.record_arity"]
+    assert len(findings) == len(candidate["resources"])
+    for index, finding in enumerate(findings):
+        assert finding["expected_field_refs"] == [field["id"] for field in candidate["resources"][index]["fields"]]
+
+
+def test_editor_only_exposes_writable_inputs_and_preserves_fixed_readonly_context() -> None:
+    brief, semantic = _multi_resource_fixture()
+    next(field for field in semantic["resources"][0]["fields"] if field["id"] == "title")["editable"] = True
+    editor = next(view for view in semantic["views"] if view["role"] == "editor")
+    editor["field_refs"].extend(["title", "status", "work_owner_id"])
+    for command in semantic["commands"]:
+        if command["view_ref"] == editor["id"]:
+            command["input_field_refs"] = ["title"]
+            command["fixed_values"] = {"status": "open"}
+    compiled = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    form = next(widget for widget in compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["widgets"] if widget["id"] == editor["id"])
+    fields = {field["id"]: field for field in form["inputs"]["fields"]}
+    assert not fields["title"].get("readOnly")
+    assert fields["status"]["readOnly"] is True
+    assert fields["status"]["defaultValue"] == "open"
+    assert fields["status"]["required"] is False
+    assert fields["work_owner_id"]["readOnly"] is True
+
+
+def test_filter_binding_closes_over_one_explicit_collection_not_ambiguous_owners() -> None:
+    from adaos.services.builder.semantic_bindings import close_bindings
+    def view(identifier):
+        return {"id": identifier, "resource_ref": "items", "role": "collection", "query_controls": [
+            {"id": f"{identifier}-a", "kind": "filter"}, {"id": f"{identifier}-b", "kind": "filter"}]}
+    brief = {"operations": [{"id": "operation:filter", "kind": "filter"}]}
+    document = {"views": [view("main"), view("secondary")], "commands": [],
+                "requirement_bindings": [{"requirement_ref": "operation:filter", "semantic_refs": ["view:main"]}]}
+    close_bindings(document, brief)
+    assert set(document["requirement_bindings"][0]["semantic_refs"]) == {"view:main", "resource:items", "query:main-a", "query:main-b"}
+    document["requirement_bindings"][0]["semantic_refs"] = ["resource:items"]
+    close_bindings(document, brief)
+    assert document["requirement_bindings"][0]["semantic_refs"] == ["resource:items"]
 
 
 def test_qualified_unique_fields_resolve_in_bindings_views_commands_and_relationships() -> None:

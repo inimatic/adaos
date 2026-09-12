@@ -145,6 +145,10 @@ try {
         for (const field of widget.inputs.fields) {
           const container = form.locator(`[data-webui-field-id=${JSON.stringify(field.id)}]`)
           if (!await container.isVisible()) continue
+          if (field.readOnly) {
+            for (const control of await container.locator('input,textarea,select').all()) await expect(control).toBeDisabled()
+            continue
+          }
           if (field.type === 'dropdown') {
             const select = container.locator('select')
             await expect(select).toBeEnabled()

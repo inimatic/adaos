@@ -37,8 +37,8 @@ def close_bindings(document: dict, brief: Mapping | None) -> list[dict]:
                 query_views = [view for view in views.values() if f"resource:{view['resource_ref']}" in refs]
             queries = [f"query:{query['id']}" for view in query_views
                        for query in view.get("query_controls", []) if query["kind"] == kind]
-            if len(queries) == 1:
-                refs.add(queries[0])
+            if len(queries) == 1 or len(query_views) == 1:
+                refs.update(queries)
         for ref in sorted(refs - explicit):
             normalizations.append({"kind": "binding_ownership", "from": binding["requirement_ref"], "to": ref})
         binding["semantic_refs"] = sorted(refs)

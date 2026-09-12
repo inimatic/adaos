@@ -1475,6 +1475,41 @@ admits both previously rejected terminal candidates; original evidence remains
 unchanged. The batch has 276 passing focused Core tests and 121 Client tests.
 Fresh generation and browser qualification remain separate gates.
 
+- [x] `[must]` Keep explicit identity-field values consistent with normalized
+  record IDs and typed references. Run 07 library attempt 2 retained a matching
+  raw `record.id` and `values[id]`; Core normalized only the former, then asked
+  the model to fix each row. Preserve mismatches as errors, not guessed renames.
+- [x] `[must]` Derive the state-repair envelope name in Builder context from the
+  actual SDK output schema. The transport now declares v2 while the adapter's
+  stable/system text still names v1. Cover the real version contract in tests;
+  a stub without schema identity concealed the drift.
+- [x] `[must]` Do not present editable fields whose values are ignored by every
+  command of that editor. Run 07 queue creation presents an editable status but
+  always submits its fixed `New` value. Keep field editability scoped to the
+  editor's declared command inputs; preserve useful read-only context.
+- [x] `[must]` Close a filter binding over all controls of its one explicitly
+  bound collection. Retained library run 07 had all requested controls but was
+  rejected for omitting repeated control IDs. Ambiguous collections remain
+  unresolved; closure does not replace semantic grading of the controls.
+- [x] `[should]` Report fixture-arity failures across resources with ordered
+  expected field IDs in one diagnostic batch; preserve all raw cell values.
+
+Run 07 completed at 14/16, with grader v13 and actual GPT-5/low requests. The
+two failures were library identity normalization/binding closure and media
+metadata/command ownership. After the next batch, both retained library outputs
+pass the full replay boundary; media command ownership still correctly fails
+and needs a fresh model correction. The new batch has 283 focused Core tests
+and 285 DEV Builder tests passing. Browser tasks for the eight admitted first
+attempts cover creation, typed edits, assignment/status choices, numeric values,
+attachments, native media, and related records on 1440px/390px; each probe keeps
+unsupported tasks explicit. Generation acceptance is still not full UX approval.
+
+The matched operations requests now have identical stable context and output
+schema. Their provider generation times were 34.1/28.3 seconds; the second
+reused 4,352 of 5,426 input tokens. This proves cache reuse, not that the whole
+latency difference was caused by caching. Keep raw first-pass and repair costs
+separate when comparing future cohorts.
+
 Engineering basis: [OpenAI text-generation guidance](https://developers.openai.com/api/docs/guides/text),
 [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), and
 [Anthropic context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).

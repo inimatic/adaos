@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,7 +22,10 @@ def main() -> int:
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--attempt", type=int, default=1)
     parser.add_argument("--probe", choices=("review", "interactions", "commands", "empty", "readonly"), default="review")
+    parser.add_argument("--field-type", choices=("shortText", "longText", "date", "time", "number", "integer", "dropdown", "singleChoice"))
     args = parser.parse_args()
+    if args.field_type and args.probe != "interactions":
+        parser.error("--field-type requires --probe interactions")
     load_dotenv(".env")
     if os.environ.get("ENV_TYPE") != "dev":
         raise SystemExit("Browser cohort reviews require ENV_TYPE=dev")
@@ -61,6 +65,7 @@ def main() -> int:
             output = output / review_id
         output.mkdir(parents=True, exist_ok=True)
         env = {**environment, "ADAOS_E2E_CHECKPOINT": str(checkpoint.resolve()),
+               "ADAOS_E2E_FIELD_TYPE": args.field_type or "",
                "ADAOS_E2E_SCENARIO_ID": created["scenario_id"],
                "ADAOS_E2E_WEBSPACE_ID": preview["webspace_id"],
                "ADAOS_E2E_SUBNET_ID": args.subnet,
@@ -75,7 +80,9 @@ def main() -> int:
                                 env=env, capture_output=True, text=True, encoding="utf-8")
         (output / "probe.log").write_text(result.stdout + result.stderr, encoding="utf-8")
         summary.append({"case": case, "attempt": args.attempt, "probe": args.probe,
-                        "exit_code": result.returncode, "output": str(output), "revisions": revisions})
+                        "exit_code": result.returncode, "output": str(output), "revisions": revisions,
+                        "field_type": args.field_type,
+                        "probe_digest": hashlib.sha256(Path(__file__).with_name(scripts[args.probe]).read_bytes()).hexdigest()})
         print(f"[{case}] {args.probe} exit={result.returncode}", flush=True)
     receipt = args.run / f"browser-{args.probe}" / f"cohort-{args.attempt:02}-{review_id}.json"
     receipt.parent.mkdir(parents=True, exist_ok=True)

@@ -643,12 +643,30 @@ must not silently take precedence over another owner's qualified alias; an
 ambiguous binding needs an explicit owner. Independent unresolved bindings are
 reported together. Details-state evidence may include a field actually rendered
 by its native media source/poster binding, but not a hidden media-kind selector.
+The implicit record `id` is metadata shared by resource schemas, not a business
+field requiring globally unique spelling. An explicit `id` display field must
+be read-only string metadata and agree with its record identity. Normalize that
+value and its typed identity predicates together; never rename unrelated text
+or reconcile genuinely different identities. Positional fixture-arity failures
+report every affected resource/row with the expected field order.
+
+An explicitly bound collection closes over its owned query controls for the
+requested operation kind. Do not infer which collection the user means from
+several resource-owned collections. This closure records existing capabilities;
+it cannot create a missing control or satisfy semantic outcome grading by itself.
+Editor-local editability follows command inputs, not just the resource field's
+global flag. Fields ignored by all local commands remain read-only context;
+an unambiguous fixed value supplies their default. Changing such a control must
+never appear to affect a command that actually discards the change.
 
 A consumed quoted application title is authoring metadata, not an application
 operation or residual implementation requirement. Preserve the exact original
 request and the audience/outcome following the title. Changing only a generated
 test suffix must not change required semantic-reference enums. This reduces
 accidental context variation; cache-hit or latency gains require measurement.
+Repair context names its envelope from the SDK's actual output schema, rather
+than a second version constant in adapter prose. Validate system text, stable
+context and transport schema together, including compatibility versions.
 
 A deferred computation still requires representative output values when those
 outputs are requested. Raw inputs plus an explanatory paragraph are not an

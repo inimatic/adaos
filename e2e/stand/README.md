@@ -98,3 +98,7 @@ authored value label from `assets/i18n/<locale>.json`. Interaction/command probe
 verify returned record identity, not unique visible marker text: numeric values,
 hidden input fields and sorted rows cannot serve as identity. Cleanup remains
 limited to operations explicitly declared by the prototype.
+`--probe interactions --field-type number` targets numeric edits explicitly;
+`dropdown` and `singleChoice` also cover assignment and status editors. Probes
+record the field type, preserve fixture values after the task, verify read-only
+controls, and include the exact probe-script digest in their cohort receipt.

@@ -26,6 +26,10 @@ const forms = [
   ...Object.entries(application.modals || {}).flatMap(([modalId, modal]) =>
     (modal.schema?.widgets || []).filter(widget => widget.type === 'ui.form').map(widget => ({ widget, modalId }))),
 ]
+const requestedFieldType = process.env.ADAOS_E2E_FIELD_TYPE || ''
+if (requestedFieldType && !['shortText', 'longText', 'date', 'time', 'number', 'integer', 'dropdown', 'singleChoice'].includes(requestedFieldType)) {
+  throw new Error(`Unsupported interaction field type: ${requestedFieldType}`)
+}
 const token = process.env.ADAOS_E2E_HUB_TOKEN
 const subnet = process.env.ADAOS_E2E_SUBNET_ID
 if (!token || !subnet) throw new Error('Explicit subnet and local token are required')
@@ -36,7 +40,7 @@ const url = new URL(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/'
 for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo', subnet_id: subnet,
   webspace_id: preview.webspace_id, space_kind: 'development', expected_scenario_id: scenario, try_local_hub: '1' })) url.searchParams.set(key, value)
 const browser = await chromium.launch({ headless: true })
-const report = { scenario, checkpoint: checkpointPath, samples: [], passed: false }
+const report = { scenario, checkpoint: checkpointPath, requestedFieldType, samples: [], passed: false }
 try {
   for (const [layout, viewport] of Object.entries({ wide: { width: 1440, height: 1000 }, compact: { width: 390, height: 844 } })) {
     const context = await browser.newContext({ viewport })
@@ -88,10 +92,14 @@ try {
       for (const { widget, modalId } of forms) {
         const update = widget.actions?.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'update')
         const editableField = field => update?.params?.payload?.[field.id] === `$event.values.${field.id}` && !field.visibleIf && !field.readOnly
-        const field = widget.inputs.fields?.find(field => ['shortText', 'longText'].includes(field.type) && editableField(field))
-          || widget.inputs.fields?.find(field => ['date', 'time', 'number', 'integer'].includes(field.type) && editableField(field))
+        const field = requestedFieldType
+          ? widget.inputs.fields?.find(field => field.type === requestedFieldType && editableField(field))
+          : widget.inputs.fields?.find(field => ['shortText', 'longText'].includes(field.type) && editableField(field))
+            || widget.inputs.fields?.find(field => ['date', 'time', 'number', 'integer', 'dropdown', 'singleChoice'].includes(field.type) && editableField(field))
         const numeric = field && ['number', 'integer'].includes(field.type)
-        const probeValue = (purpose) => field?.type === 'date' ? `2099-12-${purpose === 'cancel' ? '29' : purpose === 'create' ? '31' : '30'}`
+        const choice = field && ['dropdown', 'singleChoice'].includes(field.type)
+        let choiceTarget
+        const probeValue = (purpose) => choice ? choiceTarget.value : field?.type === 'date' ? `2099-12-${purpose === 'cancel' ? '29' : purpose === 'create' ? '31' : '30'}`
           : field?.type === 'time' ? (purpose === 'cancel' ? '11:20' : '12:30')
             : numeric ? (purpose === 'cancel' ? '17' : '23') : `${purpose}-${checkpoint.run_id}-${layout}`
         const collection = widgets.find(item => ['ui.table', 'ui.list'].includes(item.type) && item.dataSource?.resourceType === update?.target)
@@ -145,10 +153,32 @@ try {
         const form = host(widget.id)
         const opener = editorOpener(modalId, row)
         if (modalId && opener !== row) await opener.click()
-        const input = form.locator(`[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}]`).locator('input, textarea').or(form.locator(`input[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}], textarea[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}]`)).first()
+        const container = form.locator(`[data-webui-field-id=${JSON.stringify(field.id)}]`)
+        const input = choice ? container.locator('select,input[type=radio]').first()
+          : form.locator(`[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}]`).locator('input, textarea').or(form.locator(`input[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}], textarea[id=${JSON.stringify(`form-${widget.id}-${field.id}`)}]`)).first()
         await expect(input).toBeVisible({ timeout: 15_000 })
-        await expect(input).toBeEditable({ timeout: 30_000 })
-        const original = await input.inputValue()
+        await expect(input).toBeEnabled({ timeout: 30_000 })
+        const readValue = () => choice ? form.evaluate((element, id) =>
+          window.ng?.getComponent(element.querySelector('ada-form-widget'))?.values?.[id], field.id) : input.inputValue()
+        const expectValue = value => expect.poll(readValue, { timeout: 30_000 }).toEqual(value)
+        const original = await readValue()
+        const choiceOptions = () => form.evaluate((element, id) => {
+          const component = window.ng?.getComponent(element.querySelector('ada-form-widget'))
+          const selected = component?.fields.find(item => item.id === id)
+          return selected ? component.choiceOptions(selected) : []
+        }, field.id)
+        if (choice) {
+          await expect.poll(async () => (await choiceOptions()).some(option => option.value !== original)).toBe(true)
+          choiceTarget = (await choiceOptions()).find(option => option.value !== original)
+        }
+        const setValue = async value => {
+          if (!choice) return input.fill(value)
+          const index = (await choiceOptions()).findIndex(option => option.value === value)
+          if (index < 0) throw new Error(`No selectable option for ${field.id}`)
+          if (field.type === 'dropdown') await input.selectOption({ index: index + 1 })
+          else await container.locator('input[type=radio]').nth(index).check()
+          await expectValue(value)
+        }
         sample.conditionDebug = await form.evaluate(element => {
           const component = window.ng?.getComponent(element.querySelector('ada-form-widget'))
           return { record: component?.recordValues, values: component?.values,
@@ -166,13 +196,13 @@ try {
           await expect(alert).toBeVisible()
           await alert.locator('button').first().click()
           await expect(page.locator('ion-alert')).toHaveCount(0)
-          await expect(input).toHaveValue(original)
+          await expectValue(original)
           if (sample.mutations.length !== count) throw new Error('Cancelled confirmation caused a mutation')
           sample.checks.push({ editor: widget.id, command: command.id, status: 'passed', task: 'confirmation-cancel/no-mutation' })
         }
         if (modalId) {
           const count = sample.mutations.length
-          await input.fill(probeValue('cancel'))
+          await setValue(probeValue('cancel'))
           await opener.evaluate(element => { window.__E2E_FOCUS_ORIGIN__ = element })
           await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
           await expect(form).toHaveCount(0)
@@ -183,12 +213,12 @@ try {
           }))
           await expect(opener).toBeFocused()
           await opener.click()
-          await expect(input).toHaveValue(original)
+          await expectValue(original)
           if (sample.mutations.length !== count) throw new Error('Dismissing an editor caused a mutation')
           sample.checks.push({ editor: widget.id, status: 'passed', task: 'dismiss-without-save/restore-focus/reopen', surface: 'overlay' })
         }
         const marker = probeValue('edit')
-        await input.fill(marker)
+        await setValue(marker)
         let uploadProof
         for (const attachment of widget.inputs.fields.filter(item => item.fileStorage === 'prototype' && update.params.payload[item.id])) {
           const fileInput = form.locator(`[data-webui-field-id=${JSON.stringify(attachment.id)}] input[type=file]`)
@@ -246,8 +276,8 @@ try {
           await page.waitForFunction(expected => window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization?.currentScenario === expected, scenario, { timeout: 60_000 })
           await row.click()
         }
-        await expect(input).toHaveValue(marker, { timeout: 30_000 })
-        sample.checks.push({ editor: widget.id, status: 'passed', task: 'select/edit/save/reopen', surface: modalId ? 'overlay' : 'inline' })
+        await expectValue(marker)
+        sample.checks.push({ editor: widget.id, field: field.id, fieldType: field.type, status: 'passed', task: 'select/edit/save/reopen', surface: modalId ? 'overlay' : 'inline' })
         if (uploadProof) {
           const download = page.waitForEvent('download')
           void download.catch(() => {})
@@ -285,6 +315,10 @@ try {
         const originalValues = sample.conditionDebug.values
         for (const item of widget.inputs.fields) {
           const container = form.locator(`[data-webui-field-id=${JSON.stringify(item.id)}]`)
+          if (item.readOnly) {
+            for (const control of await container.locator('input,textarea,select').all()) await expect(control).toBeDisabled()
+            continue
+          }
           const value = item.id === field.id ? createdMarker : originalValues[item.id]
           if (['boolean', 'toggle'].includes(item.type)) {
             await container.locator('input[type=checkbox]').setChecked(Boolean(value))
@@ -314,7 +348,7 @@ try {
         const newRow = rows.nth(await createdRowIndex())
         await newRow.click()
         if (modalId && opener !== row) await opener.click()
-        await expect(input).toHaveValue(createdMarker, { timeout: 30_000 })
+        await expectValue(createdMarker)
         const selected = await form.evaluate(element => window.ng?.getComponent(element.querySelector('ada-form-widget'))?.recordValues)
         if (selected?.[field.id] !== expectedCreatedValue || selected.id !== createdId || selected.id === sample.conditionDebug.record.id) throw new Error('Refusing to delete a record not created by this probe')
         const deleting = operationResponse()

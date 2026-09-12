@@ -457,6 +457,8 @@ def _validate_semantic_prototype_v1(
         _fail("semantic Prototype requires at least one view in the primary region")
 
     for field in fields.values():
+        if field["id"] == "id" and (field["editable"] or field["value_type"] != "short_text"):
+            _fail("the explicit id field is read-only string record metadata; use a business field for editable identifiers")
         options = field.get("options")
         if field["value_type"] in {"choice", "multi_choice"} and not options:
             _fail(f"choice field {field['id']!r} requires options")
@@ -878,6 +880,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         },
         "records_per_resource": contract["$defs"]["resource"]["properties"]["records"]["maxItems"],
         "fixture_values": {
+            "id": "Record id is implicit read-only string metadata; do not add an id field unless it is needed for display. If declared, it must be noneditable short_text and match record.id. It is not a business field to rename or edit.",
             "number": "JSON number, e.g. 12.5, not the string \"12.5\"; optional missing values use null",
             "attachment": "one string reference, or null when optional; never an array",
             "attachments": "array of string references, [] when empty; never a scalar string",
@@ -897,6 +900,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "interactions": "Reuse local CRUD, live relationship selectors, query controls, confirmation and field guards. Commands belong to an editor; selection/details require a collection, but lookup-only resources need no standalone view. Foreign-key collections need a reachable relationship filter when the workflow requires inspecting one selected item's linked records; an unfiltered list of raw IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
         "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references: sample://image, sample://video, sample://document (downloadable text), sample://unavailable. Do not invent local paths for files that do not exist. attachment/attachments fields capture real local bytes, store references and render download links in details; documents do not require mediaKey or an image viewer. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading.",
         "ux_recommendations": {
+            "editor_inputs": "Only fields consumed by this editor's command input_field_refs are writable here. Other listed fields are read-only context; fixed_values are not editable inputs. A field may be writable in one editor and read-only in another.",
             "layout": "layout=flow stacks regions; split/focus_detail places primary beside supporting on desktop, stacked on mobile; grid groups equal-priority regions. region_role is actual placement: primary for the main task, supporting for selected details or secondary work, actions for a footer. Putting every view in primary creates one long column even in split. Prefer one primary collection and contextual details; reserve flow for genuinely linear work. Supporting is a real region, not merely a label.",
             "editor_surface": "Use surface=modal for a short focused create/edit task, side_sheet when surrounding context matters, inline for a persistent work area. Collections and details stay inline. The compiler owns openers, selection, form hydration, save/error and dismissal. No surface is mandatory for acceptance.",
             "progressive_disclosure": "Keep the main screen focused on the user's primary job. Put secondary fields in details and consider an on-demand editor instead of showing every form at once. Do not add hypothetical features or multiply views only to look complete.",
@@ -912,6 +916,13 @@ def _validate_candidate_bounds(candidate: Mapping[str, Any]) -> None:
          "detail": f"{error.validator}={error.validator_value}, actual length={len(error.instance)}"}
         for error in errors if error.validator in {"minItems", "maxItems", "maxLength", "uniqueItems"}
     ]
+    for resource_index, resource in enumerate(candidate.get("resources") or []):
+        field_ids = [field["id"] for field in resource["fields"]]
+        for record_index, record in enumerate(resource["records"]):
+            if len(record["values"]) != len(field_ids):
+                findings.append({"code": "semantic.record_arity", "path": f"$.resources[{resource_index}].records[{record_index}].values",
+                                 "expected_field_refs": field_ids,
+                                 "detail": f"resource {resource['id']!r} record {record_index} has {len(record['values'])} values for {len(field_ids)} fields; expected order: {field_ids}"})
     if findings:
         raise SemanticPrototypeValidationError(findings)
 
@@ -1193,8 +1204,23 @@ def _canonicalize_semantic_prototype_candidate(
                 normalizations=normalizations,
                 target=f"$.resource.fields[{index}].visible_when.field_ref",
             )
-    for record in records:
-        record["id"] = record_ids[str(record["id"]).strip()]
+    identity_index = next((index for index, field in enumerate(fields) if field["id"] == "id"), None)
+    identity_findings = []
+    for index, record in enumerate(records):
+        original_id = str(record["id"])
+        record["id"] = record_ids[original_id.strip()]
+        if identity_index is not None and identity_index < len(record["values"]):
+            declared = record["values"][identity_index]
+            if declared not in (None, original_id, original_id.strip(), record["id"]):
+                identity_findings.append({"code": "semantic.record_identity_mismatch",
+                                          "path": f"$.resource.records[{index}].values[{identity_index}]",
+                                          "detail": f"resource {resource['id']!r} record {index} id value {declared!r} does not match fixture id {original_id!r}"})
+            elif declared != record["id"]:
+                record["values"][identity_index] = record["id"]
+                normalizations.append({"kind": "record_identity_value", "from": str(declared),
+                                       "to": record["id"], "target": f"$.resource.records[{index}].values[{identity_index}]"})
+    if identity_findings:
+        raise SemanticPrototypeValidationError(identity_findings)
     _normalize_candidate_fixture_values(
         fields=fields,
         records=records,
@@ -1343,6 +1369,12 @@ def _canonicalize_semantic_prototype_candidate(
                         f"$.representative_states[{state_index}].filters[{filter_index}].operand.field_ref"
                     ),
                 )
+
+    if identity_index is not None:
+        _normalize_relationship_identity_literals(
+            resource=resource, field_ref="id", target_ids=record_ids,
+            commands=commands, states=states, normalizations=normalizations,
+        )
 
     semantic_namespaces = {
         "resource": resource_ids,
@@ -2016,18 +2048,25 @@ def _compile_semantic_prototype_v1(
             if resource.get("read_only_when"):
                 widget["inputs"]["readOnlyIf"] = _condition_expression(resource["read_only_when"], fields)
             widget["dataSource"]["query"]["id"] = f"$state.{selection_ref}"
+            owned_commands = [command for command in commands.values() if command["view_ref"] == view_id]
+            editable_inputs = {ref for command in owned_commands for ref in command["input_field_refs"]
+                               if ref not in command.get("fixed_values", {})}
             for field_id in view["field_refs"]:
                 field = fields[field_id]
-                if not field["editable"]:
-                    continue
+                read_only = not field["editable"] or field_id not in editable_inputs
                 label, label_i18n = _localized(field["label"], dictionaries)
                 rendered_field: dict[str, Any] = {
                     "id": field_id,
                     "title": label,
                     "title_i18n": label_i18n,
                     "type": _FIELD_TYPES[str(field["value_type"])],
-                    "required": bool(field["required"]),
+                    "required": bool(field["required"]) and not read_only,
                 }
+                if read_only:
+                    rendered_field["readOnly"] = True
+                    fixed = [command.get("fixed_values", {}).get(field_id) for command in owned_commands]
+                    if fixed and fixed[0] is not None and all(value == fixed[0] for value in fixed):
+                        rendered_field["defaultValue"] = copy.deepcopy(fixed[0])
                 if field.get("multiple"):
                     rendered_field["multiple"] = True
                     if field.get("max_items") is not None:
@@ -2309,10 +2348,12 @@ def _candidate_v2_field_namespaces(resources: Sequence[Mapping[str, Any]]) -> di
     for owner, mapping in local_maps.items():
         for key, value in mapping.items():
             if counts[value] > 1:
-                if value in {"id", "revision"}:
+                if value == "id":
+                    continue
+                if value == "revision":
                     _fail(f"field {value!r} conflicts with record metadata; use an explicit business field name")
                 mapping[key] = f"{_canonical_candidate_identifier(owner, namespace='resource')}.{value}"
-    _unique_v2_ids([{"id": value} for mapping in local_maps.values() for value in mapping.values()], "qualified field")
+    _unique_v2_ids([{"id": value} for mapping in local_maps.values() for value in mapping.values() if value != "id"], "qualified field")
     return local_maps
 
 
@@ -2359,6 +2400,9 @@ def _normalize_relationship_identity_literals(
         condition = (command.get("guard") or {}).get("when")
         if condition and condition.get("field_ref") == field_ref:
             normalize(condition, f"$.commands[{index}].guard.when.value")
+    condition = resource.get("read_only_when")
+    if condition and condition.get("field_ref") == field_ref:
+        normalize(condition, f"$.resources.@{resource['id']}.read_only_when.value")
     for index, state in enumerate(states):
         for predicate_index, predicate in enumerate(state["filters"]):
             operand = predicate["operand"]
@@ -2583,7 +2627,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
 
     for values, label in (
         (normalized_resources, "resource"),
-        ([field for resource in normalized_resources for field in resource["fields"]], "field"),
+        ([field for resource in normalized_resources for field in resource["fields"] if field["id"] != "id"], "field"),
         (normalized_views, "view"),
         ([control for view in normalized_views for control in view.get("query_controls") or []], "query control"),
         (normalized_commands, "command"),
@@ -3304,7 +3348,7 @@ def _validate_semantic_prototype_v2(
     for resource in resources.values():
         for field in resource["fields"]:
             field_id = str(field["id"])
-            if field_id in all_fields:
+            if field_id in all_fields and field_id != "id":
                 _fail(f"duplicate field id {field_id!r} across resources")
             all_fields[field_id] = dict(field)
     if not any(str(view["region_role"]) == "primary" for view in views.values()):
