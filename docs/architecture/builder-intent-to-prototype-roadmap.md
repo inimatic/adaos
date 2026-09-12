@@ -2042,6 +2042,40 @@ Exit gate: an ordinary user can reach a relevant, executable, accepted
 Prototype without understanding AdaOS internals, and the evidence demonstrates
 that this result was not supplied by a subject-specific recipe.
 
+## R10. Small Application Lifecycle Qualification
+
+The next tranche implements the agreed four-step plan. Prototype fixtures and
+the disposable Prototype CRUD engine are not Automation acceptance evidence.
+Keep generation and runtime mechanisms domain-neutral; application-specific
+requirements belong to the visible evaluation case and its implementation brief.
+
+- [ ] `[must]` Close measured Core/Client defects: addressable resource reads and
+  append-oriented journals with legacy-data preservation, readable relationship
+  and status values, host localization, stable column sizing and live publication
+  projection verification. Record before/after timings, not larger timeouts.
+- [ ] `[must]` Add bounded coverage repairs without replacing valid candidate
+  content; retain original requests, findings, changes and preservation proofs.
+  Re-run the eight archetypes and existing-prototype changes with matched profiles.
+- [ ] `[must]` Expand the equipment-inspection Automation brief beyond the
+  Prototype request: persistent installed data, referential integrity, draft
+  saving, server-side completion rules, stale-write rejection, role checks,
+  supported photo attachment/link storage and explicit failures. Example data
+  must not silently become production data or satisfy a live business rule.
+- [ ] `[must]` Exercise this small application through Builder: accepted exact
+  Prototype, Automation, Trial, stable publication, installation and a subsequent
+  version update with existing records preserved. No manual application-code
+  bypass or fabricated workflow acceptance to make the chain pass.
+- [ ] `[must]` Express the full lifecycle in the existing technological E2E
+  pipeline with scoped identities, resumable steps, negative behavior assertions,
+  browser evidence, stage timings, model inputs/outputs and intervention counts.
+  Extend other archetypes by differing risks after the first complete lifecycle.
+- [ ] `[should]` Separate read-only observation from validation and acceptance:
+  show pending automation requirements and distinguish disposable preview data
+  from installed data in retained evidence and Builder Conversation.
+
+Applications development and large-project orchestration are not part of this
+tranche. Progress and blockers remain in this roadmap, not a parallel review doc.
+
 ## Could And Deferred
 
 - [ ] `[deferred]` Large-prototype decomposition, shared entity/navigation/locale
