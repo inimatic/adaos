@@ -256,7 +256,9 @@ def test_build_and_admit_prototype_acceptance() -> None:
     assert admitted["deterministic_evaluation"]["ok"] is True
 
 
-def test_acceptance_keeps_pending_rules_for_automation_and_does_not_mark_them_done() -> None:
+@pytest.mark.parametrize("disclosure", [{"en": "Rule not enforced yet."}, {"ru": "Правило пока не исполняется."},
+                                       {"en": "Rule not enforced yet.", "ru": "Правило пока не исполняется."}])
+def test_acceptance_keeps_pending_rules_for_automation_and_does_not_mark_them_done(disclosure) -> None:
     from adaos.services.builder.prototype_stage import automation_acceptance_checks
 
     webui = _webui()
@@ -264,7 +266,7 @@ def test_acceptance_keeps_pending_rules_for_automation_and_does_not_mark_them_do
         "requirement_ref": "job:01", "reason": "business_rule",
         "statement": "Enforce completion policy",
         "acceptance": "Reject invalid completion and preserve the saved record.",
-        "disclosure": {"en": "Rule not enforced yet.", "ru": "Правило пока не исполняется."},
+        "disclosure": disclosure,
         "prototype_refs": ["view:tasks"], "status": "pending_automation",
         "brief_ref": "brief:" + "a" * 24, "brief_digest": "sha256:" + "a" * 64,
     }
@@ -276,6 +278,10 @@ def test_acceptance_keeps_pending_rules_for_automation_and_does_not_mark_them_do
     assert acceptance["automation_requirements"] == [obligation]
     assert "Reject invalid completion" in automation_acceptance_checks(acceptance)[0]
     assert "fixtures or disclosure alone do not pass" in automation_acceptance_checks(acceptance)[0]
+    invalid = copy.deepcopy(webui)
+    invalid["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"]["automation_requirements"][0]["disclosure"] = {}
+    with pytest.raises(BuilderWorkflowError, match="disclosure"):
+        _acceptance(invalid)
 
     with pytest.raises(BuilderWorkflowError, match="automation requirements"):
         admit_prototype_acceptance(
@@ -293,6 +299,30 @@ def test_acceptance_does_not_excuse_a_true_platform_gap() -> None:
     }
     with pytest.raises(BuilderWorkflowError, match="platform capability gaps"):
         _acceptance(webui)
+
+
+def test_acceptance_evidence_capacity_includes_locale_snapshot() -> None:
+    import json
+    from pathlib import Path
+    from jsonschema import Draft202012Validator, ValidationError
+
+    abi = Path(__file__).parents[1] / "src/adaos/abi"
+    candidate = json.loads((abi / "builder.semantic_prototype_candidate.v2.schema.json").read_text(encoding="utf-8"))
+    schema = json.loads((abi / "builder.prototype_acceptance.v1.schema.json").read_text(encoding="utf-8"))
+    limit = candidate["properties"]["resources"]["maxItems"]
+    assert schema["properties"]["prototype_resources"]["maxItems"] == limit + 1
+    acceptance = _acceptance()
+    evidence = {"resource_type": "prototype.locale_dictionaries", "generation": 1, "record_count": 1,
+                **{key: "sha256:" + "a" * 64 for key in ("definition_digest", "bundle_digest", "records_digest")}}
+    acceptance["prototype_resources"] = [{**evidence, "resource_type": f"prototype.record_{index}"} for index in range(limit)] + [evidence]
+    Draft202012Validator(schema).validate(acceptance)
+    records_only = copy.deepcopy(acceptance)
+    records_only["prototype_resources"][-1]["resource_type"] = "prototype.ninth_record_source"
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(records_only)
+    acceptance["prototype_resources"].append({**evidence, "resource_type": "prototype.extra"})
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(acceptance)
 
 
 def test_acceptance_requires_non_drag_move_evidence() -> None:

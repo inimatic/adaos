@@ -55,7 +55,15 @@
           "acceptance": { "type": "string", "minLength": 1 },
           "status": { "const": "pending_automation" },
           "prototype_refs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
-          "disclosure": { "type": "object", "required": ["en", "ru"] },
+          "disclosure": {
+            "type": "object",
+            "additionalProperties": false,
+            "anyOf": [{ "required": ["en"] }, { "required": ["ru"] }],
+            "properties": {
+              "en": { "type": "string", "minLength": 1 },
+              "ru": { "type": "string", "minLength": 1 }
+            }
+          },
           "brief_ref": { "type": "string", "minLength": 1 },
           "brief_digest": { "type": "string", "minLength": 1 }
         }
@@ -64,7 +72,18 @@
     "deterministic_evaluation": { "type": "object" },
     "prototype_resources": {
       "type": "array",
-      "maxItems": 8,
+      "maxItems": 9,
+      "description": "Up to eight queried Prototype resources plus the separately bound locale evidence snapshot.",
+      "allOf": [
+        {
+          "contains": { "properties": { "resource_type": { "const": "prototype.locale_dictionaries" } } },
+          "minContains": 0, "maxContains": 1
+        },
+        {
+          "contains": { "properties": { "resource_type": { "not": { "const": "prototype.locale_dictionaries" } } } },
+          "minContains": 0, "maxContains": 8
+        }
+      ],
       "items": {
         "type": "object",
         "additionalProperties": false,

@@ -377,7 +377,9 @@ because its final business behavior cannot run in the declarative preview.
 - Business rules and external integrations may be represented by realistic,
   visible states and interactions in Prototype. The semantic document retains
   `automation_requirements`: exact Brief job/residual reference, reason,
-  EN/RU disclosure, and a testable future acceptance condition. The existing
+  disclosure in the requested UI locale(s), and a testable future acceptance
+  condition. A single-locale prototype does not require speculative translations.
+  The existing
   requirement binding points to the visible demonstration. Core copies the
   original statement and marks it `pending_automation`; the model cannot mark
   it implemented. Routine deferred business logic is not a platform gap.
@@ -389,6 +391,20 @@ because its final business behavior cannot run in the declarative preview.
   Automation must implement and test success and failure behavior; screenshots,
   fixtures and disclosures alone cannot satisfy those checks. Trial/release
   readiness requires the separate implementation and verification gates.
+
+The implementation handoff is not a copy of disposable storage into production.
+New installations start with empty user data unless a separate explicit data
+policy authorizes installation seeds. Representative records remain test evidence.
+Provider ownership follows the exact accepted resources and the owning application
+manifest, not legacy request-classifier flags. Locale evidence is not a provider.
+
+An explicit Automation brief and pending business obligations must be evaluated
+before selecting a deterministic execution path. Rewriting resource types cannot
+by itself discharge those obligations. Generated resource declarations are a
+starting contract for implementation, not an instruction to preserve a CRUD-only
+provider when the approved task requires server-side policy or integrations.
+Automation acceptance checks must describe implementation behavior rather than
+repeat completed Prototype visual criteria or invented future features.
 
 The generation-stage context includes this boundary before inference. The
 independent grader applies the same stage policy, while case-specific rubrics

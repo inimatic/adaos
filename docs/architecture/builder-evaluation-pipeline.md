@@ -104,6 +104,14 @@ These adapters are a qualification slice, not a completed release pipeline:
 real browser review, consumer install/update assertions and source-registry
 publication remain required by R10 of the Prototype roadmap.
 
+For diagnosis after a terminal lifecycle failure,
+`e2e/stand/continue-builder-lifecycle.py CHECKPOINT CASE OUTPUT` executes only
+the unchanged case's lifecycle tail from its first failed step. Output must be
+a new directory under the original bundle's `continuations/`. It records the
+parent checkpoint digest and current code revision, uses the same SDK gates and
+review files, and stops at the next failure. It never overwrites the original
+checkpoint/report or turns continuation success into a fresh-cohort pass.
+
 `prototype.browser` invokes the existing review, command, interaction or
 capability probe in an isolated case preview. Each retry retains its own evidence
 directory; `browser=off` is unavailable, not a passed review. Probe execution is

@@ -2170,6 +2170,43 @@ run 18 `browser/operations-work-queue-en-1/presentation-restore-regression/attem
 lifecycle run 02 records the action-label check. These checks do not close the
 remaining live relationship-caption, shell-localization or full lifecycle gates.
 
+Lifecycle run 03 again passes generation, grading and all browser probes. The
+acceptance schema then exposes a stale mandatory EN+RU disclosure requirement.
+It now admits either requested language and preserves nonempty disclosures;
+its evidence capacity includes eight record resources plus one locale snapshot.
+The retained prototype passes the real SDK acceptance in 1.85s using diagnostic
+continuation `small-lifecycle-gpt5-low-20260912-03/continuations/acceptance-contract-fix-01`.
+The original failed report is unchanged. Automation starts, but its worker fails
+in workspace preparation before any model attempt: the legacy provider predicate
+misses the semantic-v2 resource requirements and creates no companion skill.
+
+- [x] `[must]` Align acceptance with single-locale Prototype output and test the
+  maximum resource-plus-locale evidence boundary without allowing a ninth record
+  source. Keep locale digests binding on later Automation admission.
+- [x] `[should]` Provide a diagnostic continuation stand for the unchanged
+  declared lifecycle tail, preserving parent digest, original verdict, owned
+  targets, explicit review, per-step results and redacted UTF-8 evidence.
+  This is not a fresh cohort or a general replacement for runner resume.
+- [ ] `[must]` Resolve provider scaffolding from the actual accepted record
+  resources, excluding locale evidence. Share aggregate-owner verification with
+  the worker instead of reintroducing the component/aggregate mismatch there.
+- [ ] `[must]` Remove implicit Prototype-fixture seeding from production
+  handoff. Test empty installation and separately authorized initial data.
+- [ ] `[must]` Make Automation routing and context stage-aware: an explicit
+  implementation brief and pending rules cannot pass through resource-type
+  rewriting alone. Permit supported policy implementations instead of requiring
+  immutable CRUD-only bundles; filter completed visual Prototype criteria out
+  of implementation acceptance. The observed request also acquired an invented
+  offline/camera obligation from an actor description; do not promote model
+  speculation into required production scope.
+
+Local Client production build passes in 70.13s with existing stylesheet-budget
+and dependency warnings; 29 focused renderer tests pass. Core/Client commits
+remain local. DEV Builder's additional tested source is checkpointed as
+`0.2.126` (Root release digest
+`sha256:88374262daff28c4a74117139f4bdeee09d282390012391a61be219feb98ab31`);
+the parallel-work Workspace publication remains `0.2.125`.
+
 ## Could And Deferred
 
 - [ ] `[deferred]` Large-prototype decomposition, shared entity/navigation/locale
