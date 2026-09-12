@@ -2349,6 +2349,13 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
 - [ ] `[should]` Review remaining presentation quality: uneven equipment column
   use, raw boolean display, mobile table word-breaking and oversized detail
   headings. Keep visual-quality findings separate from executable acceptance.
+- [x] `[must]` Base live relationship/filter browser checks on an unfiltered,
+  owned-resource snapshot captured before interaction, not immutable authoring
+  seeds. Create-only applications can retain newly created review records, so
+  using seeds produced a false media-filter failure after successful creation.
+  The retained failure remains visible; the corrected media probe passes on
+  both viewports without deleting records or changing application source.
+  Fresh snapshot retrieval is bounded and incomplete snapshots fail explicitly.
 
 ## Could And Deferred
 

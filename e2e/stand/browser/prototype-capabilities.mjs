@@ -76,7 +76,29 @@ try {
       }
       throw new Error(`No reachable section for ${widget.id}`)
     }
+    const runtimeRecords = new Map()
+    const recordsFor = resourceId => {
+      if (!runtimeRecords.has(resourceId)) throw new Error(`No baseline snapshot for ${resourceId}`)
+      return runtimeRecords.get(resourceId)
+    }
     try {
+      // Creation probes may retain data when the application has no delete command.
+      // Compute expected filters from an unfiltered snapshot, not from initial seeds.
+      for (const resource of semantic.resources) {
+        const view = semantic.views.find(view => view.resource_ref === resource.id)
+        const resourceType = widgets.find(widget => widget.id === view?.id)?.dataSource?.resourceType
+        if (!resourceType) continue
+        if (!resourceType.startsWith(`prototype.project.${scenario}.`)) throw new Error('Snapshot outside the owned test application')
+        const response = await context.request.post(`${hub}/api/resources/query`, {
+          headers: { 'X-AdaOS-Token': token }, data: { resource_type: resourceType, limit: 1000 },
+        })
+        const body = await response.json()
+        if (!response.ok() || !body.ok || !Array.isArray(body.items) || body.cursor || body.items.length >= 1000) {
+          throw new Error(`Incomplete baseline snapshot for ${resourceType}`)
+        }
+        runtimeRecords.set(resource.id, body.items)
+      }
+      sample.resourceSnapshot = Object.fromEntries(runtimeRecords)
       await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 60_000 })
       await ready()
       const singleActions = await page.locator('.adaptive-toolbar__item:only-child').evaluateAll(elements => elements.map(element => {
@@ -111,7 +133,7 @@ try {
           else {
             const ids = await host(widget.id).locator('[data-webui-board-item-id]').evaluateAll(elements => elements.map(element => element.getAttribute('data-webui-board-item-id')))
             const resource = semantic.resources.find(item => item.id === semantic.views.find(view => view.id === widget.id).resource_ref)
-            available = ids.map(id => resource.records.find(record => record.id === id))
+            available = ids.map(id => recordsFor(resource.id).find(record => record.id === id))
           }
           let pendingResets = []
           for (const index of available.slice(0, 2).map((_, index) => index).reverse()) {
@@ -130,7 +152,7 @@ try {
               const target = widgets.find(item => item.id === view.id)
               await reveal(target)
               const sourceField = view.selection_filter.source_field_ref || 'id'
-              const expected = semantic.resources.find(resource => resource.id === view.resource_ref).records
+              const expected = recordsFor(view.resource_ref)
                 .filter(item => item[view.selection_filter.field_ref] === available[index][sourceField]
                   && (view.scope_filters || []).every(filter => item[filter.field_ref] === filter.value)).map(item => item.id).sort()
               await expect.poll(() => collectionIds(target), { timeout: 20_000 }).toEqual(expected)
@@ -193,7 +215,7 @@ try {
               && item.dataSource?.query?.search === `$state.${control.stateKey}`)
             const view = target && semantic.views.find(view => view.id === target.id && view.scope_filters?.length)
             if (!view) continue
-            const expected = semantic.resources.find(resource => resource.id === view.resource_ref).records
+            const expected = recordsFor(view.resource_ref)
               .filter(record => view.scope_filters.every(filter => record[filter.field_ref] === filter.value)).map(record => record.id).sort()
             const ids = () => host(target.id).locator('ada-list-widget').evaluate(element => window.ng.getComponent(element).latestItems.map(item => item.id).sort())
             await expect.poll(ids, { timeout: 20_000 }).toEqual(expected)
@@ -230,11 +252,11 @@ try {
             const field = view.selection_filter.field_ref
             const selection = widget.inputs.selectedStateKey
             if (target.dataSource.query.filters?.[field] !== `$state.${selection}`) throw new Error('Related query does not consume tree selection')
-            for (const record of sourceResource.records.slice(0, 2).reverse()) {
+            for (const record of recordsFor(sourceResource.id).slice(0, 2).reverse()) {
               const node = nodes.filter({ has: page.locator('.tree-widget__node-title', { hasText: String(record[widget.inputs.titleKey]) }) })
               await node.click()
               await expect(node).toHaveClass(/is-selected/)
-              const expected = semantic.resources.find(resource => resource.id === view.resource_ref).records
+              const expected = recordsFor(view.resource_ref)
                 .filter(item => item[field] === record.id).map(item => item.id).sort()
               if (target.type === 'ui.list') {
                 await expect.poll(() => host(target.id).locator('ada-list-widget').evaluate(element =>
@@ -258,7 +280,7 @@ try {
         if (widget.type === 'ui.list') {
           await reveal(widget)
           const view = semantic.views.find(view => view.id === widget.id)
-          const records = semantic.resources.find(resource => resource.id === view.resource_ref).records
+          const records = recordsFor(view.resource_ref)
             .filter(record => (view.scope_filters || []).every(filter => record[filter.field_ref] === filter.value))
           if (records.length && !view.selection_filter && !view.filter) {
             await expect.poll(() => host(widget.id).locator('ada-list-widget').evaluate(element =>
