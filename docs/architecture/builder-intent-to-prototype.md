@@ -460,6 +460,11 @@ untouched. A subprocess or scoped context alone is insufficient if SDK services,
 capability registries, credentials, module caches or environment still resolve
 the shared runtime. Exercise reader/writer denial and accepted business behavior
 before Trial acceptance; then independently test stable installation and update.
+Use the existing native skill engine behind an admitted runtime selection, not
+an application-specific executor or another independent interpreter of manifests.
+Keep caller/control authority distinct from candidate-owned data and projection
+state; don't clone user grants or infer owner privileges from preview metadata.
+Unsupported execution capabilities remain explicit blockers, not silent fallback.
 
 Application-owned transactions and business invariants are ordinary Automation
 implementation work. A skill may use standard-library storage transactions under

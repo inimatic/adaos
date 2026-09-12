@@ -2472,17 +2472,27 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
   owner materialization. Explicit new source selection must supersede the old
   Trial binding. Regression: 297 Core/Yjs checks pass in 24.26s
   (`trial-preview-recovery-regression-20260913-01.xml`). Reopening the real browser
-  after this fix remains a separate check.
-- [ ] `[must]` Verify runtime cache identity and unavailable-Trial presentation in
-  the live Client. DEV results must not survive as Trial data after a source
-  change or an admission failure. Retain ordinary transport stale-value recovery.
+  is qualified by `trial-browser-09`: both desktop and mobile recover exact
+  candidate revision, release fingerprint and BETA marker after API restart.
+- [x] `[must]` Verify materialization identity and unavailable-Trial presentation
+  in the live Client. Both layouts in `trial-browser-09` show the explicit
+  admission error, not reconnecting state. This qualifies source recovery and
+  rejection UX only; it is not a working application Trial.
   Client implementation passes 125 focused tests, including skill/API source
   changes without refetch on timestamp-only updates, plus generic boundaries and
-  the 41-component capability inventory check. Live qualification remains open.
+  the 41-component capability inventory check. Actual nonempty DEV/Trial/stable
+  record isolation remains part of the outstanding executor qualification.
   Owner materialization and HTTP admission were exercised in receipts
   `trial-owner-selection-08.json` and `trial-http-admission-08.json`; both implicit
   and explicit DEV calls were denied. Browser run 08 exposed the bootstrap identity
   loss and is retained as a failed source-identity qualification, not a Trial pass.
+- [ ] `[should]` Resolve visual findings from Trial rejection review: clipped
+  command captions and an empty-record message shown alongside unavailable data.
+  Qualify loaded-empty versus failed-source behavior without editing the generated
+  application to manufacture a passing lifecycle receipt. New Trial admission
+  feedback and Retry use Client EN/RU dictionaries; `trial-browser-10` verifies
+  the Russian text and exact candidate identity on both layouts. Thirty caller
+  ingress/credential regressions also pass (`trial-caller-ingress-regression-20260913-01.xml`).
 - [ ] `[should]` Resolve the isolated Builder browser's node-status 401/Limited
   indicator separately from scenario rendering and source publication health.
 
