@@ -638,6 +638,17 @@ and state proofs use the same owner map; fixture text and record identities are
 not renamed. Requirement bindings with a repeated field name must identify one
 owner or use the qualified field ID. Ambiguous bindings and namespace collisions
 are errors, not opportunities to guess domain semantics.
+Owner-qualified aliases also resolve unique local fields. Literal dotted IDs
+must not silently take precedence over another owner's qualified alias; an
+ambiguous binding needs an explicit owner. Independent unresolved bindings are
+reported together. Details-state evidence may include a field actually rendered
+by its native media source/poster binding, but not a hidden media-kind selector.
+
+A consumed quoted application title is authoring metadata, not an application
+operation or residual implementation requirement. Preserve the exact original
+request and the audience/outcome following the title. Changing only a generated
+test suffix must not change required semantic-reference enums. This reduces
+accidental context variation; cache-hit or latency gains require measurement.
 
 A deferred computation still requires representative output values when those
 outputs are requested. Raw inputs plus an explanatory paragraph are not an

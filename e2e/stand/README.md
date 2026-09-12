@@ -86,3 +86,15 @@ batch; subsequent replays do not change those scores. Browser `--probe readonly`
 selects a fixture with a stored-record lock, checks disabled inputs/actions and
 the provider's rejection of a direct update. It is separate from the mutable
 `interactions` probe; unsupported tasks must remain visibly unexercised.
+
+Run `context-archetypes-gpt5-low-20260912-06` was interrupted during its final
+repair (13 passes, two validation failures, one unfinished attempt). Its
+`interruption.json` preserves that classification; do not count it as a complete
+cohort or relabel compiler replays as generation successes. Resume currently
+cannot reconcile an orphaned worker solely from an absent terminal journal.
+
+`ADAOS_E2E_DICTIONARY_PROBE=1` makes browser review wait for and verify an actual
+authored value label from `assets/i18n/<locale>.json`. Interaction/command probes
+verify returned record identity, not unique visible marker text: numeric values,
+hidden input fields and sorted rows cannot serve as identity. Cleanup remains
+limited to operations explicitly declared by the prototype.

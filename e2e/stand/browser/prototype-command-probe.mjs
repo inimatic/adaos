@@ -177,20 +177,20 @@ try {
         }
         sample.checks.push({ command: create.id, task: 'fill/create', passed: true, submittedFields: Object.keys(receipt.body.payload) })
         if (modalId) await expect(form).toHaveCount(0)
-        const row = host(collection.id).locator('tr.row-selectable, .collection-focus-item').filter({ hasText: marker })
-        await expect(row).toHaveCount(1)
-        sample.checks.push({ command: create.id, task: 'created-record-visible', passed: true })
-        // Cleanup is an explicitly separate fixture operation, not a claimed user UI task.
-        const findRecord = value => {
-          if (!value || typeof value !== 'object') return null
-          if (value.id && Object.values(value).includes(marker)) return value
-          for (const item of Object.values(value)) { const found = findRecord(item); if (found) return found }
-          return null
-        }
-        const saved = findRecord(receipt.result)
+        const saved = receipt.result.result?.record
         if (saved) {
+          if (!saved.id || saved.id !== receipt.result.result.record_id) throw new Error('Inconsistent created identity')
           freshRecords.set(receipt.body.resource_type, saved)
           createdReceipts.push({ receipt, saved })
+          // Identity, not a marker in an optional text field, locates lookup-only forms' records.
+          const rows = host(collection.id).locator('tr.row-selectable, .collection-focus-item')
+          const rowIndex = () => rows.evaluateAll((elements, id) => elements.findIndex(element =>
+            window.ng?.getContext(element)?.$implicit?.id === id), saved.id)
+          await expect.poll(rowIndex).toBeGreaterThanOrEqual(0)
+          const row = rows.nth(await rowIndex())
+          await expect(row).toBeVisible()
+          if (!(await row.innerText()).trim()) throw new Error('Created record renders an empty row')
+          sample.checks.push({ command: create.id, task: 'created-record-visible', passed: true, recordId: saved.id })
           if (chosenRelations.length && widget.actions.some(action => action.type === 'resourceOperation' && action.params.operation_id === 'update')) {
             await open(widget, modalId, collection, false, row)
             await expect.poll(async () => {

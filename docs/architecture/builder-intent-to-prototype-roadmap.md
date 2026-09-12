@@ -1261,11 +1261,9 @@ the prompt against that false-positive gate or copy a domain solution into Core.
   independent binding defects with state/type defects before choosing repair scope.
 - [ ] `[should]` Measure request-specific reference enums against their potential
   schema-cache cost; keep the authoritative requirement inventory unchanged.
-- [ ] `[should]` Review mandatory standalone collections for lookup resources.
-  Current lowering requires every resource to have a collection, even when the
-  model correctly uses it only as a relationship selector. Qualify a typed,
-  observable lookup path before relaxing this constraint; do not fabricate UI
-  or silently omit resource validation to increase the score.
+- [x] `[should]` Review mandatory standalone collections for lookup resources.
+  Viewless resources now require a typed reachable selector, materialize validated
+  records and participate in final dependency checks; no collection is fabricated.
 - [x] `[must]` Qualify real attachment capture, not filename metadata: preserve
   scalar/multiple value shape, store bytes in Preview-owned state, return a
   durable scoped reference, reopen the content and reject failed uploads without
@@ -1291,8 +1289,10 @@ the prompt against that false-positive gate or copy a domain solution into Core.
   it selectable without regenerating the Prototype; reject dangling references.
   Qualify create-related/select/save/reopen across unrelated archetypes.
   Form lookup and atomic provider checks are implemented with component/Core
-  tests. Browser create-related flow, live collection filters/display labels and
-  viewless lookup resources remain open; do not mark the whole task complete.
+  tests. Run 05 now proves create-related/select/save and visible child records
+  on both layouts. Viewless lookups also pass typed materialization tests. Live
+  collection filters/display labels and full related-record reopen remain open;
+  do not mark the whole task complete.
 
 Qualification progress: `context-media-paired-low-20260911-02` passed all four
 development attempts (short 2/2, detailed 2/2). Each prompt needed one repair
@@ -1448,6 +1448,32 @@ details. These are distinct causes, not a justification to relax acceptance.
 - [ ] `[must]` Repeat all eight fresh cases after this boundary-alignment batch;
   qualify related-record creation/selection using live options, and retain any
   browser-task coverage gaps explicitly.
+- [x] `[must]` Align owner-qualified field references with the model-facing
+  contract for both repeated and unique local names. Run 06 budget attempt 2
+  exposed qualified unique-field references rejected serially in primary and
+  repair responses; collect independent unresolved references in one preflight.
+- [x] `[must]` Classify the consumed quoted application name as authoring
+  metadata, not a residual implementation requirement. Run 06 retained a
+  `named "...<test-id>" for ...` residual, making otherwise matched response
+  schemas differ. Preserve the original request and audience/outcome context;
+  exclude only the recognized authoring/name span, with EN/RU regressions.
+- [x] `[must]` Count native details media source/poster fields as rendered state
+  evidence without accepting a hidden dispatch field as visible output.
+- [ ] `[must]` Make interrupted E2E resume reconcile the durable Builder operation
+  before polling its terminal journal. Run 06 resumed into a blind file wait
+  after its worker had ended during semantic repair; retain the Root response
+  and classify interruption separately, without automatically submitting again.
+- [ ] `[should]` Evaluate named fixture cells or a narrowly typed fixture repair
+  against positional value arrays. Run 06 inspections emitted six values for
+  seven fields; do not guess where a missing value belongs or regenerate all
+  unchanged application design solely for fixture alignment.
+
+Run 06 was interrupted during the final procurement repair: 13 completed passes,
+two completed validation failures, one interrupted attempt. It is not a complete
+13/16 generation score. Full-boundary replay after qualified-reference repair
+admits both previously rejected terminal candidates; original evidence remains
+unchanged. The batch has 276 passing focused Core tests and 121 Client tests.
+Fresh generation and browser qualification remain separate gates.
 
 Engineering basis: [OpenAI text-generation guidance](https://developers.openai.com/api/docs/guides/text),
 [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), and

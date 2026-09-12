@@ -422,6 +422,19 @@ modal dismissal and edit round trips; the generated source was not hand-patched.
   retry (EN/RU); 138 focused Client tests passed. Resource-query status/retry now
   uses the same normalized request identity as loading. Full browser qualification
   and collection lookup propagation are still required.
+  Run 05 procurement now proves creating a parent and selecting its new identity
+  in a child editor on 1440px/390px; both records are visibly persisted. Volunteer
+  assignments also pass create/visible-record tasks. Unsupported delete operations
+  are not used for cleanup; retained fixtures are reported explicitly.
+- [x] `[must]` Observe late-created and replaced resource branches for scenario
+  dictionaries. Run 05 dictionary probes remain at revision 1 with zero value
+  labels after 30 seconds on both viewports: subscribing only to an already
+  existing nested Y.Map misses materialization. Use stable root observation with
+  path-scoped invalidation, test replacement/deletion/unsubscribe, and rerun the
+  same unchanged artifacts. Longer waits are not the fix.
+  Stable-root path observation now passes 121 focused tests. The unchanged
+  run 05 volunteer artifact loads all 13 value labels at 1440px/390px, with
+  dictionary revisions 3/2, zero loading indicators and no horizontal overflow.
 - [ ] `[should]` Group collection search/filters into responsive tool regions.
   The current library still spends much of its first viewport on stacked
   full-width filters. This is shared Client/compiler UX debt, not evidence that

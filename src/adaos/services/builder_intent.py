@@ -24,7 +24,7 @@ _REF_PATTERN = re.compile(
 _CYRILLIC_PATTERN = re.compile(r"[\u0400-\u04ff]")
 _AUTHORING_PATTERNS = (
     re.compile(
-        r"\b(?:create|build|make|design)\b.{0,60}\b(?:applications?|apps?|pages?|screens?|interfaces?|prototypes?|scenarios?)\b",
+        r"\b(?:create|build|make|design)\b.{0,60}?\b(?:applications?|apps?|pages?|screens?|interfaces?|prototypes?|scenarios?)\b",
         flags=re.IGNORECASE,
     ),
     re.compile(
@@ -33,7 +33,7 @@ _AUTHORING_PATTERNS = (
         flags=re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?:создай|создайте|сделай|сделайте|разработай|подготовь)\w*\b.{0,60}"
+        r"\b(?:создай|создайте|сделай|сделайте|разработай|подготовь)\w*\b.{0,60}?"
         r"\b(?:приложение|сценарий|интерфейс|прототип|экран|страницу)\b",
         flags=re.IGNORECASE,
     ),
@@ -43,6 +43,11 @@ _AUTHORING_PATTERNS = (
         r"\b(?:верси\w*|прототип\w*)\b",
         flags=re.IGNORECASE,
     ),
+)
+_AUTHORING_TITLE = re.compile(
+    r'''\s*(?:(?:named|called|с\s+названием|под\s+названием)\s+)?'''
+    r'''(?:"[^"\n]+"|'[^'\n]+'|\u00ab[^\u00bb\n]+\u00bb|\u201c[^\u201d\n]+\u201d)''',
+    flags=re.IGNORECASE,
 )
 _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -243,7 +248,9 @@ def _authoring_spans(clause: str) -> list[tuple[int, int]]:
         for pattern in _AUTHORING_PATTERNS
         for match in pattern.finditer(clause)
     ]
-    return sorted(spans)
+    # A quoted application title is authoring metadata, not an in-app job.
+    return sorted((start, title.end() if (title := _AUTHORING_TITLE.match(clause, end)) else end)
+                  for start, end in spans)
 
 
 def _overlaps_any(start: int, end: int, spans: list[tuple[int, int]]) -> bool:

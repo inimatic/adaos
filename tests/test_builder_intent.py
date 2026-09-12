@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from adaos.sdk.builder import intent as intent_sdk
 from adaos.services.builder_intent import (
     capture_intent,
@@ -107,6 +109,29 @@ def test_ru_builder_authoring_is_not_an_application_create_operation() -> None:
 
     assert brief["operations"] == []
     assert brief["principal_jobs"] == []
+
+
+@pytest.mark.parametrize("prefix,suffix", [
+    ('Create a new application named "Create screen [TEST]-001"', 'for a small team'),
+    ('Build an app called "Review records"', 'for volunteers'),
+    ('Создай приложение "Добавить экран [TEST]-001"', 'для мастерской'),
+    ('Сделай приложение с названием «Записать заявки»', 'для команды'),
+])
+def test_quoted_authoring_title_is_not_a_job_but_audience_is_retained(prefix, suffix) -> None:
+    statement = f"{prefix} {suffix}."
+    brief = compile_prototype_brief(statement)
+    assert brief["problem"]["value"] == statement
+    assert brief["operations"] == []
+    assert brief["principal_jobs"] == []
+    assert [item["statement"] for item in brief["residual_requirements"]] == [suffix]
+
+
+def test_application_title_changes_do_not_change_residual_requirement_identity() -> None:
+    briefs = [compile_prototype_brief(f'Create an application named "App {uid}" for a team.') for uid in ("001", "002")]
+    assert briefs[0]["residual_requirements"][0]["id"] == briefs[1]["residual_requirements"][0]["id"]
+    assert briefs[0]["problem"] != briefs[1]["problem"]
+    business = compile_prototype_brief('Create a record named "Customer" and edit its address.')
+    assert {item["kind"] for item in business["operations"]} == {"create", "update"}
 
 
 def test_ru_actor_and_loading_state_do_not_invent_mutating_operations() -> None:

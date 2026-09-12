@@ -219,6 +219,79 @@ def test_field_namespace_does_not_hide_identity_or_declaration_collisions(resour
         _candidate_v2_field_namespaces(resources)
 
 
+def test_qualified_unique_fields_resolve_in_bindings_views_commands_and_relationships() -> None:
+    brief, semantic = _multi_resource_fixture()
+    semantic["relationships"][0]["label_field_refs"] = ["person_name"]
+    candidate = _multi_resource_candidate(semantic)
+    original = copy.deepcopy(candidate)
+    by_view = {view["id"]: view["resource_ref"] for view in candidate["views"]}
+    for view in candidate["views"]:
+        view["field_refs"] = [f"{view['resource_ref']}.{ref}" for ref in view["field_refs"]]
+    for command in candidate["commands"]:
+        command["input_field_refs"] = [f"{by_view[command['view_ref']]}.{ref}" for ref in command["input_field_refs"]]
+    relation = candidate["relationships"][0]
+    relation["from_field_ref"] = f"{relation['from_resource_ref']}.{relation['from_field_ref']}"
+    relation["label_field_refs"] = ["people.person_name"]
+    for state in candidate["representative_states"]:
+        state["proof"]["visible_field_refs"] = [f"{by_view[state['view_ref']]}.{ref}" for ref in state["proof"]["visible_field_refs"]]
+    owners = {field["id"]: resource["id"] for resource in candidate["resources"] for field in resource["fields"]}
+    for binding in candidate["requirement_bindings"]:
+        for ref in binding["semantic_refs"]:
+            if ref["kind"] == "field":
+                ref["id"] = f"{owners[ref['id']]}.{ref['id']}"
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+    expected = compile_semantic_prototype_candidate(original, brief=brief)
+    assert result["semantic_document"] == expected["semantic_document"]
+    assert any(item["kind"] == "candidate_reference" for item in result["normalizations"])
+
+
+def test_preflight_reports_all_independent_missing_binding_fields() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    for index, binding in enumerate(candidate["requirement_bindings"][:2]):
+        binding["semantic_refs"].append({"kind": "field", "id": f"absent_{index}"})
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    missing = [item for item in caught.value.findings if item["code"] == "semantic.binding_reference_missing"]
+    assert len(missing) == 2
+
+
+@pytest.mark.parametrize("field,visible", [("source", True), ("poster", True), ("kind", False), ("other", False)])
+def test_state_proof_counts_rendered_details_media_not_hidden_dispatch_fields(field, visible) -> None:
+    from adaos.services.builder.semantic_prototype import _state_proof_findings
+    state = {"id": "s", "min_items": 1, "max_items": 1, "filters": [],
+             "proof": {"kind": "field_predicate", "visible_field_refs": [field]}}
+    view = {"id": "v", "role": "details", "field_refs": [],
+            "media": {"source_field_ref": "source", "poster_field_ref": "poster", "kind_field_ref": "kind"}}
+    findings = _state_proof_findings(state, view, index=0)
+    assert any(item["code"] == "semantic.state_proof_hidden" for item in findings) is not visible
+
+
+@pytest.mark.parametrize("owner_refs,expected", [
+    ([], None),
+    ([{"kind": "resource", "id": "people"}], "work_items.title"),
+    ([{"kind": "resource", "id": "work_items"}], "title"),
+])
+def test_literal_dotted_id_does_not_silently_override_qualified_alias(owner_refs, expected) -> None:
+    from adaos.services.builder.semantic_prototype import _canonicalize_semantic_prototype_candidate_v2
+    _, semantic = _multi_resource_fixture()
+    people = semantic["resources"][1]
+    field = copy.deepcopy(semantic["resources"][0]["fields"][0])
+    field["id"] = "work_items.title"
+    people["fields"].append(field)
+    for record in people["records"]:
+        record[field["id"]] = "Untouched"
+    candidate = _multi_resource_candidate(semantic)
+    candidate["requirement_bindings"] = [{"requirement_ref": "collection:01", "semantic_refs": [*owner_refs, {"kind": "field", "id": "work_items.title"}]}]
+    if expected is None:
+        with pytest.raises(BuilderWorkflowError, match="ambiguous field reference"):
+            _canonicalize_semantic_prototype_candidate_v2(candidate)
+    else:
+        document, _ = _canonicalize_semantic_prototype_candidate_v2(candidate)
+        actual = document["requirement_bindings"][0]["semantic_refs"][-1]
+        assert actual == f"field:{expected}"
+
+
 def test_unreachable_resource_cannot_be_excused_as_lookup_only() -> None:
     brief, semantic = _multi_resource_fixture()
     semantic["views"] = [view for view in semantic["views"] if view["resource_ref"] != "people"]

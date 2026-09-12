@@ -9,6 +9,16 @@ const token = process.env.ADAOS_E2E_HUB_TOKEN
 const selectWidget = process.env.ADAOS_E2E_SELECT_WIDGET || ''
 const locale = process.env.ADAOS_E2E_LOCALE || 'en'
 const emptyMode = process.env.ADAOS_E2E_EMPTY_STATES === '1'
+const dictionaryProbe = process.env.ADAOS_E2E_DICTIONARY_PROBE === '1'
+let expectedTranslation
+if (dictionaryProbe) {
+  const checkpoint = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CHECKPOINT, 'utf8'))
+  const created = checkpoint.steps.find(step => step.id === 'create')?.output
+  if (!checkpoint.cleanup?.test || created.scenario_id !== scenario) throw new Error('Dictionary probe requires an owned test checkpoint')
+  const dictionary = JSON.parse(await fs.readFile(path.join(created.artifact_root, `assets/i18n/${locale}.json`), 'utf8'))
+  expectedTranslation = Object.entries(dictionary).find(([key]) => key.startsWith('value.'))
+  if (!expectedTranslation) throw new Error('Dictionary probe needs a value label')
+}
 let emptyCollections = []
 if (emptyMode) {
   const checkpoint = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CHECKPOINT, 'utf8'))
@@ -88,6 +98,12 @@ try {
       }, scenario, { timeout: 60_000 })
       await page.locator('ada-page-widget-host, ada-widget').first().waitFor({ timeout: 15_000 })
       await page.evaluate(() => document.fonts.ready)
+      if (dictionaryProbe) {
+        await page.waitForFunction(([key, value]) => {
+          const component = window.ng?.getComponent(document.querySelector('ada-table-widget, ada-list-widget, ada-details-widget'))
+          return component?.i18n?.t(key) === value
+        }, expectedTranslation, { timeout: 30_000 })
+      }
       if (emptyMode) {
         for (const widget of emptyCollections) {
           const host = page.locator(`[data-webui-widget-id=${JSON.stringify(widget.id)}]`)
@@ -140,6 +156,12 @@ try {
       loadingIndicators: document.querySelectorAll('ion-spinner').length,
       tables: document.querySelectorAll('ada-table-widget').length,
       language: document.documentElement.lang,
+      dictionary: (() => {
+        const component = window.ng?.getComponent(document.querySelector('ada-table-widget, ada-list-widget, ada-details-widget'))
+        const i18n = component?.i18n
+        return { language: i18n?.getLang(), revision: i18n?.revision,
+          valueLabels: Object.keys(i18n?.activeDict || {}).filter(key => key.startsWith('value.')).length }
+      })(),
       media: Array.from(document.querySelectorAll('ada-page-widget-host img, ada-page-widget-host video, ada-page-widget-host audio')).map(element => ({
         kind: element.tagName, src: element.currentSrc || element.getAttribute('src'),
         naturalWidth: element.naturalWidth, readyState: element.readyState,

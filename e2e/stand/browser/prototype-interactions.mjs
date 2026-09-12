@@ -89,7 +89,11 @@ try {
         const update = widget.actions?.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'update')
         const editableField = field => update?.params?.payload?.[field.id] === `$event.values.${field.id}` && !field.visibleIf && !field.readOnly
         const field = widget.inputs.fields?.find(field => ['shortText', 'longText'].includes(field.type) && editableField(field))
-          || widget.inputs.fields?.find(field => field.type === 'date' && editableField(field))
+          || widget.inputs.fields?.find(field => ['date', 'time', 'number', 'integer'].includes(field.type) && editableField(field))
+        const numeric = field && ['number', 'integer'].includes(field.type)
+        const probeValue = (purpose) => field?.type === 'date' ? `2099-12-${purpose === 'cancel' ? '29' : purpose === 'create' ? '31' : '30'}`
+          : field?.type === 'time' ? (purpose === 'cancel' ? '11:20' : '12:30')
+            : numeric ? (purpose === 'cancel' ? '17' : '23') : `${purpose}-${checkpoint.run_id}-${layout}`
         const collection = widgets.find(item => ['ui.table', 'ui.list'].includes(item.type) && item.dataSource?.resourceType === update?.target)
         if (process.env.ADAOS_E2E_READONLY === '1') {
           if (!update || !collection || !widget.inputs.readOnlyIf) continue
@@ -132,7 +136,7 @@ try {
           continue
         }
         if (!update || !field || !collection) {
-          sample.checks.push({ editor: widget.id, status: 'not_exercised', reason: 'No supported text/date update and matching collection' })
+          sample.checks.push({ editor: widget.id, status: 'not_exercised', reason: 'No supported scalar update and matching collection' })
           continue
         }
         const row = host(collection.id).locator('tr.row-selectable, .collection-focus-item').first()
@@ -168,9 +172,9 @@ try {
         }
         if (modalId) {
           const count = sample.mutations.length
-          await input.fill(field.type === 'date' ? '2099-12-29' : `cancelled-${layout}`)
+          await input.fill(probeValue('cancel'))
           await opener.evaluate(element => { window.__E2E_FOCUS_ORIGIN__ = element })
-          await page.locator('ion-modal').last().getByRole('button', { name: 'Close', exact: true }).click()
+          await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
           await expect(form).toHaveCount(0)
           sample.dismissFocus = await opener.evaluate(element => ({
             sameElement: element === window.__E2E_FOCUS_ORIGIN__, originConnected: window.__E2E_FOCUS_ORIGIN__?.isConnected,
@@ -183,7 +187,7 @@ try {
           if (sample.mutations.length !== count) throw new Error('Dismissing an editor caused a mutation')
           sample.checks.push({ editor: widget.id, status: 'passed', task: 'dismiss-without-save/restore-focus/reopen', surface: 'overlay' })
         }
-        const marker = field.type === 'date' ? '2099-12-30' : `review-${checkpoint.run_id}-${layout}`
+        const marker = probeValue('edit')
         await input.fill(marker)
         let uploadProof
         for (const attachment of widget.inputs.fields.filter(item => item.fileStorage === 'prototype' && update.params.payload[item.id])) {
@@ -231,7 +235,7 @@ try {
         const result = await response.json()
         if (!response.ok() || result.ok === false) throw new Error(`Update rejected: ${JSON.stringify(result)}`)
         const mutation = sample.mutations.at(-1)
-        if (!mutation?.record || mutation.payload[field.id] !== marker) throw new Error('Wrong record or payload was submitted')
+        if (!mutation?.record || mutation.payload[field.id] !== (numeric ? Number(marker) : marker)) throw new Error('Wrong record or payload was submitted')
         try {
         if (modalId) {
           await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
@@ -267,7 +271,7 @@ try {
         if (!restored.ok() || (await restored.json()).ok === false) throw new Error('Could not restore fixture')
         sample.checks.push({ editor: widget.id, status: 'passed', task: 'fixture-restore', evidenceKind: 'stand_cleanup' })
         }
-        if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: 'Close', exact: true }).click()
+        if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
         const create = widget.actions.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'create')
         const remove = widget.actions.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'delete')
         const supportedTypes = ['shortText', 'longText', 'number', 'integer', 'date', 'singleChoice', 'boolean', 'toggle']
@@ -277,7 +281,7 @@ try {
         }
         if (modalId) await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
         await host(`open-${widget.id}`).locator('[data-command-id="new"]').click()
-        const createdMarker = field.type === 'date' ? '2099-12-31' : `created-${checkpoint.run_id}-${layout}`
+        const createdMarker = probeValue('create')
         const originalValues = sample.conditionDebug.values
         for (const item of widget.inputs.fields) {
           const container = form.locator(`[data-webui-field-id=${JSON.stringify(item.id)}]`)
@@ -297,16 +301,22 @@ try {
         const createdResponse = await creating
         const createdResult = await createdResponse.json()
         if (!createdResponse.ok() || createdResult.ok === false) throw new Error(`Create rejected: ${JSON.stringify(createdResult)}`)
-        if (sample.mutations.at(-1)?.payload?.[field.id] !== createdMarker) throw new Error('Create submitted the wrong draft')
+        const expectedCreatedValue = numeric ? Number(createdMarker) : createdMarker
+        if (sample.mutations.at(-1)?.payload?.[field.id] !== expectedCreatedValue) throw new Error('Create submitted the wrong draft')
+        const createdId = createdResult.result?.record_id
+        if (!createdId || createdResult.result?.record?.id !== createdId) throw new Error('Create did not return a consistent record identity')
         if (modalId) await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
         // The new record must be discoverable through the collection before deletion.
-        const newRow = host(collection.id).locator('tr.row-selectable, .collection-focus-item').filter({ hasText: createdMarker })
-        await expect(newRow).toHaveCount(1, { timeout: 30_000 })
+        const rows = host(collection.id).locator('tr.row-selectable, .collection-focus-item')
+        const createdRowIndex = () => rows.evaluateAll((elements, id) => elements.findIndex(element =>
+          window.ng?.getContext(element)?.$implicit?.id === id), createdId)
+        await expect.poll(createdRowIndex).toBeGreaterThanOrEqual(0)
+        const newRow = rows.nth(await createdRowIndex())
         await newRow.click()
         if (modalId && opener !== row) await opener.click()
         await expect(input).toHaveValue(createdMarker, { timeout: 30_000 })
         const selected = await form.evaluate(element => window.ng?.getComponent(element.querySelector('ada-form-widget'))?.recordValues)
-        if (selected?.[field.id] !== createdMarker || !selected.id || selected.id === sample.conditionDebug.record.id) throw new Error('Refusing to delete a record not created by this probe')
+        if (selected?.[field.id] !== expectedCreatedValue || selected.id !== createdId || selected.id === sample.conditionDebug.record.id) throw new Error('Refusing to delete a record not created by this probe')
         const deleting = operationResponse()
         await form.locator(`[data-command-id=${JSON.stringify(remove.id)}]`).locator('button').click()
         if (remove.confirmation) await page.locator('ion-alert').last().locator('button').last().click()
@@ -314,7 +324,7 @@ try {
         if (!removedResponse.ok() || (await removedResponse.json()).ok === false) throw new Error('Delete rejected')
         if (sample.mutations.at(-1)?.record !== selected.id) throw new Error('Delete targeted the wrong record')
         if (modalId) await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
-        await expect(newRow).toHaveCount(0, { timeout: 30_000 })
+        await expect.poll(createdRowIndex).toBe(-1)
         sample.checks.push({ editor: widget.id, status: 'passed', task: 'create/read/delete', surface: modalId ? 'overlay' : 'inline' })
       }
       if (!sample.checks.some(check => check.status === 'passed')) throw new Error('No mutation exercised; this is not a task pass')
