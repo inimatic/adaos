@@ -4494,6 +4494,8 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     assert (input_dir / "packet.json").resolve().as_posix() in prompt
     assert "admitted read-only context" in prompt
     assert "same schema with `blocking:true`" in prompt
+    from adaos.domain.development_feedback import development_feedback_model_rules
+    assert json.dumps(development_feedback_model_rules(), separators=(",", ":")) in prompt
     assert "Do not run tests, validation, status, or diff commands" in prompt
     assert "every textual `Get-Content`" in prompt
     assert "`-Encoding UTF8`" in prompt
@@ -4516,7 +4518,8 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     assert "Previous Automation" not in prompt
     assert "workflow.json" in prompt
     assert "irrelevant.full.catalog" not in prompt
-    assert len(prompt.encode("utf-8")) < 8_000
+    # Includes parser vocabulary and exact read-only input paths, not just prose.
+    assert len(prompt.encode("utf-8")) < 8_700
     assert [item["id"] for item in packet["prompt_rule_capsules"]] == [
         "adaos.builder.execution_boundary.v1",
         "adaos.skill.sdk_boundary.v1",

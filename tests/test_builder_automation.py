@@ -2837,6 +2837,30 @@ def test_followup_turn_can_replace_bounded_execution_budget(tmp_path: Path) -> N
     assert task["realize_request"]["artifacts"]["execution_budget"]["max_model_tokens"] == 200000
 
 
+def test_session_read_waits_for_the_same_mutation_lock_as_the_writer(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+
+    service = _service(tmp_path)
+    path = service._session_path("scenario", "recipes")
+    started = Event()
+    session = {"session_id": "automation.scenario.recipes", "object_type": "scenario",
+               "object_id": "recipes", "status": "failed"}
+
+    def read():
+        started.set()
+        return service.get_session("scenario", "recipes")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with mutation_lock(service.root / ".mutation.lock"):
+            pending = pool.submit(read)
+            assert started.wait(5)
+            assert not pending.done()
+            atomic_write_json(path, session)
+        assert pending.result(timeout=5)["session_id"] == session["session_id"]
+
+
 def test_retry_failed_reuses_governed_request_and_refreshes_prototype_acceptance(
     tmp_path: Path,
     monkeypatch,

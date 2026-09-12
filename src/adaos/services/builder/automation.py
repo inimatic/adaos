@@ -6004,7 +6004,10 @@ class BuilderAutomationService:
             return None
         path = self._session_path(kind, project_id)
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            # Readers participate in the writer's process lock: a Windows
+            # replacement can otherwise briefly deny opening the old inode.
+            with mutation_lock(self.root / ".mutation.lock", timeout_s=30.0):
+                raw = json.loads(path.read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError):
             return None
         return self._hydrate_session_compatibility(raw) if isinstance(raw, Mapping) else None

@@ -178,6 +178,13 @@ def _text(value: Any, *, field: str, limit: int, required: bool = False) -> str:
     return text
 
 
+def development_feedback_model_rules() -> dict[str, Any]:
+    """Expose parser vocabulary without a second hand-maintained prompt enum."""
+    return {"category": sorted(_CATEGORIES), "impact": sorted(_IMPACTS),
+            "max_items": 8, "max_target_refs": 20, "max_evidence_refs": 20,
+            "text_limits": {"summary": 1000, "details": 3000, "recommendation": 2000}}
+
+
 def normalize_development_feedback(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, Mapping):
         raise TypeError("development feedback envelope must be an object")
@@ -280,5 +287,6 @@ __all__ = [
     "DEVELOPMENT_FEEDBACK_FENCE",
     "DEVELOPMENT_FEEDBACK_OUTPUT_SCHEMA",
     "normalize_development_feedback",
+    "development_feedback_model_rules",
     "parse_development_feedback",
 ]

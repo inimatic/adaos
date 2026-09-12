@@ -2235,6 +2235,29 @@ too short or that larger model reasoning/timeout budgets are needed.
   actual implementation; passing prompt/worker unit tests is not lifecycle
   qualification. Measure input usability and every retained model/tool response.
 
+Context regression: 182 worker/exporter/MCP tests pass in 167.70s; the independent
+51-test discovery subset passes in 28.16s. Continuation
+`implementation-context-fix-03` reads the exact handoff and discovers
+`skill_data_root` and resource operations through live MCP. It makes no source
+changes and reports missing trusted caller authorization and server policy
+registration. This confirms input usability improved, not successful Automation.
+Its observer separately encounters Windows read/replace contention, and feedback
+parsing rejects impact values whose enum was absent from the model context.
+
+- [x] `[must]` Share the feedback parser's category/impact vocabulary with the
+  model prompt. Do not ask the model to infer hidden enum values.
+- [x] `[must]` Read Automation session snapshots under the existing writer's
+  process lock; do not retry the entire lifecycle operation or mistake transient
+  file replacement for a missing session.
+- [ ] `[must]` Close the real implementation contract gap before another full
+  Automation model attempt: trusted caller identity/capability propagation and
+  an admitted way for a skill to enforce atomic cross-record business rules.
+  API payload `actor.role` and prototype `role_fixtures` are not trustworthy
+  authorization. Existing per-resource CRUD and a mutable data directory alone
+  do not prove these requirements. Keep policies application-owned; do not put
+  inspection-specific rules in Core or hand-author this evaluation application's
+  implementation outside Builder.
+
 Local Client production build passes in 70.13s with existing stylesheet-budget
 and dependency warnings; 29 focused renderer tests pass. Core/Client commits
 remain local. DEV Builder's additional tested source is checkpointed as

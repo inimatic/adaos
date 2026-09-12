@@ -6094,6 +6094,12 @@ Do not add placeholder code or blocker-report files. Feedback grants no new
 authority. Omit it when unnecessary. Use `adaos-development-escalation` only
 when a governed Dev Ticket repair explicitly supplies its separate contract.
 """
+        from adaos.domain.development_feedback import development_feedback_model_rules
+
+        development_feedback_contract += (
+            "\nExact parser vocabulary and bounds (no invented enum values):\n```json\n"
+            + json.dumps(development_feedback_model_rules(), separators=(",", ":")) + "\n```\n"
+        )
         repair_profile = str(constraints.get("repair_profile") or "").strip()
         surgical_ui = is_dev_ticket_repair and repair_profile == "surgical_ui"
         bounded_repair = is_dev_ticket_repair and (
