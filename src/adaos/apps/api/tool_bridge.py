@@ -22,6 +22,7 @@ from adaos.services.observe import attach_http_trace_headers
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.eventbus import emit
 from adaos.services.pending_actions import list_pending_actions_async, publish_pending_action_async
+from adaos.services.policy.caller import CallerAccessDenied
 from adaos.services.runtime_lifecycle import is_accepting_new_work
 from adaos.services.runtime_action_grants import (
     find_runtime_action_grant,
@@ -1758,6 +1759,15 @@ def _project_tool_context_meta(
 
 @router.post("/tools/call", dependencies=[Depends(require_token)])
 async def call_tool(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
+    from adaos.services.policy.caller import verified_caller
+
+    state = getattr(request, "state", None)
+    actor = getattr(state, "adaos_verified_caller", None)
+    with verified_caller(actor):
+        return await _call_tool_with_identity(body, request, response, ctx)
+
+
+async def _call_tool_with_identity(body: ToolCall, request: Request, response: Response, ctx: AgentContext):
     resolved_timeout = _request_tool_call_timeout_s(body, request)
     if resolved_timeout is not None and resolved_timeout != body.timeout:
         body = body.model_copy(update={"timeout": resolved_timeout})
@@ -1998,6 +2008,8 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
                 float(local_timings.get("prepare_ms") or 0.0),
                 float(local_timings.get("run_tool_ms") or 0.0),
             )
+    except CallerAccessDenied as exc:
+        raise HTTPException(status_code=403, detail={"error": "caller_access_denied", "reason": str(exc)}) from exc
     except (FileNotFoundError, RuntimeError, KeyError) as e:
         local_runtime_resolved = local_execution_started and await asyncio.to_thread(
             _runtime_ready,

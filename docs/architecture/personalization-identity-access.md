@@ -114,6 +114,24 @@ The product UI should still distinguish:
 This lets AdaOS start with an honest owner-superuser model while preserving a
 future path toward encrypted private data and stronger separation.
 
+### Trusted invocation subject
+
+Skill execution identity and caller identity are distinct. `adaos.sdk.access.caller`
+reads only the subject bound by trusted ingress; `adaos.sdk.access.require` evaluates
+caller capabilities through `PersonalizationAccessService` in the executing skill's
+scope. The SDK does not accept an actor/role override or expose an identity setter.
+The owner-token `/tools/call` path binds the configured local owner after token
+verification and preserves that context across runtime thread calls. Outside an
+admitted invocation the new caller checks deny access; they do not default to owner.
+
+This is an owner-ingress and SDK foundation, not completed Phase 9 enforcement.
+Scoped browser credentials, actor propagation across member-node forwarding,
+principal-partitioned idempotency caches and resource endpoint enforcement must
+be qualified before admitting non-owner traffic. Existing request-body `actor`
+fields and prototype role fixtures are not authenticated identities. Integration
+must reuse local sessions, grants and revocation rather than promote Root MCP
+credentials to unrestricted node-owner credentials.
+
 ### Subnet service identity and purpose-scoped keys
 
 The subnet itself is also a service principal for Root authentication,

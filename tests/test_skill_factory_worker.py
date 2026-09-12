@@ -6909,6 +6909,8 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     prompt = (tmp_path / "input-blueprint/task.md").read_text(encoding="utf-8")
     assert "Do not create custom CRUD handlers" not in prompt
     assert "Fresh installation starts with empty user data" in prompt
+    assert "Core need not supply a domain policy registry" in prompt
+    assert "Missing authentication ingress remains" in prompt
     assert (tmp_path / "input-blueprint/prototype-resource-handoff.json").resolve().as_posix() in prompt
     declaration = workspace / "skills" / companion / "resources/work_items.resource.json"
     empty_bundle = json.loads(declaration.read_text(encoding="utf-8"))
@@ -6936,6 +6938,23 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     context_packet["artifacts"]["prototype"]["acceptance"]["automation_requirements"] = obligations
     completion = worker._prototype_resource_handoff_from_assignment(assignment, workspace)["completion"]
     assert completion["model_required"] and "pending_automation_requirements" in completion["reasons"]
+    compact_packet = worker_module.context_packet_prompt_projection(context_packet)
+    assert compact_packet["artifacts"]["prototype"]["acceptance"]["automation_requirements"] == obligations
+    assignment_artifacts = assignment["realize_request"]["artifacts"]
+    assignment_artifacts["prototype_acceptance"] = copy.deepcopy(context_packet["artifacts"]["prototype"]["acceptance"])
+    assignment_artifacts.pop("context_packet")
+    assignment_artifacts["context_projection"] = compact_packet
+    projected_handoff = worker._prototype_resource_handoff_from_assignment(assignment, workspace)
+    assert projected_handoff["automation_requirements"] == obligations
+    assert "pending_automation_requirements" in projected_handoff["completion"]["reasons"]
+    compact_packet["artifacts"]["prototype"]["acceptance"].pop("automation_requirements")
+    assert worker._prototype_resource_handoff_from_assignment(assignment, workspace)["automation_requirements"] == obligations
+    assignment_artifacts["prototype_acceptance"]["digest"] = "sha256:another"
+    with pytest.raises(ValueError, match="projection identity mismatch: digest"):
+        worker._prototype_resource_handoff_from_assignment(assignment, workspace)
+    assignment_artifacts.pop("prototype_acceptance")
+    assignment_artifacts.pop("context_projection")
+    assignment_artifacts["context_packet"] = context_packet
     context_packet["artifacts"]["prototype"]["acceptance"].pop("automation_requirements")
 
     (workspace / "skills" / companion / "resources" / "work_items.resource.json").unlink()

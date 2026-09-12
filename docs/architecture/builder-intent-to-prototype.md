@@ -418,6 +418,18 @@ SDK catalog headers are navigation, not executable method contracts. Search
 must expose the same admitted public facades that generated code may use, and
 exact symbols must outrank broad catalog vocabulary.
 
+Application-owned transactions and business invariants are ordinary Automation
+implementation work. A skill may use standard-library storage transactions under
+its admitted persistent data root; the absence of a Core domain-policy registry
+is not itself a capability gap. Authentication, caller grants and identity must
+not be recreated inside the application. The public `adaos.sdk.access` facade
+checks a verified invocation subject against the existing local access kernel
+in the executing skill's scope; arguments, profile selection and skill execution
+identity cannot substitute for that subject. No subject means access denied.
+The current owner-token HTTP ingress establishes only local-owner identity.
+Policy checks tested with trusted session fixtures do not qualify a live reader
+login or delegated-call authorization path; those need independent evidence.
+
 All implementation stages may report typed development feedback. An unresolved
 blocking item retains the candidate and evidence without applying source or
 claiming completed Automation. Recovery obeys the same gate. Governed Dev Ticket

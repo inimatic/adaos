@@ -2265,6 +2265,43 @@ remain local. DEV Builder's additional tested source is checkpointed as
 `sha256:88374262daff28c4a74117139f4bdeee09d282390012391a61be219feb98ab31`);
 the parallel-work Workspace publication remains `0.2.125`.
 
+Additional local progress (2026-09-12): 171 Automation tests pass after the
+session-reader lock fix. DEV Builder `0.2.127` retains scoped repair candidates
+and can make successive, distinct reference/binding/state repairs when a full
+compile exposes another typed finding. Each family is attempted at most once;
+no-progress or repeated findings stop the chain without a full-candidate retry.
+Nine focused DEV tests and its full runtime test/activation pass. Fresh paired
+archetype run 20 is in progress; this repair replay evidence is not a new baseline.
+
+Inspection of the actual retained executor inputs found another context defect:
+`artifacts.prototype_acceptance` retained two obligations, but its compact
+`context_projection` dropped them, so the handoff contained an empty list.
+- [x] `[must]` Preserve accepted Automation obligations and provenance through
+  compact context projection. For older projections, recover only from the
+  identity-matched acceptance; mismatching identity or obligations must fail.
+  Regression coverage includes both complete and retained compact assignments.
+  Read-only reconstruction of retained task `task.01M2BE8HNT4PP7CGH1SNQWTY2K`
+  with `e2e/stand/inspect-builder-automation-context.py` restores both refs and
+  preserves empty seeds for all three production resources without a model call.
+- [ ] `[must]` Requalify this fix through actual Automation; unchanged acceptance
+  obligations are still pending, not satisfied by their presence in the prompt.
+
+- [x] `[must]` Distinguish application-owned transactional implementation from
+  missing Core contracts in Automation context. Standard-library transactions
+  under the admitted data root are allowed; identity/authorization bypasses are not.
+- [x] `[must]` Add a discoverable caller-access SDK backed by the existing
+  identity/access kernel. The owner-token HTTP ingress supplies verified owner
+  context; absent callers deny. Local tests cover scoped read/write, cross-skill
+  denial, revocation, session expiry, argument spoofing and thread propagation.
+- [ ] `[must]` Finish and qualify non-owner ingress before claiming that the
+  lifecycle reader/writer requirement works over HTTP. Use the linked
+  [identity/access roadmap](personalization-identity-access-roadmap.md#phase-9---skill-tool-and-sdk-enforcement),
+  including concurrent access-fact persistence, cache isolation and forwarding.
+  Do not silently remove this requirement from the retained lifecycle case.
+
+Local regression: 395 Automation/worker/caller/exporter/HTTP tests pass in
+347.70s. These checks do not complete the live non-owner or full lifecycle gates.
+
 ## Could And Deferred
 
 - [ ] `[deferred]` Large-prototype decomposition, shared entity/navigation/locale

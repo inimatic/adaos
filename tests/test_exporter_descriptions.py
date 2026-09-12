@@ -80,6 +80,8 @@ def test_sdk_resource_and_persistent_data_contracts_are_discoverable():
     for query, expected in (
         ("skill_data_root", "adaos.sdk.data.skill_env.skill_data_root"),
         ("adaos.sdk.resources.operate", "adaos.sdk.resources.operate"),
+        ("adaos.sdk.access.caller", "adaos.sdk.access.caller"),
+        ("adaos.sdk.access.require", "adaos.sdk.access.require"),
     ):
         result = search_descriptors(query, descriptor_ids=["sdk_metadata"], limit=6)
         assert result["items"][0]["item_id"] == expected

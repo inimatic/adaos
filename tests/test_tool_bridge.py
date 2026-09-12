@@ -175,6 +175,30 @@ def test_call_tool_offloads_local_execution_to_worker(monkeypatch) -> None:
     assert result["trace_id"] == "trace-123"
 
 
+def test_caller_denial_is_403_and_idempotent_replay_stays_403(monkeypatch):
+    calls = []
+
+    class Manager:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run_tool(self, *_args, **_kwargs):
+            calls.append(True)
+            raise tool_bridge_module.CallerAccessDenied("caller_access_denied:missing_capability")
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", Manager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda *_args: "trace-denied")
+    body = tool_bridge_module.ToolCall(tool="sample:get_records", arguments={}, idempotency_key="caller-denied")
+    for _ in range(2):
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=_fake_ctx()))
+        assert error.value.status_code == 403
+        assert error.value.detail["error"] == "caller_access_denied"
+    assert calls == [True]
+
+
 def test_call_tool_rejects_read_intent_for_trusted_mutating_tool(monkeypatch) -> None:
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:

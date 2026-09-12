@@ -1129,6 +1129,9 @@ def _prototype_acceptance_prompt_projection(value: Any) -> dict[str, Any]:
         for item in acceptance.get("prototype_resources") or []
         if isinstance(item, Mapping)
     ][:20]
+    # Obligations influence execution strategy as well as model context. They
+    # must survive compact projection unchanged, including accepted provenance.
+    projected["automation_requirements"] = copy.deepcopy(acceptance.get("automation_requirements") or [])
     projected["behavior_checks"] = [
         {"id": item.get("id"), "status": item.get("status")}
         for item in acceptance.get("behavior_checks") or []
@@ -5504,6 +5507,18 @@ class LocalSkillFactoryWorker:
         )
         if handoff is None:
             return None
+        accepted = artifacts.get("prototype_acceptance")
+        if isinstance(accepted, Mapping):
+            projected_acceptance = _prototype_acceptance_from_context(context_packet)
+            for key in ("acceptance_id", "digest", "webui_digest", "change_id", "revision"):
+                if accepted.get(key) != projected_acceptance.get(key):
+                    raise ValueError(f"prototype acceptance projection identity mismatch: {key}")
+            if ("automation_requirements" in projected_acceptance
+                    and projected_acceptance["automation_requirements"] != (accepted.get("automation_requirements") or [])):
+                raise ValueError("prototype acceptance projection obligations mismatch")
+            # Older stored projections omitted these obligations. Recover from
+            # the same acceptance, never infer completion from an absent field.
+            handoff["automation_requirements"] = copy.deepcopy(accepted.get("automation_requirements") or [])
         handoff["completion"] = self._prototype_resource_completion(
             workspace,
             target_id=target_id,
@@ -6260,6 +6275,14 @@ queries or operations. Fresh installation starts with empty user data; represent
 Prototype records are test fixtures only. Keep working data outside package files
 so updates preserve it. State any missing platform contract as a blocker rather
 than bypassing permissions or presenting simulated checks as real enforcement.
+Application-owned business rules are implementation work, not missing Core APIs:
+Python standard-library transactions (for example sqlite3 under the admitted
+skill_data_root) may enforce relationships, revisions and atomic record changes.
+Core need not supply a domain policy registry. Do not reimplement platform identity,
+grants or authentication in the application. Discover the public caller-access
+contract separately; skill capabilities and request payload actor/role fields
+are not evidence of the caller's authority. Missing authentication ingress remains
+a real blocker even when a policy-check facade exists.
 """
             if prototype_resource_handoff and prototype_resource_handoff.get("mode") == "implementation_blueprint"
             else """## Accepted resource implementation handoff

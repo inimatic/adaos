@@ -57,6 +57,12 @@ async def require_token(
             query_token=query_token,
         )
     )
+    # The shared node credential authenticates the local owner, not a subject
+    # named in a request body. Scoped session credentials need their own ingress.
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.personalization_runtime import current_user_id
+
+    request.state.adaos_verified_caller = SubjectRef("user", current_user_id())
 
 
 def require_owner_token(token: str) -> None:

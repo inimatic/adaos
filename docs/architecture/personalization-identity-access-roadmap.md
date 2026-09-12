@@ -542,6 +542,16 @@ Checklist:
   device variants.
 - [ ] Add SDK helpers for `ctx.actor`, `ctx.current_user`, `ctx.subject_user`,
   `ctx.profile`, `ctx.preferences`, `ctx.require`, and `ctx.policy.explain`.
+- [x] `[must]` Add `adaos.sdk.access.caller/require` backed by the existing
+  policy service and a separate trusted invocation context. Bind the configured
+  owner at the verified node-token tool ingress, not from argument metadata.
+- [ ] `[must]` Qualify a non-owner credential ingress using existing local
+  sessions/grants, including expiry/revocation, no cross-principal idempotency
+  replay and no member-proxy promotion to owner. The owner-token foundation
+  does not meet this gate; Root MCP credentials must not become owner tokens.
+- [ ] `[must]` Prove access-fact persistence under concurrent grant/revocation
+  and audit writes before broad caller enforcement. A stale in-memory JSON
+  snapshot must not restore a revoked grant when appending an audit record.
 - [ ] Model service identities and skill `on_behalf_of` behavior.
 - [ ] Enforce both skill permission and actor capability before sensitive tool
   invocation.
