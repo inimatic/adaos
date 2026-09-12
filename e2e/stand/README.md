@@ -137,3 +137,28 @@ Fetch/review that remote first. `--project` narrows the set and `--exclude` remo
 an explicitly separately handled project. `--resume` reuses the identical batch,
 skips successful receipts and retains each failed attempt's UTF-8 logs. It does
 not approve a Prototype, promote test applications or push AdaOS/Client Git.
+
+For DEV sources that cannot build a release because dependencies are unavailable,
+`--source-checkpoint --publish --change-id <id>` invokes the existing
+`adaos dev project checkpoint` and verifies the owned components' Forge commits.
+This preserves component source separately; it does not turn unresolved
+dependencies into valid releases or prove the aggregate manifest is in Git.
+Keep release and source receipts separate. Failed publications are not successes.
+
+`audit-builder-context.py <run>` retains the actual primary/repair input inventory:
+model settings, stable-context hashes, dynamic keys, locales and prompt lengths.
+It complements reading the context and code; a keyword/hash check alone cannot
+prove the absence of semantic leakage.
+
+`regrade-builder-artifact.py <retained-grading-input> --output <new-directory>`
+reuses the exact artifact, user turns, rubric and model with the current grader
+instruction. It retains separate submission/terminal response records and reports
+artifact/rubric digest equality. It never overwrites the original grade or counts
+as a fresh generation. Root may reuse an identical request; do not count that as
+an independent judge sample.
+
+`profile-prototype-query.py <retained-evaluation-artifact> --output <new-directory>`
+profiles read-only queries against that local Prototype. It does append normal
+resource traces. Its cProfile timings include instrumentation overhead and are
+neither HTTP latency nor LLM latency; compare separately measured wall-clock calls
+before claiming an optimization.

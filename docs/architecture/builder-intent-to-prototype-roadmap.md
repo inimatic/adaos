@@ -1657,23 +1657,48 @@ cohort with their own request, schema, model settings and browser evidence.
 - [ ] `[must]` Finish known relationship/lookup and grader-observability defects,
   then run matched GPT-5/low repeats and compare short/moderate prompts on the
   difficult cases. Record initial success, repair success, task success and cost.
-- [ ] `[must]` Audit generation inputs and Core/Client changes for subject-scoped
+- [x] `[must]` Audit generation inputs and Core/Client changes for subject-scoped
   branches, fixture leakage and rubric leakage before accepting the tranche.
+  Run 13 retains ten actual requests: two locale-specific stable contexts, the
+  same five dynamic keys, GPT-5/low/128000, and no unexpected dynamic keys.
+  Generic semantic/Brief paths have no archetype-name branches; scenario creation
+  uses `scenario_default`. Client checks pass for 21 generic sources and inventory
+  consistency for 41 widgets. This is the tranche boundary, not a claim that all
+  historical application-specific Client code has been removed.
 - [x] `[must]` Separate collection/record presentation shapes in the
   provider contract; preserve useful structured diagnostics for retained invalid
   candidates. Run 11's budget repair repeats an accordion on a record-details view.
   Nested alternatives now reject that combination before generation. Full
   semantic validation remains mandatory; reference and task correctness cannot
   be guaranteed by this structural constraint.
-- [ ] `[should]` Extend typed selection links to reverse foreign-key lookup and
+- [x] `[should]` Extend typed selection links to reverse foreign-key lookup and
   invalidate dependent selections when their ancestor changes. Test both query
   identity and editor availability; highlighted stale descendants are not proof.
-- [ ] `[should]` Profile local resource queries independently of LLM waits.
+  `source_field_ref` captures the selected record's field; omitted/null retains
+  identity semantics. Declared unique business keys reuse existing cardinality
+  checks; undeclared endpoints and cycles fail. Tests cover descendant reset and
+  preserving ancestor selection during reverse lookup. Run 15 attempt 2 browser
+  proves board-record FK -> client collection on 1440/390px, not just highlighting.
+- [ ] `[should]` Complete browser qualification of descendant selection/editor
+  invalidation on a fresh multi-level linked collection, beyond compiler tests.
+- [x] `[should]` Profile local resource queries independently of LLM waits.
   Browser run 05 observed roughly 0.5-3 seconds for local queries. Do not turn
   a longer browser wait into a claim that query latency is acceptable.
-- [ ] `[should]` Calibrate grader consistency on retained stage-boundary examples:
+  `local-query-profile-20260912-01` identifies global definition enumeration and
+  whole-file rewriting of 1000 traces on each two-row query. Instrumented calls
+  took 1.23-1.38s; cProfile overhead prevents treating those as HTTP measurements.
+- [ ] `[should]` Remove avoidable definition enumeration and trace serialization
+  from the query path; retain freshness, bounded retention and durable writes.
+  Compare uninstrumented wall time and browser behavior before accepting a gain.
+- [x] `[should]` Calibrate grader consistency on retained stage-boundary examples:
   run 11 inspection attempt 2 describes the Prototype allowance as satisfied but
   emits `partial`. Preserve the original result; any regrade is separate evidence.
+  Grader v17 explicitly applies executable criteria to primitives and paired
+  demonstration/obligation evidence to deferred rules within the same job.
+  The exact retained artifact and rubric regrade passed (score 1.0); the original
+  failure is unchanged. This single example is not broad judge calibration.
+- [ ] `[should]` Broaden live judge calibration with positive and negative
+  stage-boundary examples and repeat consistency checks.
 - [x] `[should]` Discuss a finite vocabulary of composable layout strategies,
   distinguishing user-selectable preferences from hard acceptance requirements.
   See the canonical architecture's composable layout policy below its UX guidance.
@@ -1784,6 +1809,27 @@ archetypes passed both attempts. Model calls: 23; fresh/cached input:
 65,672/126,464 tokens; output: 124,119 including 49,920 reasoning tokens.
 Median total case time: 77.83s; observed maximum: 128.37s. Grading is separate:
 14 calls, 196,401 fresh input and 16,622 output tokens.
+
+Follow-up evidence remains distinct: budget run 12 passed both primary answers
+without repair and both 1440/390px browser probes. Run 13 passed 7/8; appointments
+exposed the missing reverse selection contract. Run 14 reached no model answer:
+the new nullable provider field was missing from `required`. Strict-schema tests
+now cover both versions, including nested alternatives. Run 15 passed one of two;
+its other candidate used a declared business key already supported by the resource
+model but rejected by the selection adapter. The adapter now uses the same
+relationship/cardinality contract. These retained failures are not relabeled.
+Run 16 is the subsequent matched full repeat with grader v17; record its final
+result before claiming cross-archetype reliability. Cohorts 13 onward overlap
+source-publication work, so total case times are not an idle-machine benchmark.
+
+The separate DEV release checkpoint batch attempted 340 projects, excluding
+Builder for its explicit promotion check: 197 published; 143 legacy research
+projects failed dependency resolution (131 require `adaos_research_platform ^0.2`,
+12 require `^0.1`). Neither version exists in the local release repository.
+Do not silently rewrite these manifests or publish unsatisfied dependency graphs.
+Owned-source Forge checkpoints are a separate preservation path, not a successful
+ProjectRelease upload; their completion and the later-created test projects must
+be reconciled before the final baseline report.
 
 Input inspection confirmed the primary dynamic keys are instruction,
 output_locales, prototype_brief, scenario_id and title, without rubrics or prior

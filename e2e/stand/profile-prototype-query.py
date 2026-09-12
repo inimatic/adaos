@@ -33,6 +33,11 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     init_ctx(Settings.from_sources())
     service = ResourceWorkbenchService()
+    wall_samples = []
+    for _ in range(5):
+        started = time.perf_counter()
+        service.query({'resource_type': resource, 'limit': 100})
+        wall_samples.append(time.perf_counter() - started)
     samples = []
     for index in range(3):
         profile = cProfile.Profile()
@@ -43,7 +48,7 @@ def main():
         pstats.Stats(profile, stream=buffer).sort_stats('cumulative').print_stats(30)
         (args.output / f'profile-{index + 1}.txt').write_text(buffer.getvalue(), encoding='utf-8')
         samples.append({'elapsed_s': elapsed, 'ok': result.get('ok'), 'items': len(result.get('items', []))})
-    receipt = {'resource_type': resource, 'samples': samples,
+    receipt = {'resource_type': resource, 'samples': samples, 'uninstrumented_seconds': wall_samples,
                'scope': 'in-process query including definition resolution, authorization and trace; not HTTP or LLM'}
     (args.output / 'summary.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(receipt, ensure_ascii=False))
