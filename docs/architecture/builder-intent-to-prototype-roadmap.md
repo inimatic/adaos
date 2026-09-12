@@ -1553,6 +1553,9 @@ Root receipts rather than rewriting the report or counting either as model failu
   All 13 admitted artifacts have snapshots taken before browser mutations.
   The old grader's case-only input filename overwrote library attempt 1's
   exact input; its retained Root response is not a replacement for that input.
+- [ ] `[must]` Aggregate failed grader usage into run totals as well as retaining
+  it in response evidence. Report unavailable usage explicitly; an inconclusive
+  call is not necessarily free and must not vanish from cost comparisons.
 - [ ] `[must]` Qualify mutable relationship-label workflows, including category
   rename with existing transactions. Run 08 budget browser edits fail because
   links use the mutable category name. Prefer immutable IDs in context, expose
@@ -1570,6 +1573,14 @@ explicitly unexercised. Native media commands pass; the volunteer command probe
 exposed Client `readOnly`/`readonly` disagreement. Browser evidence and renderer
 fix qualification are tracked in the Client roadmap. The new Core changes have
 not yet been evaluated by a fresh live generation cohort or promoted to Workspace.
+
+Local recovery checkpoint: `adaos dev project push builder --local-only`
+retained ProjectRelease `builder@0.2.115`, digest
+`sha256:bd1810f24bfcf89b4caa8eb31add8e4fa2f169e9b4f706e7b6f6e4803873ddca`,
+with source revision
+`sha256:2a99bfce8ea17523e4c3ac1c121ce9d0f78e136af0aad076b22e1b4ee434e877`.
+This includes the DEV Builder repair-envelope regression test. It is a local
+content-addressed checkpoint, not a Root/GitHub publication or runtime promotion.
 
 The grader/bounds changes follow the supported-subset distinction in
 [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)

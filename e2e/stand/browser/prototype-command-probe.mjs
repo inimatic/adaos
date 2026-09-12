@@ -210,6 +210,14 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}.png`), fullPage: true })
     } catch (error) {
       sample.failure = error.message
+      sample.formSources = await page.locator('ada-form-widget').evaluateAll(elements => elements.map(element => {
+        const component = window.ng?.getComponent(element)
+        return { widget: component?.widget?.id, fields: (component?.fields || []).filter(field => field.optionsDataSource).map(field => {
+          const source = component?.optionSources?.get(field.id)
+          return { field: field.id, resource: field.optionsDataSource.resourceType, disabled: field.disabled,
+            received: source?.received, status: source?.status?.state, optionCount: source?.options?.length }
+        }) }
+      })).catch(() => [])
       sample.text = await page.locator('body').innerText({ timeout: 2000 }).catch(() => 'Diagnostics unavailable')
       await page.screenshot({ path: path.join(output, `${layout}-failure.png`), fullPage: true, timeout: 5000 }).catch(() => {})
     } finally {

@@ -439,6 +439,28 @@ modal dismissal and edit round trips; the generated source was not hand-patched.
   The current library still spends much of its first viewport on stacked
   full-width filters. This is shared Client/compiler UX debt, not evidence that
   the model ignored a working layout primitive.
+- [x] `[must]` Honor canonical `readOnly` and legacy `readonly` field flags
+  through the actual renderer. Run 08 volunteer command checks found an enabled
+  boolean field despite Core's `readOnly=true`; generated source must remain
+  unchanged during the renderer regression test. Client `93ef263` fixes field
+  parsing and change guards; 25 focused form tests pass. The unchanged volunteer
+  prototype passed create/visible-record/delete-cleanup at 1440px/390px after
+  this fix, including the disabled conflict context fields.
+- [x] `[must]` Keep unavailable read-only lookup context from blocking unrelated
+  writable commands. Such fields remain visibly unavailable and immutable;
+  editable unavailable selectors still block submission. Test validation,
+  save-draft, direct field handlers, and stored-record locks independently.
+  Client `93ef263` covers these paths without suppressing loading/error status.
+  The library's unchanged stored-record UI/provider lock probe also passes on
+  both viewports after the Client change.
+- [ ] `[must]` Diagnose intermittent lookup readiness separately from field
+  editability. One post-fix volunteer replay still stopped with two loading
+  selectors before a later replay passed unchanged. Retain both, capture source
+  received/status/option counts, and measure request timing; neither a longer
+  assertion wait nor a single passing rerun establishes reliability.
+- [ ] `[should]` Include clipped child content in narrow-screen review, not
+  only document-level overflow. Run 08 media cards clip metadata at 390px even
+  though their outer grid fits; this is UX debt, not a passing visual verdict.
 
 Exit gate: each new primitive improves matched task outcomes without adding
 domain branches or regressing Client conformance, bundle, or latency gates.
