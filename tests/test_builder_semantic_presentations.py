@@ -204,6 +204,28 @@ def test_selection_cascade_clears_child_but_preserves_ancestor_lookup():
     assert selection_action(child['id'])[selected_fk] == '$event.work_owner_id'
 
 
+@pytest.mark.parametrize('duplicate', [False, True])
+def test_selection_business_key_uses_existing_relationship_cardinality_validation(duplicate):
+    brief, semantic = _multi_resource_fixture()
+    people = next(resource for resource in semantic['resources'] if resource['id'] == 'people')
+    people['fields'].append(dict(id='person_code', value_type='short_text',
+                                 label=_text('person_code', 'Code', 'Code'), required=True, editable=False))
+    for record in people['records']:
+        record['person_code'] = people['records'][0]['id'] if duplicate else record['id']
+    semantic['relationships'][0]['to_field_ref'] = 'person_code'
+    source = semantic['views'][0]
+    target = next(view for view in semantic['views'] if view['id'] == 'people-list')
+    target['selection_filter'] = {'field_ref': 'person_code', 'source_view_ref': source['id'],
+                                  'source_field_ref': 'work_owner_id'}
+    if duplicate:
+        with pytest.raises(BuilderWorkflowError):
+            compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+        return
+    result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    widget = next(item for item in result['webui']['ui']['application']['desktop']['pageSchema']['widgets'] if item['id'] == target['id'])
+    assert widget['dataSource']['query']['filters']['person_code'].startswith('$state.')
+
+
 @pytest.mark.parametrize('broken', ['unknown_source_field', 'unrelated_source_field', 'cycle'])
 def test_reverse_selection_rejects_invalid_endpoints_and_cycles(broken):
     brief, semantic = _multi_resource_fixture()

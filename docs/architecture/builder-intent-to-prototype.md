@@ -179,8 +179,10 @@ remain inline inside their owning section; large-project orchestration is separa
 Linked navigation uses semantic v2 `selection_filter`: a target collection names
 its target field, source collection (`source_view_ref`) and optional
 `source_field_ref` (null/omitted means implicit `id`), not a guessed runtime state
-variable. A declared FK/id relationship supports both parent-to-children and
-selected-child-to-parent lookup; matching field names are not sufficient.
+variable. A declared singular relationship supports both parent-to-children and
+selected-child-to-parent lookup, using implicit identity or an explicitly declared
+unique business key. Existing relationship type/cardinality validation still
+applies; matching field names are not sufficient.
 Links must be acyclic. Core resolves the source's actual selection action and the target query;
 no selection shows the unrestricted collection. A linked predicate cannot overlap
 a resettable or fixed filter on the same field. Charts cannot act as selection

@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "16"
+PROTOTYPE_GRADER_VERSION = "17"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -96,6 +96,12 @@ For such a rule, supported at this stage requires BOTH visible representative
 evidence in /webui or /prototype_resources AND this explicit pending obligation
 matching the requested outcome. Cite both. This means demonstrated and deferred,
 NOT implemented or safe for real use. Never treat a fixture status as computed.
+Decide per requested outcome: use executable evidence for supported primitives;
+use the paired demonstration/obligation evidence above only for the deferred
+rule or integration. A mixed job passes only if BOTH parts meet their respective
+Prototype criteria. Do not downgrade that job merely because the explicitly
+deferred part is not yet enforced. Missing disclosure, an untestable obligation,
+missing primitive controls, or a demonstrated forbidden path still fail.
 Supported CRUD, selection, detail disclosure, search, filters and field validation
 still require working declarative controls; an obligation cannot excuse their absence.
 Evaluate a minimum useful working interpretation, not an exhaustive imagined product.
@@ -118,8 +124,10 @@ Prototype records under /prototype_resources. Records may prove representative d
 states, but they do not prove an interaction unless /webui exposes the required
 control and executable declarative action or binding.
 Do not reward intent, labels, hidden state, or static sample values as proof of an
-interactive job. A supported job must have visible controls/data and executable
-declarative actions or bindings sufficient for that job. A representative state
+interactive job. The executable part of a supported job must have visible controls/data
+and sufficient declarative actions or bindings; apply the paired-evidence rule
+above to its explicitly deferred part, not an Automation enforcement requirement.
+A representative state
 must be explicitly renderable or reachable. Do not infer runtime behavior that
 is absent from the document. In particular, field definitions prove only that
 values can be entered, table columns and static data prove only that rows can be

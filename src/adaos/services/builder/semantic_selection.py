@@ -44,13 +44,12 @@ def selection_findings(document):
             for relationship in document['relationships']:
                 pair = ((relationship['from_resource_ref'], relationship['from_field_ref']),
                         (relationship['to_resource_ref'], relationship['to_field_ref']))
-                singular = (relationship['cardinality'] in {'many_to_one', 'one_to_one'} and pair[1][1] == 'id'
-                            or relationship['cardinality'] == 'one_to_many' and pair[0][1] == 'id')
+                singular = relationship['cardinality'] in {'many_to_one', 'one_to_one', 'one_to_many'}
                 if singular and endpoints in (pair, pair[::-1]):
                     linked = True
                     break
             if not linked:
-                detail = 'selection_filter needs a declared FK/id relationship between the source and target fields'
+                detail = 'selection_filter needs a declared singular relationship between the exact source and target fields'
         if detail:
             findings.append({'code': 'semantic.selection_filter_invalid', 'path': f'$.views[{index}].selection_filter',
                              'semantic_refs': [f"view:{view['id']}"], 'detail': detail})

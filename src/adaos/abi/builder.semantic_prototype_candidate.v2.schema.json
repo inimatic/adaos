@@ -243,7 +243,7 @@
         "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" }, "description": "Permanent equality predicates defining this collection, independent of user search/filter controls. Reset never removes these. Empty for an unrestricted view. Do not also offer a query control for the same field." },
-        "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }], "description": "Match this collection's field_ref to source_field_ref (null means id) of the selected source record. Requires a declared FK/id relationship in either direction. Null leaves it unlinked. No selection shows all records. Do not duplicate this field in other filters." },
+        "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }], "description": "Match this collection's field_ref to source_field_ref (null means id) of the selected source record. Requires an exact declared singular relationship in either direction; prefer implicit id, or use a declared unique target field. Null leaves it unlinked. No selection shows all records. Do not duplicate this field in other filters." },
         "filter": {
           "anyOf": [{ "$ref": "#/$defs/viewFilter" }, { "type": "null" }]
         },
