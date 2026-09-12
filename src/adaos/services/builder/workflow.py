@@ -1937,8 +1937,29 @@ class BuilderWorkflowService:
         )
 
         try:
-            return PrototypeResourceService().acceptance_snapshots(
-                project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
+            resources = PrototypeResourceService()
+            component_ref = f"{_kind(object_type)}:{_project_id(object_id)}"
+            owners = {
+                str(_mapping(_mapping(resources.definition(ref)).get("metadata")).get("project_ref") or "")
+                for ref in resource_types
+            }
+            if len(owners) != 1:
+                raise PrototypeResourceConflict("prototype resources must share one declared owner")
+            owner_ref = owners.pop()
+            if owner_ref != component_ref:
+                if _kind(object_type) == "project" or not owner_ref.startswith("project:"):
+                    raise PrototypeResourceConflict("prototype resource owner does not match the workflow target")
+                # The workflow is component-scoped; compiled resources may be
+                # application-scoped. Admit that binding only through ownership.
+                owner_id = _project_id(owner_ref.partition(":")[2])
+                try:
+                    manifest = yaml.safe_load((self.project_root("project", owner_id) / "project.yaml").read_text(encoding="utf-8-sig"))
+                except (OSError, ValueError, yaml.YAMLError) as exc:
+                    raise PrototypeResourceConflict("prototype resource owner manifest is unavailable") from exc
+                if not isinstance(manifest, Mapping) or str(manifest.get("id") or "") != owner_id or component_ref not in _project_component_refs_from_manifest(manifest):
+                    raise PrototypeResourceConflict("prototype resource owner does not own the workflow component")
+            return resources.acceptance_snapshots(
+                project_ref=owner_ref,
                 change_id=change_id,
                 revision=revision,
                 webui_digest=webui_digest,

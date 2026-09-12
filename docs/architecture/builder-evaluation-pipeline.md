@@ -69,12 +69,21 @@ component-retrieval, or implementation-agent workspaces.
 
 ### Lifecycle Steps
 
+Prototype review targets the exact workflow component and revision. Its resource
+namespace can belong to the enclosing application: Core must verify that the
+declared aggregate manifest owns that component before collecting acceptance
+snapshots. A matching suffix, a dependency edge or a shared title is not ownership.
+The original resource owner, change, revision and content digests remain bound.
+
 The SDK adapter also admits `builder.workflow`, `prototype.accept`,
 `automation.start`, `automation.wait`, `trial.prepare`, `trial.decide` and
 `release.promote`. These technological steps require `ENV_TYPE=dev`, retained
 test projects and the primary component owned by that exact case. They use the
 public Builder SDK gates, not synthetic workflow transitions. A publication
 project cannot expand the case's ownership.
+`release.promote` requires `confirmed=true`: it activates Workspace and advances
+the Root release channel, not merely a local runtime pointer. Publishing source
+to the Git registry is a distinct subsequent operation.
 
 Prototype/Trial review is explicit external evidence inside the run bundle,
 bound to the current WebUI or candidate digest. `review_file` is run-relative;

@@ -389,8 +389,14 @@ resource families.
   measures 576-655ms; `lifecycle-query-sqlite-20260912-01` measures a 583ms one-time
   import followed by 17-18ms reads. These are in-process measurements, not HTTP or
   LLM latency claims; copied state avoids running mixed-version live writers.
-- [ ] `[must]` Restart the API onto the new store before live migration, verify
+- [x] `[must]` Restart the API onto the new store before live migration, verify
   browser data/mutations and record the HTTP timings and retained record counts.
+  Live audit `lifecycle-storage-live-audit-20260912.json` preserves all 617 legacy
+  resources and their edited records (650 resources at audit time), with SQLite
+  `quick_check=ok`. Browser checks cover date commit/reset and board moves through
+  drag and the compact alternative, including reload. Twelve HTTP queries take
+  26-834ms under concurrent qualification load; this is not a controlled latency
+  benchmark or evidence of production multi-process transaction semantics.
 
 ## Deferred
 

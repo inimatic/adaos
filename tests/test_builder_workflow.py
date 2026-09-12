@@ -969,6 +969,38 @@ def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
         service.transition("scenario", "recipes", "automation_started")
 
 
+@pytest.mark.parametrize("owner_ref,owned,accepted", [
+    ("scenario:recipes", True, True),
+    ("project:catalog", True, True),
+    ("project:catalog", False, False),
+    ("scenario:another", True, False),
+])
+def test_prototype_resource_snapshot_resolves_only_manifest_proven_application_ownership(
+    workflow_project, monkeypatch, owner_ref, owned, accepted,
+):
+    from adaos.services.resources.prototype import PrototypeResourceService
+
+    service, root = workflow_project
+    project_root = service.dev_projects_root / "catalog"
+    project_root.mkdir(parents=True)
+    (project_root / "project.yaml").write_text(json.dumps({
+        "id": "catalog", "components": {"owned": [{"ref": "scenario:recipes" if owned else "scenario:another"}],
+                                           "dependencies": [{"ref": "scenario:recipes"}]}}), encoding="utf-8")
+    monkeypatch.setattr(PrototypeResourceService, "definition", lambda self, ref: {"metadata": {"project_ref": owner_ref}})
+    calls = []
+    monkeypatch.setattr(PrototypeResourceService, "acceptance_snapshots", lambda self, **kwargs: calls.append(kwargs) or [])
+    inputs = dict(object_type="scenario", object_id="recipes", change_id="change", revision="001",
+                  webui={"source": {"kind": "resourceQuery", "resourceType": "prototype.example"}}, webui_digest="digest")
+    if accepted:
+        service._prototype_resource_snapshots(**inputs)
+        assert calls == [{"project_ref": owner_ref, "change_id": "change", "revision": "001",
+                          "webui_digest": "digest", "resource_types": ["prototype.example"]}]
+    else:
+        with pytest.raises(BuilderWorkflowError, match="owner"):
+            service._prototype_resource_snapshots(**inputs)
+        assert not calls
+
+
 def test_optional_prototype_acceptance_is_preserved_for_automation(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

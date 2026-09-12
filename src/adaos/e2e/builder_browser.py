@@ -42,7 +42,7 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
         raise ValueError("browser evidence path escapes this run")
     output.mkdir(parents=True)
     checkpoint = output / "input.json"
-    _write_json(checkpoint, {"kind": "active_prototype_review", "context": dict(context),
+    _write_json(checkpoint, {"kind": "active_prototype_review", "run_id": context["run_id"], "context": dict(context),
         "steps": [{"id": "create", "output": created}],
         "cleanup": {"test": True, "status": "review_in_progress", "acceptance": "not_approved",
                     "owned_artifacts": context["owned_artifacts"], "previews": [preview]}})

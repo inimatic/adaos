@@ -55,6 +55,14 @@ steps:
     type: prototype.browser
     input: {object_id: $steps.create.scenario_id, probe: review, timeout_seconds: 240}
     expect: {values: {ok: true}}
+  - id: browser-interactions
+    type: prototype.browser
+    input: {object_id: $steps.create.scenario_id, probe: interactions, timeout_seconds: 300}
+    expect: {values: {ok: true}}
+  - id: browser-capabilities
+    type: prototype.browser
+    input: {object_id: $steps.create.scenario_id, probe: capabilities, timeout_seconds: 240}
+    expect: {values: {ok: true}}
   - id: approve
     type: prototype.accept
     input:

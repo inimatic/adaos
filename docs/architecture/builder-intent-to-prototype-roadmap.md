@@ -2056,7 +2056,7 @@ requirements belong to the visible evaluation case and its implementation brief.
 - [ ] `[must]` Add bounded coverage repairs without replacing valid candidate
   content; retain original requests, findings, changes and preservation proofs.
   Re-run the eight archetypes and existing-prototype changes with matched profiles.
-- [ ] `[must]` Expand the equipment-inspection Automation brief beyond the
+- [x] `[must]` Expand the equipment-inspection Automation brief beyond the
   Prototype request: persistent installed data, referential integrity, draft
   saving, server-side completion rules, stale-write rejection, role checks,
   supported photo attachment/link storage and explicit failures. Example data
@@ -2085,6 +2085,13 @@ Its exact source publication is registry commit
 project selection were included. Core/Client Git pushes remain deferred to final
 qualification.
 
+Parallel-work follow-up: `builder@0.2.125` is active in WorkspaceLock 49 after
+DEV checkpoint, isolated Trial and confirmed promotion. DEV/Workspace handler
+hashes match; the release adds bounded binding repair and canonical table-kind
+validation. Its registry source push remains pending final Core/Client
+qualification. Promotion also updates the Root stable release pointer; it must
+not be described as a purely local operation.
+
 R10 progress: keyed SQLite reads and append-oriented traces are committed, with
 44 resource tests and retained legacy data. The live in-process two-record query
 now takes 19-21ms versus 576-655ms; HTTP/browser latency is not inferred from it.
@@ -2110,6 +2117,19 @@ allowlist. The stopped run remains failed/incomplete, not relabeled as success.
 - [ ] `[must]` Qualify these adapters on the real application lifecycle and add
   registry source publication, consumer installation/update and data-preservation
   assertions. Adapter unit tests are not proof of an automated application.
+
+Lifecycle run `small-lifecycle-gpt5-low-20260912-01` reaches real browser review:
+selection/reset across two relationship levels, draft edit/save/reopen,
+confirmation/dismissal without mutation and an attachment upload/download hash
+roundtrip pass at wide and compact widths. It then fails before Automation:
+compiled resources use the aggregate `project:` owner while component workflow
+acceptance expected `scenario:`. The fix admits an aggregate resource owner only
+when its manifest owns the exact component; digest/change/revision checks remain
+strict. Eighty workflow/resource tests pass, including unrelated-owner and
+dependency-only rejection. The failed run remains unchanged; a fresh run must
+prove the corrected handoff. Layout balance, compact action labels, attachment
+cell presentation and overlay-shell localization remain explicit UX debt, not
+claims of production readiness.
 
 ## Could And Deferred
 
