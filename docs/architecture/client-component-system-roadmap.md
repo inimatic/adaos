@@ -44,8 +44,12 @@ Small-prototype qualification, 2026-09-12:
 - [x] `[must]` Distinguish persisted board lane moves from unsupported rank changes.
 - [ ] `[must]` Qualify the above through freshly generated small prototypes in the
   local browser, including mobile, actual mutations, sections and settings.
-- [ ] `[must]` Extend the boundary audit beyond its current 15 checked sources;
+- [x] `[must]` Extend the boundary audit beyond its previous 15 checked sources;
   inspect residual product-specific layout selectors before a clean-baseline claim.
+  Client `554e763` checks 21 sources, including desktop and modal styles, and
+  moves the existing Newface chart-layout exception into product-owned
+  compatibility styles. Inventory (41 widgets) and 14 focused renderer/modal
+  tests pass. This bounded audit does not establish full baseline qualification.
 
 Builder owns the semantic adapters and generation experiments in its
 [capability qualification checklist](builder-intent-to-prototype-roadmap.md#small-prototype-capability-qualification-2026-09-12).
