@@ -176,6 +176,16 @@ remain inline inside their owning section; large-project orchestration is separa
 
 ### Small-Prototype Content Composition
 
+Linked navigation uses semantic v2 `selection_filter`: a target collection names
+its foreign key and the source collection (`source_view_ref`), not a guessed
+runtime state variable. The relationship must target the source record's implicit
+identity. Core resolves the source's actual selection action and the target query;
+no selection shows the unrestricted collection. A linked predicate cannot overlap
+a resettable or fixed filter on the same field. Charts cannot act as selection
+sources. Row selection that drives related content does not also open an editor;
+editing remains an explicit action. Browser qualification must prove both ends
+of the link, not only a highlighted row and an independent dropdown.
+
 Collection scope is separate from user query state. Semantic v2 `scope_filters`
 contains typed, permanent equality predicates; query controls narrow that scope
 on other fields and reset only their own state. A tab title is not a predicate.
@@ -594,10 +604,22 @@ validated for requested output locales, independently of storage preservation.
 Surface choice remains a reversible model decision, guided by generic UX
 recommendations rather than a mandatory layout. A short edit can use a modal;
 context-sensitive work can use a side sheet. Collection selection opens the
-single editor directly when there is no details view; otherwise selection
+single editor directly when there is no details view or linked collection; otherwise selection
 reveals details and editing starts there. The compiler owns selection ordering,
 form hydration, save/error, dismissal and responsive region placement. An
 independent footer full of duplicate editor-open buttons is not necessary.
+
+The layout vocabulary should be small and composable, not a catalog of complete
+application templates: linear flow, collection workbench, master/detail,
+hierarchical navigator, board, equal-priority overview grid, and tabbed tasks.
+Focused editors (modal, side sheet, inline) and compact query toolbars are
+independent choices. These are design recommendations and possible user
+preferences; only implemented compiler capabilities may be advertised as
+executable. A hierarchy or board is not a domain classifier. Responsive collapse
+and explicit row intent belong to each primitive's contract. Combinations are
+open-ended, so this vocabulary does not prescribe a fixed number of screens or
+force a short prompt to produce a maximally detailed application. Large-project
+planning, nested composition and learned personal preferences remain deferred.
 
 Media requires an explicit binding to a renderer capability. A filename or a
 details property list is not a viewer. Image/video/audio loading and unavailable

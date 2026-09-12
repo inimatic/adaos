@@ -370,6 +370,18 @@ def test_explicit_search_remains_a_supported_operation() -> None:
         assert "search" in {item["kind"] for item in brief["operations"]}
 
 
+def test_query_state_description_is_not_an_additional_search_operation() -> None:
+    for statement in (
+        "Search items by title. Include an empty-search state.",
+        "Search items by title and include a search error state.",
+        "Поиск элементов по названию. Покажи состояние пустого поиска.",
+    ):
+        brief = compile_prototype_brief(statement)
+        assert sum(item['kind'] == 'search' for item in brief['operations']) == 1
+        assert brief['representative_states']['state'] == 'known'
+        assert brief['representative_states']['value']
+
+
 def test_brief_preserves_unclassified_explicit_requirements() -> None:
     statement = (
         "Make the first version usable now. We need to record income and expenses; "

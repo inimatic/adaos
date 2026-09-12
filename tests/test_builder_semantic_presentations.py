@@ -31,11 +31,16 @@ def test_extended_collection_preserves_resource_query_and_field_provenance(prese
         extra['field_refs'] = ['title', 'amount']
     extra['presentation_options'] = options
     semantic['views'].append(extra)
+    semantic['representative_states'][0]['view_ref'] = 'extra-view'
     result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
     page = result['webui']['ui']['application']['desktop']['pageSchema']
     widget = next(widget for widget in page['widgets'] if widget['id'] == 'extra-view')
     assert widget['type'] == widget_type
     assert widget['dataSource']['kind'] == 'resourceQuery'
+    state_id = semantic['representative_states'][0]['id']
+    observable = result['source_map'][f'state:{state_id}']
+    assert observable
+    assert any('@extra-view.inputs.empty' in path for path in observable)
     for ref in extra['field_refs']:
         assert any('@extra-view.inputs.' in path for path in result['source_map'][f'field:{ref}'])
     if presentation == 'board':
@@ -118,4 +123,43 @@ def test_conflicting_sections_are_rejected_instead_of_overwriting_content():
     for view in semantic['views']:
         view['section'] = {'id': 'one', 'kind': 'tab', 'title': _text('one', view['id'], view['id'])}
     with pytest.raises(BuilderWorkflowError, match='Conflicting'):
+        compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+
+
+@pytest.mark.parametrize('inverse', [False, True])
+def test_selection_filter_resolves_source_action_and_preserves_independent_queries(inverse):
+    brief, semantic = _multi_resource_fixture()
+    view = semantic['views'][0]
+    view['selection_filter'] = {'field_ref': 'work_owner_id', 'source_view_ref': 'people-list'}
+    if inverse:
+        relation = semantic['relationships'][0]
+        relation.update(from_resource_ref='people', from_field_ref='id', to_resource_ref='work_items',
+                        to_field_ref='work_owner_id', cardinality='one_to_many')
+    result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    page = result['webui']['ui']['application']['desktop']['pageSchema']
+    widgets = {widget['id']: widget for widget in page['widgets']}
+    source = widgets['people-list']
+    selected = next(key for action in source['actions'] if action['type'] == 'updateState'
+                    for key, expression in action['params'].items() if expression == '$event.id')
+    assert widgets[view['id']]['dataSource']['query']['filters']['work_owner_id'] == f'$state.{selected}'
+    assert page['initialState'][selected] == ''
+    assert result['semantic_document']['views'][0]['selection_filter'] == view['selection_filter']
+
+
+@pytest.mark.parametrize('broken', ['missing_source', 'chart_source', 'wrong_key', 'filter_conflict', 'editor_target'])
+def test_selection_filter_rejects_unexecutable_links(broken):
+    brief, semantic = _multi_resource_fixture()
+    view = semantic['views'][0]
+    view['selection_filter'] = {'field_ref': 'work_owner_id', 'source_view_ref': 'people-list'}
+    if broken == 'missing_source':
+        view['selection_filter']['source_view_ref'] = 'absent'
+    elif broken == 'chart_source':
+        semantic['views'][-1]['presentation'] = 'chart'
+    elif broken == 'wrong_key':
+        view['selection_filter']['field_ref'] = 'title'
+    elif broken == 'filter_conflict':
+        view['scope_filters'] = [{'field_ref': 'work_owner_id', 'value': 'person-1'}]
+    else:
+        semantic['views'][1]['selection_filter'] = view.pop('selection_filter')
+    with pytest.raises(BuilderWorkflowError, match='selection_filter|selection filters'):
         compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)

@@ -21,9 +21,12 @@ def main() -> int:
     parser.add_argument("--subnet", required=True)
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--attempt", type=int, default=1)
-    parser.add_argument("--probe", choices=("review", "interactions", "commands", "empty", "readonly", "capabilities"), default="review")
+    parser.add_argument("--builder-webspace", help="Explicit DEV Builder host for Conversation review")
+    parser.add_argument("--probe", choices=("review", "interactions", "commands", "empty", "readonly", "capabilities", "conversation"), default="review")
     parser.add_argument("--field-type", choices=("shortText", "longText", "date", "time", "number", "integer", "dropdown", "singleChoice"))
     args = parser.parse_args()
+    if args.probe == "conversation" and not args.builder_webspace:
+        parser.error("Conversation review requires --builder-webspace (a DEV Builder host, not its E2E source or application preview)")
     if args.field_type and args.probe != "interactions":
         parser.error("--field-type requires --probe interactions")
     load_dotenv(".env")
@@ -41,7 +44,7 @@ def main() -> int:
     }
     scripts = {"review": "prototype-review.mjs", "empty": "prototype-review.mjs", "interactions": "prototype-interactions.mjs",
                "commands": "prototype-command-probe.mjs", "readonly": "prototype-interactions.mjs",
-               "capabilities": "prototype-capabilities.mjs"}
+               "capabilities": "prototype-capabilities.mjs", "conversation": "builder-conversation.mjs"}
     for checkpoint in sorted(args.run.glob(f"checkpoints/*/attempt-{args.attempt:02}.json")):
         case = checkpoint.parent.name
         if args.case and case not in args.case:
@@ -66,6 +69,7 @@ def main() -> int:
             output = output / review_id
         output.mkdir(parents=True, exist_ok=True)
         env = {**environment, "ADAOS_E2E_CHECKPOINT": str(checkpoint.resolve()),
+               "ADAOS_E2E_BUILDER_WEBSPACE": args.builder_webspace or "",
                "ADAOS_E2E_FIELD_TYPE": args.field_type or "",
                "ADAOS_E2E_SCENARIO_ID": created["scenario_id"],
                "ADAOS_E2E_WEBSPACE_ID": preview["webspace_id"],

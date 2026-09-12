@@ -153,7 +153,7 @@ def test_prototype_grader_normalizes_evidence_and_separates_usage() -> None:
             "unclear",
         ]
         assert "Mere absence is not uncertainty" in messages[0]["content"]
-        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v15"
+        assert kwargs["prompt_cache_key"] == "adaos-builder-e2e-prototype-grader-v16"
         assert kwargs["max_tokens"] == 32768
         assert kwargs["max_tokens"] == recorded[0]["generation_options"]["max_tokens"]
         return {"job_id": "job-1", "_client": {"base_url": "https://root"}}

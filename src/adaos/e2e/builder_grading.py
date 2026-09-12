@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "15"
+PROTOTYPE_GRADER_VERSION = "16"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -139,6 +139,10 @@ exclusive content visibility. Two collections in the same tab do not satisfy tha
 request. A subset view requires an actual fixed predicate, not just a title or an
 optional filter initially showing everything. Settings need reachable editing and a
 local mutation, not merely a settings modal. Cite the bindings, not just their labels.
+When selecting a row or tree node must narrow another collection, prove the entire
+chain: the source selection action writes a state key AND the target resource query
+reads that same key for the relationship field. A highlighted node plus an independent
+filter dropdown does not implement selection-driven navigation. Cite both endpoints.
 Each rubric item supplies a statement plus optional acceptance and exclusions. Apply
 its acceptance literally and do not import an excluded concern from another item.
 Every supported or partial verdict must cite one or more existing RFC 6901 JSON

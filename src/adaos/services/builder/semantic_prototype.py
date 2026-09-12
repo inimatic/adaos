@@ -22,6 +22,7 @@ from .prototype_contracts import STATE_PROOF_RULES
 from .workflow import BuilderWorkflowError
 from .semantic_presentations import legacy_view, view_extras, presentation_findings, compile_presentations
 from .semantic_query_scope import compile_query_scopes, legacy_state, scope_findings, scoped_predicates
+from .semantic_selection import compile_selection_filters, selection_findings
 
 
 FILTER_VALUE_TYPES = frozenset({"boolean", "choice", "date", "number", "short_text"})
@@ -819,7 +820,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         contract["$defs"]["relationship"]["required"].append("label_field_refs")
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
-        contract["$defs"]["view"]["required"].extend(["presentation_options", "field_display", "section", "scope_filters"])
+        contract["$defs"]["view"]["required"].extend(["presentation_options", "field_display", "section", "scope_filters", "selection_filter"])
         if brief is not None:
             inventory = prototype_requirement_inventory(brief)
             for name, allowed in (
@@ -900,14 +901,16 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             "attachment": "one string reference, or null when optional; never an array",
             "attachments": "array of string references, [] when empty; never a scalar string",
             "multi_choice": "unique array of option.value; never labels",
-            "choice": "one option.value; never a translated label",
+            "choice": "one option.value; never a translated label. An unassigned value is null only when required=false; do not put null into a required field or invent an undeclared choice value.",
             "record_order": "values follow fields order exactly; include each field once",
         },
         "relationships": contract["$defs"]["relationship"]["properties"]["to_field_ref"]["description"],
         "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Field IDs are unique within their resource; Core owner-qualifies repeated names. A field binding with a repeated name needs one owning resource/view/command or the resource.field ID. Each independently browsed resource needs a collection for record selection; details alone cannot select a record. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
         "coverage": "Use the Brief required_references once each. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search uses field_ref=null. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
         "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality",
-                          "placement": "query_controls, filter and empty_state belong to collection views only. Details and editors have query_controls=[] and filter=null; put search on their owning collection."},
+                          "placement": "query_controls, filter and empty_state belong to collection views only. Details and editors have query_controls=[] and filter=null; put search on their owning collection. Equality filters accept only field_types, not long_text, markdown or array fields. Search has field_ref=null; use it for free text rather than adding an unsupported equality filter."},
+        "command_ownership": "Every command, including delete or a fixed-value transition, belongs to an editor view. A collection or details view is not a command owner. For a focused action use an editor with surface=modal/side_sheet and the necessary context fields; Core provides its opener and selected record. Editable inputs must be included in both the editor's field_refs and the command's input_field_refs.",
+        "selection_links": "When selecting a row or tree node must change another collection, set that target's selection_filter={field_ref: its foreign key, source_view_ref: the source collection id}. Declare the relationship to the source resource's implicit id. Core owns runtime selection state; do not guess state_ref names. No selection shows all records. A separate dropdown is not the same as following the selected row. Do not also expose a resettable filter on this linked field. Prefer selection_filter over legacy filter for new linked views.",
         "deferred_computations": "When a requested computation or rule is deferred, show plausible representative OUTPUT values and their meaning in an inspectable view. A description or raw inputs alone do not illustrate the requested result. Clearly disclose that these values are fixtures, not live calculations. Do not build data concepts used only by future Automation.",
         "command_guards": "Guards reference fields of the command's own editor resource only. A predicate over several related records is not a single-record field guard; preserve such business rules for Automation with visible representative outcomes.",
         "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
@@ -2453,6 +2456,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
             view.setdefault("field_display", [])
             view.setdefault("section", None)
             view.setdefault("scope_filters", [])
+            view.setdefault("selection_filter", None)
             view.setdefault("media", None)
     try:
         Draft202012Validator(
@@ -2590,6 +2594,11 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 {**entry, "field_ref": field_refs_by_resource[raw_resource_id].get(entry["field_ref"], entry["field_ref"])}
                 for entry in raw_view.get("scope_filters") or []
             ]
+            link = raw_view.get("selection_filter")
+            normalized_view["selection_filter"] = {
+                "field_ref": field_refs_by_resource[raw_resource_id].get(link["field_ref"], link["field_ref"]),
+                "source_view_ref": _canonical_candidate_identifier(link["source_view_ref"], namespace="view"),
+            } if link else None
             section = raw_view.get("section")
             normalized_view["section"] = {
                 "id": _canonical_candidate_identifier(section["id"], namespace="section"),
@@ -3441,7 +3450,7 @@ def _validate_semantic_prototype_v2(
         if not any(str(item["role"]) == "collection" for item in resource_views):
             _fail(f"resource {resource_id!r} requires a collection view")
 
-    scope_errors = scope_findings(document, valid_value=_field_value_is_valid)
+    scope_errors = scope_findings(document, valid_value=_field_value_is_valid) + selection_findings(document)
     if scope_errors:
         _fail(scope_errors[0]['detail'])
 
@@ -3825,7 +3834,8 @@ def _compile_editor_surfaces(
             edit_views = [item for item in document["views"] if item["resource_ref"] == view["resource_ref"] and item["role"] == "editor" and any(command["kind"] != "create" and command["view_ref"] == item["id"] for command in document["commands"])]
             related_context = any(
                 item["resource_ref"] != view["resource_ref"]
-                and (item.get("filter") or {}).get("state_ref") == selection
+                and ((item.get("filter") or {}).get("state_ref") == selection
+                     or (item.get("selection_filter") or {}).get("source_view_ref") in {collection["id"] for collection in collections})
                 for item in document["views"]
             )
             if surface != "inline" and any(button["id"] == "edit" for button in toolbar["inputs"]["buttons"]):
@@ -4052,6 +4062,7 @@ def _compile_semantic_prototype_v2(
     from .semantic_query_toolbar import compile_query_toolbars
     compile_query_toolbars(document, webui, source_map)
     compile_query_scopes(document, webui, source_map)
+    compile_selection_filters(document, webui, source_map)
     from .semantic_media import compile_media
     compile_media(document, webui, prototype_resources, source_map)
     compile_presentations(document, webui, source_map)
@@ -4189,6 +4200,7 @@ def compile_semantic_prototype_candidate(
         model_findings = _semantic_v2_model_findings(semantic_document)
         model_findings.extend(presentation_findings(semantic_document))
         model_findings.extend(scope_findings(semantic_document, valid_value=_field_value_is_valid))
+        model_findings.extend(selection_findings(semantic_document))
         from .semantic_bindings import binding_findings
         model_findings.extend(binding_findings(semantic_document, brief))
         if model_findings or requirement_findings:

@@ -9,7 +9,7 @@ from .workflow import BuilderWorkflowError
 
 
 EXTENDED_PRESENTATIONS = frozenset({"board", "tree", "chart", "accordion"})
-VIEW_EXTRAS = frozenset({"surface", "media", "presentation_options", "field_display", "section", "scope_filters"})
+VIEW_EXTRAS = frozenset({"surface", "media", "presentation_options", "field_display", "section", "scope_filters", "selection_filter"})
 
 
 def legacy_view(view: Mapping) -> dict:
@@ -155,10 +155,21 @@ def compile_presentations(document: Mapping, webui: dict, source_map: dict) -> N
             else:
                 inputs.update(variant="cards", groupBy=group, groupDisplay="accordion")
             if field_paths:
+                replacements = {
+                    old: new for ref, new in field_paths.items()
+                    for old in source_map.get(f"field:{ref}", []) if old.startswith(root + ".inputs.")
+                }
+                if inputs.get('emptyState'):
+                    replacements[root + '.inputs.emptyState'] = root + '.inputs.emptyText'
                 for paths in source_map.values():
-                    paths[:] = [path for path in paths if not path.startswith(root + ".inputs.")]
+                    paths[:] = list(dict.fromkeys(
+                        replacements.get(path, path) for path in paths
+                        if path in replacements or not path.startswith(root + ".inputs.")
+                    ))
                 for ref, path in field_paths.items():
-                    source_map.setdefault(f"field:{ref}", []).append(path)
+                    paths = source_map.setdefault(f"field:{ref}", [])
+                    if path not in paths:
+                        paths.append(path)
             if presentation != 'accordion' and inputs.get('emptyState'):
                 empty = inputs['emptyState']
                 widget['inputs'].update(emptyText=empty['title'], emptyText_i18n=empty['title_i18n'])

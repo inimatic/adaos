@@ -14,6 +14,7 @@ def scope_findings(document, *, valid_value):
         refs = [item['field_ref'] for item in scopes]
         dynamic = {control.get('field_ref') for control in view.get('query_controls') or []}
         dynamic.add((view.get('filter') or {}).get('field_ref'))
+        dynamic.add((view.get('selection_filter') or {}).get('field_ref'))
         detail = None
         if view['role'] != 'collection':
             detail = 'scope_filters belong to collection views only'

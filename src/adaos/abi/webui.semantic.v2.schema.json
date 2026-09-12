@@ -280,6 +280,7 @@
         "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" } },
+        "selection_filter": { "anyOf": [{ "$ref": "#/$defs/selectionFilter" }, { "type": "null" }] },
         "title": { "$ref": "#/$defs/localizedText" },
         "field_refs": {
           "type": "array",
@@ -309,6 +310,10 @@
           "else": { "not": { "required": ["presentation"] } }
         }
       ]
+    },
+    "selectionFilter": {
+      "type": "object", "additionalProperties": false, "required": ["field_ref", "source_view_ref"],
+      "properties": { "field_ref": { "$ref": "#/$defs/id" }, "source_view_ref": { "$ref": "#/$defs/id" } }
     },
     "queryControl": {
       "type": "object",

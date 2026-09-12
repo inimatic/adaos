@@ -170,12 +170,57 @@ try {
       const settings = widgets.find(widget => widget.id === 'prototype-settings')
       if (settings) {
         for (const button of settings.inputs.buttons) {
-          await host(settings.id).locator(`[data-command-id=${JSON.stringify(button.id)}]`).click()
+          const openSettings = () => host(settings.id).locator(`[data-command-id=${JSON.stringify(button.id)}]`).click()
+          await openSettings()
           await expect(page.locator('ion-modal').last()).toBeVisible()
           await expect(page.locator('ion-modal').last().locator('ada-page-widget-host').first()).toBeVisible()
           await page.screenshot({ path: path.join(output, `${layout}-settings.png`), fullPage: true })
+          const sectionId = settings.actions.find(action => action.on === `click:${button.id}`).params.modalId
+          const members = application.modals[sectionId].schema.widgets
+          const collection = members.find(widget => ['ui.table', 'ui.list'].includes(widget.type))
+          const editor = Object.values(application.modals).flatMap(modal => modal.schema.widgets)
+            .find(widget => widget.type === 'ui.form' && widget.actions?.some(action => action.type === 'resourceOperation'
+              && action.params.operation_id === 'update' && action.target === collection?.dataSource?.resourceType))
+          if (!collection || !editor) throw new Error('Settings have no collection and editable local record')
+          const update = editor.actions.find(action => action.type === 'resourceOperation' && action.params.operation_id === 'update')
+          const field = editor.inputs.fields.find(field => ['longText', 'shortText'].includes(field.type)
+            && !field.readOnly && !field.visibleIf && update.params.payload?.[field.id] === `$event.values.${field.id}`)
+          if (!field) throw new Error('No editable settings text field')
+          const openRecord = async () => {
+            await host(collection.id).locator('tr.row-selectable,.collection-focus-item').first().click()
+            const opensEditor = collection.actions?.some(action => action.on === 'select' && action.type === 'openModal')
+            if (!opensEditor) {
+              const opener = members.find(widget => widget.type === 'ui.actions' && widget.actions.some(action => action.type === 'openModal' && action.on === 'click:edit'))
+              if (!opener) throw new Error('Settings edit has no reachable opener')
+              await host(opener.id).locator('[data-command-id="edit"]').click()
+            }
+            await expect(host(editor.id)).toBeVisible()
+            await expect.poll(() => host(editor.id).locator('ada-form-widget').evaluate(element => window.ng.getComponent(element).recordLoaded)).toBe(true)
+          }
+          const input = () => host(editor.id).locator(`[data-webui-field-id=${JSON.stringify(field.id)}]`).locator('input,textarea').first()
+          const save = async value => {
+            await input().fill(value)
+            const pending = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate'
+              && response.request().postDataJSON()?.resource_type === update.target)
+            void pending.catch(() => {})
+            await host(editor.id).locator(`[data-command-id=${JSON.stringify(update.id)}] button`).click()
+            const result = await pending
+            if (!result.ok() || !(await result.json()).ok) throw new Error('Settings mutation failed')
+            await expect(host(editor.id)).toHaveCount(0)
+          }
+          await openRecord()
+          const original = await input().inputValue()
+          const marker = `review-${layout}@example.invalid`
+          await save(marker)
           await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
-          sample.checks.push({ kind: 'settings-open-close', section: button.id })
+          await page.reload({ waitUntil: 'domcontentloaded' })
+          await ready()
+          await openSettings()
+          await openRecord()
+          await expect(input()).toHaveValue(marker)
+          await save(original)
+          await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+          sample.checks.push({ kind: 'settings-edit-persist-reload-restore', section: button.id, field: field.id })
         }
       }
       if (!sample.checks.length) throw new Error('No supported capability exercised')

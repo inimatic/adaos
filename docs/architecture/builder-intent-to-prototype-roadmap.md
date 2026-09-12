@@ -1629,21 +1629,29 @@ cohort with their own request, schema, model settings and browser evidence.
 - [ ] `[must]` Regenerate and browser-test fixed-subset tabs, including reset and
   mutation: the first library passed the grader but its Favorites tab displayed
   all records by default. A title and an optional filter do not satisfy this task.
-- [ ] `[must]` Expose application settings through the existing host contract;
+- [x] `[must]` Expose application settings through the existing host contract;
   test their actual effect and persistence scope rather than a Settings heading.
-- [ ] `[must]` Make Builder Conversation retain project-scoped user instructions
+  Run 04 board browser checks edit/save/reload/verify/restore on 1440/390px.
+- [x] `[must]` Make Builder Conversation retain project-scoped user instructions
   and generation results, including technological E2E entrypoints, without
   inheriting another project's transcript or duplicating chat messages.
-- [ ] `[should]` Inspect existing prototype inheritance/revision isolation before
+  Run 04 original creation and design prompts each appear once in DEV Builder
+  Conversation on 1440/390px; event-only SDK ingress was replaced with scoped
+  durable storage. Browser inspection does not enter generation context.
+- [x] `[should]` Inspect existing prototype inheritance/revision isolation before
   consolidating test applications. Reuse one project only if current source,
   runtime data and evaluation identities already isolate revisions safely.
+  Experiment/base-revision metadata and adopt/discard exist, but E2E ownership,
+  cleanup, resource data and grading remain case/project-scoped. Consolidation is
+  deferred with large-project orchestration; it is not a configuration-only change.
 - [ ] `[must]` Finish known relationship/lookup and grader-observability defects,
   then run matched GPT-5/low repeats and compare short/moderate prompts on the
   difficult cases. Record initial success, repair success, task success and cost.
 - [ ] `[must]` Audit generation inputs and Core/Client changes for subject-scoped
   branches, fixture leakage and rubric leakage before accepting the tranche.
-- [ ] `[should]` Discuss a finite vocabulary of composable layout strategies,
+- [x] `[should]` Discuss a finite vocabulary of composable layout strategies,
   distinguishing user-selectable preferences from hard acceptance requirements.
+  See the canonical architecture's composable layout policy below its UX guidance.
 
 Design references: [Carbon data-table usage](https://carbondesignsystem.com/components/data-table/usage/)
 separates row, selection and toolbar actions; [PatternFly toolbar guidance](https://www.patternfly.org/components/toolbar/design-guidelines/)
@@ -1675,10 +1683,12 @@ baseline, not snapshot the transient empty response.
   use opt-in durable scoped IO append, preserve thread context, avoid per-project
   E2E message-ID reuse, and report scheduled versus persisted honestly. SDK and
   Builder tests pass; the browser-visible end-to-end checkbox above remains open.
-- [ ] `[must]` Remove false operational obligations from descriptive empty-search
+- [x] `[must]` Remove false operational obligations from descriptive empty-search
   state clauses in the Brief compiler. Runs 01/03 required unnecessary full
   semantic repairs for a second search binding. Preserve the state requirement
   and genuine search operation; do not weaken binding validation to hide it.
+  Narrow EN/RU query-state noun exclusion is regression-tested; arbitrary natural
+  language admission still needs broader evaluation, not more domain heuristics.
 
 Browser evidence is distinct from grader success. Daily readings passes tabs,
 query disclosure, date filtering/reset and five numeric graph points (including
@@ -1687,6 +1697,28 @@ remain retained alongside the corrected harness result. Library tree selection
 revealed missing selection-state display wiring; compiler lowering now emits
 the Client's actual `selectedStateKey` and `selectionMode` inputs. Fresh tree,
 fixed-subset, settings and drag/persistence qualification is still pending.
+
+Run 04 reached 3/3 generation/validation/grading passes (grader v15). The library
+passed on its primary answer; board/readings needed a full repair. Browser checks
+confirmed separate tabs, scoped Favorites, tree highlighting, accordions, charts,
+date reset, persisted board movement and actual settings edits. Independent review
+found that the library tree did NOT filter its materials list: the model wired a
+separate dropdown instead. This is not qualified hierarchical navigation. The
+new typed selection-link contract removes runtime-name guessing; grader v16 now
+requires evidence for both selection and consumption. Fresh verification remains
+open. Old run artifacts and grades are not rewritten.
+
+Eight-archetype run `context-archetypes-gpt5-low-20260912-09` reached 6 passed,
+2 failed, 0 inconclusive. Operations lost empty-state provenance when a list was
+lowered to a board; remapping now preserves state/field aliases and all four
+presentation regression tests. Volunteer assignment failed command ownership,
+then its repair chose a filter on an unsupported field type. These are distinct
+failures and do not justify weakening acceptance. The next matched run must use
+the new immutable code/schema/grader revision.
+
+DEV Builder durable IO was subsequently checkpointed locally as `builder@0.2.117`,
+source `sha256:e9aa4efaa991ad47611bd92c66455f92db0bf8d9502ec002b61c64c24b6230f1`.
+No remote publication or Workspace promotion is implied.
 
 DEV Builder Conversation ingress changes were tested and locally checkpointed
 as `builder@0.2.116`, source

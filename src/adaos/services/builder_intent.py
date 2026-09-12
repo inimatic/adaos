@@ -111,6 +111,12 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("delete", re.compile(r"\b(?:delete|remove|удал)\w*\b", re.IGNORECASE)),
 )
 _READ_OPERATIONS = {"list", "inspect", "search", "filter", "sort"}
+_QUERY_STATE_NOUN_PATTERN = re.compile(
+    r"\b(?:empty|no[- ]results?|loading|error)[- ]+(?:search|filter)(?:[- ]+results?)?[- ]+states?\b|"
+    r"\b(?:search|filter)[- ]+(?:empty|no[- ]results?|loading|error)[- ]+states?\b|"
+    r"\bсостояни\w*\s+(?:пуст\w*|ошибк\w*|загрузк\w*)\s+(?:поиск\w*|фильтр\w*)\b",
+    re.IGNORECASE,
+)
 _CAPTURE_ATTACHMENT_PATTERN = re.compile(
     r"\b(?:(?:attach|upload)\w*[^.!?;\n]{0,80}(?:photos?|images?|pictures?|files?|attachments?|documents?)|"
     r"(?:add|capture)\w*\s+(?:(?!(?:to|about|for|of)\b)\w+\s+){0,3}(?:photos?|images?|pictures?|files?|attachments?|documents?)|"
@@ -270,9 +276,12 @@ def _operation_mentions(
     clause: str, exclusion_spans: list[tuple[int, int]]
 ) -> list[tuple[str, re.Match[str]]]:
     candidates: list[tuple[int, int, int, str, re.Match[str]]] = []
+    state_nouns = [match.span() for match in _QUERY_STATE_NOUN_PATTERN.finditer(clause)]
     for priority, (kind, pattern) in enumerate(_OPERATION_PATTERNS):
         for match in pattern.finditer(clause):
             if _overlaps_any(match.start(), match.end(), exclusion_spans):
+                continue
+            if kind in {"search", "filter"} and _overlaps_any(match.start(), match.end(), state_nouns):
                 continue
             candidates.append((match.start(), match.end(), priority, kind, match))
     selected: list[tuple[int, int, int, str, re.Match[str]]] = []
