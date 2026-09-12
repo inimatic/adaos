@@ -5,7 +5,7 @@ import json
 
 from adaos.sdk.core.exporter import export as sdk_export
 from adaos.services.root_mcp.registry import get_descriptor_set
-from adaos.services.root_mcp.descriptor_search import get_descriptor_item
+from adaos.services.root_mcp.descriptor_search import get_descriptor_item, search_descriptors
 
 
 def test_sdk_export_std():
@@ -74,3 +74,23 @@ def test_sdk_descriptor_drilldown_states_quota_contract_boundary():
     description = " ".join(item["description"].split())
     assert "CanonicalObject.to_dict()" in description
     assert "does not return subscription-plan LLM or Codex token usage" in description
+
+
+def test_sdk_resource_and_persistent_data_contracts_are_discoverable():
+    for query, expected in (
+        ("skill_data_root", "adaos.sdk.data.skill_env.skill_data_root"),
+        ("adaos.sdk.resources.operate", "adaos.sdk.resources.operate"),
+    ):
+        result = search_descriptors(query, descriptor_ids=["sdk_metadata"], limit=6)
+        assert result["items"][0]["item_id"] == expected
+        contract = get_descriptor_item("sdk_metadata", expected)["item"]
+        assert contract["name"] == expected
+        assert contract["description"] and "signature_detail" in contract
+
+
+def test_sdk_catalog_is_navigation_not_an_empty_method_contract():
+    result = search_descriptors("public SDK skill_data_root", limit=6)
+    assert result["items"][0]["item_id"] == "adaos.sdk.data.skill_env.skill_data_root"
+    catalog = get_descriptor_item("sdk_metadata", "sdk_metadata")
+    assert catalog["item"]["discovery"]["descriptor_ids"] == ["sdk_metadata"]
+    assert "payload" not in catalog["item"]

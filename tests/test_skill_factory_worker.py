@@ -2237,6 +2237,39 @@ def test_worker_records_exhausted_public_contract_validation_feedback(
     }
 
 
+def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_path, monkeypatch):
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev/skills"
+    _core_created_skill_fixture(repo_root, dev_skills, "blocked_example")
+    factory = SkillFactoryService(state_dir=state_dir)
+    submitted = factory.submit_realize_request({
+        "target": {"type": "skill", "id": "blocked_example"},
+        "artifacts": {"implementation_brief": "Use a supported permission boundary."},
+        "repo": {"sparse_paths": ["skills/blocked_example/"]},
+    })
+    envelope = {"schema": "adaos.development_feedback_output.v1", "items": [{
+        "category": "ambiguous_contract", "summary": "Caller identity contract is unavailable",
+        "blocking": True, "confidence": 0.9, "impact": ["comprehension"],
+        "target_refs": ["sdk:identity"], "details": "No caller authority was admitted.",
+        "recommendation": "Disclose the supported identity contract.", "evidence_refs": [],
+    }]}
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir, repo_root=repo_root, dev_skills_root=dev_skills,
+        dev_scenarios_root=tmp_path / "dev/scenarios", runs_root=tmp_path / "runs",
+        executor=lambda **kwargs: CodexRunResult(returncode=0, final_message=(
+            "```adaos-development-feedback\n" + json.dumps(envelope) + "\n```")),
+    )
+    monkeypatch.setattr(worker, "_validate_workspace", lambda *args: pytest.fail("must not validate an unresolved blocker"))
+    monkeypatch.setattr(worker, "_sync_artifacts", lambda *args: pytest.fail("must not activate blocked source"))
+    result = worker.run_once()
+    assert result["ok"] is False
+    failure = factory.read_task(submitted["task"]["task_id"])["failure_history"][-1]
+    assert failure["stage"] == "development_feedback"
+    assert failure["failure_class"] == "capability_blocked"
+    assert len(failure["details"]["development_feedback_refs"]) == 1
+
+
 def test_worker_links_final_validator_feedback_to_failed_task(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4453,10 +4486,14 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     assert "public `adaos.sdk` contracts only" in prompt
     assert "not Codex skill authoring" in prompt
     assert "Do not load generic skill-creator instructions" in prompt
-    assert "Never scan the complete SDK, repository, or task tree" in prompt
+    assert "Do not scan the complete SDK, repository, or task tree" in prompt
     assert "at most 120 lines and 8192 bytes" in prompt
-    assert "at most 400 source lines inspected before the first edit" in prompt
-    assert "Use task-scoped MCP at most once" in prompt
+    assert "there is no fixed first-edit line quota for a full implementation" in prompt
+    assert "Repeat for independently needed contracts and reuse prior results" in prompt
+    assert "Use task-scoped MCP at most once" not in prompt
+    assert (input_dir / "packet.json").resolve().as_posix() in prompt
+    assert "admitted read-only context" in prompt
+    assert "same schema with `blocking:true`" in prompt
     assert "Do not run tests, validation, status, or diff commands" in prompt
     assert "every textual `Get-Content`" in prompt
     assert "`-Encoding UTF8`" in prompt
@@ -6869,6 +6906,7 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     prompt = (tmp_path / "input-blueprint/task.md").read_text(encoding="utf-8")
     assert "Do not create custom CRUD handlers" not in prompt
     assert "Fresh installation starts with empty user data" in prompt
+    assert (tmp_path / "input-blueprint/prototype-resource-handoff.json").resolve().as_posix() in prompt
     declaration = workspace / "skills" / companion / "resources/work_items.resource.json"
     empty_bundle = json.loads(declaration.read_text(encoding="utf-8"))
     seeded_bundle = {**empty_bundle, "seed": materialized["state"]["records"]}

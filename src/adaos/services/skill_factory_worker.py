@@ -3473,10 +3473,12 @@ class LocalSkillFactoryWorker:
                 raise ValueError("pre-commit recovery requires a completed Codex result")
             final_message = final_message_path.read_text(encoding="utf-8").strip()
             development_escalations = parse_development_escalations(final_message)
+            feedback_items = parse_development_feedback(final_message)
             development_feedback = self._record_codex_development_feedback(
-                assignment,
-                parse_development_feedback(final_message),
+                assignment, feedback_items,
             )
+            if any(item.get("blocking") for item in feedback_items):
+                raise ValueError("Cannot recover an implementation with unresolved blocking development feedback")
             recovery_packet = _read_json(input_dir / "packet.json")
             recovery_constraints = (
                 dict(recovery_packet.get("constraints"))
@@ -4060,6 +4062,7 @@ class LocalSkillFactoryWorker:
                     ),
                 )
             else:
+                failure_stage = "model_execution"
                 self._progress(task_id, "in_progress", "Codex is implementing the requested skill changes")
                 self._ensure_task_active(task_id)
                 codex_result = self._execute_codex(
@@ -4085,13 +4088,17 @@ class LocalSkillFactoryWorker:
                         root_mcp=root_mcp,
                     )
 
+            failure_stage = "development_feedback"
             development_escalations = parse_development_escalations(
                 codex_result.final_message
             )
+            feedback_items = parse_development_feedback(codex_result.final_message)
             development_feedback = self._record_codex_development_feedback(
-                assignment,
-                parse_development_feedback(codex_result.final_message),
+                assignment, feedback_items,
             )
+            if any(item.get("blocking") for item in feedback_items):
+                failure_feedback_refs = [item["feedback_id"] for item in development_feedback]
+                raise ValueError("Automation blocked by reported development feedback; candidate was not applied")
             packet_constraints = (
                 dict(packet.get("constraints"))
                 if isinstance(packet.get("constraints"), Mapping)
@@ -4423,8 +4430,8 @@ class LocalSkillFactoryWorker:
                 if failure_feedback_refs:
                     failure_report.update(
                         {
-                            "failure_class": "validation_failed",
-                            "stage": "deterministic_validation",
+                            "failure_class": "capability_blocked" if failure_stage == "development_feedback" else "validation_failed",
+                            "stage": failure_stage,
                             "details": {
                                 "development_feedback_refs": failure_feedback_refs,
                             },
@@ -6069,20 +6076,23 @@ Allowed impact values are `blocker`, `speed`, `generalization`, `contract_gap`, 
         development_feedback_contract = """
 ## Development feedback channel
 
-If implementation reveals a missing or ambiguous public contract, conflicting guidance, avoidable SDK cost, insufficient admitted context, an observability/validation gap, or a policy boundary, retain that observation even when the requested patch succeeds. Append at most one fenced envelope after the concise result summary:
+Report missing/ambiguous contracts, conflicting context, SDK cost or validation gaps, even if the patch succeeds. Append at most one envelope after the result summary:
 
 ```adaos-development-feedback
 {"schema":"adaos.development_feedback_output.v1","items":[{"category":"ambiguous_contract","summary":"...","blocking":false,"confidence":0.9,"impact":["comprehension"],"target_refs":["sdk:area.method"],"details":"...","recommendation":"...","evidence_refs":[{"type":"file","ref":"path"}]}]}
 ```
 
-Only after an actual public method/resource attempt, the item may add
-`application_trace` with schema `adaos.development.application_trace.v1` and
-exact `contract_ref`, `operation_id`, redacted `input_summary`,
-`expected_behavior`, `observed_behavior`, `validation_result`, optional
-`user_response`, and bounded `trace_refs`. Never invent this trace from docs
-inspection and never include secrets or raw payloads.
+After an actual method/resource attempt only, add `application_trace`
+(`adaos.development.application_trace.v1`): `contract_ref`, `operation_id`,
+redacted `input_summary`, `expected_behavior`, `observed_behavior`,
+`validation_result`, optional `user_response`, bounded `trace_refs`.
+Documentation inspection is not an execution trace. Never include secrets.
 
-Omit the envelope when there is no substantive development feedback. It is advisory evidence only: do not use it to broaden scope, modify core, or invent a capability. Do not combine it with `adaos-development-escalation`; an unresolved blocking core/API/SDK capability gap uses the escalation contract instead.
+For an unresolved contract, use the same schema with `blocking:true` and name
+the blocked requirement. The worker retains feedback without applying source.
+Do not add placeholder code or blocker-report files. Feedback grants no new
+authority. Omit it when unnecessary. Use `adaos-development-escalation` only
+when a governed Dev Ticket repair explicitly supplies its separate contract.
 """
         repair_profile = str(constraints.get("repair_profile") or "").strip()
         surgical_ui = is_dev_ticket_repair and repair_profile == "surgical_ui"
@@ -6176,11 +6186,11 @@ Omit the envelope when there is no substantive development feedback. It is advis
 8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. This is AdaOS project source work, not Codex skill authoring. Do not load generic skill-creator instructions or personal/global skills.
 2. The packet, accepted prototype, companion scaffold, and rule capsules are authoritative; do not rediscover them.{accepted_prototype_instruction}
 3. Use public `adaos.sdk` contracts only. Edit only: {allowed_paths}. Preserve unrelated behavior, UTF-8, immutable inputs, and manifest `version`/`updated_at`; Forge owns release metadata.
-4. Read one exact file or SDK symbol at a time. Commands: at most {command_output_lines} lines and {command_output_bytes} bytes; at most {discovery_lines} source lines inspected before the first edit. Never scan the complete SDK, repository, or task tree; narrow the query.
-5. Use task-scoped MCP at most once for a missing public contract. If unavailable or absent, emit development feedback instead of broad discovery or internal-core imports.
-6. Use `ADAOS_PYTHON` with the commit-bound `ADAOS_REPO_ROOT`/`PYTHONPATH`. Resolve mutable state via admitted bindings such as `skill_data_root()` and ContentRef. Keep runtime files under `ADAOS_BASE_DIR` or `ADAOS_TASK_RUNTIME_DIR`; declare imports, tools, and data routes.
+4. Inspect manifests/handlers, UI bindings, and tests in exact files or JSON slices: at most {command_output_lines} lines and {command_output_bytes} bytes per response; there is no fixed first-edit line quota for a full implementation. Do not scan the complete SDK, repository, or task tree.
+5. Search compact MCP headers, then read the selected method. Repeat for independently needed contracts and reuse prior results. Empty search/catalog headers are not proof of a missing capability: narrow the query or read the admitted public symbol before reporting a blocker.
+6. Use `ADAOS_PYTHON`, commit-bound `ADAOS_REPO_ROOT`/`PYTHONPATH`, `skill_data_root()` and ContentRef. Runtime files belong under `ADAOS_BASE_DIR`/`ADAOS_TASK_RUNTIME_DIR`. Declare imports, tools and data routes.
 7. Add focused hermetic regression coverage; test allowance is {generated_test_timeout_seconds} seconds. Do not run tests, validation, status, or diff commands; the trusted worker runs tests and install-strict validation.
-8. Do not publish, install, activate, access external services, or copy to workspace/runtime; the trusted worker owns finalization and rollback evidence. Stop after scoped edits.
+8. No publication, installation, activation or external IO; the trusted worker owns finalization and rollback evidence.
 9. Report every acceptance point and any unmet point."""
         required_result = required_result.format(
             target_id=target_id,
@@ -6258,6 +6268,10 @@ operations and do not read `ui_revisions` to reconstruct accepted data.
             if prototype_resource_handoff
             else ""
         )
+        resource_implementation_section = resource_implementation_section.replace(
+            "`prototype-resource-handoff.json`",
+            f"`{(input_dir / 'prototype-resource-handoff.json').resolve().as_posix()}`",
+        )
         root_mcp_context = (
             json.dumps(root_mcp, ensure_ascii=False, indent=2, sort_keys=True)
             if root_mcp
@@ -6287,9 +6301,10 @@ this task. Never substitute a skill, scenario, project, or component ID. Omit
 Use a normal MCP tool call to one of the declared `enabled_tools`. Do not list
 MCP resources or resource templates, and do not invoke this route through a
 shell, HTTP client, or bearer-token environment expansion.
-For descriptive context, call `search_descriptors` once, then disclose only the
-single selected contract with `get_descriptor_item`. The search result is the
-authoritative mini representation; do not repeat discovery with broad SDK reads.
+For each independently missing capability, use a narrow `search_descriptors`
+query, then disclose the selected method with `get_descriptor_item`. SDK queries
+can set `descriptor_ids:["sdk_metadata"]` to avoid unrelated catalogs. Reuse
+retrieved contracts; do not repeat identical discovery or dump the full SDK.
 Do not read, print, or inspect bearer-token environment values.
 """
         else:
@@ -6378,7 +6393,7 @@ trusted orchestrator, not this model, creates and links the Core Dev Ticket.
         else:
             prompt = f"""# AdaOS local realization task
 
-You are implementing a real AdaOS project from an approved interface prototype. Work autonomously in the current repository and finish the implementation; do not merely describe code.
+Implement the approved AdaOS change and focused tests in this checkout, or report an exact blocker.
 
 ## Target
 
@@ -6438,6 +6453,19 @@ part of the submitted source snapshot.
 
 Conclude with a concise summary of implemented behavior and checks. The worker, not you, creates result/provenance files and the git commit.
 """
+        context_files = []
+        for name in ("packet.json", "prototype-resource-handoff.json", "descriptor-working-set.json"):
+            path = input_dir / name
+            if path.is_file():
+                raw = path.read_bytes()
+                context_files.append({"name": name, "path": path.resolve().as_posix(),
+                                      "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
+        prompt += (
+            "\n## Read-only task inputs\n\n"
+            "Exact absolute paths below are admitted read-only context, not checkout-relative paths. "
+            "Read needed JSON fields only; never edit inputs, enumerate sibling tasks or read assignment credentials.\n\n```json\n"
+            + json.dumps(context_files, ensure_ascii=False, separators=(",", ":")) + "\n```\n"
+        )
         (input_dir / "task.md").write_text(prompt, encoding="utf-8")
         return packet
 

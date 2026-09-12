@@ -23,10 +23,12 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.control_plane",
     "adaos.sdk.conversation",
     "adaos.sdk.context",
+    "adaos.sdk.data.skill_env",
     "adaos.sdk.deployment",
     "adaos.sdk.distributed",
     "adaos.sdk.execution",
     "adaos.sdk.research",
+    "adaos.sdk.resources",
     "adaos.sdk.status",
     "adaos.sdk.subscriptions",
     "adaos.sdk.web",
@@ -38,10 +40,12 @@ _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
     "adaos.sdk.control_plane": "Read canonical node, subnet, reliability, quota, and inventory projections.",
     "adaos.sdk.conversation": "Read and update governed conversational threads and Builder topics.",
     "adaos.sdk.context": "Resolve, compile, inspect, and bind governed agent context.",
+    "adaos.sdk.data.skill_env": "Resolve owner-scoped persistent skill data paths and environment state.",
     "adaos.sdk.deployment": "Plan and inspect project deployment through the public SDK boundary.",
     "adaos.sdk.distributed": "Describe and operate governed distributed datasets and services.",
     "adaos.sdk.execution": "Declare and inspect bounded execution jobs and artifacts.",
     "adaos.sdk.research": "Use governed research inquiry, synthesis, and evidence workflows.",
+    "adaos.sdk.resources": "Query and mutate current-skill Resource Workbench records through declared operations.",
     "adaos.sdk.status": "Publish bounded skill and scenario status projections.",
     "adaos.sdk.subscriptions": "Read bounded subscription usage and quota projections.",
     "adaos.sdk.web": "Read and update declarative desktop, application, and webspace state.",
@@ -231,7 +235,9 @@ def _selection_score(item: dict[str, Any], terms: list[str]) -> int:
     name_tokens = set(re.findall(r"[a-z0-9]+", name.replace("_", " ")))
     score = 0
     for term in terms:
-        if term in name_tokens:
+        if term == name or term == name.rsplit(".", 1)[-1]:
+            score += 40
+        elif term in name_tokens:
             score += 8
         elif term in name:
             score += 5

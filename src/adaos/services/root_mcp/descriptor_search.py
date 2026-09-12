@@ -22,7 +22,7 @@ def _terms(value: str | None) -> list[str]:
     return list(
         dict.fromkeys(
             token.lower()
-            for token in re.findall(r"[^\W_]+", str(value or ""), flags=re.UNICODE)
+            for token in re.findall(r"\w+", str(value or ""), flags=re.UNICODE)
             if len(token) >= 2
         )
     )[:24]
@@ -199,7 +199,7 @@ def _score(row: Mapping[str, Any], terms: Sequence[str]) -> int:
     searchable = " ".join((item_id, title, summary, owner, tags))
     score = 0
     for term in terms:
-        if term == item_id or term == title:
+        if term == item_id or term == title or term == item_id.rsplit(".", 1)[-1]:
             score += 40
         elif term in item_id or term in title:
             score += 12
@@ -244,6 +244,12 @@ def search_descriptors(
         parent = _catalog_header(entry)
         descriptor_class = str(entry.get("descriptor_class") or "").lower()
         parent_score = _score(parent, query_terms)
+        if descriptor_id in _CHILD_INDEX_DESCRIPTORS and text.casefold() not in {
+            descriptor_id.casefold(), str(parent.get("title") or "").casefold()
+        }:
+            # Container vocabulary must not outrank actionable methods merely
+            # because a request says "public SDK" or "skill".
+            parent_score = min(parent_score, 1)
         if parent_score > 0 and (
             not selected_kinds
             or descriptor_class in selected_kinds
@@ -306,6 +312,16 @@ def get_descriptor_item(
     effective_level = str(level or "std").strip().lower()
     if effective_level not in {"mini", "std", "rich"}:
         effective_level = "std"
+    if token == "sdk_metadata" and selected_item_id == token:
+        entry = next(item for item in list_descriptor_sets() if item["descriptor_id"] == token)
+        return {
+            "schema": "adaos.descriptor.item.v1", "descriptor_id": token,
+            "item_id": token, "level": "mini",
+            "item": {**_catalog_header(entry), "discovery": {
+                "tool": "search_descriptors", "descriptor_ids": [token],
+                "guidance": "Search one required capability or exact public symbol, then read its returned item_id. This is a catalog, not a method contract.",
+            }},
+        }
     descriptor = get_descriptor_set(
         token,
         level=effective_level,

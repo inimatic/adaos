@@ -406,6 +406,25 @@ provider when the approved task requires server-side policy or integrations.
 Automation acceptance checks must describe implementation behavior rather than
 repeat completed Prototype visual criteria or invented future features.
 
+Automation context is not a surgical-repair prompt. Its read-only input index
+names exact paths, content digests and sizes relative to the executor's actual
+working environment. A basename alone is insufficient when inputs and source
+live in different directories. The source-edit allowlist remains separate from
+this read authority; task credentials and sibling tasks are never discovery
+inputs. Full implementation uses demand-driven retrieval per independently
+needed public contract, preserving compact responses and reusing previous
+results instead of imposing one discovery call for the entire application.
+SDK catalog headers are navigation, not executable method contracts. Search
+must expose the same admitted public facades that generated code may use, and
+exact symbols must outrank broad catalog vocabulary.
+
+All implementation stages may report typed development feedback. An unresolved
+blocking item retains the candidate and evidence without applying source or
+claiming completed Automation. Recovery obeys the same gate. Governed Dev Ticket
+escalation is a separate contract and must not be referenced without its schema
+and admission policy. Failure phases distinguish model execution, feedback
+parsing, deterministic validation and activation; none is workspace preparation.
+
 The generation-stage context includes this boundary before inference. The
 independent grader applies the same stage policy, while case-specific rubrics
 remain unavailable to the generation model. Grader v10 supersedes v9's mixed

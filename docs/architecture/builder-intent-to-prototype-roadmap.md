@@ -2212,6 +2212,29 @@ resource rewrite. The blueprint gate checks detachment only, not business-rule
 correctness. Empty-install browser verification and provenance of speculative
 requirements remain open, so the broader items above are not yet complete.
 
+Continuation `resource-handoff-fix-02` reaches the executor but stops in 118.60s.
+The actual input supplied only a handoff basename although the file lived in
+the sibling input directory. The model's SDK search selected a catalog header;
+its drill-down incorrectly searched for the literal `sdk_metadata` as a method
+and returned no methods. The full-implementation prompt also inherited a
+single-discovery limit and referenced an escalation envelope unavailable to
+this stage. The resulting malformed feedback was mislabeled workspace preparation.
+These are context/runtime contract defects, not proof that the user brief was
+too short or that larger model reasoning/timeout budgets are needed.
+
+- [x] `[must]` Index admitted read-only inputs with exact paths/digests separately
+  from editable source; cover the resource handoff file in prompt tests.
+- [x] `[must]` Publish existing resource and persistent skill-data SDK facades;
+  distinguish catalog navigation from exact method disclosure and rank exact
+  symbol matches above container vocabulary.
+- [x] `[must]` Separate full implementation discovery from surgical repair limits.
+  Keep per-response bounds and prohibit broad repository/SDK dumps.
+- [x] `[must]` Describe blocking feedback for normal Automation, retain it without
+  source activation, and preserve that boundary during candidate recovery.
+- [ ] `[must]` Re-run these context fixes through the live task MCP route and
+  actual implementation; passing prompt/worker unit tests is not lifecycle
+  qualification. Measure input usability and every retained model/tool response.
+
 Local Client production build passes in 70.13s with existing stylesheet-budget
 and dependency warnings; 29 focused renderer tests pass. Core/Client commits
 remain local. DEV Builder's additional tested source is checkpointed as
