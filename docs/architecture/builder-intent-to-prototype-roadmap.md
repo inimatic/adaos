@@ -2470,6 +2470,9 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
 - [ ] `[must]` Verify runtime cache identity and unavailable-Trial presentation in
   the live Client. DEV results must not survive as Trial data after a source
   change or an admission failure. Retain ordinary transport stale-value recovery.
+  Client implementation passes 125 focused tests, including skill/API source
+  changes without refetch on timestamp-only updates, plus generic boundaries and
+  the 41-component capability inventory check. Live qualification remains open.
 - [ ] `[should]` Resolve the isolated Builder browser's node-status 401/Limited
   indicator separately from scenario rendering and source publication health.
 
