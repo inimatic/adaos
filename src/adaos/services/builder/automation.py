@@ -3323,6 +3323,8 @@ class BuilderAutomationService:
         workflow_transition: str | None = None,
         development_session_id: str | None = None,
         execution_budget: Mapping[str, Any] | None = None,
+        expected_session_id: str | None = None,
+        expected_iteration: int | None = None,
     ) -> dict[str, Any]:
         instruction = str(text or "").strip()
         if not instruction:
@@ -3336,12 +3338,18 @@ class BuilderAutomationService:
             )
             if not session:
                 return {"ok": False, "handled": False, "error": "automation_session_not_found"}
+            session = self.refresh_session(session)
+            if expected_session_id is not None or expected_iteration is not None:
+                if (not expected_session_id or type(expected_iteration) is not int
+                        or expected_iteration < 0
+                        or session.get("session_id") != expected_session_id
+                        or int(session.get("iteration") or 0) != expected_iteration):
+                    raise ValueError("Automation follow-up does not match the expected session iteration")
             incoming_conversation_id = str(conversation_id or "").strip()
             if incoming_conversation_id and not str(session.get("conversation_id") or "").strip():
                 session["conversation_id"] = incoming_conversation_id
                 session["updated_at"] = _now_iso()
                 self._save_session(session)
-            session = self.refresh_session(session)
             if session.get("status") == "completed":
                 session = self._notify_completed_session(session)
             if session.get("status") in {"queued", "assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}:

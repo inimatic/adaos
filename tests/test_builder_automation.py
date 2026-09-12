@@ -2918,6 +2918,20 @@ def test_retry_failed_reuses_governed_request_and_refreshes_prototype_acceptance
     )
 
 
+@pytest.mark.parametrize("expected_id,iteration", [("other", 2), ("automation.scenario.recipes", 1),
+                                                  (None, 2), ("automation.scenario.recipes", True)])
+def test_followup_rejects_stale_or_partial_iteration_preconditions(tmp_path, monkeypatch, expected_id, iteration):
+    service = _service(tmp_path)
+    service._save_session({"session_id": "automation.scenario.recipes", "object_type": "scenario",
+                          "object_id": "recipes", "status": "failed", "iteration": 2})
+    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+    monkeypatch.setattr(BuilderAutomationService, "_submit", lambda *a, **kw: pytest.fail("must not submit"))
+    with pytest.raises(ValueError, match="expected session iteration"):
+        service.submit_turn(text="Correction", object_type="scenario", object_id="recipes",
+                            expected_session_id=expected_id, expected_iteration=iteration)
+    assert service.get_session("scenario", "recipes")["iteration"] == 2
+
+
 def test_retry_failed_stops_before_codex_when_prototype_acceptance_is_stale(
     tmp_path: Path,
     monkeypatch,
@@ -4473,11 +4487,16 @@ def test_followup_turn_clears_stale_terminal_projection(tmp_path: Path) -> None:
         object_type="scenario",
         object_id="recipes",
         webspace_id="prompt-dev",
+        expected_session_id=previous["session_id"],
+        expected_iteration=previous["iteration"],
     )
 
     assert turn["automation"]["summary"] is None
     assert "completion_readiness" not in turn["session"]
     assert turn["session"]["completion_history"][0]["completed_at"] == "before"
+    with pytest.raises(ValueError, match="expected session iteration"):
+        service.submit_turn(text="Duplicate correction", object_type="scenario", object_id="recipes",
+                            expected_session_id=previous["session_id"], expected_iteration=previous["iteration"])
 
 
 def test_automation_projection_is_render_safe_and_abi_valid(tmp_path: Path) -> None:

@@ -15,7 +15,7 @@ from adaos.sdk.developer import projects
 from adaos.services.resources.prototype import prototype_webui_digest
 
 
-STEP_TYPES = frozenset({"builder.workflow", "prototype.accept", "automation.start", "automation.wait",
+STEP_TYPES = frozenset({"builder.workflow", "prototype.accept", "automation.start", "automation.submit", "automation.wait",
                         "trial.prepare", "trial.decide", "release.promote"})
 
 
@@ -116,6 +116,30 @@ def execute(step_type: str, inputs: Mapping[str, Any], context: Mapping[str, Any
         return automation.start(object_type=kind, object_id=identifier, implementation_brief=brief,
             webspace_id=webspace, conversation_id=conversation_id,
             execution_budget=inputs.get("execution_budget"), agent_profile=inputs.get("agent_profile"))
+    if step_type == "automation.submit":
+        instruction = str(inputs.get("text") or "").strip()
+        expected_session = str(inputs.get("expected_session_id") or "")
+        iteration = inputs.get("expected_iteration")
+        if not instruction or not expected_session or type(iteration) is not int or iteration < 0:
+            raise ValueError("Automation correction requires text and the exact expected session iteration")
+        current = automation.get_state(object_type=kind, object_id=identifier, webspace_id=webspace)
+        session = current.get("session") or {}
+        if (session.get("session_id") != expected_session or session.get("iteration", 0) != iteration
+                or session.get("status") not in {"failed", "completed", "awaiting_input"}):
+            raise ValueError("Automation correction requires its exact terminal session iteration")
+        intent = _evidence_path(f"evidence/lifecycle/{context['case_id']}-{context['repetition']}-{context['step_id']}.correction.json", context)
+        intent.parent.mkdir(parents=True, exist_ok=True)
+        # A lost acknowledgement is ambiguous. Never automatically resubmit it.
+        with intent.open("x", encoding="utf-8") as stream:
+            json.dump({"input": dict(inputs), "session_id": expected_session,
+                       "iteration": iteration, "review_interventions": 1}, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        result = automation.submit(instruction, object_type=kind, object_id=identifier,
+            webspace_id=webspace, conversation_id=session.get("conversation_id"),
+            expected_session_id=expected_session, expected_iteration=iteration)
+        if result.get("status") == "automation_busy":
+            return {**result, "ok": False, "review_interventions": 1}
+        return {**result, "review_interventions": 1}
     if step_type == "automation.wait":
         timeout = max(1.0, float(inputs.get("timeout_seconds") or context.get("timeout_seconds") or 1800))
         started, polls = time.monotonic(), 0
@@ -167,7 +191,7 @@ def retained_stage(steps: list[Mapping[str, Any]]) -> dict[str, str]:
         kind = step.get("type")
         if kind == "prototype.accept":
             result["acceptance"] = "accepted"
-        elif kind == "automation.start":
+        elif kind in {"automation.start", "automation.submit"}:
             result["stage"] = "automation"
         elif kind == "trial.prepare":
             result["stage"] = "trial"

@@ -107,6 +107,8 @@ def submit(
     webspace_id: str = "desktop",
     conversation_id: str | None = None,
     development_session_id: str | None = None,
+    expected_session_id: str | None = None,
+    expected_iteration: int | None = None,
 ) -> dict[str, Any]:
     """Submit one follow-up instruction and include the current projection."""
 
@@ -119,6 +121,8 @@ def submit(
             webspace_id=webspace_id,
             conversation_id=conversation_id,
             development_session_id=development_session_id,
+            expected_session_id=expected_session_id,
+            expected_iteration=expected_iteration,
         )
         or {}
     )

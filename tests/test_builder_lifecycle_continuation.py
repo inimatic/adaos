@@ -28,3 +28,18 @@ def test_continuation_preserves_case_and_cannot_skip_failed_work():
     non_lifecycle["steps"][-1]["type"] = "builder.chat"
     with pytest.raises(ValueError, match="lifecycle tail"):
         module.lifecycle_tail({**checkpoint, "case_digest": _digest(non_lifecycle)}, non_lifecycle)
+
+    case["steps"][-1]["input"] = {"object_id": "$steps.create.scenario_id", "implementation_brief": "Original"}
+    checkpoint["case_digest"] = _digest(case)
+    correction = {"text": "Correct the package checks", "expected_session_id": "s", "expected_iteration": 2}
+    tail = module.correction_tail(checkpoint, case, correction)
+    assert tail[0]["type"] == "automation.submit"
+    assert tail[0]["input"] == {"object_id": "$steps.create.scenario_id", **correction}
+    assert case["steps"][-1]["type"] == "automation.start"
+    with pytest.raises(ValueError):
+        module.correction_tail(checkpoint, case, {**correction, "object_id": "another"})
+
+    case["steps"].append({"id": "wait", "type": "automation.wait"})
+    later = {"case_digest": _digest(case), "steps": [{**step, "status": "failed" if step["id"] == "wait" else "passed"}
+                                                    for step in case["steps"]]}
+    assert [step["type"] for step in module.correction_tail(later, case, correction)] == ["automation.submit", "automation.wait"]

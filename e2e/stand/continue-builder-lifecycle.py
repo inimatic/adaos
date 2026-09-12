@@ -40,13 +40,32 @@ def lifecycle_tail(checkpoint, case):
     return copy.deepcopy(tail)
 
 
+def correction_tail(checkpoint, case, correction):
+    lifecycle_tail(checkpoint, case)
+    tail = copy.deepcopy(case["steps"])
+    starts = [index for index, step in enumerate(tail) if step["type"] == "automation.start"]
+    if len(starts) != 1 or set(correction) != {"text", "expected_session_id", "expected_iteration"}:
+        raise ValueError("Correction requires the original Automation start and explicit session iteration/text")
+    tail = tail[starts[0]:]
+    if any(step["type"] not in STEP_TYPES for step in tail):
+        raise ValueError("Only lifecycle steps may follow an Automation correction")
+    original = tail[0]
+    original["type"] = "automation.submit"
+    original["input"] = {**{key: value for key, value in original["input"].items()
+                            if key in {"object_type", "object_id"}}, **correction}
+    return tail
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("checkpoint", type=Path)
     parser.add_argument("case", type=Path)
     parser.add_argument("output", type=Path)
-    parser.add_argument("--retry-failed-automation", action="store_true",
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--retry-failed-automation", action="store_true",
                         help="Retry the unchanged, owned Automation session after a terminal executor failure")
+    mode.add_argument("--automation-correction", type=Path,
+                      help="Record an explicit Automation correction; never reapprove its functional UI as Prototype")
     args = parser.parse_args()
     raw = args.checkpoint.read_bytes()
     checkpoint = json.loads(raw)
@@ -55,7 +74,9 @@ def main():
     output = args.output.resolve()
     if not args.checkpoint.resolve().is_relative_to(root) or not output.is_relative_to(root / "continuations"):
         parser.error("Checkpoint and new continuation evidence must remain inside the original bundle")
-    tail = lifecycle_tail(checkpoint, _load_document(args.case))
+    case = _load_document(args.case)
+    correction = _load_document(args.automation_correction) if args.automation_correction else None
+    tail = correction_tail(checkpoint, case, correction) if correction is not None else lifecycle_tail(checkpoint, case)
     load_dotenv()
     init_ctx(Settings.from_sources())
     output.mkdir(parents=True, exist_ok=False)
@@ -64,6 +85,9 @@ def main():
               "core_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
               "core_status": subprocess.check_output(["git", "status", "--short"], text=True).strip(),
               "retry_failed_automation": args.retry_failed_automation, "steps": [], "ok": False}
+    if correction is not None:
+        report["automation_correction"] = correction
+        report["review_interventions"] = 1
     for declaration in tail:
         step_id = declaration["id"]
         inputs = _resolve_value(declaration.get("input") or {}, context)
@@ -72,7 +96,8 @@ def main():
         started = time.perf_counter()
         print(f"{step_id}: started", flush=True)
         try:
-            result = execute(declaration["type"], inputs, {**context, "step_id": step_id})
+            evidence_step = f"{step_id}-{output.name}" if declaration["type"] == "automation.submit" else step_id
+            result = execute(declaration["type"], inputs, {**context, "step_id": evidence_step})
             if (args.retry_failed_automation and declaration["type"] == "automation.start"
                     and result.get("duplicate") and (result.get("session") or {}).get("status") == "failed"):
                 from adaos.sdk.builder import automation

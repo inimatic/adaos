@@ -436,6 +436,13 @@ application closure and carry that scope in their evidence. Failing isolation
 requires moving or repairing the test at its correct owner, not skipping the
 check or injecting authoring-only sources into installed packages.
 
+An Automation correction is a new, explicit instruction on a governed session,
+not another Prototype acceptance. Technological E2E continuations retain the
+original case verdict, instruction and expected session/iteration. They reject
+stale targets and ambiguous replay instead of submitting duplicate model work.
+The service checks optional expected-session preconditions before a follow-up;
+these checks do not constitute a distributed exactly-once submission contract.
+
 Application-owned transactions and business invariants are ordinary Automation
 implementation work. A skill may use standard-library storage transactions under
 its admitted persistent data root; the absence of a Core domain-policy registry

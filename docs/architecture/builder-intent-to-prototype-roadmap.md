@@ -2434,6 +2434,13 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
   compares the functional UI against the Prototype digest after activation
   failure. Do not reapprove Automation as Prototype or remove the approval gate;
   use a recorded Automation correction while qualifying provenance-aware retry.
+- [x] `[must]` Add an explicit diagnostic `automation.submit` continuation over
+  the existing SDK, retaining its instruction and intervention count. Require an
+  owned terminal session and expected iteration; refuse ambiguous replay. Keep
+  the initial case verdict and Prototype acceptance unchanged.
+  Automation/SDK/E2E regression: 192 tests pass in 188.04s
+  (`automation-correction-regression-20260913-01.xml`). Live qualification remains
+  part of the retained lifecycle, not a fresh first-pass result.
 - [ ] `[should]` Resolve the isolated Builder browser's node-status 401/Limited
   indicator separately from scenario rendering and source publication health.
 

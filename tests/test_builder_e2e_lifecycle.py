@@ -93,6 +93,28 @@ def test_retained_automation_is_not_mislabeled_as_an_unapproved_prototype():
     assert steps.retained_stage([*history, {"type": "release.promote", "status": "failed"}])["stage"] == "trial"
 
 
+def test_correction_is_explicit_owned_terminal_and_not_automatically_replayed(context, monkeypatch):
+    session = {"session_id": "s", "iteration": 3, "status": "failed", "conversation_id": "c"}
+    monkeypatch.setattr(steps.automation, "get_state", lambda **kwargs: {"session": session})
+    monkeypatch.setattr(steps.automation, "submit", lambda text, **kwargs: {"ok": True, "kwargs": kwargs})
+    monkeypatch.setattr(steps.workflow, "accept_prototype", lambda *a, **kw: pytest.fail("not a Prototype acceptance"))
+    inputs = {"object_id": "example", "text": "Move package-independent checks to their owning component.",
+              "expected_session_id": "s", "expected_iteration": 3}
+    for patch in ({"expected_iteration": 2}, {"expected_session_id": "other"}, {"text": ""}):
+        with pytest.raises(ValueError):
+            steps.execute("automation.submit", {**inputs, **patch}, context)
+    session["status"] = "in_progress"
+    with pytest.raises(ValueError, match="terminal"):
+        steps.execute("automation.submit", inputs, context)
+    session["status"] = "failed"
+    result = steps.execute("automation.submit", inputs, context)
+    assert result["review_interventions"] == 1
+    assert result["kwargs"]["expected_iteration"] == 3
+    assert result["kwargs"]["webspace_id"] == context["webspace_id"]
+    with pytest.raises(FileExistsError):
+        steps.execute("automation.submit", inputs, context)
+
+
 def test_browser_requires_owned_validated_unapproved_preview(context):
     from pathlib import Path
     from adaos.e2e import builder_browser
