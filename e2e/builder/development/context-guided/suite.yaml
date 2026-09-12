@@ -1,0 +1,22 @@
+schema: adaos.builder.e2e_suite.v1
+suite_id: builder-context-guided-appointments
+version: "1"
+title: Clarified appointments prompt comparison
+description: Same outcome rubric as the visible short-prompt case; human-language clarification, not a hidden solution.
+cohort: development
+case_refs:
+  - cases/service-appointments-guided-ru.yaml
+defaults:
+  adapter: sdk.v1
+  profile: generic
+  generation_contract: semantic.v2
+  repetitions: 2
+  timeout_seconds: 1250
+  browser: "off"
+  grader_model: gpt-4.1
+  require_client_profile: true
+  retain_test_projects: true
+  domain_packs: []
+tags: [visible, context-comparison, generic]
+gates:
+  outcome_grade_required: true

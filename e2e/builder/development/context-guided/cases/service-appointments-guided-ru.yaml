@@ -1,0 +1,71 @@
+schema: adaos.builder.e2e_case.v1
+case_id: service-appointments-guided-ru
+title: Запись на услуги с уточненным запросом
+description: Уточнение смысла тех же задач, без имен компонентов и готовой схемы.
+locale: ru
+tags: [visible, scheduling, context-comparison]
+requirements:
+  primary_jobs:
+    - statement: видеть загрузку на день и неделю и найти свободное время
+      acceptance: Можно просмотреть время, услугу и мастера в пределах дня и недели и отличить свободное время от занятого. Подходит простой список, таблица или фильтруемое расписание с примерами доступности.
+      exclusions: [Автоматический подбор оптимального слота и календарная сетка не обязательны.]
+    - statement: создать запись
+      acceptance: Доступный редактор сохраняет клиента, время, услугу и мастера записи.
+    - statement: перенести запись
+      acceptance: Можно изменить время выбранной записи и сохранить изменение.
+    - statement: отменить запись с подтверждением
+      acceptance: Действие отмены выбранной записи требует подтверждения.
+    - statement: открыть карточку клиента
+      acceptance: Можно выбрать клиента или запись и открыть связанные сведения клиента.
+  representative_states:
+    - statement: нет записей
+      acceptance: Есть отображаемое состояние пустого дня.
+    - statement: загруженный день
+      acceptance: В расписании доступны правдоподобные занятые интервалы.
+    - statement: конфликт времени
+      acceptance: Есть видимый пример конфликта времени, не представленный как допустимая подтвержденная запись.
+      exclusions: [Пользователь запросил отображение конфликта, не реализацию автоматического планировщика.]
+prohibited_assumptions:
+  - statement: отмена записи без подтверждения
+    acceptance: Нарушение только при исполняемом пути отмены, который не запрашивает подтверждение.
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: Создай новое приложение "Запись на услуги ${case_instance_id}" для небольшой мастерской.
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: >-
+        Покажи рабочую первую версию. Администратор должен видеть загрузку на день и неделю,
+        находить свободное время с учетом услуги и мастера, создавать и переносить запись,
+        отменять ее с подтверждением и быстро открывать карточку клиента.
+        Под загрузкой понимаю просмотр занятых и свободных интервалов выбранного периода,
+        а не автоматическую оптимизацию расписания. При создании записи выбираем клиента,
+        время, услугу и мастера. Перенос меняет время именно выбранной записи; отмена сначала
+        запрашивает подтверждение. Карточку клиента можно открыть из записи или выбрать
+        самого клиента, чтобы увидеть его имя и телефон. Добавь правдоподобные примеры
+        загруженного и пустого дня и явно отмеченный конфликт времени. Сейчас нужен
+        интерактивный прототип на локальных примерах, а не действующая система бронирования.
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+  - id: grade
+    type: prototype.grade
+    input: {scenario_id: $steps.create.scenario_id, threshold: 0.85}
+    expect: {values: {ok: true, passed: true}}
+cleanup: {policy: always, retain_on_failure: true}
