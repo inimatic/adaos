@@ -65,6 +65,35 @@ async def require_token(
     request.state.adaos_verified_caller = SubjectRef("user", current_user_id())
 
 
+async def require_tool_caller(request: Request) -> None:
+    """Accept an owner credential or a purpose-bound local session bearer."""
+    authorization = request.headers.get("Authorization")
+    token = resolve_presented_token(x_adaos_token=request.headers.get("X-AdaOS-Token"),
+                                    authorization=authorization, query_token=request.query_params.get("token"))
+    if token == _expected_token():
+        await require_token(request)
+        return
+    # Scoped secrets are not accepted in query strings or the node-token header.
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Invalid or missing tool credential")
+    from starlette.concurrency import run_in_threadpool
+    from adaos.services.personalization_access import PersonalizationAccessError
+    from adaos.services.personalization_runtime import personalization_access_service
+    from adaos.services.policy.caller import CallerAccessDenied
+    from adaos.services.policy.session_credentials import authenticate_tool_credential
+
+    def authenticate():
+        return authenticate_tool_credential(personalization_access_service(), str(token or ""))
+    try:
+        actor, scope = await run_in_threadpool(authenticate)
+    except (CallerAccessDenied, ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired tool credential") from exc
+    except PersonalizationAccessError as exc:
+        raise HTTPException(status_code=503, detail="Caller access facts unavailable") from exc
+    request.state.adaos_verified_caller = actor
+    request.state.adaos_verified_caller_scope = scope
+
+
 def require_owner_token(token: str) -> None:
     expected = os.getenv("ADAOS_ROOT_OWNER_TOKEN") or os.getenv("ROOT_TOKEN") or ""
     if not expected or token != expected:

@@ -62,6 +62,15 @@ def test_scope_cannot_be_missing(caller_access):
         access.require("workspace.write")
 
 
+def test_credential_scope_cannot_be_broadened_by_the_executing_skill(caller_access):
+    ctx, _ = caller_access
+    with verified_caller(OWNER, ScopeRef("skill", "sample")):
+        assert access.require("workspace.write")["decision"] == "allow"
+        ctx.skill_ctx.get = lambda: SimpleNamespace(name="another")
+        with pytest.raises(PermissionError, match="credential_scope_mismatch"):
+            access.require("workspace.write")
+
+
 def test_revocation_is_read_again_on_next_check(caller_access):
     _, path = caller_access
     with verified_caller(READER):

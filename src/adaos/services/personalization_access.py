@@ -39,6 +39,7 @@ class PersonalizationAccessError(RuntimeError):
 
 
 _AUDIT_DIAGNOSTICS_LOCK = threading.Lock()
+_ACCESS_TRANSACTIONS = threading.local()
 _AUDIT_DIAGNOSTICS: dict[str, Any] = {
     "schema": "adaos.personalization.audit_diagnostics.v1",
     "successful_read_suppressed_total": 0,
@@ -238,11 +239,32 @@ class PersonalizationAccessStore:
     def batch(self) -> Iterator[None]:
         lock = mutation_lock(self.path.with_suffix(self.path.suffix + ".lock")) if self.path else self._memory_lock
         with lock:
+            active = getattr(_ACCESS_TRANSACTIONS, "active", None)
+            if active is None:
+                active = _ACCESS_TRANSACTIONS.active = {}
+            key = str(self.path) if self.path else id(self)
+            owner = active.get(key)
+            if owner is not None and owner is not self:
+                # Factories may create another facade inside the same transaction.
+                # Join its live snapshot instead of reloading and committing stale facts.
+                self._data = owner._data
+                self._batch_depth += 1
+                try:
+                    yield
+                except BaseException:
+                    owner._batch_failed = True
+                    raise
+                finally:
+                    owner._batch_dirty |= self._batch_dirty
+                    self._batch_dirty = False
+                    self._batch_depth -= 1
+                return
             outer = self._batch_depth == 0
             if outer:
                 previous = self._data if self.path else copy.deepcopy(self._data)
                 self._load()
                 self._batch_dirty = self._batch_failed = False
+                active[key] = self
             self._batch_depth += 1
             try:
                 yield
@@ -260,6 +282,7 @@ class PersonalizationAccessStore:
                 self._batch_depth -= 1
                 if outer:
                     self._batch_dirty = self._batch_failed = False
+                    active.pop(key, None)
 
     @_access_transaction
     def snapshot(self) -> dict[str, Any]:

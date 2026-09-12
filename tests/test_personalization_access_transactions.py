@@ -101,6 +101,38 @@ def test_access_serializes_threads_on_one_instance(tmp_path):
     assert len(store.snapshot()["users"]) == 24
 
 
+def test_nested_factories_join_the_same_path_transaction(tmp_path):
+    path = tmp_path / "access.json"
+    outer = PersonalizationAccessStore(path)
+    _grant(outer)
+    with outer.batch():
+        outer.put_user(OWNER)
+        inner = PersonalizationAccessStore(path)
+        assert inner.get_user("owner")
+        inner.update_grant("read", {"status": "revoked"})
+        assert outer.get_grant("read")["status"] == "revoked"
+        outer.put_user(READER)
+    result = PersonalizationAccessStore(path).snapshot()
+    assert set(result["users"]) == {"owner", "reader"}
+    assert result["grants"]["read"]["status"] == "revoked"
+
+
+def test_nested_factory_failure_rolls_back_the_outer_transaction(tmp_path):
+    path = tmp_path / "access.json"
+    outer = PersonalizationAccessStore(path)
+    outer.put_user(OWNER)
+    with pytest.raises(PersonalizationAccessError, match="aborted"):
+        with outer.batch():
+            inner = PersonalizationAccessStore(path)
+            try:
+                with inner.batch():
+                    inner.put_user(READER)
+                    raise ValueError("nested operation failed")
+            except ValueError:
+                pass
+    assert set(outer.snapshot()["users"]) == {"owner"}
+
+
 def _process_writer(path, ready, start, prefix):
     store = PersonalizationAccessStore(path)
     ready.put(prefix)

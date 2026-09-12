@@ -7,7 +7,7 @@ from typing import Any
 from adaos.domain.personalization_access import ScopeRef
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.personalization_runtime import personalization_access_service
-from adaos.services.policy.caller import CallerAccessDenied, current_caller
+from adaos.services.policy.caller import CallerAccessDenied, current_caller, current_caller_scope
 
 
 def caller() -> dict[str, str] | None:
@@ -16,6 +16,10 @@ def caller() -> dict[str, str] | None:
     This is not the executing skill, the profile selected in the UI, or an
     ``actor``/``role`` supplied in arguments. An absent caller must not be treated
     as owner. Use ``require`` for authorization, not comparisons of display names.
+    Core binds owner or purpose-scoped local session credentials at /api/tools/call.
+    A scoped session admits only its named installed skill; administrative and
+    legacy resource endpoints do not accept it. Application code must not issue
+    credentials or implement its own user/role authentication.
     """
     actor = current_caller()
     return {"kind": actor.kind, "id": actor.id} if actor is not None else None
@@ -37,6 +41,9 @@ def require(capability: str) -> dict[str, Any]:
     skill = ctx.skill_ctx.get()
     if skill is None:
         raise CallerAccessDenied("caller_skill_scope_missing")
+    scope = current_caller_scope()
+    if scope is not None and scope != ScopeRef("skill", skill.name):
+        raise CallerAccessDenied("caller_credential_scope_mismatch")
     decision = personalization_access_service(ctx).evaluate(
         actor=actor,
         action=capability,

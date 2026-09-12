@@ -124,13 +124,28 @@ The owner-token `/tools/call` path binds the configured local owner after token
 verification and preserves that context across runtime thread calls. Outside an
 admitted invocation the new caller checks deny access; they do not default to owner.
 
-This is an owner-ingress and SDK foundation, not completed Phase 9 enforcement.
-Scoped browser credentials, actor propagation across member-node forwarding,
-principal-partitioned idempotency caches and resource endpoint enforcement must
-be qualified before admitting non-owner traffic. Existing request-body `actor`
-fields and prototype role fixtures are not authenticated identities. Integration
-must reuse local sessions, grants and revocation rather than promote Root MCP
-credentials to unrestricted node-owner credentials.
+The owner can provision a short-lived opaque bearer for an existing local session
+at `POST /api/personalization/admin/sessions/{session_id}/tool-credential`. It is
+bound to one skill and the `local_skill_http.v1` purpose, lasts at most one hour
+and never outlives its session. Only a random-secret SHA-256 verifier is persisted
+on the session; issuance creates neither a user nor a grant. Rotation invalidates
+the old credential and responses are `no-store`. Revoked/expired sessions and
+revoked/missing bound devices deny access. Root MCP bearers are not node-owner
+credentials.
+
+Scoped credentials are accepted only as Authorization bearers on `/api/tools/call`,
+not query parameters, node-token headers, administrative or legacy resource routes.
+The resolved installed manifest determines read/write capability requirements;
+payload roles, declared intent and method-name heuristics do not grant authority.
+Fresh policy checks run before idempotent replay. Cache keys include the verified
+subject and credential scope. SDK checks additionally intersect the executing skill
+with that scope. Development runtimes and cross-node forwarding fail closed for
+this credential until independently qualified delegation exists.
+
+This is a bounded local tool-ingress implementation, not completed Phase 9.
+Browser credential lifecycle, actor propagation across member forwarding and
+legacy resource endpoint enforcement remain separate work. Existing request-body
+`actor` fields and prototype role fixtures are not authenticated identities.
 
 The local access-fact store reloads its persisted snapshot under the shared
 thread/process mutation lock before each outer operation. A policy decision and
@@ -139,6 +154,8 @@ work. Successful batches replace the JSON once, failed batches roll back, and
 malformed/unreadable existing facts fail closed instead of becoming an empty
 store. Returned records are detached copies. This prevents a stale audit writer
 from restoring revoked grants; it does not itself authenticate an HTTP caller.
+Nested service factories targeting the same store join the outer transaction's
+snapshot and outcome rather than independently replacing its state.
 
 ### Subnet service identity and purpose-scoped keys
 

@@ -2303,6 +2303,12 @@ Inspection of the actual retained executor inputs found another context defect:
   serialization, fresh outer snapshots, transactional policy/audit reads and
   writes, rollback and fail-closed malformed-state handling. The linked identity
   roadmap records 59 passing local tests; credential admission remains open.
+- [x] `[must]` Implement bounded local session tool admission without new user or
+  grant identities. Current session/grant state and resolved tool effects are
+  checked before cache replay; DEV/remote escalation is denied. Broad HTTP/policy
+  regression: 157 tests pass in 19.03s; subsequent nested-store and scoped SDK
+  checks pass in the 46-test focused subset. Live node and application checks
+  remain open. No new Automation model attempt is claimed from these tests.
 
 Local regression: 395 Automation/worker/caller/exporter/HTTP tests pass in
 347.70s. These checks do not complete the live non-owner or full lifecycle gates.
@@ -2336,6 +2342,15 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
   whole-task pass.
 - [ ] `[must]` Requalify the fixture scope in fresh live Builder attempts after
   loading the tested Core revision; preserve the failed run 20 receipt.
+  Fresh inventory run 21 passes twice in 116.01/125.44s, with its first attempt
+  also passing desktop/mobile render review. These attempts used other repair
+  families, so they do not claim fresh v4 path coverage. Full archetype run 22
+  passes 8/8 with API revision `520d4d343`: 10 generation/repair calls,
+  62,147 fresh + 18,944 cached input tokens, 48,593 output tokens (including
+  20,992 reasoning), case p50 99.95s/p95 185.56s. Independent grading adds
+  8 calls, 114,856 fresh input and 9,938 output tokens. Browser qualification
+  remains separate; pending caller-ingress edits were not loaded into that
+  runtime and do not change this generation comparison.
 - [x] `[must]` Extend generic command/interaction browser probes to kanban
   collections using the renderer's card/record identity contract, without
   application-specific selectors. Queue editing and creation pass on both

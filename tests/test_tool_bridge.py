@@ -382,6 +382,61 @@ def test_call_tool_rejects_reused_idempotency_key_with_different_payload(monkeyp
     assert calls == ["notebook_skill:save_note"]
 
 
+def test_tool_idempotency_separates_verified_callers_even_with_spoofed_argument_identity(monkeypatch):
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.policy.caller import current_caller
+
+    calls = []
+    async def execute(*_args):
+        caller = current_caller()
+        calls.append(caller.ref())
+        if caller.kind == "session":
+            raise HTTPException(status_code=403, detail="reader cannot mutate")
+        return {"private_result": caller.ref()}
+
+    monkeypatch.setattr(tool_bridge_module, "_call_tool_impl", execute)
+    body = tool_bridge_module.ToolCall(tool="sample:save", idempotency_key="same-request",
+        arguments={"actor": {"id": "owner", "role": "owner"}, "_meta": {"caller": "user:owner"}})
+    def request(actor):
+        return SimpleNamespace(headers={}, state=SimpleNamespace(adaos_verified_caller=actor))
+
+    for actor in (SubjectRef("user", "owner"), SubjectRef("session", "reader-1"), SubjectRef("session", "reader-2")):
+        for replay in (False, True):
+            response = Response()
+            if actor.kind == "session":
+                with pytest.raises(HTTPException) as error:
+                    asyncio.run(tool_bridge_module.call_tool(body, request(actor), response, ctx=_fake_ctx()))
+                assert error.value.status_code == 403
+            else:
+                result = asyncio.run(tool_bridge_module.call_tool(body, request(actor), response, ctx=_fake_ctx()))
+                assert result == {"private_result": "user:owner"}
+                assert bool(response.headers.get("X-AdaOS-Idempotency-Replay")) == replay
+    assert calls == ["user:owner", "session:reader-1", "session:reader-2"]
+
+
+def test_tool_idempotency_does_not_coalesce_concurrent_distinct_callers(monkeypatch):
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.policy.caller import current_caller
+
+    async def check():
+        entered = []
+        both_entered = asyncio.Event()
+        async def execute(*_args):
+            identity = current_caller().ref()
+            entered.append(identity)
+            if len(entered) == 2:
+                both_entered.set()
+            await asyncio.wait_for(both_entered.wait(), timeout=2)
+            return {"caller": identity}
+        monkeypatch.setattr(tool_bridge_module, "_call_tool_impl", execute)
+        body = tool_bridge_module.ToolCall(tool="sample:list", idempotency_key="same-inflight")
+        requests = [SimpleNamespace(headers={}, state=SimpleNamespace(adaos_verified_caller=SubjectRef("session", name)))
+                    for name in ("a", "b")]
+        results = await asyncio.gather(*(tool_bridge_module.call_tool(body, request, Response(), ctx=_fake_ctx()) for request in requests))
+        assert results == [{"caller": "session:a"}, {"caller": "session:b"}]
+    asyncio.run(check())
+
+
 def test_call_tool_replays_idempotent_http_errors_with_replay_header(monkeypatch) -> None:
     monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
 

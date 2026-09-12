@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from urllib.request import Request as UrlRequest, urlopen
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
@@ -75,6 +75,11 @@ class GuestInviteCreateRequest(BaseModel):
     scope: ScopePayload = Field(default_factory=ScopePayload)
     expires_in_minutes: int = Field(default=60, ge=1, le=60 * 24 * 30)
     max_sessions: int = Field(default=50, ge=1, le=500)
+
+
+class SessionToolCredentialRequest(BaseModel):
+    skill_name: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.-]+$")
+    ttl_seconds: int = Field(default=3600, ge=1, le=3600)
 
 
 class TargetedInviteCreateRequest(BaseModel):
@@ -1013,6 +1018,22 @@ def admin_revoke_device(
         return {"ok": True, "device": data}
     except Exception as exc:
         raise _http_error(exc) from exc
+
+
+@router.post("/admin/sessions/{session_id}/tool-credential", dependencies=[Depends(require_token)])
+def admin_issue_session_tool_credential(session_id: str, body: SessionToolCredentialRequest,
+                                        request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+    from adaos.services.policy.session_credentials import issue_tool_credential
+    from adaos.services.policy.caller import CallerAccessDenied
+
+    try:
+        credential = issue_tool_credential(_access(ctx), session_id=session_id, skill_name=body.skill_name,
+                                          actor=request.state.adaos_verified_caller, ttl_seconds=body.ttl_seconds)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        return {"ok": True, **credential}
+    except CallerAccessDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/admin/sessions/{session_id}/revoke", dependencies=[Depends(require_token)])

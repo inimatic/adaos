@@ -549,6 +549,17 @@ Checklist:
   sessions/grants, including expiry/revocation, no cross-principal idempotency
   replay and no member-proxy promotion to owner. The owner-token foundation
   does not meet this gate; Root MCP credentials must not become owner tokens.
+- [x] `[must]` Implement owner-provisioned, one-skill local session bearers with
+  secret verifiers, bounded expiry, rotation, and no-store responses. Authenticate
+  existing sessions/devices and check current grants before execution/replay;
+  partition idempotency by verified subject/scope. Reject dev and cross-node
+  execution, node-admin use and request-body role spoofing.
+- [ ] `[must]` Qualify the new credential path on the running local node using
+  `e2e/stand/check-session-tool-ingress.py`, then exercise it in the generated
+  application's real read/write lifecycle. TestClient policy checks alone are
+  not a live-node or application pass.
+- [ ] `[should]` Integrate scoped credentials with browser session renewal and
+  explicitly governed resource routes. Do not broaden `require_token` globally.
 - [x] `[must]` Prove access-fact persistence under concurrent grant/revocation
   and audit writes before broad caller enforcement. A stale in-memory JSON
   snapshot must not restore a revoked grant when appending an audit record.

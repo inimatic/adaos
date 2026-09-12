@@ -16,13 +16,13 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from adaos.apps.api.auth import require_token
+from adaos.apps.api.auth import require_token, require_tool_caller
 from adaos.domain.node_identity import node_identities_match, node_identity_token
 from adaos.services.observe import attach_http_trace_headers
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.eventbus import emit
 from adaos.services.pending_actions import list_pending_actions_async, publish_pending_action_async
-from adaos.services.policy.caller import CallerAccessDenied
+from adaos.services.policy.caller import CallerAccessDenied, current_caller_scope
 from adaos.services.runtime_lifecycle import is_accepting_new_work
 from adaos.services.runtime_action_grants import (
     find_runtime_action_grant,
@@ -145,7 +145,7 @@ _TOOL_CALL_IDEMPOTENCY_WAIT_S = max(
     min(300.0, float(os.getenv("ADAOS_TOOL_CALL_IDEMPOTENCY_WAIT_S") or "65")),
 )
 _TOOL_CALL_IDEMPOTENCY_LOCK = threading.RLock()
-_TOOL_CALL_IDEMPOTENCY_CACHE: dict[str, dict[str, Any]] = {}
+_TOOL_CALL_IDEMPOTENCY_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
 _APPROVED_ACTION_STATES = {"approve", "approved", "allowed", "operator_apply_allowed", "responded"}
 _RISK_FREEFORM_ARGUMENT_KEYS = {"content", "text"}
 
@@ -536,11 +536,16 @@ def _tool_call_idempotency_begin(
     key = _tool_call_idempotency_key(body, request)
     if not key:
         return "bypass", "", None
+    from adaos.services.policy.caller import current_caller
+
+    caller = current_caller()
+    scope = current_caller_scope()
+    cache_key = (caller.ref() if caller is not None else "", scope.ref() if scope else "", key)
     fingerprint = _tool_call_idempotency_fingerprint(body)
     now = time.time()
     with _TOOL_CALL_IDEMPOTENCY_LOCK:
         _tool_call_idempotency_cleanup(now)
-        entry = _TOOL_CALL_IDEMPOTENCY_CACHE.get(key)
+        entry = _TOOL_CALL_IDEMPOTENCY_CACHE.get(cache_key)
         if entry is not None:
             if str(entry.get("fingerprint") or "") != fingerprint:
                 raise HTTPException(
@@ -562,7 +567,7 @@ def _tool_call_idempotency_begin(
             "event": event,
             "done": False,
         }
-        _TOOL_CALL_IDEMPOTENCY_CACHE[key] = entry
+        _TOOL_CALL_IDEMPOTENCY_CACHE[cache_key] = entry
         return "owner", key, entry
 
 
@@ -1413,6 +1418,8 @@ async def _proxy_tool_call_to_node(
     payload: Dict[str, Any],
     target_node_id: str,
 ) -> Dict[str, Any]:
+    if current_caller_scope() is not None:
+        raise HTTPException(status_code=403, detail="scoped_caller_forwarding_not_supported")
     directory = get_directory()
     link_manager = get_hub_link_manager()
     webspace_id = _resolve_tool_webspace_id(payload)
@@ -1757,17 +1764,49 @@ def _project_tool_context_meta(
     return projected
 
 
-@router.post("/tools/call", dependencies=[Depends(require_token)])
+@router.post("/tools/call", dependencies=[Depends(require_tool_caller)])
 async def call_tool(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
     from adaos.services.policy.caller import verified_caller
 
     state = getattr(request, "state", None)
     actor = getattr(state, "adaos_verified_caller", None)
-    with verified_caller(actor):
+    scope = getattr(state, "adaos_verified_caller_scope", None)
+    with verified_caller(actor, scope):
         return await _call_tool_with_identity(body, request, response, ctx)
 
 
+async def _authorize_scoped_tool_call(body: ToolCall, ctx: AgentContext) -> None:
+    from adaos.domain.personalization_access import ScopeRef
+    from adaos.services.personalization_runtime import personalization_access_service
+    from adaos.services.policy.caller import current_caller
+
+    scope = current_caller_scope()
+    if scope is None:
+        return
+    skill, separator, tool = body.tool.partition(":")
+    if not separator or not skill or not tool or scope != ScopeRef("skill", skill) or body.dev:
+        raise HTTPException(status_code=403, detail="caller_credential_scope_mismatch")
+    routing = dict(body.arguments or {})
+    if not str(routing.get("webspace_id") or "").strip():
+        routing["webspace_id"] = (body.context or {}).get("webspace_id")
+    if await asyncio.to_thread(_webspace_uses_dev_runtime, routing):
+        raise HTTPException(status_code=403, detail="scoped_caller_dev_runtime_not_supported")
+    manager = await _skill_manager_for_context(ctx)
+    effects = await asyncio.to_thread(_declared_tool_side_effects, manager, skill_name=skill, public_tool=tool, dev=False)
+    if not effects:
+        raise HTTPException(status_code=403, detail="scoped_tool_effects_undeclared")
+    action = "workspace.read" if _declared_side_effects_are_read_only(effects) else "workspace.write"
+    actor = current_caller()
+    def evaluate():
+        return personalization_access_service(ctx).evaluate(actor=actor, action=action, scope=scope, resource=f"skill:{skill}")
+    decision = await asyncio.to_thread(evaluate)
+    if decision.decision != "allow":
+        raise HTTPException(status_code=403, detail={"error": "caller_access_denied", "reason": decision.reason_code})
+
+
 async def _call_tool_with_identity(body: ToolCall, request: Request, response: Response, ctx: AgentContext):
+    # Authorization precedes cached results as well as new execution.
+    await _authorize_scoped_tool_call(body, ctx)
     resolved_timeout = _request_tool_call_timeout_s(body, request)
     if resolved_timeout is not None and resolved_timeout != body.timeout:
         body = body.model_copy(update={"timeout": resolved_timeout})
@@ -1822,6 +1861,8 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         _webspace_uses_dev_runtime,
         routing_payload,
     )
+    if current_caller_scope() is not None and (body.dev or implicit_dev_webspace):
+        raise HTTPException(status_code=403, detail="scoped_caller_dev_runtime_not_supported")
 
     mgr = await _skill_manager_for_context(ctx)
     if implicit_dev_webspace and await asyncio.to_thread(
@@ -2032,6 +2073,8 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
                 },
             ) from e
         # Если локально не найден навык/слот — попробуем проксировать на участника подсети (только если роль hub)
+        if current_caller_scope() is not None:
+            raise HTTPException(status_code=403, detail="scoped_caller_forwarding_not_supported") from e
         if not conf or conf.role != "hub":
             # На member нет прокси — вернём исходную ошибку
             raise HTTPException(status_code=404, detail=str(e))
