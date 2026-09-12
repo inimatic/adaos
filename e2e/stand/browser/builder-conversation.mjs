@@ -66,7 +66,9 @@ try {
       await conversation.click()
       const chat = page.locator('[data-webui-widget-id="builder-chat"]')
       await expect(chat).toBeVisible()
-      for (const prompt of prompts) await expect(chat).toContainText(prompt)
+      const hydrationStarted = Date.now()
+      for (const prompt of prompts) await expect(chat).toContainText(prompt, { timeout: 20_000 })
+      sample.transcriptHydrationMs = Date.now() - hydrationStarted
       const transcript = await chat.innerText()
       for (const prompt of prompts) if (transcript.split(prompt).length !== 2) throw new Error('Duplicate or missing original prompt')
       sample.transcript = transcript

@@ -1848,18 +1848,79 @@ now cover both versions, including nested alternatives. Run 15 passed one of two
 its other candidate used a declared business key already supported by the resource
 model but rejected by the selection adapter. The adapter now uses the same
 relationship/cardinality contract. These retained failures are not relabeled.
-Run 16 is the subsequent matched full repeat with grader v17; record its final
-result before claiming cross-archetype reliability. Cohorts 13 onward overlap
-source-publication work, so total case times are not an idle-machine benchmark.
+Run 16 is the subsequent matched full repeat with grader v17: 16/16 passed,
+8/16 without repair and 8/16 after one semantic repair. All 24 requests share
+one stable generic context; primary inputs have five dynamic keys, while repair
+inputs add the candidate and findings. Retained input inspection found no rubric
+or application-template payload. This small sample is not a reliability guarantee.
+
+| Archetype | Primary success | Final task success |
+| --- | --- | --- |
+| Operations queue | 1/2 | 2/2 |
+| Service appointments | 0/2 | 2/2 |
+| Household budget | 2/2 | 2/2 |
+| Equipment inspections | 1/2 | 2/2 |
+| Knowledge library | 1/2 | 2/2 |
+| Media review | 1/2 | 2/2 |
+| Volunteer roster | 1/2 | 2/2 |
+| Inventory procurement | 1/2 | 2/2 |
+
+Fresh/cached generation input: 100,297/114,304 tokens; output: 133,624 including
+57,920 reasoning tokens. Observed full-case range: 82.02-149.04s. The reporter's
+p50 is 106.11s. Grading is separate: 16 calls, 225,875 fresh input, 19,588 output.
+Cohorts 13 onward overlap source-publication work and the Client production build,
+so total case times are not an idle-machine benchmark or a causal speed comparison.
+
+Run 17 uses a moderately elaborated appointment request and the unchanged task
+rubric. Both short and guided groups pass 2/2, with one full repair per attempt.
+
+| Request | Attempt | Full case s | Model s | Input tokens | Output tokens |
+| --- | --- | --- | --- | --- | --- |
+| Short, 318 characters | 1 | 149.04 | 103.584 | 19,710 | 12,410 |
+| Short, 318 characters | 2 | 119.80 | 79.513 | 19,510 | 10,521 |
+| Guided, 803 characters | 1 | 137.33 | 92.780 | 22,586 | 13,130 |
+| Guided, 803 characters | 2 | 119.40 | 79.586 | 22,903 | 13,701 |
+
+The guided request clarifies availability versus optimization, editable record
+identity, confirmation and client contact details without component IDs. It did
+not eliminate contract errors: one answer omitted visible deferred-requirement
+evidence; another hid a state predicate field and used an invalid board lane type.
+Clarification is useful for intent, but not a substitute for structural contracts
+or bounded repair. Extra detail increased tokens in this sample. Do not infer a
+general prompt-length effect from two attempts or require this detail from users.
+
+Run 17 attempt 1 browser capabilities pass at 1440/390px. Its first browser
+failure compared raw row text against asynchronously hydrated relationship labels;
+the corrected probe compares record IDs across native-calendar change/reset.
+Conversation contains both complete original prompts once on both viewports.
+The first compact assertion expired at 5s, but its captured DOM already contained
+the transcript. The rerun uses the stand's existing 20s interaction budget and
+records hydration separately (11/2556ms); no product timeout was changed.
 
 The separate DEV release checkpoint batch attempted 340 projects, excluding
 Builder for its explicit promotion check: 197 published; 143 legacy research
 projects failed dependency resolution (131 require `adaos_research_platform ^0.2`,
 12 require `^0.1`). Neither version exists in the local release repository.
 Do not silently rewrite these manifests or publish unsatisfied dependency graphs.
-Owned-source Forge checkpoints are a separate preservation path, not a successful
-ProjectRelease upload; their completion and the later-created test projects must
-be reconciled before the final baseline report.
+Owned-source Forge checkpoints preserved 140 of these 143 projects (one canary
+plus 139 successful batch entries), independently of release dependencies. Three
+calibration sources fail validation: `tlp_cal_c0_a1_fd_9e95681ba678` has an
+unregistered `prepare_attempt` activity; `tlp_cal_c0_a2_fd_61f6c5d28bd3` has an
+unregistered `accepted_protocol_present` guard; `tlp_cal_c4_a1_fd_cc48be23727d`
+shadows the standard library with root `operator.py`. Keep these invalid fixtures
+and original failures; do not invent passing implementations to obtain a receipt.
+Owned-source Forge preservation is not a ProjectRelease or a guarantee that the
+aggregate project manifest was checkpointed. All 30 later-created DEV projects
+passed `adaos dev project push`; Builder's separate DEV checkpoint also passed.
+
+- [ ] `[should]` Provide quarantined, non-promotable source checkpoints for invalid
+  unfinished drafts, retaining validation findings without weakening release gates.
+- [ ] `[should]` Hydrate Git-tracked sparse component sources before a release
+  attempt; report missing source separately from missing dependency releases.
+  The final Workspace batch passes all 26 published projects after hydrating two
+  sparse scenarios and Flowboard's sparse skill. No deleted or untracked files
+  were restored. Builder's dirty promoted closure was first published with the
+  exact-candidate source command, then `adaos project push` completed normally.
 
 Input inspection confirmed the primary dynamic keys are instruction,
 output_locales, prototype_brief, scenario_id and title, without rubrics or prior

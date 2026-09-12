@@ -10,13 +10,15 @@ if (process.env.ENV_TYPE !== 'dev' || !search || !scenario || !webspace || !subn
 }
 const output = path.resolve(process.env.ADAOS_E2E_OUTPUT || 'artifacts/builder-project-review')
 const hub = process.env.ADAOS_E2E_HUB_URL || 'http://127.0.0.1:8777'
+const spaceKind = process.env.ADAOS_E2E_SPACE_KIND || 'development'
+if (!['development', 'workspace'].includes(spaceKind)) throw new Error('Unsupported Builder space')
 const url = new URL(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
 for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo',
-  subnet_id: subnet, webspace_id: webspace, space_kind: 'development',
+  subnet_id: subnet, webspace_id: webspace, space_kind: spaceKind,
   expected_scenario_id: 'builder', try_local_hub: '1' })) url.searchParams.set(key, value)
 await fs.mkdir(output, { recursive: true })
 const browser = await chromium.launch({ headless: true })
-const report = { scenario, webspace, search, passed: false, errors: [], responses: [] }
+const report = { scenario, webspace, spaceKind, search, passed: false, errors: [], responses: [] }
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
   await context.addInitScript(({ hub, token, subnet, webspace }) => {
@@ -43,6 +45,17 @@ try {
       const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
       return sync?.materializationReady && sync.materialization.currentScenario === 'builder'
     }, undefined, { timeout: 60_000 })
+    report.modalSources = await page.evaluate(() => {
+      const element = document.querySelector('ada-chat-widget')
+      const component = element && window.ng?.getComponent(element)
+      if (!component?.ydoc) return []
+      const modals = component.ydoc.toJSON(component.ydoc.getPath('ui/application/modals')) || {}
+      return Object.entries(modals).filter(([id]) => id.endsWith('project-picker')).map(([id, modal]) => ({
+        id, source: modal.__source, metadata: modal.metadata, context: modal.context,
+        widgets: (modal.schema?.widgets || []).map(widget => ({ id: widget.id, type: widget.type })),
+      }))
+    })
+    console.log(JSON.stringify({ modalSources: report.modalSources }))
     await page.getByRole('button', { name: /choose project|выбрать проект/i }).click()
     const picker = page.locator('ion-modal').filter({ has: page.locator('ada-table-widget') }).last()
     const rows = picker.locator('ada-table-widget tbody tr.row-selectable')

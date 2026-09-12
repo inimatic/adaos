@@ -161,8 +161,9 @@ try {
               && JSON.stringify(item.dataSource?.query || {}).includes(`$state.${control.stateKey}`))
             if (!collection) throw new Error('Date filter has no table consumer')
             const table = host(collection.id)
-            await expect(table.locator('tr.row-selectable').first()).toBeVisible()
-            const before = await table.locator('tbody tr').allTextContents()
+            await expect(table.locator('tr.row-selectable').first()).toBeVisible({ timeout: 20_000 })
+            // Relationship labels hydrate separately; record identity must survive reset.
+            const before = await collectionIds(collection)
             const response = page.waitForResponse(item => new URL(item.url()).pathname === '/api/resources/query'
               && item.request().postDataJSON()?.resource_type === collection.dataSource.resourceType
               && JSON.stringify(item.request().postDataJSON()).includes('2099-12-31'))
@@ -173,7 +174,7 @@ try {
             if (!body.ok || body.items?.length) throw new Error('Date commit did not filter the resource query')
             await expect(table.locator('tr.row-selectable')).toHaveCount(0)
             await toolbar.locator('.query-toolbar__reset').click()
-            await expect.poll(() => table.locator('tbody tr').allTextContents()).toEqual(before)
+            await expect.poll(() => collectionIds(collection), { timeout: 20_000 }).toEqual(before)
             sample.checks.push({ kind: 'date-change-query-reset', widget: widget.id, before: before.length })
           }
           for (const control of widget.inputs.controls.filter(item => item.kind === 'search')) {
