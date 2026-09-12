@@ -1973,6 +1973,9 @@
       "additionalProperties": true,
       "description": "Inputs for ui.form. This is the compatibility container for typed Google-Forms-like field declarations.",
       "properties": {
+        "selectedStateKey": { "type": "string", "minLength": 1, "description": "Page-state key containing the selected record id. Required for record loading from a skill dataSource. Empty selection means create mode." },
+        "closeOnSuccess": { "type": "boolean", "description": "For explicit action buttons, close the editor only after every matching command succeeds." },
+        "resetOnSuccess": { "type": "boolean", "description": "Clear draft values after a successful submission, never after failure or skipped mutation." },
         "readOnlyIf": { "type": "string", "description": "Evaluated against the loaded record, never the draft. Disables mutation controls and fields while selection is read-only. Provider must enforce the same policy." },
         "fields": {
           "type": "array",

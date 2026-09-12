@@ -1,0 +1,56 @@
+{
+  "schema": "adaos.ui.implementation_bindings.v1",
+  "stage": "automation",
+  "purpose": "Bounded authoring reference for replacing disposable Prototype bindings with owned skill tools. This is not an application template or an additional WebUI schema.",
+  "binding_rules": {
+    "read": "Use dataSource.kind=skill and name=<owned_skill>.<exported_tool>. params accepts $state references. Return a collection as {items:[...]} and one record directly or as {item:{...}}. ui.form requires records with id and an explicit inputs.selectedStateKey for skill sources. Empty selection is create mode, not the first returned record. A get tool should return an empty item for empty id.",
+    "selection": "Keep the accepted collection selection and modal navigation. Set the selected id in page state before opening the editor. Use that same state key in the form inputs.selectedStateKey and dataSource.params.id. Do not invent a resourceQuery handler registration API: ordinary owned tools are a supported alternative to the declarative local_crud provider.",
+    "mutation": "Use callSkill with target=<owned_skill>.<exported_tool>. Form events expose $event.values (draft fields) and $event.record (loaded record, including id and revision). Do not read revision from editable fields or invent an actor/role in params. Buttons dispatch matching actions by id. interaction.submit.defaultAction names the button for Enter; do not attach unrelated mutations to a single submit.",
+    "result": "Client unwraps the HTTP tool envelope to the handler result. Action resultStateKey writes this result into page state; action resultPath optionally projects within it, e.g. item, not result.item. This projection does not apply to a skill dataSource: return the shape the widget consumes. Declare invalidates on mutations matching dataSource.invalidationTags to refresh affected reads only.",
+    "failure": "A thrown handler error, failed transport, or returned {ok:false,error:<code>,message:<human reason>} rejects the command. Form commands await completion even if background=true. A denied/skipped command or pending approval is not form success. inputs.closeOnSuccess with explicit buttons closes only after success; leave resetOnSuccess false to retain a failed draft. Server enforces rights, invariants and revision conflicts independently of UI enabledIf/readOnlyIf. Do not return ok:true for an unsuccessful mutation.",
+    "authorization": "Call adaos.sdk.access.require('workspace.read') or require('workspace.write') inside each tool BEFORE touching data. Use adaos.sdk.access.caller() only for verified caller attribution. An absent caller is not owner. Core binds caller identity through /api/tools/call; existing session credentials can be owner-issued for one installed skill. No custom authentication or role registry belongs in the app. Core tests exercise ingress; application tests must also exercise deny paths.",
+    "persistence": "Use adaos.sdk.data.skill_env.skill_data_root() for owned durable data, outside source/package files. Standard-library sqlite3 is allowed for atomic relationships, optimistic revisions and app-owned business rules. New installation starts empty; keep representative Prototype records only in tests. Add versioned compatible schema initialization/migration and persistence tests. The SDK resources facade does not register arbitrary transaction handlers.",
+    "attachments": "ui.form fileUpload with fileStorage=prototype uploads bytes ONLY to disposable Preview storage. Without fileStorage it collects metadata only, not durable file content. There is no production fileUpload binding in this capsule. If the explicit brief permits persistent links, model and validate links in owned data using supported text/list fields; do not present metadata as an uploaded file. If actual uploaded bytes are required, discover an admitted end-to-end upload contract or report that branch as blocked. Do not weaken the accepted requirement silently.",
+    "discovery": "The supplied owned skill manifest and handlers define the local tool declaration pattern. Add tools to its exports and declarations with accurate read/write side effects; never infer caller rights from those effects. Consult targeted public SDK descriptors only for contracts still missing after this capsule. Preserve the accepted workflows, not Prototype storage or sample records. Larger new UX choices need review, not extra speculative hard acceptance requirements."
+  },
+  "examples": {
+    "read_collection": {
+      "kind": "skill",
+      "name": "sample_skill.list_records",
+      "params": {"query": "$state.search"},
+      "invalidationTags": ["sample.records"]
+    },
+    "record_editor": {
+      "id": "record-editor",
+      "type": "ui.form",
+      "area": "main",
+      "dataSource": {
+        "kind": "skill",
+        "name": "sample_skill.get_record",
+        "params": {"id": "$state.selectedId"},
+        "invalidationTags": ["sample.records"]
+      },
+      "interaction": {"submit": {"defaultAction": "save"}},
+      "inputs": {
+        "selectedStateKey": "selectedId",
+        "resetOnSuccess": false,
+        "closeOnSuccess": true,
+        "fields": [{"id": "name", "type": "shortText", "label": "Name", "required": true}],
+        "buttons": [{"id": "save", "label": "Save"}]
+      },
+      "actions": [{
+        "id": "save",
+        "on": "submit",
+        "type": "callSkill",
+        "target": "sample_skill.save_record",
+        "params": {"id": "$event.record.id", "revision": "$event.record.revision", "values": "$event.values"},
+        "invalidates": ["sample.records"],
+        "resultStateKey": "savedRecord",
+        "resultPath": "item"
+      }]
+    },
+    "read_result": {"item": {"id": "r1", "revision": 3, "name": "Example"}},
+    "write_result": {"ok": true, "item": {"id": "r1", "revision": 4, "name": "Changed"}},
+    "rejected_write": {"ok": false, "error": "revision_conflict", "message": "The record changed. Reopen it before saving."}
+  }
+}

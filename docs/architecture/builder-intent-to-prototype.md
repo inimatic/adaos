@@ -418,6 +418,16 @@ SDK catalog headers are navigation, not executable method contracts. Search
 must expose the same admitted public facades that generated code may use, and
 exact symbols must outrank broad catalog vocabulary.
 
+Implementation blueprints receive a bounded, versioned UI binding capsule before
+broad discovery. It is a public SDK view over generic ABI authoring guidance,
+with source hashes and schema-validated neutral examples, not a subject-specific
+template. The capsule connects owned tool reads, selected record identity,
+revision-aware form commands, invalidation, results and failure semantics. It
+also states caller-access and persistent-data contracts and honest upload limits.
+The deterministic local CRUD path does not receive this model-only context.
+Changes to these bindings require matching Client execution tests and an updated
+capability inventory; a permissive JSON schema alone is not implementation proof.
+
 Application-owned transactions and business invariants are ordinary Automation
 implementation work. A skill may use standard-library storage transactions under
 its admitted persistent data root; the absence of a Core domain-policy registry
@@ -426,9 +436,12 @@ not be recreated inside the application. The public `adaos.sdk.access` facade
 checks a verified invocation subject against the existing local access kernel
 in the executing skill's scope; arguments, profile selection and skill execution
 identity cannot substitute for that subject. No subject means access denied.
-The current owner-token HTTP ingress establishes only local-owner identity.
-Policy checks tested with trusted session fixtures do not qualify a live reader
-login or delegated-call authorization path; those need independent evidence.
+The owner token establishes local-owner identity. Purpose-scoped existing local
+session credentials additionally admit one installed skill, with current grants
+checked before execution or cache replay. Policy fixture tests alone do not
+qualify live ingress; ingress evidence alone does not qualify the generated
+application's reader/writer behavior. Browser renewal and broader delegated
+routes require separate admission and evidence.
 
 All implementation stages may report typed development feedback. An unresolved
 blocking item retains the candidate and evidence without applying source or

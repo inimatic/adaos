@@ -554,10 +554,14 @@ Checklist:
   existing sessions/devices and check current grants before execution/replay;
   partition idempotency by verified subject/scope. Reject dev and cross-node
   execution, node-admin use and request-body role spoofing.
-- [ ] `[must]` Qualify the new credential path on the running local node using
-  `e2e/stand/check-session-tool-ingress.py`, then exercise it in the generated
-  application's real read/write lifecycle. TestClient policy checks alone are
-  not a live-node or application pass.
+- [x] `[must]` Qualify the new credential path on the running local node using
+  `e2e/stand/check-session-tool-ingress.py`. Receipt
+  `session-tool-ingress-live-20260912-02` passes all nine owner/reader,
+  cache-isolation, write/admin/scope denial and revocation checks on `0e855bc9e`.
+  The first live receipt exposed an owner-header admission regression; it remains
+  retained, with HTTP owner header/bearer/query compatibility tests added.
+- [ ] `[must]` Exercise the credential path in the generated application's real
+  read/write lifecycle. A passing ingress probe is not an application pass.
 - [ ] `[should]` Integrate scoped credentials with browser session renewal and
   explicitly governed resource routes. Do not broaden `require_token` globally.
 - [x] `[must]` Prove access-fact persistence under concurrent grant/revocation

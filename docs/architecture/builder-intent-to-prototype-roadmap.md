@@ -2307,8 +2307,9 @@ Inspection of the actual retained executor inputs found another context defect:
   grant identities. Current session/grant state and resolved tool effects are
   checked before cache replay; DEV/remote escalation is denied. Broad HTTP/policy
   regression: 157 tests pass in 19.03s; subsequent nested-store and scoped SDK
-  checks pass in the 46-test focused subset. Live node and application checks
-  remain open. No new Automation model attempt is claimed from these tests.
+  checks pass in the 46-test focused subset. Live node qualification subsequently
+  passes all nine checks in `session-tool-ingress-live-20260912-02` on `0e855bc9e`.
+  Generated-application authorization remains open.
 
 Local regression: 395 Automation/worker/caller/exporter/HTTP tests pass in
 347.70s. These checks do not complete the live non-owner or full lifecycle gates.
@@ -2348,9 +2349,18 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
   passes 8/8 with API revision `520d4d343`: 10 generation/repair calls,
   62,147 fresh + 18,944 cached input tokens, 48,593 output tokens (including
   20,992 reasoning), case p50 99.95s/p95 185.56s. Independent grading adds
-  8 calls, 114,856 fresh input and 9,938 output tokens. Browser qualification
-  remains separate; pending caller-ingress edits were not loaded into that
-  runtime and do not change this generation comparison.
+  8 calls, 114,856 fresh input and 9,938 output tokens. Separate browser render
+  and capability probes pass 8/8 on desktop/mobile. Command probes pass 6/8;
+  the remaining probes assumed reversible archive and a single unfiltered
+  collection. Keep those receipts, correct the harness and requalify rather than
+  weakening application policies. Caller-ingress edits were not loaded into
+  that generation runtime and do not change the comparison.
+- [x] `[must]` Requalify those two command probes without changing app source:
+  use newly created records for lifecycle transitions and locate created identity
+  across declared collections. Knowledge and appointments now pass on both
+  viewports; the read-only transition is retained, not undone by bypassing policy.
+  Together with the six original passes this covers commands on all eight run 22
+  archetypes, not every possible command or production persistence.
 - [x] `[must]` Extend generic command/interaction browser probes to kanban
   collections using the renderer's card/record identity contract, without
   application-specific selectors. Queue editing and creation pass on both
@@ -2371,6 +2381,27 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
   The retained failure remains visible; the corrected media probe passes on
   both viewports without deleting records or changing application source.
   Fresh snapshot retrieval is bounded and incomplete snapshots fail explicitly.
+
+- [x] `[must]` Supply a generic, stage-specific Automation binding capsule with
+  source receipts and ABI-validated examples. Owned tool reads, record selection,
+  revisions, command failures, invalidation, caller rights and upload limits must
+  be available before broad discovery, without leaking application solutions.
+  Retained lifecycle continuation 04 spent 320.03s on discovery and stopped with
+  typed insufficient-context feedback; it changed no application files. It saw
+  current caller SDK descriptors, so this was not a stale Root catalog failure.
+- [x] `[must]` Align Client forms with the declared skill-command contract:
+  loaded record/revision on submit, success result projection, explicit Enter
+  action, validation, duplicate-submit suppression and no premature success for
+  background/denied/pending-approval commands. Focused Client regression: 147
+  tests pass; runtime browser qualification remains distinct.
+  Core worker/ABI suite: 137 checks pass; one invalid generic example was found
+  and fixed. The corrected example and exact/blueprint context paths pass all
+  four focused checks (`automation-binding-regression-20260912-02.xml`).
+- [ ] `[must]` Requalify the binding capsule through retained Automation, then
+  real UI/server behavior and the complete install/update lifecycle. Do not count
+  copied documentation, deterministic resource rewrites or fixture tests as
+  application implementation. Production binary uploads and dirty-editor refresh
+  conflicts require explicit evidence if the implementation uses those branches.
 
 ## Could And Deferred
 

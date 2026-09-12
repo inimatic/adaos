@@ -6055,6 +6055,11 @@ class LocalSkillFactoryWorker:
             "prompt_rule_capsules": prompt_rule_capsules,
             "prototype_resource_handoff": prototype_resource_handoff,
         }
+        if prototype_resource_handoff and prototype_resource_handoff.get("mode") == "implementation_blueprint":
+            from adaos.sdk.web.ui_contract import implementation_binding_contract
+
+            _write_json(input_dir / "implementation-bindings.json", implementation_binding_contract())
+            packet["implementation_bindings_ref"] = (input_dir / "implementation-bindings.json").resolve().as_posix()
         _write_json(input_dir / "packet.json", packet)
         if prototype_resource_handoff:
             _write_json(
@@ -6265,7 +6270,11 @@ authoritative files and trusted worker checks remain decisive.
             """## Accepted resource implementation blueprint
 
 Read `prototype-resource-handoff.json` for the reviewed resource shapes and
-pending Automation obligations. The proposed local CRUD declarations are a
+pending Automation obligations. Before broad discovery, read
+`implementation-bindings.json` for exact owned-tool data sources, form selection,
+revision-aware commands, result/error behavior, caller access and upload limits.
+Its examples are generic binding shapes, not a UI to copy over the accepted design.
+The proposed local CRUD declarations are a
 starting point, not proof of implementation. Implement the explicit brief using
 supported SDK/ABI mechanisms, including server-side rules and failure tests.
 You may adapt these declarations or replace disposable bindings with your owned
@@ -6300,6 +6309,10 @@ operations and do not read `ui_revisions` to reconstruct accepted data.
         resource_implementation_section = resource_implementation_section.replace(
             "`prototype-resource-handoff.json`",
             f"`{(input_dir / 'prototype-resource-handoff.json').resolve().as_posix()}`",
+        )
+        resource_implementation_section = resource_implementation_section.replace(
+            "`implementation-bindings.json`",
+            f"`{(input_dir / 'implementation-bindings.json').resolve().as_posix()}`",
         )
         root_mcp_context = (
             json.dumps(root_mcp, ensure_ascii=False, indent=2, sort_keys=True)
@@ -6483,7 +6496,7 @@ part of the submitted source snapshot.
 Conclude with a concise summary of implemented behavior and checks. The worker, not you, creates result/provenance files and the git commit.
 """
         context_files = []
-        for name in ("packet.json", "prototype-resource-handoff.json", "descriptor-working-set.json"):
+        for name in ("packet.json", "prototype-resource-handoff.json", "implementation-bindings.json", "descriptor-working-set.json"):
             path = input_dir / name
             if path.is_file():
                 raw = path.read_bytes()

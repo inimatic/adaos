@@ -49,6 +49,7 @@ from .webspace import (
 from .yjs import webspace_ydoc, webspace_read_ydoc, webspace_ydoc_sync
 from .ui_contract import (
     diagnostic_catalog,
+    implementation_binding_contract,
     modal_domain_contract,
     modal_domain_state,
     modal_interface,
@@ -98,6 +99,7 @@ __all__ = [
     "webspace_read_ydoc",
     "webspace_ydoc_sync",
     "diagnostic_catalog",
+    "implementation_binding_contract",
     "modal_domain_contract",
     "modal_domain_state",
     "modal_interface",

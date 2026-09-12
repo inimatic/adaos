@@ -6851,6 +6851,8 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     prompt = (tmp_path / "input" / "task.md").read_text(encoding="utf-8")
     assert "prototype-resource-handoff.json" in prompt
     assert "Do not create custom CRUD handlers" in prompt
+    assert "implementation_bindings_ref" not in packet
+    assert not (tmp_path / "input/implementation-bindings.json").exists()
     assert handoff["completion"] == {
         "strategy": "deterministic_resource_promotion",
         "model_required": False,
@@ -6905,8 +6907,16 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     worker._validate_prototype_resource_handoff(assignment, workspace, checks, errors)
     assert not errors
     assert checks[0]["kind"] == "prototype_resource_handoff.detached"
-    worker._build_packet(assignment, workspace, tmp_path / "input-blueprint")
+    blueprint_packet = worker._build_packet(assignment, workspace, tmp_path / "input-blueprint")
     prompt = (tmp_path / "input-blueprint/task.md").read_text(encoding="utf-8")
+    bindings_path = tmp_path / "input-blueprint/implementation-bindings.json"
+    bindings = json.loads(bindings_path.read_text(encoding="utf-8"))
+    assert bindings["stage"] == "automation"
+    assert blueprint_packet["implementation_bindings_ref"] == bindings_path.resolve().as_posix()
+    assert bindings_path.resolve().as_posix() in prompt
+    assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
+    assert "sample_skill.save_record" in bindings_path.read_text(encoding="utf-8")
+    assert project_id not in bindings_path.read_text(encoding="utf-8")
     assert "Do not create custom CRUD handlers" not in prompt
     assert "Fresh installation starts with empty user data" in prompt
     assert "Core need not supply a domain policy registry" in prompt

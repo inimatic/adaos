@@ -63,6 +63,16 @@ try {
     const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).last()
     const collectionRows = collection => host(collection.id).locator(collection.type === 'collection.board'
       ? '.board-card__main' : 'tr.row-selectable, .collection-focus-item')
+    const locateRecord = async (collections, id) => {
+      for (const collection of collections) {
+        const rows = collectionRows(collection)
+        const index = await rows.evaluateAll((elements, id) => elements.findIndex(element =>
+          (element.closest('[data-webui-board-item-id]')?.getAttribute('data-webui-board-item-id')
+            || window.ng?.getContext(element)?.$implicit?.id) === id), id)
+        if (index >= 0 && await rows.nth(index).isVisible()) return { collection, row: rows.nth(index) }
+      }
+      return null
+    }
     const state = form => form.evaluate(element => {
       const component = window.ng?.getComponent(element.querySelector('ada-form-widget'))
       return { record: component?.recordValues, values: component?.values }
@@ -93,7 +103,8 @@ try {
       return { body: received.request().postDataJSON(), headers: await received.request().allHeaders(), result }
     }
     const clean = async (receipt, payload, operation = 'update', recordId = receipt.body.record_id) => {
-      if (!receipt.body.resource_type?.startsWith('prototype.') || !recordId) throw new Error('Unsafe fixture cleanup')
+      if (!forms.some(({ widget }) => widget.dataSource?.resourceType === receipt.body.resource_type)
+        || !receipt.body.resource_type?.startsWith('prototype.project.') || !recordId) throw new Error('Unsafe fixture cleanup')
       const headers = Object.fromEntries(Object.entries(receipt.headers).filter(([key]) => !['content-length', 'host', 'origin'].includes(key)))
       const response = await context.request.post(`${hub}/api/resources/operate`, {
         headers, data: { ...receipt.body, operation_id: operation, record_id: recordId, payload },
@@ -107,34 +118,18 @@ try {
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
       await page.waitForFunction(expected => window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization?.currentScenario === expected, scenario, { timeout: 60_000 })
       for (const { widget, modalId } of orderedForms) {
-        const collection = widgets.find(item => ['ui.table', 'ui.list', 'collection.board'].includes(item.type)
+        const collections = widgets.filter(item => ['ui.table', 'ui.list', 'collection.board'].includes(item.type)
           && item.dataSource?.resourceType === widget.dataSource?.resourceType)
+        const collection = collections[0]
         if (!collection) continue
         const fixed = widget.actions.filter(action => action.type === 'resourceOperation' && action.params.operation_id === 'update'
           && Object.values(action.params.payload).every(value => !String(value).startsWith('$')))
-        for (const action of fixed) {
-          await open(widget, modalId, collection)
-          const form = host(widget.id)
-          await expect.poll(async () => (await state(form)).record?.id).toBeTruthy()
-          const original = (await state(form)).record
-          let receipt
-          try {
-            receipt = await submit(form, action)
-            if (receipt.body.record_id !== original.id) throw new Error('Mutation targeted another record')
-            if (modalId) await expect(form).toHaveCount(0)
-            await open(widget, modalId, collection)
-            await expect.poll(async () => {
-              const record = (await state(form)).record
-              return record?.id === original.id && Object.entries(action.params.payload).every(([key, value]) => record[key] === value)
-            }).toBe(true)
-            sample.checks.push({ command: action.id, task: 'select/transition/reopen', passed: true })
-          } finally {
-            if (receipt) await clean(receipt, Object.fromEntries(Object.keys(action.params.payload).map(key => [key, original[key]])))
-            if (modalId && await form.isVisible()) await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
-          }
-        }
         const create = widget.actions.find(action => action.type === 'resourceOperation' && action.params.operation_id === 'create')
-        if (!create) continue
+        if (!create) {
+          for (const action of fixed) sample.checks.push({ command: action.id, task: 'select/transition/reopen',
+            status: 'not_exercised', reason: 'No declared create command for a disposable transition record' })
+          continue
+        }
         if (widget.inputs.fields.some(field => field.required && field.type === 'fileUpload')) {
           sample.checks.push({ command: create.id, task: 'create', status: 'not_exercised', reason: 'Required upload needs separate probe' })
           continue
@@ -187,24 +182,44 @@ try {
         if (saved) {
           if (!saved.id || saved.id !== receipt.result.result.record_id) throw new Error('Inconsistent created identity')
           freshRecords.set(receipt.body.resource_type, saved)
-          createdReceipts.push({ receipt, saved })
+          const createdReceipt = { receipt, saved, readOnly: false }
+          createdReceipts.push(createdReceipt)
           // Identity, not a marker in an optional text field, locates lookup-only forms' records.
-          const rows = collectionRows(collection)
-          const rowIndex = () => rows.evaluateAll((elements, id) => elements.findIndex(element =>
-            (element.closest('[data-webui-board-item-id]')?.getAttribute('data-webui-board-item-id')
-              || window.ng?.getContext(element)?.$implicit?.id) === id), saved.id)
-          await expect.poll(rowIndex).toBeGreaterThanOrEqual(0)
-          const row = rows.nth(await rowIndex())
+          // Daily/weekly or filtered views may expose the same resource in different collections.
+          await expect.poll(async () => Boolean(await locateRecord(collections, saved.id))).toBe(true)
+          const { row, collection: visibleCollection } = await locateRecord(collections, saved.id)
           await expect(row).toBeVisible()
           if (!(await row.innerText()).trim()) throw new Error('Created record renders an empty row')
           sample.checks.push({ command: create.id, task: 'created-record-visible', passed: true, recordId: saved.id })
           if (chosenRelations.length && widget.actions.some(action => action.type === 'resourceOperation' && action.params.operation_id === 'update')) {
-            await open(widget, modalId, collection, false, row)
+            await open(widget, modalId, visibleCollection, false, row)
             await expect.poll(async () => {
               const record = (await state(form)).record
               return record?.id === saved.id && chosenRelations.every(relation => record[relation.field] === relation.value)
             }).toBe(true)
             sample.checks.push({ command: create.id, task: 'related-record/reopen', passed: true })
+            if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+          }
+          // Never archive a retained representative record and then assume unarchive is allowed.
+          for (const action of fixed) {
+            const found = await locateRecord(collections, saved.id)
+            if (!found) throw new Error('Transition record is not visible in any declared collection')
+            await open(widget, modalId, found.collection, false, found.row)
+            await expect.poll(async () => (await state(form)).record?.id).toBe(saved.id)
+            const transition = await submit(form, action)
+            if (transition.body.record_id !== saved.id) throw new Error('Mutation targeted another record')
+            if (modalId) await expect(form).toHaveCount(0)
+            await expect.poll(async () => Boolean(await locateRecord(collections, saved.id))).toBe(true)
+            const reopened = await locateRecord(collections, saved.id)
+            await open(widget, modalId, reopened.collection, false, reopened.row)
+            await expect.poll(async () => {
+              const record = (await state(form)).record
+              return record?.id === saved.id && Object.entries(action.params.payload).every(([key, value]) => record[key] === value)
+            }).toBe(true)
+            createdReceipt.readOnly = await form.evaluate(element =>
+              Boolean(window.ng?.getComponent(element.querySelector('ada-form-widget'))?.recordReadOnly))
+            sample.checks.push({ command: action.id, task: 'select/transition/reopen', passed: true,
+              recordId: saved.id, readOnlyAfter: createdReceipt.readOnly })
             if (modalId) await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
           }
         } else sample.fixtureCleanup.push({ operation: 'delete', ok: false, reason: 'Created identity not present in operation receipt; test record retained' })
@@ -225,11 +240,11 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}-failure.png`), fullPage: true, timeout: 5000 }).catch(() => {})
     } finally {
       // Do not delete parents of retained children or mutate undeclared operations.
-      const canClean = createdReceipts.every(({ receipt }) => declaredDeleteTargets.has(receipt.body.resource_type))
+      const canClean = createdReceipts.every(({ receipt, readOnly }) => !readOnly && declaredDeleteTargets.has(receipt.body.resource_type))
       for (const { receipt, saved } of createdReceipts.reverse()) {
         if (canClean) await clean(receipt, {}, 'delete', saved.id).catch(error => { sample.cleanupFailure = error.message })
         else sample.fixtureCleanup.push({ resource: receipt.body.resource_type, recordId: saved.id,
-          operation: 'retain', status: 'retained', reason: 'Related test fixtures retained because not all resources declare deletion' })
+          operation: 'retain', status: 'retained', reason: 'Related test fixtures retained because deletion is undeclared or a tested transition made a record read-only' })
       }
     }
     await context.close()

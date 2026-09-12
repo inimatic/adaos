@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
 from typing import Any, Mapping
 
 from adaos.services.webui_contract import (
@@ -233,6 +236,32 @@ def validate_webui(webui: Mapping[str, Any], *, skill_id: str | None = None) -> 
 
 def diagnostic_catalog() -> dict[str, dict[str, str]]:
     return webui_contract_diagnostic_catalog()
+
+
+def implementation_binding_contract() -> dict[str, Any]:
+    """Return the bounded Automation UI/owned-tool binding guide and ABI receipts.
+
+    Covers record loading, revision-aware form commands, caller authorization,
+    durable data and the current upload limitations. Generic examples are not
+    an application template. Source hashes bind this view to the installed SDK.
+    """
+    abi_root = Path(__file__).resolve().parents[2] / "abi"
+    sources = {}
+    for name in (
+        "implementation.bindings.v1.json", "webui.v1.schema.json",
+        "ui.capability_catalog.v1.json",
+    ):
+        raw = (abi_root / name).read_bytes()
+        sources[name] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+    guide = json.loads((abi_root / "implementation.bindings.v1.json").read_text(encoding="utf-8"))
+    guide["sources"] = sources
+    guide["schema_refs"] = {
+        "read_collection": "webui.v1.schema.json#/$defs/dataSource",
+        "record_editor": "webui.v1.schema.json#/$defs/widgetConfig",
+        "command": "webui.v1.schema.json#/$defs/action",
+        "form_inputs": "webui.v1.schema.json#/$defs/formInputs",
+    }
+    return guide
 
 
 def _drop_none(value: Mapping[str, Any]) -> dict[str, Any]:
