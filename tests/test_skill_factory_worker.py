@@ -4299,7 +4299,8 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(
         "    assert workspace not in runtime.parents\n"
         "    assert os.environ['ADAOS_SKILL_NAME'] == 'candidate'\n"
         "    assert internal == runtime / 'skill-data' / 'candidate'\n"
-        "    assert (workspace / 'scenarios' / 'companion' / 'scenario.yaml').is_file()\n"
+        "    assert not (workspace / 'scenarios').exists()\n"
+        "    assert list((workspace / 'skills').iterdir()) == [workspace / 'skills' / 'candidate']\n"
         "    (internal / 'installed-context-marker.txt').parent.mkdir(parents=True, exist_ok=True)\n"
         "    (internal / 'installed-context-marker.txt').write_text('ok', encoding='utf-8')\n"
         "    (runtime / 'validation-marker.txt').parent.mkdir(parents=True, exist_ok=True)\n"
@@ -5876,6 +5877,31 @@ def test_worker_runs_generated_tests_from_package_shaped_projection(
     assert any("packaged pytest failed" in error for error in errors)
 
 
+def test_skill_package_checks_cannot_depend_on_sibling_scenario(tmp_path: Path) -> None:
+    workspace = tmp_path / "run/workspace"
+    tests = workspace / "skills/demo/tests"
+    tests.mkdir(parents=True)
+    scenario = workspace / "scenarios/example"
+    scenario.mkdir(parents=True)
+    (scenario / "webui.json").write_text("{}", encoding="utf-8")
+    (tests / "test_sibling.py").write_text(
+        "from pathlib import Path\n"
+        "def test_sibling():\n"
+        "    assert (Path(__file__).resolve().parents[3] / 'scenarios/example/webui.json').is_file()\n",
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state", repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev/skills", dev_scenarios_root=tmp_path / "dev/scenarios",
+    )
+    checks, errors = [], []
+    worker._run_generated_tests(workspace, checks, errors)
+    assert errors and "packaged pytest failed" in errors[0]
+    assert checks[0]["source_scope"] == "skill_package"
+    assert checks[0]["ok"] is False
+    assert (scenario / "webui.json").is_file()
+
+
 def test_worker_records_budgeted_package_test_timeout_for_autonomous_repair(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5930,6 +5956,7 @@ def test_worker_records_budgeted_package_test_timeout_for_autonomous_repair(
         {
             "kind": "pytest.packaged",
             "path": "skills/demo/tests",
+            "source_scope": "skill_package",
             "ok": False,
             "status": "timeout",
             "timeout_seconds": 180,

@@ -9,6 +9,9 @@ const token = process.env.ADAOS_E2E_HUB_TOKEN
 const selectWidget = process.env.ADAOS_E2E_SELECT_WIDGET || ''
 const locale = process.env.ADAOS_E2E_LOCALE || 'en'
 const emptyMode = process.env.ADAOS_E2E_EMPTY_STATES === '1'
+const spaceKind = process.env.ADAOS_E2E_SPACE_KIND || 'development'
+if (!['development', 'workspace'].includes(spaceKind)) throw new Error('Unsupported review space')
+if (emptyMode && spaceKind !== 'development') throw new Error('Empty fixture probes require development space')
 const dictionaryProbe = process.env.ADAOS_E2E_DICTIONARY_PROBE === '1'
 let expectedTranslation
 if (dictionaryProbe) {
@@ -39,7 +42,7 @@ const hub = process.env.ADAOS_E2E_HUB_URL || 'http://127.0.0.1:8777'
 const url = new URL(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
 for (const [key, value] of Object.entries({
   intent: 'webspace.open', zone: 'lo', subnet_id: subnet, webspace_id: webspace,
-  space_kind: 'development', expected_scenario_id: scenario, try_local_hub: '1',
+  space_kind: spaceKind, expected_scenario_id: scenario, try_local_hub: '1',
 })) url.searchParams.set(key, value)
 await fs.mkdir(output, { recursive: true })
 const browser = await chromium.launch({ headless: true })

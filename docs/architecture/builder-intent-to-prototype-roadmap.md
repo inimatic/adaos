@@ -2092,6 +2092,15 @@ validation. Its registry source push remains pending final Core/Client
 qualification. Promotion also updates the Root stable release pointer; it must
 not be described as a purely local operation.
 
+The next parallel-work publication promotes `builder@0.2.127` into WorkspaceLock
+50 through exact candidate `builder-0-2-127-3a399b8ca20f`. DEV/Trial/Workspace
+handler hashes match; changes preserve scoped repair candidates and sequence
+distinct bounded repair families. 49 repair checks and 106 scenario/SDK checks
+pass. Desktop/mobile read-only rendering completes in an isolated Workspace;
+the retained browser receipt also records a node-status 401/Limited indicator,
+so it is not a claim of entirely healthy browser connectivity. Evidence:
+`builder-parallel-work-20260912-03`. No shared selected project was changed.
+
 R10 progress: keyed SQLite reads and append-oriented traces are committed, with
 44 resource tests and retained legacy data. The live in-process two-record query
 now takes 19-21ms versus 576-655ms; HTTP/browser latency is not inferred from it.
@@ -2402,6 +2411,31 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
   copied documentation, deterministic resource rewrites or fixture tests as
   application implementation. Production binary uploads and dirty-editor refresh
   conflicts require explicit evidence if the implementation uses those branches.
+- [x] `[must]` Admit skill-backed form choices through the same causal loader,
+  retry and invalidation path as resource queries. Preserve the draft and block
+  submission on unavailable/malformed choice collections. Client regression:
+  145 tests pass; eight ABI/binding checks pass. This does not claim live coverage
+  of skill-backed captions or every collection filter.
+- [x] `[must]` Correct worker/native package-test parity: skill tests must not see
+  sibling scenario/project source. Record skill-package versus application-closure
+  scope. Four focused isolation/budget checks pass, including an actual subprocess
+  that fails for a sibling-scenario dependency before installation.
+  The full worker/ABI regression passes 140 tests in 135.45s:
+  `automation-package-binding-regression-20260913-02.xml`.
+- [ ] `[must]` Continue the retained lifecycle past its installation gate.
+  Continuation 05 produced owned SQLite operations and 15 passing worker tests
+  after one model repair, but DEV activation correctly rejected a skill test
+  reading a sibling scenario. Keep both receipts: 773.28s wait, two model attempts,
+  1,667,128 input tokens (1,576,576 cached) and 20,557 output tokens. This is not
+  a completed Automation or Trial. Publication-gate ticket:
+  `dticket.01M2BPTBAA8V1Z4X2640RGHFR6`.
+- [ ] `[must]` Make post-application recovery distinguish the frozen accepted
+  Prototype from the applied Automation revision. Unchanged retry currently
+  compares the functional UI against the Prototype digest after activation
+  failure. Do not reapprove Automation as Prototype or remove the approval gate;
+  use a recorded Automation correction while qualifying provenance-aware retry.
+- [ ] `[should]` Resolve the isolated Builder browser's node-status 401/Limited
+  indicator separately from scenario rendering and source publication health.
 
 ## Could And Deferred
 

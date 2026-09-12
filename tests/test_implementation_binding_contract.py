@@ -38,3 +38,15 @@ def test_editor_binding_retains_loaded_revision_and_does_not_fake_upload():
     assert command["resultPath"] == "item"
     assert not editor["inputs"]["resetOnSuccess"]
     assert guide["examples"]["rejected_write"]["ok"] is False
+
+
+def test_skill_choice_source_is_admitted_but_arbitrary_transports_are_not():
+    root = Path(__file__).resolve().parents[1] / "src/adaos/abi"
+    schema = json.loads((root / "webui.v1.schema.json").read_text(encoding="utf-8"))
+    validator = jsonschema.Draft202012Validator({**schema, "$ref": "#/$defs/formField"})
+    field = {"id": "related", "type": "dropdown", "optionValuePath": "id", "optionLabelPaths": ["name"],
+             "optionsDataSource": {"kind": "skill", "name": "sample_skill.list_records",
+                                   "invalidationTags": ["sample.records"]}}
+    assert not list(validator.iter_errors(field))
+    field["optionsDataSource"] = {"kind": "api", "url": "https://example.org"}
+    assert list(validator.iter_errors(field))

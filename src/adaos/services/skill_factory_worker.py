@@ -7752,6 +7752,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         skip_frozen_skills: bool = False,
     ) -> None:
         validation_root = workspace.parent / "package-validation"
+        if not validation_root.resolve().is_relative_to(workspace.parent.resolve()):
+            raise ValueError("package validation projection escapes its task directory")
         if validation_root.exists():
             shutil.rmtree(validation_root)
         for root_name in ("skills", "scenarios", "projects"):
@@ -7793,6 +7795,14 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 )
                 continue
             packaged_tests = validation_root / tests_dir.relative_to(workspace)
+            test_cwd = validation_root
+            if owner_kind == "skills":
+                # A native skill slot contains only that skill, not the task's
+                # sibling scenario/project sources. Cross-component tests belong
+                # to the scenario's application-closure checks instead.
+                test_cwd = validation_root / "isolated-skills" / tests_dir.parent.name / "src"
+                packaged_tests = test_cwd / tests_dir.relative_to(workspace)
+                shutil.copytree(validation_root / "skills" / tests_dir.parent.name, packaged_tests.parent)
             # Validate the exact package-shaped source projection, without
             # authoring-only ``.adaos_context``. This closes the gap between
             # Codex workspace tests and Forge/native installed validation.
@@ -7840,7 +7850,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         "-p",
                         "no:cacheprovider",
                     ],
-                    cwd=validation_root,
+                    cwd=test_cwd,
                     timeout=float(timeout_seconds),
                     env=environment,
                 )
@@ -7852,6 +7862,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     {
                         "kind": "pytest.packaged",
                         "path": relative,
+                        "source_scope": "skill_package" if owner_kind == "skills" else "application_closure",
                         "ok": False,
                         "status": "timeout",
                         "timeout_seconds": timeout_seconds,
@@ -7868,6 +7879,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 {
                     "kind": "pytest.packaged",
                     "path": relative,
+                    "source_scope": "skill_package" if owner_kind == "skills" else "application_closure",
                     "ok": result.returncode == 0,
                     "timeout_seconds": timeout_seconds,
                     "validation_budget": validation_budget,
@@ -7880,6 +7892,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     f"{(result.stdout + result.stderr)[-2000:]}"
                 )
         if validation_root.exists():
+            if not validation_root.resolve().is_relative_to(workspace.parent.resolve()):
+                raise ValueError("package validation projection escapes its task directory")
             shutil.rmtree(validation_root)
 
     @staticmethod

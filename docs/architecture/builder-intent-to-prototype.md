@@ -428,6 +428,14 @@ The deterministic local CRUD path does not receive this model-only context.
 Changes to these bindings require matching Client execution tests and an updated
 capability inventory; a permissive JSON schema alone is not implementation proof.
 
+Worker validation must reproduce package boundaries, not merely copy an entire
+authoring checkout into a directory named package validation. Skill tests see
+that skill alone with its admitted runtime/data context; sibling scenario and
+project files are absent. Cross-component checks run from the owning scenario's
+application closure and carry that scope in their evidence. Failing isolation
+requires moving or repairing the test at its correct owner, not skipping the
+check or injecting authoring-only sources into installed packages.
+
 Application-owned transactions and business invariants are ordinary Automation
 implementation work. A skill may use standard-library storage transactions under
 its admitted persistent data root; the absence of a Core domain-policy registry
