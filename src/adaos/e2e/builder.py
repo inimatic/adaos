@@ -1575,6 +1575,10 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
     adapter_id = "sdk.v1"
 
     def execute(self, step_type: str, inputs: Mapping[str, Any], context: Mapping[str, Any]) -> Mapping[str, Any]:
+        from adaos.e2e import builder_lifecycle
+
+        if step_type in builder_lifecycle.STEP_TYPES:
+            return builder_lifecycle.execute(step_type, inputs, context)
         result = dict(super().execute(step_type, inputs, context))
         if step_type == "scenario.validate" and result.get("ok") and context.get("retain_test_projects"):
             result["review_preview"] = self._prepare_review_preview(result["scenario_id"], context)
@@ -2465,14 +2469,15 @@ class BuilderE2ERunner:
             input_attribution=input_attribution,
         )
 
+        from adaos.e2e.builder_lifecycle import retained_stage
+
         cleanup: Mapping[str, Any] | None = (
             {
-                "status": "retained_for_review", "test": True, "stage": "prototype",
+                "status": "retained_for_review", "test": True, **retained_stage(steps),
                 "name_suffix": context["case_instance_id"],
                 "owned_artifacts": context.get("owned_artifacts", []),
                 "previews": [output["review_preview"] for output in full_outputs
                              if output.get("review_preview")],
-                "acceptance": "not_approved",
             } if self.retain_test_projects else None
         )
         cleanup_options = dict(case.get("cleanup") or {})

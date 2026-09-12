@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 
-from adaos.sdk.builder.prototype import apply_state_repair, compile_semantic_candidate
+from adaos.sdk.builder.prototype import apply_binding_repair, apply_state_repair, compile_semantic_candidate
 from adaos.sdk.developer.prototypes import validate_resource_spec
 from adaos.sdk.developer.ui import evaluate
 
@@ -52,10 +52,11 @@ def replay(run: Path, builder_skill: Path | None = None) -> list[dict]:
             row = {"case": case, "attempt": attempt, "stage": artifact["stage"], "source": artifact["evidence_ref"]}
             try:
                 candidate = json.loads((run / artifact["evidence_ref"]).read_text(encoding="utf-8"))["structured_candidate"]
-                if candidate.get("schema") in {"adaos.builder.state_repair.v1", "adaos.builder.state_repair.v2", "adaos.builder.state_repair.v3"}:
+                if candidate.get("schema") in {"adaos.builder.state_repair.v1", "adaos.builder.state_repair.v2", "adaos.builder.state_repair.v3", "adaos.builder.binding_repair.v1"}:
                     original = next((attempt.get("validation", {}).get("findings") for attempt in generation.get("attempts", [])
                                      if attempt.get("validation", {}).get("findings")), findings)
-                    candidate = apply_state_repair(base, candidate, original)
+                    apply = apply_binding_repair if candidate["schema"] == "adaos.builder.binding_repair.v1" else apply_state_repair
+                    candidate = apply(base, candidate, original)
                     row["repair_authority"] = "original_preflight_findings"
                 else:
                     base = candidate

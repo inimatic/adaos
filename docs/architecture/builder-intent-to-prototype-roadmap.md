@@ -2096,6 +2096,21 @@ state bindings: 10.3s wall, 933 output tokens including 576 reasoning tokens,
 change. This single retained replay is not a fresh cohort or semantic grader pass;
 the eight-archetype and live-browser gates remain open.
 
+Run 18 stopped at a real platform blocker: the second queue candidate compiled,
+but DEV Builder's duplicate table validator rejected compiler-emitted `kind=date`.
+Its unchanged primary response passes the complete replay after reading allowed
+column kinds from the shared capability catalog. Sixteen boundary/context tests
+pass; image/datetime/number support is no longer contradicted by a stale local
+allowlist. The stopped run remains failed/incomplete, not relabeled as success.
+
+- [x] `[must]` Add owned-test-only SDK adapters for exact Prototype review,
+  Automation start/wait, Trial preparation/decision and stable promotion.
+  Require retained DEV scope, existing review evidence, immutable target identity
+  and explicit promotion confirmation; keep resumable Automation input receipts.
+- [ ] `[must]` Qualify these adapters on the real application lifecycle and add
+  registry source publication, consumer installation/update and data-preservation
+  assertions. Adapter unit tests are not proof of an automated application.
+
 ## Could And Deferred
 
 - [ ] `[deferred]` Large-prototype decomposition, shared entity/navigation/locale

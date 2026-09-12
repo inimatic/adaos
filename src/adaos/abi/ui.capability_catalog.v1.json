@@ -154,7 +154,7 @@
       "title": "Dense table",
       "summary": "A dense comparison of typed textual, status, boolean, icon, and action columns.",
       "aliases": { "en": ["table", "rows", "columns"], "ru": ["таблица", "строки", "столбцы"] },
-      "manifest": { "widget_type": "ui.table", "column_display": "columns[*].overflow=wrap|truncate and align=start|center|end are retained at widget ingress. Date, datetime and number cells stay unbroken unless overflow is explicit. Columns support valueI18nPrefix with valueLabels fallback, or optionsDataSource.kind=resourceQuery with optionValuePath and optionLabelPaths for live related-record captions; canonical stored IDs are unchanged." },
+      "manifest": { "widget_type": "ui.table", "column_kinds": ["text", "icon", "boolean", "buttons", "status", "date", "datetime", "number", "image"], "column_display": "columns[*].overflow=wrap|truncate and align=start|center|end are retained at widget ingress. Date, datetime and number cells stay unbroken unless overflow is explicit. Columns support valueI18nPrefix with valueLabels fallback, or optionsDataSource.kind=resourceQuery with optionValuePath and optionLabelPaths for live related-record captions; canonical stored IDs are unchanged." },
       "data_shape": { "kind": "collection" },
       "events": ["select", "click:<buttonId>"],
       "responsive": { "desktop": "tabular", "compact": "bounded horizontal overflow" },

@@ -69,6 +69,32 @@ component-retrieval, or implementation-agent workspaces.
 
 ### Evaluation suite
 
+### Lifecycle Steps
+
+The SDK adapter also admits `builder.workflow`, `prototype.accept`,
+`automation.start`, `automation.wait`, `trial.prepare`, `trial.decide` and
+`release.promote`. These technological steps require `ENV_TYPE=dev`, retained
+test projects and the primary component owned by that exact case. They use the
+public Builder SDK gates, not synthetic workflow transitions. A publication
+project cannot expand the case's ownership.
+
+Prototype/Trial review is explicit external evidence inside the run bundle,
+bound to the current WebUI or candidate digest. `review_file` is run-relative;
+an optional bounded `wait_seconds` allows human/agent review while the runner
+remains observable. Evidence files must exist. The runner does not invent a
+passed review from generated controls, a grader score or a queued worker.
+Automation receives a separate `implementation_brief`, records its immutable
+input digest and waits for the exact started session. A timeout does not cancel
+the durable worker or authorize removing its source. Retained projection markers
+advance with the actual accepted lifecycle rather than remaining unapproved
+Prototype markers.
+
+These adapters are a qualification slice, not a completed release pipeline:
+real browser review, consumer install/update assertions and source-registry
+publication remain required by R10 of the Prototype roadmap.
+
+### Evaluation Suite Contract
+
 `adaos.builder.e2e_suite.v1` declares:
 
 - immutable suite ID, version, digest, visibility, and owner;
