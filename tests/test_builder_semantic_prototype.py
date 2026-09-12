@@ -2454,6 +2454,88 @@ def test_numeric_filter_compiles_to_number_input() -> None:
     assert collection["dataSource"]["query"]["filters"][number["id"]] == "$state.query_number_filter"
 
 
+def _missing_state_fixture():
+    brief, semantic = _multi_resource_fixture()
+    view = next(view for view in semantic["views"] if view["id"] == "people-list")
+    semantic["representative_states"].append({
+        "id": "missing-person", "label": _text("missing", "Another person", "Другой человек"),
+        "view_ref": view["id"], "filters": [{"field_ref": "person_name", "operator": "eq", "value": "Taylor"}],
+        "min_items": 1, "max_items": 1, "proof": {"kind": "field_predicate", "visible_field_refs": ["person_name"]},
+    })
+    candidate = _multi_resource_candidate(semantic)
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    findings = caught.value.findings
+    assert {item["code"] for item in findings} == {"semantic.state_fixture_mismatch"}
+    plan = prototype_sdk.prepare_state_repair(candidate, findings)
+    repair = {"schema": "adaos.builder.state_repair.v4", "base_sha256": plan["base_sha256"],
+              "states": [], "views": [], "fixture_additions": [
+                  {"resource_ref": "people", "records": [{"id": "person-3", "values": ["Taylor", "+3"]}]},
+              ]}
+    return brief, candidate, findings, plan, repair
+
+
+def test_state_repair_v4_supplies_missing_fixture_without_rewriting_the_condition():
+    brief, candidate, findings, plan, repair = _missing_state_fixture()
+    original = copy.deepcopy(candidate)
+    assert plan["output_schema"]["properties"]["schema"]["enum"] == ["adaos.builder.state_repair.v4"]
+    assert plan["fixture_scope"] == [{"resource_ref": "people", "max_add_records": 1,
+                                      "field_refs": ["person_name", "person_phone"], "state_ids": ["missing-person"]}]
+    result = prototype_sdk.apply_state_repair(candidate, repair, findings)
+    assert candidate == original
+    assert result["resources"][1]["records"][:-1] == original["resources"][1]["records"]
+    assert result["resources"][0] == original["resources"][0]
+    assert {k: v for k, v in result.items() if k != "resources"} == {k: v for k, v in original.items() if k != "resources"}
+    compile_semantic_prototype_candidate(result, brief=brief)
+
+
+@pytest.mark.parametrize("defect", ["out_of_scope", "too_many", "duplicate_resource", "duplicate_record", "normalized_duplicate", "arity", "weaken_state", "change_predicate", "change_target", "stale"])
+def test_state_repair_v4_rejects_scope_expansion_or_intent_changes(defect):
+    _, candidate, findings, _, repair = _missing_state_fixture()
+    if defect == "out_of_scope":
+        repair["fixture_additions"][0]["resource_ref"] = "work_items"
+    elif defect == "too_many":
+        repair["fixture_additions"][0]["records"] *= 2
+    elif defect == "duplicate_resource":
+        repair["fixture_additions"] *= 2
+    elif defect in {"duplicate_record", "normalized_duplicate"}:
+        repair["fixture_additions"][0]["records"][0]["id"] = "person-1" if defect == "duplicate_record" else " person-1 "
+    elif defect == "arity":
+        repair["fixture_additions"][0]["records"][0]["values"].pop()
+    elif defect == "stale":
+        repair["base_sha256"] = "stale"
+    else:
+        state = copy.deepcopy(candidate["representative_states"][-1])
+        repair["states"] = [state]
+        if defect == "weaken_state":
+            state["min_items"] = 0
+        elif defect == "change_predicate":
+            state["filters"][0]["operand"]["value"] = "Alex"
+        else:
+            state["view_ref"] = "work-list"
+    with pytest.raises((BuilderWorkflowError, ValidationError)):
+        prototype_sdk.apply_state_repair(candidate, repair, findings)
+
+
+def test_state_repair_v4_does_not_make_a_nonmatching_fixture_a_pass():
+    brief, candidate, findings, _, repair = _missing_state_fixture()
+    repair["fixture_additions"][0]["records"][0]["values"][0] = "Other"
+    merged = prototype_sdk.apply_state_repair(candidate, repair, findings)
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(merged, brief=brief)
+    assert any(item["code"] == "semantic.state_fixture_mismatch" for item in caught.value.findings)
+
+
+def test_state_repair_v4_does_not_enable_appends_for_excess_records():
+    brief, candidate, _, _, _ = _missing_state_fixture()
+    state = candidate["representative_states"][-1]
+    state["filters"][0]["operand"]["value"] = "Alex"
+    state.update(min_items=0, max_items=0)
+    findings = [{"code": "semantic.state_fixture_mismatch", "semantic_refs": ["state:missing-person"]}]
+    plan = prototype_sdk.prepare_state_repair(candidate, findings)
+    assert plan["output_schema"]["properties"]["schema"]["enum"] == ["adaos.builder.state_repair.v3"]
+
+
 def test_query_toolbar_preserves_typed_options_and_search_binding() -> None:
     brief, semantic = _multi_resource_fixture()
     view = next(view for view in semantic["views"] if view["role"] == "collection")

@@ -12,8 +12,12 @@ from jsonschema import Draft202012Validator
 
 from .semantic_prototype import (
     _canonical_candidate_identifier,
+    _canonicalize_semantic_prototype_candidate_v2,
+    _matching_state_records,
+    semantic_prototype_candidate_contract,
     semantic_prototype_provider_contract,
 )
+from .semantic_query_scope import scoped_predicates
 from .workflow import BuilderWorkflowError
 
 
@@ -159,9 +163,46 @@ def apply_binding_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any]
     return result
 
 
+def _state_fixture_scope(candidate, findings):
+    mismatches = {ref for finding in findings if finding.get("code") == "semantic.state_fixture_mismatch"
+                  for ref in finding.get("semantic_refs") or [] if str(ref).startswith("state:")}
+    other_defects = {ref for finding in findings if finding.get("code") != "semantic.state_fixture_mismatch"
+                     for ref in finding.get("semantic_refs") or []}
+    if not mismatches - other_defects:
+        return []
+    # Use the compiler's normalization and predicates, including owner-qualified fields.
+    normalized, _ = _canonicalize_semantic_prototype_candidate_v2(candidate)
+    views = {view["id"]: view for view in normalized["views"]}
+    resources = {resource["id"]: resource for resource in normalized["resources"]}
+    original_resources = {item["id"]: original for item, original in zip(normalized["resources"], candidate["resources"], strict=True)}
+    original_states = {item["id"]: original for item, original in zip(normalized["representative_states"], candidate["representative_states"], strict=True)}
+    limit = semantic_prototype_candidate_contract(version="v2")["$defs"]["resource"]["properties"]["records"]["maxItems"]
+    scope = {}
+    for state in normalized["representative_states"]:
+        if f"state:{state['id']}" not in mismatches - other_defects or state["proof"]["kind"] != "field_predicate":
+            continue
+        view = views[state["view_ref"]]
+        resource = resources[view["resource_ref"]]
+        fields = [field["id"] for field in resource["fields"]]
+        records = [{**dict(zip(fields, record["values"], strict=True)), "id": record["id"]} for record in resource["records"]]
+        predicates = [{"field_ref": predicate["field_ref"], "operator": predicate["operator"],
+                       ("compare_field_ref" if predicate["operand"]["kind"] == "field" else "value"):
+                           predicate["operand"]["field_ref" if predicate["operand"]["kind"] == "field" else "value"]}
+                      for predicate in state["filters"]]
+        missing = state["min_items"] - len(_matching_state_records(records, scoped_predicates({"filters": predicates}, view)))
+        capacity = limit - len(resource["records"])
+        if missing <= 0 or missing > capacity:
+            continue
+        original = original_resources[resource["id"]]
+        entry = scope.setdefault(original["id"], {"resource_ref": original["id"], "max_add_records": 0,
+                                                 "field_refs": [field["id"] for field in original["fields"]], "state_ids": []})
+        entry["max_add_records"] = min(capacity, entry["max_add_records"] + missing)
+        entry["state_ids"].append(original_states[state["id"]]["id"])
+    return list(scope.values())
+
+
 def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]], *, legacy: bool = False, version: int | None = None) -> dict[str, Any] | None:
-    version = version if version is not None else 1 if legacy else 3
-    if version not in (1, 2, 3):
+    if version is not None and version not in (1, 2, 3, 4):
         raise BuilderWorkflowError("unsupported state repair version")
     state_codes = {
         "semantic.state_fixture_mismatch", "semantic.state_proof_hidden",
@@ -179,6 +220,10 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
     view_ids = {state["view_ref"] for state in states}
     views = [view for view in candidate["views"] if view["id"] in view_ids]
     if len(views) != len(view_ids):
+        return None
+    fixture_scope = _state_fixture_scope(candidate, findings) if not legacy and version in (None, 4) else []
+    version = version if version is not None else 1 if legacy else 4 if fixture_scope else 3
+    if version == 4 and not fixture_scope:
         return None
     locales = tuple(locale for locale in ("en", "ru") if locale in candidate["title"])
     available = semantic_prototype_provider_contract(version="v2", locales=locales, _view_variants=False)["$defs"]
@@ -206,7 +251,7 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
     if version == 1:
         include("view")
     else:
-        properties = {("add_" + name if version == 3 and name in {"field_refs", "query_controls"} else name):
+        properties = {("add_" + name if version >= 3 and name in {"field_refs", "query_controls"} else name):
                       copy.deepcopy(available["view"]["properties"][name])
                       for name in ("id", "empty_state", "field_refs", "query_controls")}
         definitions["view"] = {"type": "object", "additionalProperties": False,
@@ -215,15 +260,15 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
     definitions["representativeState"]["properties"]["id"] = {"type": "string", "enum": [state["id"] for state in states]}
     definitions["view"]["properties"]["id"] = {"type": "string", "enum": [view["id"] for view in views]}
     digest = _digest(candidate)
-    return {
+    plan = {
         "base_sha256": digest,
         "allowed_state_ids": [state["id"] for state in states],
         "allowed_view_ids": [view["id"] for view in views],
         "task": (
             "Return only changed states and view patches resolving every reported failure. "
-            + ("View add_field_refs and add_query_controls are ADDITIONS: empty arrays preserve all existing fields and controls. Never repeat or replace an existing query ID. empty_state=null preserves the existing empty presentation; an object sets it. " if version == 3 else
+            + ("View add_field_refs and add_query_controls are ADDITIONS: empty arrays preserve all existing fields and controls. Never repeat or replace an existing query ID. empty_state=null preserves the existing empty presentation; an object sets it. " if version >= 3 else
                "View field_refs and query_controls REPLACE their complete original lists; empty arrays clear them. Carry unchanged entries forward. empty_state=null clears the original empty presentation. ")
-            + "Core retains the original title, resource, role, surface and media. Fixtures, commands, bindings and unreported states are immutable. First identify the intended state in the original request and Brief, then choose its proof and counts. A populated condition requires matching records and a visible predicate; do not turn it into an empty state to bypass a mismatch. Empty dataset and zero query matches are different proofs; use either only when it demonstrates the requested meaning. The merged candidate is fully validated after this patch."
+            + "Core retains the original title, resource, role, surface and media. Existing fixtures, commands, bindings and unreported states are immutable. First identify the intended state in the original request and Brief, then choose its proof and counts. A populated condition requires matching records and a visible predicate; do not turn it into an empty state to bypass a mismatch. Empty dataset and zero query matches are different proofs; use either only when it demonstrates the requested meaning. The merged candidate is fully validated after this patch."
         ),
         "output_schema": {
             "type": "object", "additionalProperties": False,
@@ -237,10 +282,30 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
             "$defs": definitions,
         },
     }
+    if version == 4:
+        include("record")
+        plan["fixture_scope"] = fixture_scope
+        plan["task"] += (
+            " fixture_scope authorizes APPENDING only the missing representative records to the listed resources, "
+            "up to each max_add_records budget. Use fresh IDs and values in the exact listed field_refs order, "
+            "respecting types, options and existing relationship targets. Do not alter or replace existing records. "
+            "The listed state_ids are immutable, including their filters, proof and counts: preserve their intended "
+            "condition and supply matching examples. Leave unchanged states/views out of the patch. "
+            "Resource schemas and all other resources remain immutable. Full compilation checks every state and relationship."
+        )
+        plan["output_schema"]["required"].append("fixture_additions")
+        plan["output_schema"]["properties"]["fixture_additions"] = {
+            "type": "array", "items": {"type": "object", "additionalProperties": False,
+                "required": ["resource_ref", "records"], "properties": {
+                    "resource_ref": {"type": "string", "enum": [item["resource_ref"] for item in fixture_scope]},
+                    "records": {"type": "array", "items": {"$ref": "#/$defs/record"}},
+                }},
+        }
+    return plan
 
 
 def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    versions = {f"adaos.builder.state_repair.v{version}": version for version in (1, 2, 3)}
+    versions = {f"adaos.builder.state_repair.v{version}": version for version in (1, 2, 3, 4)}
     version = versions.get(repair.get("schema"))
     if version is None:
         raise BuilderWorkflowError("unsupported state repair version")
@@ -261,6 +326,31 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
                 view["selection_filter"].setdefault("source_field_ref", None)
     Draft202012Validator(plan["output_schema"]).validate(repair)
     result = copy.deepcopy(dict(candidate))
+    if version == 4:
+        scope = {item["resource_ref"]: item for item in plan["fixture_scope"]}
+        protected = {identity for item in scope.values() for identity in item["state_ids"]}
+        originals = {item["id"]: item for item in candidate["representative_states"]}
+        if any(patch["id"] in protected and patch != originals[patch["id"]] for patch in repair["states"]):
+            raise BuilderWorkflowError("fixture repair cannot change the intended state, predicate or counts")
+        resources = {item["id"]: item for item in result["resources"]}
+        seen = set()
+        for addition in repair["fixture_additions"]:
+            identity = addition["resource_ref"]
+            if identity in seen:
+                raise BuilderWorkflowError("fixture repair contains duplicate resource additions")
+            seen.add(identity)
+            records = addition["records"]
+            if len(records) > scope[identity]["max_add_records"]:
+                raise BuilderWorkflowError("fixture repair exceeds the missing-record budget")
+            existing_ids = {_canonical_candidate_identifier(item["id"], namespace="record") for item in resources[identity]["records"]}
+            for record in records:
+                record_id = _canonical_candidate_identifier(record["id"], namespace="record")
+                if record_id in existing_ids:
+                    raise BuilderWorkflowError("fixture repair cannot replace or duplicate an existing record")
+                existing_ids.add(record_id)
+                if len(record["values"]) != len(scope[identity]["field_refs"]):
+                    raise BuilderWorkflowError("fixture repair values must follow the complete field order")
+            resources[identity]["records"].extend(copy.deepcopy(records))
     for key, target, allowed in (("states", "representative_states", plan["allowed_state_ids"]), ("views", "views", plan["allowed_view_ids"])):
         replacements = {item["id"]: copy.deepcopy(dict(item)) for item in repair[key]}
         if len(replacements) != len(repair[key]) or not set(replacements).issubset(allowed):
@@ -270,7 +360,7 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
             if replacement is None:
                 continue
             if key == "views":
-                if version == 3:
+                if version >= 3:
                     updated = copy.deepcopy(original)
                     updated["field_refs"] = list(dict.fromkeys([*original["field_refs"], *replacement["add_field_refs"]]))
                     controls = {item["id"]: item for item in original["query_controls"]}

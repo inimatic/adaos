@@ -833,6 +833,17 @@ additive patch. Reported states remain full replacements; unrelated states,
 fixtures, commands and bindings remain immutable. Replay keeps the original
 v1/v2 semantics instead of reinterpreting old outputs as v3.
 
+When a populated field-predicate state lacks matching fixtures, state repair v4
+can append records only to the affected resources. The budget is derived from
+the missing counts and the existing candidate resource-size bound. Existing
+records, schemas, relationships and the affected state's predicate/proof/counts
+are immutable. New records must have fresh identities and complete field vectors;
+full compilation still checks every relationship and state. Excess matches or
+invalid predicates do not authorize additions. Select this scope from typed
+findings and actual normalized data, not application names. Keep v1-v3 replay
+semantics unchanged. An infeasible repair scope is a context defect; reducing
+the requested proof to zero is not an acceptable workaround.
+
 Provider schema projection must not hide Core authoring constraints. The
 portable projection supplies omitted nested assertions from the authoritative
 ABI in generation guidance, including label-field cardinality. More capable

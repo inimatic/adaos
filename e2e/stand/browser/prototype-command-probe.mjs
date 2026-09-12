@@ -61,13 +61,15 @@ try {
     report.samples.push(sample)
     page.on('pageerror', error => sample.errors.push(error.message))
     const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).last()
+    const collectionRows = collection => host(collection.id).locator(collection.type === 'collection.board'
+      ? '.board-card__main' : 'tr.row-selectable, .collection-focus-item')
     const state = form => form.evaluate(element => {
       const component = window.ng?.getComponent(element.querySelector('ada-form-widget'))
       return { record: component?.recordValues, values: component?.values }
     })
     const open = async (widget, modalId, collection, create = false, selectedRow) => {
       if (create) return host(`open-${widget.id}`).locator('[data-command-id="new"]').click()
-      const row = selectedRow || host(collection.id).locator('tr.row-selectable, .collection-focus-item').first()
+      const row = selectedRow || collectionRows(collection).first()
       await row.click()
       if (!modalId) return
       for (const owner of widgets) {
@@ -105,7 +107,7 @@ try {
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
       await page.waitForFunction(expected => window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization?.currentScenario === expected, scenario, { timeout: 60_000 })
       for (const { widget, modalId } of orderedForms) {
-        const collection = widgets.find(item => ['ui.table', 'ui.list'].includes(item.type)
+        const collection = widgets.find(item => ['ui.table', 'ui.list', 'collection.board'].includes(item.type)
           && item.dataSource?.resourceType === widget.dataSource?.resourceType)
         if (!collection) continue
         const fixed = widget.actions.filter(action => action.type === 'resourceOperation' && action.params.operation_id === 'update'
@@ -187,9 +189,10 @@ try {
           freshRecords.set(receipt.body.resource_type, saved)
           createdReceipts.push({ receipt, saved })
           // Identity, not a marker in an optional text field, locates lookup-only forms' records.
-          const rows = host(collection.id).locator('tr.row-selectable, .collection-focus-item')
+          const rows = collectionRows(collection)
           const rowIndex = () => rows.evaluateAll((elements, id) => elements.findIndex(element =>
-            window.ng?.getContext(element)?.$implicit?.id === id), saved.id)
+            (element.closest('[data-webui-board-item-id]')?.getAttribute('data-webui-board-item-id')
+              || window.ng?.getContext(element)?.$implicit?.id) === id), saved.id)
           await expect.poll(rowIndex).toBeGreaterThanOrEqual(0)
           const row = rows.nth(await rowIndex())
           await expect(row).toBeVisible()

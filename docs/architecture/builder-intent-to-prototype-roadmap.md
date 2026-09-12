@@ -2271,7 +2271,8 @@ and can make successive, distinct reference/binding/state repairs when a full
 compile exposes another typed finding. Each family is attempted at most once;
 no-progress or repeated findings stop the chain without a full-candidate retry.
 Nine focused DEV tests and its full runtime test/activation pass. Fresh paired
-archetype run 20 is in progress; this repair replay evidence is not a new baseline.
+archetype run 20 completed at 15/16 (93.75%); this is a small paired cohort, not
+a reliability guarantee. All eight archetypes have a successful attempt.
 
 Inspection of the actual retained executor inputs found another context defect:
 `artifacts.prototype_acceptance` retained two obligations, but its compact
@@ -2308,6 +2309,42 @@ Local regression: 395 Automation/worker/caller/exporter/HTTP tests pass in
   Three local resolver measurements change from 1265.22/1172.94/1345.61ms to
   121.91/58.68/54.78ms. This measures endpoint resolution, not total model or
   build latency. Control/preview/runtime regression: 91 tests pass in 7.76s.
+
+Run 20 (`context-archetypes-gpt5-low-20260912-20`) used 23 model calls for 16
+attempts, with 116901 fresh / 84736 cached input tokens, 122019 output tokens
+(51520 reasoning). Case p50 was 109.32s, p95 225.83s. The 15 independent grades
+add 221906 fresh input and 18970 output tokens; report them separately from
+generation. Inventory attempt 1 failed: its pending-state proof had no matching
+fixture, while state repair v3 forbade all fixture additions. The model reduced
+min_items to zero and was correctly rejected. This is an infeasible repair
+scope, not evidence for higher reasoning effort or weakened acceptance.
+
+- [x] `[must]` Admit bounded append-only fixture repair for missing populated
+  state evidence. Preserve existing records, intended predicates/counts and all
+  unrelated resources; reject replacement IDs, scope expansion, excessive
+  additions and incomplete field vectors. Legacy repair envelopes keep their
+  meaning. Full semantic regression: 172 tests pass.
+- [x] `[must]` Replay the actual failing model input without altering its run
+  verdict or application source. `state-fixture-scope-gpt5-low-20260912-01`
+  changes the repair scope/schema at the same GPT-5 low effort. The model adds
+  one pending fixture, leaves states/views unchanged and passes full compilation:
+  12.33s observed, 9.20s provider execution. This is a repair replay, not a fresh
+  whole-task pass.
+- [ ] `[must]` Requalify the fixture scope in fresh live Builder attempts after
+  loading the tested Core revision; preserve the failed run 20 receipt.
+- [x] `[must]` Extend generic command/interaction browser probes to kanban
+  collections using the renderer's card/record identity contract, without
+  application-specific selectors. Queue editing and creation pass on both
+  viewport sizes after this probe correction.
+- [x] `[must]` Retain desktop/mobile render reviews for all eight run 20
+  archetypes (inventory uses attempt 2). Scalar edit probes pass for queue,
+  appointments, equipment and knowledge; creation probes pass for budget,
+  media and volunteer cases. Unsupported scalar edits remain not-exercised,
+  not silently successful. These checks do not constitute complete UX or
+  business-rule coverage.
+- [ ] `[should]` Review remaining presentation quality: uneven equipment column
+  use, raw boolean display, mobile table word-breaking and oversized detail
+  headings. Keep visual-quality findings separate from executable acceptance.
 
 ## Could And Deferred
 

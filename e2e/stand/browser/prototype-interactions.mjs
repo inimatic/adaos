@@ -102,10 +102,11 @@ try {
         const probeValue = (purpose) => choice ? choiceTarget.value : field?.type === 'date' ? `2099-12-${purpose === 'cancel' ? '29' : purpose === 'create' ? '31' : '30'}`
           : field?.type === 'time' ? (purpose === 'cancel' ? '11:20' : '12:30')
             : numeric ? (purpose === 'cancel' ? '17' : '23') : `${purpose}-${checkpoint.run_id}-${layout}`
-        const collection = widgets.find(item => ['ui.table', 'ui.list'].includes(item.type) && item.dataSource?.resourceType === update?.target)
+        const collection = widgets.find(item => ['ui.table', 'ui.list', 'collection.board'].includes(item.type) && item.dataSource?.resourceType === update?.target)
+        const rowSelector = collection?.type === 'collection.board' ? '.board-card__main' : 'tr.row-selectable, .collection-focus-item'
         if (process.env.ADAOS_E2E_READONLY === '1') {
           if (!update || !collection || !widget.inputs.readOnlyIf) continue
-          const rows = host(collection.id).locator('tr.row-selectable, .collection-focus-item')
+          const rows = host(collection.id).locator(rowSelector)
           await expect(rows.first()).toBeVisible()
           let checked = false
           for (let index = 0; index < await rows.count(); index++) {
@@ -147,7 +148,7 @@ try {
           sample.checks.push({ editor: widget.id, status: 'not_exercised', reason: 'No supported scalar update and matching collection' })
           continue
         }
-        const row = host(collection.id).locator('tr.row-selectable, .collection-focus-item').first()
+        const row = host(collection.id).locator(rowSelector).first()
         await expect(row).toBeVisible({ timeout: 30_000 })
         await row.click()
         const form = host(widget.id)

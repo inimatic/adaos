@@ -14,7 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from adaos.apps.cli.app import Settings, init_ctx
-from adaos.sdk.builder.prototype import (apply_binding_repair, apply_state_repair, prepare_binding_repair,
+from adaos.sdk.builder.prototype import (apply_binding_repair, apply_state_repair, prepare_binding_repair, prepare_state_repair,
                                          apply_reference_repair, prepare_reference_repair)
 from adaos.sdk.llm.llm_client import submit_response_job, wait_response_job
 from adaos.services.builder.semantic_prototype import compile_semantic_prototype_candidate
@@ -30,6 +30,7 @@ def main() -> None:
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--binding-scope", action="store_true", help="Compare additive bindings against a retained whole-candidate repair")
     scope.add_argument("--reference-scope", action="store_true", help="Repair only reported relationship field references")
+    scope.add_argument("--current-state-scope", action="store_true", help="Compare the current SDK state scope with the retained request")
     args = parser.parse_args()
     load_dotenv()
     base = Path(os.getenv("ADAOS_BASE_DIR") or ".adaos").resolve()
@@ -49,8 +50,8 @@ def main() -> None:
     if generation["model"] != "gpt-5":
         parser.error("Only retained GPT-5 requests are supported")
     messages = captured["messages"]
-    if args.binding_scope or args.reference_scope:
-        prepare = prepare_reference_repair if args.reference_scope else prepare_binding_repair
+    if args.binding_scope or args.reference_scope or args.current_state_scope:
+        prepare = prepare_reference_repair if args.reference_scope else prepare_state_repair if args.current_state_scope else prepare_binding_repair
         plan = prepare(dynamic["candidate"], dynamic["validation_findings"])
         if plan is None:
             parser.error("Captured findings do not admit the requested bounded repair")
@@ -73,7 +74,7 @@ def main() -> None:
         dynamic["task"] = plan["task"]
         dynamic["repair_scope"] = {key: value for key, value in plan.items() if key != "output_schema"}
         messages[-1]["content"] = json.dumps({"semantic_repair": dynamic}, ensure_ascii=False, separators=(",", ":"))
-    elif not any(schema_id == [f"adaos.builder.state_repair.v{version}"] for version in (1, 2, 3)):
+    elif not any(schema_id == [f"adaos.builder.state_repair.v{version}"] for version in (1, 2, 3, 4)):
         parser.error("Expected a state-repair envelope or an explicit bounded scope")
     args.output.mkdir(parents=True, exist_ok=False)
 
@@ -84,7 +85,7 @@ def main() -> None:
     kwargs.update(model=generation["model"], reasoning={"effort": args.effort}, request_id=f"state-repair-calibration-{uuid.uuid4().hex}")
     write("input.json", {"source": str(args.request.resolve()), "source_sha256": hashlib.sha256(raw).hexdigest(),
                          "messages": messages, "options": kwargs,
-                         "changed_variable": "reference repair scope and schema" if args.reference_scope else "binding repair scope and schema" if args.binding_scope else "reasoning.effort"})
+                         "changed_variable": "reference repair scope and schema" if args.reference_scope else "binding repair scope and schema" if args.binding_scope else "state repair scope and schema" if args.current_state_scope else "reasoning.effort"})
     started = time.perf_counter()
     if args.response:
         job = json.loads(args.response.read_bytes())
