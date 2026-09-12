@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,21 @@ from adaos.services.resources import (
     ResourceConflict,
     ResourceWorkbenchService,
 )
+
+
+def test_legacy_prototype_state_migrates_without_reseeding_or_catalog_reads(tmp_path, monkeypatch):
+    source = PrototypeResourceService(state_dir=tmp_path / "source")
+    state = source.materialize(_bundle())["state"]
+    state["records"][0]["title"] = "Retained edit"
+    target = PrototypeResourceService(state_dir=tmp_path / "target")
+    target.registry_path.write_text(json.dumps({"resources": {state["resource_type"]: state}}), encoding="utf-8")
+    original = target.registry_path.read_bytes()
+    assert target.materialize(_bundle())["duplicate"] is True
+    monkeypatch.setattr(PrototypeResourceService, "_read_registry", lambda *_: pytest.fail("single-resource read enumerated catalog"))
+    assert target.definition(state["resource_type"])["resource_type"] == state["resource_type"]
+    rows = target.query(state["resource_type"], filters={}, search="", sort=[], limit=100)
+    assert rows[0]["title"] == "Retained edit"
+    assert target.registry_path.read_bytes() == original
 
 
 def _record_schema() -> dict:

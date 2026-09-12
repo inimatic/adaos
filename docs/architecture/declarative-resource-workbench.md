@@ -679,6 +679,26 @@ NLU Teacher owns understanding correction. Feedback Skill and Dev Tickets own
 development feedback. Builder owns implementation planning. The workbench
 gives all of them a common resource route without merging their state machines.
 
+## Local Resource Persistence
+
+Prototype states are addressed by resource type in
+`state/resources/prototypes/resources.sqlite3`; project/revision indexes bound
+relationship checks to one prototype. The existing mutation lock keeps reference
+validation and the corresponding state write serialized. Workbench query traces
+use a bounded append-oriented journal in `state/resources/resources.sqlite3`.
+Each stream retains its latest 1000 records. SQLite transactions replace full
+catalog reads and full-history rewrites on each query; no TTL cache is involved.
+Public resource/query/trace contracts and UTF-8 JSON evidence exports are unchanged.
+
+Each store imports its legacy JSON once, atomically, before its first operation.
+Malformed imports fail without a completion marker; retries cannot duplicate
+history or reseed edited records. Original JSON files remain untouched recovery
+inputs, not a second writable authority. Deploy by stopping the old API/workers
+before the new version accesses live state: mixed old-JSON/new-SQLite writers are
+not supported. Back up active SQLite through its backup API, not a raw copy of
+the main file while WAL writers run. Rolling code back requires an explicit data
+export/restore; do not silently reactivate the pre-migration JSON snapshot.
+
 ## Invariants
 
 - Resource definitions are versioned and digest-addressable.

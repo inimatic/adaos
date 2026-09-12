@@ -32,13 +32,14 @@ def test_trace_append_preserves_existing_journal_retention_and_utf8(tmp_path: Pa
     history = [{**trace, "trace_id": str(index)} for index in range(1000)]
     service.trace_path.parent.mkdir(parents=True, exist_ok=True)
     service.trace_path.write_text(json.dumps({"schema": "adaos.resource.traces.v1", "items": history}), encoding="utf-8")
+    original = service.trace_path.read_bytes()
     title = "\u041e\u0441\u043c\u043e\u0442\u0440"
     appended = {**trace, "trace_id": "new", "result": {"title": title}}
     service._append_trace(appended)
-    raw = service.trace_path.read_bytes()
-    assert title.encode("utf-8") in raw
-    assert raw.endswith(b"\n")
-    assert json.loads(raw)["items"] == [*history[1:], appended]
+    assert service.trace_path.read_bytes() == original
+    assert service._read_trace_state()["items"] == [*history[1:], appended]
+    from adaos.services.resources.storage import ResourceStorage
+    assert title.encode("utf-8") in ResourceStorage(service.root).path.read_bytes()
     assert ResourceWorkbenchService(state_dir=tmp_path).traces(limit=1)[0] == appended
 
 

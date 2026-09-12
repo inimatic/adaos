@@ -377,6 +377,21 @@ resource families.
   failure rate, unsupported filter rate, stale revision rate, and autonomous
   repair cost.
 
+## Local Query Storage Qualification (2026-09-12)
+
+- [x] `[must]` Replace whole-catalog Prototype reads and whole-trace-history writes
+  with addressable state and transactional bounded journals. Preserve original
+  legacy files, edited records, relationship checks and cross-process freshness.
+  The storage/workbench suite passes 44 tests, including concurrent first import,
+  append retention, failed-import retry and another process's update.
+- [x] `[must]` Profile the same retained two-record resource on an isolated copy of
+  the current store before live migration. `lifecycle-query-before-20260912-01`
+  measures 576-655ms; `lifecycle-query-sqlite-20260912-01` measures a 583ms one-time
+  import followed by 17-18ms reads. These are in-process measurements, not HTTP or
+  LLM latency claims; copied state avoids running mixed-version live writers.
+- [ ] `[must]` Restart the API onto the new store before live migration, verify
+  browser data/mutations and record the HTTP timings and retained record counts.
+
 ## Deferred
 
 - [ ] `[deferred]` `DRW-D01` Public GitHub Issue automation waits until internal

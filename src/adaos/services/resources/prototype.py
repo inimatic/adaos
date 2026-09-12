@@ -11,7 +11,8 @@ from typing import Any, Mapping, Sequence
 
 from jsonschema import Draft202012Validator, ValidationError
 
-from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.storage import mutation_lock
+from adaos.services.resources.storage import ResourceStorage
 from adaos.services.id_gen import new_id
 from adaos.services.runtime_paths import current_state_dir
 
@@ -179,8 +180,7 @@ class PrototypeResourceService:
             }
         )
         with mutation_lock(self.lock_path, timeout_s=30.0):
-            registry = self._read_registry()
-            previous = registry["resources"].get(resource_type)
+            previous = self._state(resource_type)
             if isinstance(previous, Mapping) and previous.get("bundle_digest") == bundle_digest:
                 return {"ok": True, "duplicate": True, "state": _clone(previous)}
             state = {
@@ -198,8 +198,7 @@ class PrototypeResourceService:
                 "generation": runtime.generation,
                 "trace_entries": runtime.entries,
             }
-            registry["resources"][resource_type] = state
-            self._write_registry(registry)
+            self._store().put(resource_type, state)
         return {"ok": True, "duplicate": False, "state": _clone(state)}
 
     def definitions(self) -> list[dict[str, Any]]:
@@ -347,8 +346,7 @@ class PrototypeResourceService:
         from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
 
         with mutation_lock(self.lock_path, timeout_s=30.0):
-            registry = self._read_registry()
-            state = registry["resources"].get(resource_type)
+            state = self._state(resource_type)
             if not isinstance(state, Mapping):
                 raise ValueError(f"unknown prototype resource_type: {resource_type}")
             state = copy.deepcopy(dict(state))
@@ -415,10 +413,11 @@ class PrototypeResourceService:
             state["records"] = runtime.records
             state["generation"] = runtime.generation
             state["trace_entries"] = runtime.entries[-500:]
-            registry["resources"][resource_type] = state
             if operation_kind in {"create", "update", "delete", "reset"}:
+                registry = {"resources": self._store().states(project_ref=state["project_ref"], ui_revision=state["webui_digest"])}
+                registry["resources"][resource_type] = state
                 self._validate_relationships(registry, state)
-            self._write_registry(registry)
+            self._store().put(resource_type, state)
         result = execution["result"]
         return {
             "record": _clone(result) if isinstance(result, Mapping) else None,
@@ -475,8 +474,7 @@ class PrototypeResourceService:
                     raise PrototypeResourceConflict("one-to-one prototype relationship source values must be unique")
 
     def _state(self, resource_type: str) -> dict[str, Any] | None:
-        state = self._read_registry()["resources"].get(_text(resource_type))
-        return _clone(state) if isinstance(state, Mapping) else None
+        return self._store().get(_text(resource_type))
 
     def _require_state(self, resource_type: str) -> dict[str, Any]:
         state = self._state(resource_type)
@@ -485,20 +483,15 @@ class PrototypeResourceService:
         return state
 
     def _read_registry(self) -> dict[str, Any]:
-        if not self.registry_path.is_file():
-            return {"schema": "adaos.builder.prototype_resource_registry.v1", "resources": {}}
-        try:
-            value = json.loads(self.registry_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"invalid prototype resource registry: {exc}") from exc
-        resources = value.get("resources") if isinstance(value, Mapping) else None
         return {
             "schema": "adaos.builder.prototype_resource_registry.v1",
-            "resources": dict(resources) if isinstance(resources, Mapping) else {},
+            "resources": self._store().states(),
         }
 
-    def _write_registry(self, registry: Mapping[str, Any]) -> None:
-        atomic_write_json(self.registry_path, dict(registry))
+    def _store(self) -> ResourceStorage:
+        store = ResourceStorage(self.root)
+        store.import_json(self.registry_path)
+        return store
 
     @staticmethod
     def _condition_matches(record: Mapping[str, Any], condition: Mapping[str, Any]) -> bool:

@@ -9,7 +9,7 @@ from typing import Any, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 
-from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.builder.repair import BuilderRepairService
 from adaos.services.context_control import ContextAccessDenied, ContextConflict, ContextControlService
 from adaos.services.development_tickets import DevelopmentTicketService
@@ -18,6 +18,7 @@ from adaos.services.id_gen import new_id
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.resources.local import LocalCrudResourceService, LocalResourceConflict
 from adaos.services.resources.prototype import PrototypeResourceConflict, PrototypeResourceService
+from adaos.services.resources.storage import ResourceStorage
 
 
 RESOURCE_DEFINITION_SCHEMA = "adaos.resource.definition.v1"
@@ -1579,25 +1580,16 @@ class ResourceWorkbenchService:
         )
 
     def _read_trace_state(self) -> dict[str, Any]:
-        if not self.trace_path.is_file():
-            return {"schema": "adaos.resource.traces.v1", "items": []}
-        value = json.loads(self.trace_path.read_text(encoding="utf-8"))
-        if not isinstance(value, Mapping):
-            return {"schema": "adaos.resource.traces.v1", "items": []}
-        return {"schema": "adaos.resource.traces.v1", "items": list(value.get("items") or [])}
+        store = ResourceStorage(self.root)
+        store.import_json(self.trace_path, stream="traces")
+        return {"schema": "adaos.resource.traces.v1", "items": store.journal("traces")}
 
     def _append_trace(self, trace: Mapping[str, Any]) -> None:
         payload = dict(trace)
         _validate("resource.trace.v1", payload)
-        with mutation_lock(self.lock_path, timeout_s=30.0):
-            state = self._read_trace_state()
-            items = [dict(item) for item in state.get("items") or [] if isinstance(item, Mapping)]
-            items.append(payload)
-            # Serialize the bounded journal once, avoiding thousands of small file writes.
-            encoded = json.dumps(
-                {"schema": "adaos.resource.traces.v1", "items": items[-1000:]}, ensure_ascii=False, indent=2
-            ) + "\n"
-            atomic_write_bytes(self.trace_path, encoded.encode("utf-8"))
+        store = ResourceStorage(self.root)
+        store.import_json(self.trace_path, stream="traces")
+        store.append("traces", payload)
 
     def _read_event_state(self) -> dict[str, Any]:
         if not self.event_path.is_file():
