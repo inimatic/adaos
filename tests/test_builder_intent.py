@@ -370,6 +370,19 @@ def test_explicit_search_remains_a_supported_operation() -> None:
         assert "search" in {item["kind"] for item in brief["operations"]}
 
 
+def test_no_required_mutations_and_contrast_keep_positive_requests():
+    for statement in (
+        'Show read-only cards. No editing, calculations or external services are needed.',
+        'No editing is needed but show the cards.',
+        'Editing is not needed but show the cards.',
+        'Show the cards but no editing is needed.',
+    ):
+        brief = compile_prototype_brief(statement)
+        assert 'update' not in {item['kind'] for item in brief['operations']}
+        assert 'list' in {item['kind'] for item in brief['operations']}
+        assert brief['exclusions']
+
+
 def test_query_state_description_is_not_an_additional_search_operation() -> None:
     for statement in (
         "Search items by title. Include an empty-search state.",

@@ -12,7 +12,7 @@ from jsonschema import Draft202012Validator
 
 from adaos.services.ui_resource_queries import widget_resource_queries
 
-from adaos.services.builder_intent import capture_intent, compile_prototype_brief
+from adaos.services.builder_intent import capture_intent, compile_prototype_brief, partition_intent_scope
 from adaos.services.builder_domain_packs import (
     domain_pack_receipts,
     resolve_domain_packs,
@@ -599,9 +599,10 @@ def qualify_ui_request(
         & {"create", "update", "assign", "transition", "delete", "archive"}
         and brief_operations & {"inspect", "list", "search", "filter"}
     )
-    text = _normalized_text(request)
-    literal_text_change = _literal_text_change(request)
-    prototype_iteration = _prototype_iteration(request)
+    included_request, _ = partition_intent_scope(request)
+    text = _normalized_text(included_request)
+    literal_text_change = _literal_text_change(included_request)
+    prototype_iteration = _prototype_iteration(included_request)
     board = _contains_any(text, _BOARD_TERMS) or bool(
         literal_text_change and literal_text_change.get("target_kind") == "column"
     )

@@ -22,6 +22,20 @@ from adaos.services.ui_capabilities import (
 APPLICATION_PACKS = ("applications.compatibility.v1",)
 
 
+def test_readonly_comparison_does_not_require_excluded_persistence():
+    qualification = qualify_ui_request('Show read-only comparison cards. No editing, live calculations or external services are needed.')
+    assert 'update' not in qualification['requirements']['brief_operation_kinds']
+    assert not qualification['requirements']['prototype_resource']
+
+
+def test_board_qualification_uses_the_same_exclusions_as_the_brief():
+    qualification = qualify_ui_request('Show a kanban board. No editing, search or filters are needed.')
+    requirements = qualification['requirements']
+    assert requirements['operation_kinds'] == []
+    assert not requirements['record_edit']
+    assert not requirements['resource_query']
+
+
 def _empty_webui() -> dict:
     return {
         "schema": "adaos.webui.v1",

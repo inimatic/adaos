@@ -175,25 +175,27 @@ _JOB_SEPARATOR_PATTERN = re.compile(
 )
 
 _EXCLUSION_END_PATTERN = re.compile(
-    r"\b(?:не\s+(?:нужн\w*|требу\w*)|not\s+(?:needed|required|necessary))\s*$", re.IGNORECASE
+    r"\b(?:не\s+(?:нужн\w*|требу\w*)|not\s+(?:needed|required|necessary))\s*$|"
+    r"^no\b.+\b(?:is|are)\s+(?:needed|required|necessary)\s*$", re.IGNORECASE
 )
 
 
-def _explicit_exclusions(statement: str) -> tuple[str, list[dict[str, Any]]]:
+def partition_intent_scope(statement: str) -> tuple[str, list[dict[str, Any]]]:
     """Keep explicit scope exclusions as evidence, not required implementation work."""
     chars = list(statement)
     exclusions = []
     for clause, start, end in _clauses(statement):
-        if not _EXCLUSION_END_PATTERN.search(clause):
-            continue
         contrasts = list(re.finditer(r"\b(?:but|но)\s+", clause, re.IGNORECASE))
-        if contrasts:
-            offset = contrasts[-1].end()
-            start += offset
-            clause = clause[offset:]
-        exclusions.append({"id": f"exclusion:{len(exclusions) + 1:02d}", "statement": clause,
-                           "evidence": [f"intent.statement#char={start}:{end}"], "confidence": 1.0})
-        chars[start:end] = " " * (end - start)
+        segments = zip([0, *[match.end() for match in contrasts]], [*[match.start() for match in contrasts], len(clause)])
+        for begin, finish in segments:
+            begin, finish = _trim_job_span(clause, begin, finish)
+            segment = clause[begin:finish]
+            if not _EXCLUSION_END_PATTERN.search(segment):
+                continue
+            segment_start, segment_end = start + begin, start + finish
+            exclusions.append({"id": f"exclusion:{len(exclusions) + 1:02d}", "statement": segment,
+                               "evidence": [f"intent.statement#char={segment_start}:{segment_end}"], "confidence": 1.0})
+            chars[segment_start:segment_end] = " " * (segment_end - segment_start)
     return "".join(chars), exclusions
 
 
@@ -630,7 +632,7 @@ def compile_prototype_brief(intent: Mapping[str, Any] | str) -> dict[str, Any]:
     )
     _validate("builder.intent.v1.schema.json", captured)
     statement = str(captured["statement"])
-    statement, exclusions = _explicit_exclusions(statement)
+    statement, exclusions = partition_intent_scope(statement)
     operations, jobs = _extract_operations(statement)
     information_requirements = _extract_information_requirements(statement)
     collection_requirements = _extract_collection_requirements(statement)

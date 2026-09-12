@@ -89,7 +89,7 @@ try {
           const available = await host(widget.id).locator('ada-table-widget').evaluate(element => window.ng.getComponent(element).pagedRows.map(row => row.id))
           for (const index of available.slice(0, 2).map((_, index) => index).reverse()) {
             await rows.nth(index).click()
-            await expect(page.locator('ion-modal')).toHaveCount(0)
+            await expect(page.locator('ion-modal:visible')).toHaveCount(0)
             for (const view of tableLinks) {
               const target = widgets.find(item => item.id === view.id)
               const expected = semantic.resources.find(resource => resource.id === view.resource_ref).records

@@ -1612,12 +1612,14 @@ cohort with their own request, schema, model settings and browser evidence.
   Client component tests cover standalone calendar/manual-save behavior. Fresh
   `capabilities-gpt5-low-20260912-01` daily-readings browser probes at 1440/390px
   pass change-without-input/blur, filtered rows and reset to all five records.
-- [ ] `[must]` Provide a compact, extensible collection query toolbar with
+- [x] `[must]` Provide a compact, extensible collection query toolbar with
   responsive disclosure, active-filter visibility and reset; reuse the same
   primitive for lists, tables and other collection presentations.
-- [ ] `[must]` Separate row selection, related-detail navigation and editing.
+- [x] `[must]` Separate row selection, related-detail navigation and editing.
   Declare explicit actions when selection has multiple useful consequences;
   test the inspection/check-item example without domain-specific compiler rules.
+  Run 10 browser verifies both linked table levels and the separate inspection
+  editor on 1440/390px. Hidden Ionic modal hosts do not count as opened dialogs.
 - [ ] `[must]` Expose per-view text wrapping/truncation and alignment, preserving
   complete values and an accessible route to any deliberately truncated text.
 - [ ] `[must]` Qualify tabs, modals, hierarchical navigation, accordion disclosure,
@@ -1626,7 +1628,7 @@ cohort with their own request, schema, model settings and browser evidence.
 - [x] `[must]` Separate permanent typed collection scope from resettable filters.
   `scope_filters` compiles to literal queries, participates in state evidence,
   and rejects duplicate, invalid or conflicting fields (six regression tests).
-- [ ] `[must]` Regenerate and browser-test fixed-subset tabs, including reset and
+- [x] `[must]` Regenerate and browser-test fixed-subset tabs, including reset and
   mutation: the first library passed the grader but its Favorites tab displayed
   all records by default. A title and an optional filter do not satisfy this task.
 - [x] `[must]` Expose application settings through the existing host contract;
@@ -1737,6 +1739,16 @@ requiring executable single-record guards. It does not force a duplicate parent
 field or a new per-child completion workflow. This is a rubric treatment change,
 not a retroactive eighth pass; fresh generation and matched regrading must be
 reported separately. Cross-record enforcement remains an Automation gate.
+
+The new read-only comparison case (capability run 06) produced a valid primary
+candidate in 19.5s of Root execution, but the generic postcondition checker read
+"No editing ... are needed" as a required update. The shared intent scope
+partition now handles this exclusion and either side of a contrast. Board
+qualification uses that same positive scope rather than rediscovering excluded
+CRUD/search keywords. The retained answer replays successfully; that is compiler
+evidence, not a relabeled successful fresh run. Fresh text-policy verification
+remains open. Broad local Builder tests: 732 passed, four explicit live-grader
+probes skipped. Client: 71 focused tests; generic boundary/inventory checks pass.
 
 DEV Builder Conversation ingress changes were tested and locally checkpointed
 as `builder@0.2.116`, source
