@@ -87,17 +87,34 @@ try {
         }
       }
       for (const widget of widgets) {
-        const tableLinks = widget.type === 'ui.table'
+        const tableLinks = ['ui.table', 'ui.list', 'collection.board'].includes(widget.type)
           ? semantic.views.filter(view => view.selection_filter?.source_view_ref === widget.id) : []
         if (tableLinks.length) {
           await reveal(widget)
-          const rows = host(widget.id).locator('tr.row-selectable')
+          const rows = host(widget.id).locator(widget.type === 'ui.table' ? 'tr.row-selectable'
+            : widget.type === 'ui.list' ? '.collection-focus-item' : '.board-card__main')
           await expect(rows.first()).toBeVisible({ timeout: 20_000 })
-          const available = await host(widget.id).locator('ada-table-widget').evaluate(element => window.ng.getComponent(element).pagedRows)
+          let available
+          if (widget.type === 'ui.table') available = await host(widget.id).locator('ada-table-widget').evaluate(element => window.ng.getComponent(element).pagedRows)
+          else if (widget.type === 'ui.list') available = await host(widget.id).locator('ada-list-widget').evaluate(element => window.ng.getComponent(element).latestItems)
+          else {
+            const ids = await host(widget.id).locator('[data-webui-board-item-id]').evaluateAll(elements => elements.map(element => element.getAttribute('data-webui-board-item-id')))
+            const resource = semantic.resources.find(item => item.id === semantic.views.find(view => view.id === widget.id).resource_ref)
+            available = ids.map(id => resource.records.find(record => record.id === id))
+          }
+          let pendingResets = []
           for (const index of available.slice(0, 2).map((_, index) => index).reverse()) {
             await reveal(widget)
             await rows.nth(index).click()
             await expect(page.locator('ion-modal:visible')).toHaveCount(0)
+            for (const pending of pendingResets) {
+              await expect.poll(() => host(pending.target).locator('ada-table-widget').evaluate((element, keys) => {
+                const state = window.ng.getComponent(element).state.getSnapshot()
+                return keys.map(key => state[key])
+              }, pending.keys)).toEqual(pending.keys.map(() => ''))
+              sample.checks.push({ kind: 'descendant-selection-reset', source: widget.id, ...pending })
+            }
+            pendingResets = []
             for (const view of tableLinks) {
               const target = widgets.find(item => item.id === view.id)
               await reveal(target)
@@ -106,8 +123,17 @@ try {
                 .filter(item => item[view.selection_filter.field_ref] === available[index][sourceField]
                   && (view.scope_filters || []).every(filter => item[filter.field_ref] === filter.value)).map(item => item.id).sort()
               await expect.poll(() => collectionIds(target), { timeout: 20_000 }).toEqual(expected)
-              sample.checks.push({ kind: 'table-related-selection', source: widget.id, target: target.id,
+              sample.checks.push({ kind: 'collection-related-selection', source: widget.id, sourceType: widget.type, target: target.id,
                 selected: available[index].id, sourceField, records: expected })
+              if (index > 0 && expected.length && target.type === 'ui.table'
+                && semantic.views.some(item => item.selection_filter?.source_view_ref === target.id)) {
+                const action = target.actions.find(item => item.on === 'select' && item.type === 'updateState')
+                const keys = Object.entries(action.params).filter(([, value]) => typeof value === 'string' && value.startsWith('$event.')).map(([key]) => key)
+                await host(target.id).locator('tr.row-selectable').first().click()
+                await expect.poll(() => host(target.id).locator('ada-table-widget').evaluate((element, key) =>
+                  window.ng.getComponent(element).state.getSnapshot()[key], keys[0])).not.toBe('')
+                pendingResets.push({ target: target.id, keys })
+              }
             }
           }
           const sourceView = semantic.views.find(view => view.id === widget.id)

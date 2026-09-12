@@ -28,8 +28,14 @@ def main() -> int:
     parser.add_argument("--project", action="append", default=[])
     parser.add_argument("--exclude", action="append", default=[])
     parser.add_argument("--publish", action="store_true", help="Upload releases; Workspace also pushes scoped Git checkpoints")
+    parser.add_argument("--source-checkpoint", action="store_true", help="DEV only: checkpoint owned component sources in Forge, without a ProjectRelease")
+    parser.add_argument("--change-id", help="Required for source checkpoints")
     parser.add_argument("--resume", action="store_true", help="Skip successful entries in this same immutable batch")
     args = parser.parse_args()
+    if args.source_checkpoint and (args.space != "dev" or not args.publish or not args.change_id):
+        parser.error("Source checkpoint requires --space dev --publish --change-id")
+    if args.change_id and not args.source_checkpoint:
+        parser.error("--change-id is only meaningful with --source-checkpoint")
     load_dotenv(ROOT / ".env")
     if os.getenv("ENV_TYPE") != "dev":
         parser.error("This technological stand requires ENV_TYPE=dev")
@@ -57,6 +63,8 @@ def main() -> int:
         parser.error("Receipts must stay below e2e/artifacts")
     manifest = {"space": args.space, "subnet": args.subnet, "source": str(source),
                 "publish": args.publish, "projects": projects}
+    if args.source_checkpoint:
+        manifest.update(mode="source_checkpoint", change_id=args.change_id)
     if args.resume:
         retained = json.loads((output / "batch.json").read_text(encoding="utf-8"))
         if retained != manifest:
@@ -74,7 +82,9 @@ def main() -> int:
         attempt = len(list(output.glob(f"{project}.attempt-*.stdout.txt"))) + 1
         prefix = output / f"{project}.attempt-{attempt:02}"
         command = [sys.executable, "-c", "from adaos.apps.cli.app import app; app()"]
-        command += (["dev"] if args.space == "dev" else []) + ["project", "push", project, "--json"]
+        command += (["dev"] if args.space == "dev" else []) + ["project", "checkpoint" if args.source_checkpoint else "push", project, "--json"]
+        if args.source_checkpoint:
+            command += ["--change-id", args.change_id]
         if not args.publish:
             command.append("--local-only")
         started = time.monotonic()
@@ -84,9 +94,14 @@ def main() -> int:
             payload = json.loads(Path(f"{prefix}.stdout.txt").read_text(encoding="utf-8"))
         except ValueError:
             payload = {}
-        passed = process.returncode == 0 and payload.get("project_id") == project and bool(payload.get("release_digest"))
-        if args.publish:
-            passed = passed and payload.get("publication", {}).get("published") is True
+        passed = process.returncode == 0 and payload.get("project_id") == project
+        if args.source_checkpoint:
+            components = payload.get("components") or []
+            passed = passed and payload.get("ok") is True and bool(components) and all(item.get("ok") and item.get("commit") for item in components)
+        else:
+            passed = passed and bool(payload.get("release_digest"))
+            if args.publish:
+                passed = passed and payload.get("publication", {}).get("published") is True
         receipt = {"project_id": project, "passed": passed, "exit_code": process.returncode,
                    "attempt": attempt, "duration_s": round(time.monotonic() - started, 3),
                    "completed_at": datetime.now(timezone.utc).isoformat(), "command": command,

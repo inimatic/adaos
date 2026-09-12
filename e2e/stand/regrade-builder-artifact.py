@@ -33,13 +33,18 @@ def main():
             target.write('\n')
     record('source.json', {'input': str(args.input.resolve()), 'request_digest': original['request_digest'],
                            'artifact_digest': original['artifact_digest'], 'rubric_digest': original['rubric_digest']})
+    response_count = 0
+    def record_response(value):
+        nonlocal response_count
+        response_count += 1
+        record(f'response-{response_count:02}.json', value)
     init_ctx(Settings.from_sources())
     grade, request = grade_builder_prototype(
         artifact=payload['artifact'], user_turns=payload['user_turns'], requirements=payload['rubric'],
         prohibited_assumptions=payload['rubric']['prohibited_assumptions'], locale=payload['locale'],
         model=original['model'], max_output_tokens=original['generation_options']['max_tokens'],
         request_recorder=lambda value: record('input.json', value),
-        response_recorder=lambda value: record('response.json', value),
+        response_recorder=record_response,
     )
     record('grade.json', grade)
     print(json.dumps({'passed': grade['passed'], 'score': grade['score'],
