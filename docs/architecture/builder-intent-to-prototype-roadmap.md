@@ -2467,12 +2467,22 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
   Neither is a passing Trial execution receipt. The independent declarative
   HTTP probe is prepared in `e2e/stand/check-application-tools.py`; live business
   and reader/writer checks remain outstanding.
+- [x] `[must]` Recover the selected immutable Trial during Yjs room bootstrap and
+  effective-branch repair, instead of reloading DEV source after a successful
+  owner materialization. Explicit new source selection must supersede the old
+  Trial binding. Regression: 297 Core/Yjs checks pass in 24.26s
+  (`trial-preview-recovery-regression-20260913-01.xml`). Reopening the real browser
+  after this fix remains a separate check.
 - [ ] `[must]` Verify runtime cache identity and unavailable-Trial presentation in
   the live Client. DEV results must not survive as Trial data after a source
   change or an admission failure. Retain ordinary transport stale-value recovery.
   Client implementation passes 125 focused tests, including skill/API source
   changes without refetch on timestamp-only updates, plus generic boundaries and
   the 41-component capability inventory check. Live qualification remains open.
+  Owner materialization and HTTP admission were exercised in receipts
+  `trial-owner-selection-08.json` and `trial-http-admission-08.json`; both implicit
+  and explicit DEV calls were denied. Browser run 08 exposed the bootstrap identity
+  loss and is retained as a failed source-identity qualification, not a Trial pass.
 - [ ] `[should]` Resolve the isolated Builder browser's node-status 401/Limited
   indicator separately from scenario rendering and source publication health.
 

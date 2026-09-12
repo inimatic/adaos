@@ -11,6 +11,8 @@ const locale = process.env.ADAOS_E2E_LOCALE || 'en'
 const emptyMode = process.env.ADAOS_E2E_EMPTY_STATES === '1'
 const spaceKind = process.env.ADAOS_E2E_SPACE_KIND || 'development'
 const reviewStage = process.env.ADAOS_E2E_REVIEW_STAGE || 'prototype'
+const expectTrialUnavailable = process.env.ADAOS_E2E_EXPECT_TRIAL_UNAVAILABLE === '1'
+if (expectTrialUnavailable && reviewStage !== 'trial') throw new Error('Trial admission probe requires Trial stage')
 if (!['prototype', 'automation', 'trial', 'publication'].includes(reviewStage)) throw new Error('Unsupported review stage')
 if (!['development', 'workspace'].includes(spaceKind)) throw new Error('Unsupported review space')
 if (emptyMode && spaceKind !== 'development') throw new Error('Empty fixture probes require development space')
@@ -88,7 +90,7 @@ try {
       if (target.pathname.startsWith('/api/') && response.status() >= 400) {
         const failure = { path: target.pathname, status: response.status() }
         requestFailures.push(failure)
-        if (target.pathname.startsWith('/api/resources/')) responseTasks.push(
+        if (target.pathname.startsWith('/api/resources/') || target.pathname === '/api/tools/call') responseTasks.push(
           response.json().then(body => { failure.detail = body.detail || body.error }).catch(() => {}),
         )
       }
@@ -105,6 +107,22 @@ try {
       await page.locator('ada-page-widget-host, ada-widget').first().waitFor({ timeout: 15_000 })
       await page.evaluate(() => document.fonts.ready)
       console.log(`${layout}: materialization and fonts ready`)
+      if (reviewStage === 'trial') {
+        await page.waitForFunction(() => {
+          const source = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization
+          return source?.materializationRevision && source?.materializationKeyHash
+            && /^trial[:_]/.test(source?.sourceFingerprint || '')
+        }, undefined, { timeout: 15_000 })
+      }
+      if (expectTrialUnavailable) {
+        await page.waitForFunction(() => {
+          const hosts = [...document.querySelectorAll('ada-page-widget-host')]
+            .map(node => window.ng?.getComponent(node))
+            .filter(component => ['skill', 'api'].includes(component?.widget?.dataSource?.kind))
+          return hosts.length > 0 && hosts.every(component => component.dataSourceStatus?.state === 'error'
+            && component.dataSourceDiagnosticText.includes('trial_runtime_unavailable'))
+        }, undefined, { timeout: 15_000 })
+      }
       if (dictionaryProbe) {
         await page.waitForFunction(([key, value]) => {
           const component = window.ng?.getComponent(document.querySelector('ada-table-widget, ada-list-widget, ada-details-widget'))

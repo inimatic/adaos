@@ -106,6 +106,12 @@ def _builder_publication_operations() -> BuilderPublicationOperations:
     )
 
 
+def _selected_trial_preview_inputs(webspace_id: str, scenario_id: str | None) -> dict[str, Any]:
+    return _RUNTIME.builder_publication.selected_trial_inputs(
+        webspace_id, scenario_id=scenario_id, operations=_builder_publication_operations(),
+    )
+
+
 def _event_operations() -> WebspaceEventOperations:
     return WebspaceEventOperations(
         default_webspace_id=default_webspace_id,
@@ -5546,6 +5552,17 @@ class WebspaceScenarioRuntime:
         self._last_materialized_payload = None
         self._last_worker_diagnostics = None
 
+        if materialization_identity is None and scenario_content_override is None:
+            selected = await _run_materialization_cpu(
+                _selected_trial_preview_inputs, webspace_id, scenario_id,
+            )
+            if selected:
+                scenario_id = selected["scenario_id"]
+                scenario_content_override = selected["scenario_content_override"]
+                skill_decls_snapshot = selected["skill_decls_snapshot"]
+                skill_decls_fingerprint = selected["skill_decls_fingerprint"]
+                materialization_identity = selected["materialization_identity"]
+
         prepared_skill_decls = skill_decls_snapshot
         prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
         if prepared_skill_decls is None:
@@ -5605,6 +5622,16 @@ class WebspaceScenarioRuntime:
         scenario_content_override: Mapping[str, Any] | None = None,
         skill_source_mode: str | None = None,
     ) -> WebUIRegistryEntry:
+        if materialization_identity is None and scenario_content_override is None:
+            selected = await _run_materialization_cpu(
+                _selected_trial_preview_inputs, webspace_id, scenario_id,
+            )
+            if selected:
+                scenario_id = selected["scenario_id"]
+                scenario_content_override = selected["scenario_content_override"]
+                skill_decls_snapshot = selected["skill_decls_snapshot"]
+                skill_decls_fingerprint = selected["skill_decls_fingerprint"]
+                materialization_identity = selected["materialization_identity"]
         return await _RUNTIME.materialization.resolve_payload(
             self,
             _materialization_operations(),

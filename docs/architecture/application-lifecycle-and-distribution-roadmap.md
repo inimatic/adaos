@@ -57,6 +57,14 @@ The missing vertical slice is the Application aggregate and product contract
 that composes these mechanisms without exposing component-first or
 Infrastate-owned UX.
 
+Runtime qualification correction (2026-09-13): Trial package materialization and
+its activation record do not yet prove an isolated skill executor. The retained
+small Builder lifecycle discovered DEV fallback on Trial tool calls and source
+identity loss on browser reopen. These are release-blocking runtime boundaries,
+not deferred hardening. Execution, source recovery and live qualification are
+tracked in the [Builder lifecycle checklist](builder-intent-to-prototype-roadmap.md);
+do not interpret package health or successful UI rendering as execution admission.
+
 ## APP0. Contract and Terminology Freeze
 
 **Outcome:** Application is the canonical product/distribution identity and all
