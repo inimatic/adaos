@@ -132,6 +132,14 @@ fields and prototype role fixtures are not authenticated identities. Integration
 must reuse local sessions, grants and revocation rather than promote Root MCP
 credentials to unrestricted node-owner credentials.
 
+The local access-fact store reloads its persisted snapshot under the shared
+thread/process mutation lock before each outer operation. A policy decision and
+its audit use one such transaction; nested store calls do not reload partial
+work. Successful batches replace the JSON once, failed batches roll back, and
+malformed/unreadable existing facts fail closed instead of becoming an empty
+store. Returned records are detached copies. This prevents a stale audit writer
+from restoring revoked grants; it does not itself authenticate an HTTP caller.
+
 ### Subnet service identity and purpose-scoped keys
 
 The subnet itself is also a service principal for Root authentication,

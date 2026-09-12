@@ -2299,6 +2299,10 @@ Inspection of the actual retained executor inputs found another context defect:
   [identity/access roadmap](personalization-identity-access-roadmap.md#phase-9---skill-tool-and-sdk-enforcement),
   including concurrent access-fact persistence, cache isolation and forwarding.
   Do not silently remove this requirement from the retained lifecycle case.
+- [x] `[must]` Fix the stale access-fact persistence prerequisite: process/thread
+  serialization, fresh outer snapshots, transactional policy/audit reads and
+  writes, rollback and fail-closed malformed-state handling. The linked identity
+  roadmap records 59 passing local tests; credential admission remains open.
 
 Local regression: 395 Automation/worker/caller/exporter/HTTP tests pass in
 347.70s. These checks do not complete the live non-owner or full lifecycle gates.

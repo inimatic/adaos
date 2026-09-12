@@ -549,9 +549,14 @@ Checklist:
   sessions/grants, including expiry/revocation, no cross-principal idempotency
   replay and no member-proxy promotion to owner. The owner-token foundation
   does not meet this gate; Root MCP credentials must not become owner tokens.
-- [ ] `[must]` Prove access-fact persistence under concurrent grant/revocation
+- [x] `[must]` Prove access-fact persistence under concurrent grant/revocation
   and audit writes before broad caller enforcement. A stale in-memory JSON
   snapshot must not restore a revoked grant when appending an audit record.
+  Store operations and policy evaluations now reload under the shared process
+  lock; nested batches commit once or roll back. Two spawned Windows writers,
+  shared-instance threads, stale audit/patch writes, failed persistence and
+  malformed-state rejection are covered. Local access/profile/API/SDK regression:
+  59 tests pass in 15.41s (`access-transaction-regression-20260912-03.xml`).
 - [ ] Model service identities and skill `on_behalf_of` behavior.
 - [ ] Enforce both skill permission and actor capability before sensitive tool
   invocation.

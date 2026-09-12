@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 import threading
 import time
 from typing import Any, Callable, Iterator, Mapping
 from uuid import uuid4
+
+from adaos.services.artifact_pipeline.storage import mutation_lock
 
 from adaos.domain.personalization_access import (
     AuditRecord,
@@ -144,6 +148,15 @@ def _data_zone_rules(zone: str) -> dict[str, Any]:
     return dict(DATA_ZONE_RULES.get(zone) or {})
 
 
+def _access_transaction(method):
+    """Keep store operations and policy decisions on one locked facts snapshot."""
+    @wraps(method)
+    def operation(self, *args, **kwargs):
+        with self.batch():
+            return copy.deepcopy(method(self, *args, **kwargs))
+    return operation
+
+
 class PersonalizationAccessStore:
     """Small JSON-backed Phase 1 store for identity/access facts.
 
@@ -168,33 +181,35 @@ class PersonalizationAccessStore:
     _MAX_AUDIT_RECORDS = 2000
 
     def __init__(self, path: str | Path | None = None) -> None:
-        self.path = Path(path) if path else None
+        self.path = Path(path).resolve() if path else None
+        self._memory_lock = threading.RLock()
         self._data: dict[str, Any] = {key: ({} if key != "audit" else []) for key in self._BUCKETS}
         self._batch_depth = 0
         self._batch_dirty = False
-        if self.path and self.path.exists():
-            self._load()
+        self._batch_failed = False
+        with self.batch():
+            pass
 
     def _load(self) -> None:
         if self.path is None:
             return
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except FileNotFoundError:
             payload = {}
-        for key in self._BUCKETS:
-            if key == "audit":
-                self._data[key] = _list(payload.get(key))
-            else:
-                self._data[key] = _dict(payload.get(key))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PersonalizationAccessError("access facts cannot be read; refusing an empty-state fallback") from exc
+        if not isinstance(payload, dict) or any(
+            key in payload and not isinstance(payload[key], list if key == "audit" else dict)
+            for key in self._BUCKETS
+        ):
+            raise PersonalizationAccessError("access facts have an invalid bucket shape")
+        self._data = {key: _list(payload.get(key)) if key == "audit" else _dict(payload.get(key))
+                      for key in self._BUCKETS}
 
     def save(self) -> None:
-        if self.path is None:
-            return
-        if self._batch_depth:
+        with self.batch():
             self._batch_dirty = True
-            return
-        self._save_now()
 
     def _save_now(self) -> None:
         if self.path is None:
@@ -221,18 +236,36 @@ class PersonalizationAccessStore:
 
     @contextmanager
     def batch(self) -> Iterator[None]:
-        self._batch_depth += 1
-        try:
-            yield
-        finally:
-            self._batch_depth -= 1
-            if self._batch_depth == 0 and self._batch_dirty:
-                self._batch_dirty = False
-                self._save_now()
+        lock = mutation_lock(self.path.with_suffix(self.path.suffix + ".lock")) if self.path else self._memory_lock
+        with lock:
+            outer = self._batch_depth == 0
+            if outer:
+                previous = self._data if self.path else copy.deepcopy(self._data)
+                self._load()
+                self._batch_dirty = self._batch_failed = False
+            self._batch_depth += 1
+            try:
+                yield
+                if outer:
+                    if self._batch_failed:
+                        raise PersonalizationAccessError("access transaction was aborted by a nested operation")
+                    if self._batch_dirty:
+                        self._save_now()
+            except BaseException:
+                self._batch_failed = True
+                if outer:
+                    self._data = previous
+                raise
+            finally:
+                self._batch_depth -= 1
+                if outer:
+                    self._batch_dirty = self._batch_failed = False
 
+    @_access_transaction
     def snapshot(self) -> dict[str, Any]:
-        return json.loads(json.dumps(self._data, ensure_ascii=False))
+        return self._data
 
+    @_access_transaction
     def put_user(self, subject: SubjectRef, metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
         if subject.kind != "user":
             raise PersonalizationAccessError(f"user subject expected: {subject.ref()}")
@@ -245,20 +278,24 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         data = self._data["users"].get(str(user_id or "").strip())
         return dict(data) if isinstance(data, Mapping) else None
 
+    @_access_transaction
     def put_profile(self, profile: UserProfile) -> dict[str, Any]:
         data = profile.to_dict()
         self._data["profiles"][profile.user_id] = data
         self.save()
         return data
 
+    @_access_transaction
     def get_profile(self, user_id: str) -> dict[str, Any] | None:
         data = self._data["profiles"].get(str(user_id or "").strip())
         return dict(data) if isinstance(data, Mapping) else None
 
+    @_access_transaction
     def put_preference(self, preference: Preference) -> dict[str, Any]:
         data = preference.to_dict()
         key = self._preference_key(preference.subject, preference.key, preference.scope)
@@ -266,6 +303,7 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def get_preference(
         self,
         subject: SubjectRef,
@@ -275,6 +313,7 @@ class PersonalizationAccessStore:
         data = self._data["preferences"].get(self._preference_key(subject, key, scope))
         return dict(data) if isinstance(data, Mapping) else None
 
+    @_access_transaction
     def list_preferences(self, subject: SubjectRef, scope: ScopeRef | None = None) -> list[dict[str, Any]]:
         scope_key = scope.ref() if scope else ""
         result: list[dict[str, Any]] = []
@@ -293,16 +332,19 @@ class PersonalizationAccessStore:
     def _preference_key(self, subject: SubjectRef, key: str, scope: ScopeRef | None = None) -> str:
         return "\0".join([subject.ref(), scope.ref() if scope else "", str(key or "").strip()])
 
+    @_access_transaction
     def put_user_key(self, key: UserKey) -> dict[str, Any]:
         data = key.to_dict()
         self._data["user_keys"][key.key_id] = data
         self.save()
         return data
 
+    @_access_transaction
     def get_user_key(self, key_id: str) -> dict[str, Any] | None:
         data = self._data["user_keys"].get(str(key_id or "").strip())
         return dict(data) if isinstance(data, Mapping) else None
 
+    @_access_transaction
     def update_user_key(self, key_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
         data = self.get_user_key(key_id)
         if data is None:
@@ -312,16 +354,19 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def put_device_key(self, key: DeviceKey) -> dict[str, Any]:
         data = key.to_dict()
         self._data["device_keys"][key.device_id] = data
         self.save()
         return data
 
+    @_access_transaction
     def get_device_key(self, device_id: str) -> dict[str, Any] | None:
         data = self._data["device_keys"].get(str(device_id or "").strip())
         return dict(data) if isinstance(data, Mapping) else None
 
+    @_access_transaction
     def update_device_key(self, device_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
         data = self.get_device_key(device_id)
         if data is None:
@@ -331,16 +376,19 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def put_session(self, session: SessionKey) -> dict[str, Any]:
         data = session.to_dict()
         self._data["sessions"][session.session_id] = data
         self.save()
         return data
 
+    @_access_transaction
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         data = self._data["sessions"].get(str(session_id or "").strip())
         return dict(data) if isinstance(data, Mapping) else None
 
+    @_access_transaction
     def update_session(self, session_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
         data = self.get_session(session_id)
         if data is None:
@@ -350,6 +398,7 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def put_membership(self, membership: Membership) -> dict[str, Any]:
         data = membership.to_dict()
         key = membership.grant_id or f"{membership.subject.ref()}@{membership.scope.ref()}"
@@ -357,16 +406,19 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def put_grant(self, grant: Grant) -> dict[str, Any]:
         data = grant.to_dict()
         self._data["grants"][grant.grant_id] = data
         self.save()
         return data
 
+    @_access_transaction
     def get_grant(self, grant_id: str) -> dict[str, Any] | None:
         data = self._data["grants"].get(str(grant_id or "").strip())
         return dict(data) if isinstance(data, Mapping) else None
 
+    @_access_transaction
     def update_grant(self, grant_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
         data = self.get_grant(grant_id)
         if data is None:
@@ -376,6 +428,7 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def put_invite(self, invite: Invite) -> dict[str, Any]:
         existing = _dict(self._data["invites"].get(invite.invite_id))
         if existing and _record_status(existing) in {"accepted", "expired", "revoked"}:
@@ -385,10 +438,12 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def get_invite(self, invite_id: str) -> dict[str, Any] | None:
         data = self._data["invites"].get(str(invite_id or "").strip())
         return dict(data) if isinstance(data, Mapping) else None
 
+    @_access_transaction
     def update_invite(self, invite_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
         data = self.get_invite(invite_id)
         if data is None:
@@ -398,6 +453,7 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def put_recovery_action(self, action: RecoveryAction) -> dict[str, Any]:
         existing = _dict(self._data["recovery_actions"].get(action.recovery_id))
         if existing and _record_status(existing) in {"accepted", "expired", "revoked"}:
@@ -407,10 +463,12 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def get_recovery_action(self, recovery_id: str) -> dict[str, Any] | None:
         data = self._data["recovery_actions"].get(str(recovery_id or "").strip())
         return dict(data) if isinstance(data, Mapping) else None
 
+    @_access_transaction
     def update_recovery_action(self, recovery_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
         data = self.get_recovery_action(recovery_id)
         if data is None:
@@ -420,6 +478,7 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def append_audit(self, record: AuditRecord) -> dict[str, Any]:
         data = record.to_dict()
         audit = self._data["audit"]
@@ -429,6 +488,7 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def append_revocation(self, record: Mapping[str, Any]) -> dict[str, Any]:
         data = dict(record)
         data.setdefault("ts", _now_ts())
@@ -436,6 +496,7 @@ class PersonalizationAccessStore:
         self.save()
         return data
 
+    @_access_transaction
     def iter_sessions(self, *, status: str = "active") -> list[dict[str, Any]]:
         return [
             dict(item)
@@ -443,6 +504,7 @@ class PersonalizationAccessStore:
             if isinstance(item, Mapping) and _record_status(item) == status
         ]
 
+    @_access_transaction
     def iter_invites(self, *, status: str = "pending") -> list[dict[str, Any]]:
         return [
             dict(item)
@@ -450,6 +512,7 @@ class PersonalizationAccessStore:
             if isinstance(item, Mapping) and _record_status(item) == status
         ]
 
+    @_access_transaction
     def iter_grants(self, *, status: str = "active") -> list[dict[str, Any]]:
         return [
             dict(item)
@@ -457,6 +520,7 @@ class PersonalizationAccessStore:
             if isinstance(item, Mapping) and _record_status(item) == status
         ]
 
+    @_access_transaction
     def iter_memberships(self, *, status: str = "active") -> list[dict[str, Any]]:
         return [
             dict(item)
@@ -464,6 +528,7 @@ class PersonalizationAccessStore:
             if isinstance(item, Mapping) and _record_status(item) == status
         ]
 
+    @_access_transaction
     def list_audit(
         self,
         *,
@@ -1492,6 +1557,7 @@ class PersonalizationAccessService:
         )
         return data
 
+    @_access_transaction
     def evaluate(
         self,
         *,
