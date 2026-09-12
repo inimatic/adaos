@@ -301,8 +301,14 @@ def resolve_control_base_url(
 
     candidates: list[str] = []
     seen: set[str] = set()
+    token = resolve_control_token()
     if role == "hub" and cfg_url and _is_local_url(cfg_url):
         _append_candidate(candidates, seen, cfg_url)
+        # Test the highest-priority configured runtime before network discovery
+        # of fallbacks. Eager supervisor probes cost a timeout on every call.
+        code, payload = probe_control_api(base_url=cfg_url, token=token, timeout_s=0.35)
+        if _looks_like_control_api_response(code, payload):
+            return cfg_url
     _append_candidate(candidates, seen, _supervisor_public_runtime_url())
     _append_candidate(candidates, seen, _pick_local_env_url())
     _append_candidate(candidates, seen, _autostart_control_url())
@@ -315,8 +321,9 @@ def resolve_control_base_url(
     for raw in fallback_bases:
         _append_candidate(candidates, seen, raw)
 
-    token = resolve_control_token()
     for candidate in candidates:
+        if role == "hub" and candidate == cfg_url:
+            continue
         code, payload = probe_control_api(base_url=candidate, token=token, timeout_s=0.35)
         if _looks_like_control_api_response(code, payload):
             return candidate

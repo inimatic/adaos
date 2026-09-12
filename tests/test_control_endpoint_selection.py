@@ -118,6 +118,46 @@ def test_resolve_control_base_url_skips_candidate_ping_candidates(monkeypatch) -
     assert base == "http://127.0.0.1:8777"
 
 
+def test_configured_active_hub_does_not_probe_fallback_supervisor(monkeypatch):
+    monkeypatch.setattr(active_control, "_node_config_control_url", lambda: ("hub", "http://127.0.0.1:8778"))
+    monkeypatch.setattr(active_control, "_pick_env_override_url", lambda: None)
+    monkeypatch.setattr(active_control, "resolve_control_token", lambda: "token")
+    monkeypatch.setattr(active_control, "_supervisor_public_runtime_url", lambda: pytest.fail("eager fallback discovery"))
+    calls = []
+
+    def probe(**kwargs):
+        calls.append(kwargs["base_url"])
+        return 200, {"runtime": {"transition_role": "active", "admin_mutation_allowed": True}}
+
+    monkeypatch.setattr(active_control, "probe_control_api", probe)
+    assert active_control.resolve_control_base_url(prefer_local=True) == "http://127.0.0.1:8778"
+    assert calls == ["http://127.0.0.1:8778"]
+
+
+@pytest.mark.parametrize("initial", [
+    (None, None),
+    (200, {"runtime": {"transition_role": "candidate", "admin_mutation_allowed": False}}),
+])
+def test_configured_unusable_hub_still_discovers_active_runtime(monkeypatch, initial):
+    monkeypatch.setattr(active_control, "_node_config_control_url", lambda: ("hub", "http://127.0.0.1:8778"))
+    monkeypatch.setattr(active_control, "_pick_env_override_url", lambda: None)
+    monkeypatch.setattr(active_control, "resolve_control_token", lambda: "token")
+    monkeypatch.setattr(active_control, "_supervisor_public_runtime_url", lambda: "http://127.0.0.1:8777")
+    monkeypatch.setattr(active_control, "_pick_local_env_url", lambda: None)
+    monkeypatch.setattr(active_control, "_autostart_control_url", lambda: None)
+    monkeypatch.setattr(active_control, "_pidfile_control_urls", lambda: [])
+    calls = []
+
+    def probe(**kwargs):
+        url = kwargs["base_url"]
+        calls.append(url)
+        return initial if url.endswith(":8778") else (200, {"runtime": {"transition_role": "active"}})
+
+    monkeypatch.setattr(active_control, "probe_control_api", probe)
+    assert active_control.resolve_control_base_url() == "http://127.0.0.1:8777"
+    assert calls == ["http://127.0.0.1:8778", "http://127.0.0.1:8777"]
+
+
 def test_resolve_control_base_url_prefer_local_ignores_member_hub_url(monkeypatch) -> None:
     monkeypatch.setattr(active_control, "_node_config_control_url", lambda: ("member", "https://ru.api.inimatic.com"))
     monkeypatch.setattr(active_control, "_pick_env_override_url", lambda: "https://ru.api.inimatic.com")

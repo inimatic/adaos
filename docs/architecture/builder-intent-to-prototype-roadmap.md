@@ -2302,6 +2302,13 @@ Inspection of the actual retained executor inputs found another context defect:
 Local regression: 395 Automation/worker/caller/exporter/HTTP tests pass in
 347.70s. These checks do not complete the live non-owner or full lifecycle gates.
 
+- [x] `[must]` Remove eager fallback-network discovery when the configured local
+  hub already passes the active-runtime probe. Keep the existing candidate and
+  administrative-admission checks; do not reduce timeouts or add stale caches.
+  Three local resolver measurements change from 1265.22/1172.94/1345.61ms to
+  121.91/58.68/54.78ms. This measures endpoint resolution, not total model or
+  build latency. Control/preview/runtime regression: 91 tests pass in 7.76s.
+
 ## Could And Deferred
 
 - [ ] `[deferred]` Large-prototype decomposition, shared entity/navigation/locale
