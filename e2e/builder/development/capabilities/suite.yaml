@@ -1,6 +1,6 @@
 schema: adaos.builder.e2e_suite.v1
 suite_id: builder-visible-ui-capabilities
-version: "1"
+version: "2"
 title: Small prototype interaction capabilities
 description: Human behavioral prompts for component composition, independent of the eight-archetype baseline.
 cohort: development
@@ -8,6 +8,7 @@ case_refs:
   - cases/team-board-en.yaml
   - cases/reading-outline-ru.yaml
   - cases/daily-readings-en.yaml
+  - cases/comparison-cards-en.yaml
 defaults:
   adapter: sdk.v1
   profile: generic

@@ -1720,6 +1720,24 @@ DEV Builder durable IO was subsequently checkpointed locally as `builder@0.2.117
 source `sha256:e9aa4efaa991ad47611bd92c66455f92db0bf8d9502ec002b61c64c24b6230f1`.
 No remote publication or Workspace promotion is implied.
 
+Run 05 capability generation passed 3/3. Library needed one primary answer; board
+and readings used bounded `state_repair.v3`, not a full interface rewrite. Total
+case times were 61.84s, 77.67s and 70.53s respectively. These are observed runs,
+not a latency guarantee. Browser evidence at 1440/390px now proves tree-driven
+material selection, fixed-scope search/reset, favorite edit/reload/restoration,
+board desktop drag (compact move menu), settings mutation/reload and numeric
+chart/date behavior. Scope tests observe the actual consumer even when a previous
+query is cached. Text checks must await populated data; empty DOM is not a pass.
+
+Eight-archetype run 10 compiled all eight and graded 7/8. Its original result is
+retained. Inspection rubric v6 conflated a supported single-record field guard
+with checking every related record before completing a parent. Suite v7 explicitly
+permits the latter's demonstrated/disclosed Automation obligation, while still
+requiring executable single-record guards. It does not force a duplicate parent
+field or a new per-child completion workflow. This is a rubric treatment change,
+not a retroactive eighth pass; fresh generation and matched regrading must be
+reported separately. Cross-record enforcement remains an Automation gate.
+
 DEV Builder Conversation ingress changes were tested and locally checkpointed
 as `builder@0.2.116`, source
 `sha256:04a46de7d758b097cccad9047591f8f521037f507abb353d229debe32e055066`.

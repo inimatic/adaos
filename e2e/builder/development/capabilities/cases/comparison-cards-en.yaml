@@ -1,0 +1,45 @@
+schema: adaos.builder.e2e_case.v1
+case_id: comparison-cards-en
+title: Comparison cards
+description: Human-specified text display policies without renderer identifiers.
+locale: en
+tags: [visible, capabilities, typography]
+requirements:
+  primary_jobs:
+    - statement: Compare sample entries
+      acceptance: Three read-only entries expose their title, description, review score and category as cards.
+    - statement: Read descriptions without clipping
+      acceptance: Descriptions wrap and remain readable at compact and desktop widths.
+    - statement: Deliberate compact title and alignment
+      acceptance: Titles are single-line summaries with full text accessible, scores align to the right and category text is centered.
+steps:
+  - id: create
+    type: builder.chat
+    input:
+      text: 'Create a new application "Comparison cards ${case_instance_id}".'
+      auto_apply: true
+      owns_created_draft: true
+    expect:
+      values: {ok: true, project_status: ready}
+      paths_present: [session_id, scenario_id, project_ref, artifact_root, draft_id]
+  - id: design
+    type: builder.chat
+    input:
+      text: 'Show a read-only comparison of three sample reference guides as cards. Each guide has a long title, a descriptive paragraph, a review score and a category. Keep each title on one line, shortening it when necessary but making its full text available. Descriptions should wrap so I can read the whole paragraph. Align review scores to the right and center the category text. Include realistic sample values and make this usable on both a phone and a desktop. No editing, live calculations or external services are needed.'
+      auto_apply: true
+    expect:
+      values: {ok: true}
+      values_in: {status: [llm_pending, applied]}
+  - id: wait
+    type: builder.wait
+    input: {session_id: $steps.create.session_id, job_id: $steps.design.llm_job.job_id}
+    expect: {values: {ok: true, status: succeeded}}
+  - id: validate
+    type: scenario.validate
+    input: {scenario_id: $steps.create.scenario_id}
+    expect: {values: {ok: true}}
+  - id: grade
+    type: prototype.grade
+    input: {scenario_id: $steps.create.scenario_id, threshold: 0.85}
+    expect: {values: {ok: true, passed: true}}
+cleanup: {policy: always, retain_on_failure: true}

@@ -14,6 +14,7 @@ if (!ownership?.test || ownership.status !== 'retained_for_review' || ownership.
 const preview = ownership.previews.find(item => item.scenario_id === scenario && item.test && item.stage === 'prototype')
 if (!preview) throw new Error('Missing owned preview')
 const application = JSON.parse(await fs.readFile(path.join(created.artifact_root, 'webui.json'), 'utf8')).ui.application
+const semantic = JSON.parse(await fs.readFile(path.join(created.artifact_root, 'semantic.webui.json'), 'utf8'))
 const widgets = application.desktop.pageSchema.widgets
 const navigation = widgets.find(widget => widget.inputs?.variant === 'tabs')
 const output = path.resolve(process.env.ADAOS_E2E_OUTPUT)
@@ -40,11 +41,18 @@ try {
     }, { hub, token, subnet, webspace: preview.webspace_id, locale: checkpoint.context.locale })
     const page = await context.newPage()
     page.setDefaultTimeout(20_000)
-    const sample = { layout, checks: [], errors: [], operations: [] }
+    const sample = { layout, checks: [], errors: [], operations: [], queries: [] }
     report.samples.push(sample)
     page.on('pageerror', error => sample.errors.push(error.message))
+    const requests = new Map()
     page.on('request', request => {
+      if (new URL(request.url()).pathname === '/api/resources/query') requests.set(request, Date.now())
       if (new URL(request.url()).pathname === '/api/resources/operate') sample.operations.push(request.postDataJSON())
+    })
+    page.on('response', response => {
+      const request = response.request()
+      if (requests.has(request)) sample.queries.push({ elapsedMs: Date.now() - requests.get(request),
+        endpoint: response.url(), status: response.status(), query: request.postDataJSON() })
     })
     const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).last()
     const ready = async () => page.waitForFunction(expected => {
@@ -72,6 +80,36 @@ try {
         }
       }
       for (const widget of widgets) {
+        const tableLinks = widget.type === 'ui.table'
+          ? semantic.views.filter(view => view.selection_filter?.source_view_ref === widget.id) : []
+        if (tableLinks.length) {
+          await reveal(widget)
+          const rows = host(widget.id).locator('tr.row-selectable')
+          await expect(rows.first()).toBeVisible({ timeout: 20_000 })
+          const available = await host(widget.id).locator('ada-table-widget').evaluate(element => window.ng.getComponent(element).pagedRows.map(row => row.id))
+          for (const index of available.slice(0, 2).map((_, index) => index).reverse()) {
+            await rows.nth(index).click()
+            await expect(page.locator('ion-modal')).toHaveCount(0)
+            for (const view of tableLinks) {
+              const target = widgets.find(item => item.id === view.id)
+              const expected = semantic.resources.find(resource => resource.id === view.resource_ref).records
+                .filter(item => item[view.selection_filter.field_ref] === available[index]).map(item => item.id).sort()
+              if (target.type !== 'ui.table') throw new Error(`Unexercised related table target: ${target.type}`)
+              await expect.poll(() => host(target.id).locator('ada-table-widget').evaluate(element =>
+                window.ng.getComponent(element).rows.map(row => row.id).sort()), { timeout: 20_000 }).toEqual(expected)
+              sample.checks.push({ kind: 'table-related-selection', source: widget.id, target: target.id, selected: available[index], records: expected })
+            }
+          }
+          const sourceView = semantic.views.find(view => view.id === widget.id)
+          for (const editor of semantic.views.filter(view => view.resource_ref === sourceView.resource_ref && view.role === 'editor' && view.surface !== 'inline')) {
+            const edit = host(`open-${editor.id}`).locator('[data-command-id="edit"]')
+            if (!await edit.count()) continue
+            await edit.click()
+            await expect(host(editor.id)).toBeVisible()
+            await page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+            sample.checks.push({ kind: 'explicit-related-editor', editor: editor.id })
+          }
+        }
         if (widget.type === 'ui.queryToolbar') {
           await reveal(widget)
           const toolbar = host(widget.id)
@@ -102,6 +140,21 @@ try {
             await expect.poll(() => table.locator('tbody tr').allTextContents()).toEqual(before)
             sample.checks.push({ kind: 'date-change-query-reset', widget: widget.id, before: before.length })
           }
+          for (const control of widget.inputs.controls.filter(item => item.kind === 'search')) {
+            const target = widgets.find(item => item.type === 'ui.list'
+              && item.dataSource?.query?.search === `$state.${control.stateKey}`)
+            const view = target && semantic.views.find(view => view.id === target.id && view.scope_filters?.length)
+            if (!view) continue
+            const expected = semantic.resources.find(resource => resource.id === view.resource_ref).records
+              .filter(record => view.scope_filters.every(filter => record[filter.field_ref] === filter.value)).map(record => record.id).sort()
+            const ids = () => host(target.id).locator('ada-list-widget').evaluate(element => window.ng.getComponent(element).latestItems.map(item => item.id).sort())
+            await expect.poll(ids, { timeout: 20_000 }).toEqual(expected)
+            await toolbar.locator(`[data-query-id=${JSON.stringify(control.id)}] input`).fill('e2e-no-matching-record-9fb3')
+            await expect.poll(ids, { timeout: 20_000 }).toEqual([])
+            await toolbar.locator('.query-toolbar__reset').click()
+            await expect.poll(ids, { timeout: 20_000 }).toEqual(expected)
+            sample.checks.push({ kind: 'scope-search-reset', widget: target.id, records: expected })
+          }
           if (await toggle.count()) await toggle.click()
           sample.checks.push({ kind: 'query-disclosure', widget: widget.id, controls: widget.inputs.controls.length })
         }
@@ -112,6 +165,27 @@ try {
           await nodes.first().click()
           await expect(nodes.first()).toHaveClass(/is-selected/)
           sample.checks.push({ kind: 'tree-selection', widget: widget.id, count: await nodes.count() })
+          const linked = semantic.views.filter(view => view.selection_filter?.source_view_ref === widget.id)
+          for (const view of linked) {
+            const target = widgets.find(item => item.id === view.id)
+            await reveal(target)
+            const sourceResource = semantic.resources.find(resource => resource.id === semantic.views.find(item => item.id === widget.id).resource_ref)
+            const field = view.selection_filter.field_ref
+            const selection = widget.inputs.selectedStateKey
+            if (target.dataSource.query.filters?.[field] !== `$state.${selection}`) throw new Error('Related query does not consume tree selection')
+            for (const record of sourceResource.records.slice(0, 2).reverse()) {
+              const node = nodes.filter({ has: page.locator('.tree-widget__node-title', { hasText: String(record[widget.inputs.titleKey]) }) })
+              await node.click()
+              await expect(node).toHaveClass(/is-selected/)
+              const expected = semantic.resources.find(resource => resource.id === view.resource_ref).records
+                .filter(item => item[field] === record.id).map(item => item.id).sort()
+              if (target.type === 'ui.list') {
+                await expect.poll(() => host(target.id).locator('ada-list-widget').evaluate(element =>
+                  window.ng.getComponent(element).latestItems.map(item => item.id).sort()), { timeout: 20_000 }).toEqual(expected)
+              } else throw new Error(`Linked presentation not yet exercised by this probe: ${target.type}`)
+              sample.checks.push({ kind: 'tree-linked-query', source: widget.id, target: target.id, selected: record.id, records: expected })
+            }
+          }
         }
         if (widget.type === 'ui.list' && widget.inputs?.groupDisplay === 'accordion') {
           await reveal(widget)
@@ -123,6 +197,76 @@ try {
           await expect.poll(() => group.getAttribute('class')).not.toBe(before)
           await header.click()
           sample.checks.push({ kind: 'accordion-toggle', widget: widget.id })
+        }
+        if (widget.type === 'ui.list') {
+          await reveal(widget)
+          const view = semantic.views.find(view => view.id === widget.id)
+          const records = semantic.resources.find(resource => resource.id === view.resource_ref).records
+            .filter(record => (view.scope_filters || []).every(filter => record[filter.field_ref] === filter.value))
+          if (records.length && !view.selection_filter && !view.filter) {
+            await expect.poll(() => host(widget.id).locator('ada-list-widget').evaluate(element =>
+              window.ng.getComponent(element).latestItems.length), { timeout: 20_000 }).toBeGreaterThan(0)
+          }
+          const text = await host(widget.id).locator('.note-card-meta-item, .list-row-meta-item').evaluateAll(elements => elements.map(element => {
+            const style = getComputedStyle(element)
+            return { value: element.textContent, overflow: element.classList.contains('text-truncate') ? 'truncate' : 'wrap',
+              whiteSpace: style.whiteSpace, align: style.textAlign, width: element.clientWidth, scrollWidth: element.scrollWidth }
+          }))
+          if (text.some(item => item.overflow === 'wrap' && (item.whiteSpace === 'nowrap' || item.scrollWidth > item.width + 1))) {
+            throw new Error('Wrapping metadata is clipped horizontally')
+          }
+          sample.checks.push({ kind: 'text-display', widget: widget.id, text })
+          const scope = view.scope_filters?.find(filter => typeof filter.value === 'boolean')
+          const editorEntry = scope && Object.entries(application.modals || {}).flatMap(([modalId, modal]) =>
+            (modal.schema?.widgets || []).map(form => ({ modalId, form }))).find(({ form }) => form.type === 'ui.form'
+              && form.inputs.fields.some(field => field.id === scope.field_ref && ['boolean', 'toggle'].includes(field.type))
+              && form.actions.some(action => action.type === 'resourceOperation' && action.target === widget.dataSource.resourceType
+                && action.params.operation_id === 'update' && action.params.payload?.[scope.field_ref]))
+          if (editorEntry) {
+            const { modalId, form } = editorEntry
+            const row = host(widget.id).locator('.collection-focus-item').first()
+            await expect(row).toBeVisible()
+            await row.click()
+            if (!widget.actions?.some(action => action.on === 'select' && action.type === 'openModal' && action.params?.modalId === modalId)) {
+              await host(`open-${form.id}`).locator('[data-command-id="edit"]').click()
+            }
+            const formHost = host(form.id)
+            await expect.poll(() => formHost.locator('ada-form-widget').evaluate(element => window.ng.getComponent(element).recordLoaded)).toBe(true)
+            const original = await formHost.locator('ada-form-widget').evaluate(element => window.ng.getComponent(element).recordValues)
+            await formHost.locator(`[data-webui-field-id=${JSON.stringify(scope.field_ref)}] input[type=checkbox]`).setChecked(!scope.value)
+            const update = form.actions.find(action => action.type === 'resourceOperation' && action.params.operation_id === 'update')
+            const pending = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate'
+              && response.request().postDataJSON()?.record_id === original.id)
+            void pending.catch(() => {})
+            await formHost.locator(`[data-command-id=${JSON.stringify(update.id)}] button`).click()
+            if (update.confirmation) await page.locator('ion-alert').last().locator('button').last().click()
+            const response = await pending
+            const receipt = await response.json()
+            if (!response.ok() || !receipt.ok) throw new Error('Scoped record update failed')
+            const body = response.request().postDataJSON()
+            try {
+              const visibleIds = () => host(widget.id).locator('ada-list-widget').evaluate(element => window.ng.getComponent(element).latestItems.map(item => item.id))
+              await expect.poll(visibleIds).not.toContain(original.id)
+              await page.reload({ waitUntil: 'domcontentloaded' })
+              await ready()
+              await reveal(widget)
+              await expect.poll(() => host(widget.id).locator('ada-list-widget').evaluate(element => window.ng.getComponent(element).latestPayload != null)).toBe(true)
+              await expect.poll(visibleIds).not.toContain(original.id)
+              sample.checks.push({ kind: 'scope-mutation-reload', widget: widget.id, record: original.id, field: scope.field_ref })
+            } finally {
+              const headers = Object.fromEntries(Object.entries(await response.request().allHeaders())
+                .filter(([key]) => !['content-length', 'host', 'origin'].includes(key)))
+              const restored = await context.request.post(`${hub}/api/resources/operate`, { headers,
+                data: { ...body, payload: Object.fromEntries(Object.keys(body.payload).map(key => [key, original[key] ?? null])) } })
+              if (!restored.ok() || !(await restored.json()).ok) throw new Error('Scoped fixture restoration failed')
+              sample.checks.push({ kind: 'fixture-restore', evidenceKind: 'stand_cleanup', record: original.id })
+            }
+            await page.reload({ waitUntil: 'domcontentloaded' })
+            await ready()
+            await reveal(widget)
+            await expect.poll(() => host(widget.id).locator('ada-list-widget').evaluate(element =>
+              window.ng.getComponent(element).latestItems.map(item => item.id)), { timeout: 20_000 }).toContain(original.id)
+          }
         }
         if (widget.type === 'visual.metricChart') {
           await reveal(widget)
