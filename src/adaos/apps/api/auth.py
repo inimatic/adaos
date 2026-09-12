@@ -71,7 +71,7 @@ async def require_tool_caller(request: Request) -> None:
     token = resolve_presented_token(x_adaos_token=request.headers.get("X-AdaOS-Token"),
                                     authorization=authorization, query_token=request.query_params.get("token"))
     if token == _expected_token():
-        await require_token(request)
+        await require_token(request, x_adaos_token=None, authorization=None)
         return
     # Scoped secrets are not accepted in query strings or the node-token header.
     if not authorization or not authorization.lower().startswith("bearer "):

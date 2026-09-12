@@ -112,6 +112,25 @@ def test_http_session_revocation_precedes_idempotent_replay(ingress):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("transport", ["header", "bearer", "query"])
+def test_http_owner_keeps_existing_transports_and_separate_replay(ingress, transport):
+    client, access, reader_headers, calls = ingress
+    body = {"tool": "sample:read", "idempotency_key": "owner-reader"}
+    options = ({"headers": {"X-AdaOS-Token": "owner-secret"}} if transport == "header" else
+               {"headers": {"Authorization": "Bearer owner-secret"}} if transport == "bearer" else
+               {"params": {"token": "owner-secret"}})
+    owner = client.post("/tools/call", json=body, **options)
+    assert owner.status_code == 200, owner.text
+    assert owner.json()["actor"] == access.owner.ref()
+    assert owner.json()["scope"] is None
+    assert client.post("/tools/call", json=body, **options).headers["X-AdaOS-Idempotency-Replay"] == "1"
+    reader = client.post("/tools/call", json=body, headers=reader_headers)
+    assert reader.status_code == 200
+    assert reader.json()["actor"] == "session:reader-session"
+    assert not reader.headers.get("X-AdaOS-Idempotency-Replay")
+    assert len(calls) == 2
+
+
 def test_scoped_tool_proxy_cannot_replace_session_identity_with_node_owner(monkeypatch):
     def unexpected():
         pytest.fail("routing must not begin before the scoped forwarding guard")
