@@ -1,8 +1,8 @@
 """Unified IO output helpers for web/native frontends.
 
-These helpers do not write to Yjs directly. They only publish events onto the
-local bus. The RouterService is responsible for projecting them into concrete
-outputs (chat history, TTS queues, etc.) based on `_meta`.
+These helpers do not write to Yjs directly. RouterService projects IO events
+into concrete outputs. Chat callers running without a Router may explicitly
+persist a scoped message before requesting its live projection.
 """
 
 from __future__ import annotations
@@ -285,6 +285,7 @@ def chat_append(
     msg_id: str | None = None,
     ts: float | None = None,
     actions: Sequence[Mapping[str, Any]] | None = None,
+    persist: bool = False,
     _meta: Mapping[str, Any] | None = None,
 ) -> Mapping[str, bool]:
     if not isinstance(text, str) or not text.strip():
@@ -305,8 +306,30 @@ def chat_append(
     progress_seq = meta.get("progress_seq") if isinstance(meta, Mapping) else None
     if isinstance(progress_seq, (int, float)):
         payload["progress_seq"] = int(progress_seq)
+    if persist:
+        from adaos.services import conversation_store
+
+        conversation_id = str(meta.get("conversation_id") or "").strip()
+        owner = str(meta.get("conversation_owner") or meta.get("owner") or "").strip()
+        webspace_id = str(meta.get("webspace_id") or "").strip()
+        channel_id = str(meta.get("dialog_channel_id") or "").strip()
+        if not all((conversation_id, owner, webspace_id, channel_id)):
+            raise ValueError("Durable chat requires explicit conversation, owner, webspace and channel")
+        stored = conversation_store.materialize_message(
+            conversation_id=conversation_id,
+            thread_id=str(meta.get("conversation_topic_id") or meta.get("thread_id") or "") or None,
+            webspace_id=webspace_id, channel_id=channel_id, owner=owner,
+            role=payload["from"], text=payload["text"], payload=payload, meta=meta,
+            actor_id=meta.get("active_agent_id"), actor_label=meta.get("active_agent_label"),
+            actor_icon=meta.get("active_agent_icon"), route_id=meta.get("route_id"),
+            request_id=meta.get("request_id"), turn_trace_id=meta.get("turn_trace_id"), ts=payload["ts"],
+        )
+        if not stored or not stored.get("id"):
+            return {"ok": False, "persisted": False}
+        # Router materialization sees the same id, including canonical progress cards.
+        payload["id"] = stored["id"]
     _publish("io.out.chat.append", payload, source="sdk.io.out")
-    return {"ok": True}
+    return {"ok": True, **({"persisted": True} if persist else {})}
 
 
 @tool(

@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 PROTOTYPE_GRADE_SCHEMA = "adaos.builder.prototype_grade.v1"
-PROTOTYPE_GRADER_VERSION = "14"
+PROTOTYPE_GRADER_VERSION = "15"
 _DEFAULT_GRADER_MODEL = os.getenv("ADAOS_BUILDER_E2E_GRADER_MODEL", "gpt-4.1")
 
 _MODEL_RESULT_SCHEMA: dict[str, Any] = {
@@ -134,6 +134,11 @@ Cite that explicit binding and its selected record/source. A table image column 
 list imageKey can show covers but does not by itself prove video playback. Loading and
 unavailable states must belong to the actual viewer, not merely an unrelated status
 field. No second language is required unless the user explicitly requested it.
+Explicitly requested separate tabs require distinct navigation targets AND mutually
+exclusive content visibility. Two collections in the same tab do not satisfy that
+request. A subset view requires an actual fixed predicate, not just a title or an
+optional filter initially showing everything. Settings need reachable editing and a
+local mutation, not merely a settings modal. Cite the bindings, not just their labels.
 Each rubric item supplies a statement plus optional acceptance and exclusions. Apply
 its acceptance literally and do not import an excluded concern from another item.
 Every supported or partial verdict must cite one or more existing RFC 6901 JSON

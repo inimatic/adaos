@@ -13,7 +13,7 @@ requirements:
     - statement: "Inspect, create and edit tasks"
       acceptance: "Details and focused editing are reachable and mutations target the selected record."
     - statement: "Switch task views"
-      acceptance: "Board and table tabs show the same underlying task records."
+      acceptance: "Two distinct, independently selectable tabs show the same task records: Board shows the board, All tasks shows the table. Both collections visible together under one tab fail this explicit request."
     - statement: "Store application settings"
       acceptance: "A reachable settings window edits and persists local contact email and working agreement. No email delivery is expected."
 steps:

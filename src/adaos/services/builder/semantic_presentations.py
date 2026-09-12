@@ -75,8 +75,13 @@ def presentation_findings(document: Mapping) -> list[dict]:
             if set(visible) != {group, value}:
                 reject("A chart renders only its x and y fields; place additional fields in a companion view")
         if presentation == "tree":
-            if fields[parent]["value_type"] != "short_text":
-                reject("Tree parent ids require a nullable short_text field")
+            parent_field = fields[parent]
+            # Relationship lowering supplies live selectors as string choices.
+            string_choice = parent_field["value_type"] == "choice" and all(
+                isinstance(option["value"], str) for option in parent_field.get("options") or []
+            )
+            if parent_field["value_type"] != "short_text" and not string_choice:
+                reject("Tree parent ids require string record references")
             if len([ref for ref in visible if ref != parent]) > 3:
                 reject("Tree renders a title, subtitle and value; use a details view for additional fields")
     return findings

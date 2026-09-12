@@ -926,7 +926,7 @@ class CompatibilityBuilderExecutor:
             "_meta": {
                 "action_source": "builder_e2e",
                 "request_origin_id": "builder_e2e",
-                "message_id": f"m.e2e.{context['run_id']}.{context['case_id']}.{context['repetition']}",
+                "message_id": f"m.e2e.{context['run_id']}.{context['case_id']}.{context['repetition']}.{context.get('step_id') or hashlib.sha256(text.encode('utf-8')).hexdigest()[:12]}",
                 "conversation_id": conversation_id,
                 "thread_id": conversation_id,
                 "topic_id": conversation_id,
@@ -1645,7 +1645,7 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
             metadata={
                 "action_source": "builder_e2e",
                 "request_origin_id": "builder_e2e",
-                "message_id": f"m.e2e.{context['run_id']}.{context['case_id']}.{context['repetition']}",
+                "message_id": f"m.e2e.{context['run_id']}.{context['case_id']}.{context['repetition']}.{context.get('step_id') or hashlib.sha256(statement.encode('utf-8')).hexdigest()[:12]}",
                 "conversation_id": conversation_id,
                 "thread_id": conversation_id,
                 "topic_id": conversation_id,
@@ -2256,7 +2256,7 @@ class BuilderE2ERunner:
                         )
                     output = dict(
                         self.executor.execute(
-                            str(declaration["type"]), resolved_input, context
+                            str(declaration["type"]), resolved_input, {**context, "step_id": declaration["id"]}
                         )
                     )
                     findings = _expectation_findings(

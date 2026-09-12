@@ -747,6 +747,14 @@ Model options, including output budget, belong in request identity. Grader
 version changes invalidate direct score comparisons; regrading retained artifacts
 is separate from fresh generation and never overwrites the original cohort.
 
+Project Conversation is a durable transcript, not a side effect of a running
+browser or Router subscriber. Builder explicitly persists scoped IO chat before
+requesting its live projection, using the canonical message/progress identity.
+Creation ingress is assigned after the new project identity exists; other ingress
+uses the selected project. Technological entrypoints retain a stable identity per
+turn/step, not per project. A scheduled asynchronous append is not a persistence
+acknowledgment. Browser-originated ingress is not appended again by Builder.
+
 A deferred computation still requires representative output values when those
 outputs are requested. Raw inputs plus an explanatory paragraph are not an
 inspectable result. Single-record guards cannot stand in for a predicate over

@@ -87,7 +87,7 @@ try {
               && JSON.stringify(item.dataSource?.query || {}).includes(`$state.${control.stateKey}`))
             if (!collection) throw new Error('Date filter has no table consumer')
             const table = host(collection.id)
-            await expect(table.locator('tbody tr').first()).toBeVisible()
+            await expect(table.locator('tr.row-selectable').first()).toBeVisible()
             const before = await table.locator('tbody tr').allTextContents()
             const response = page.waitForResponse(item => new URL(item.url()).pathname === '/api/resources/query'
               && item.request().postDataJSON()?.resource_type === collection.dataSource.resourceType
@@ -142,24 +142,29 @@ try {
           const originalLane = await card.evaluate(element => element.closest('[data-webui-board-lane-id]').getAttribute('data-webui-board-lane-id'))
           const targetLane = widget.inputs.lanes.find(lane => lane.id !== originalLane).id
           const target = board.locator(`[data-webui-board-lane-id=${JSON.stringify(targetLane)}] .board-lane__items`)
-          const from = await card.locator('.board-card__drag-handle').boundingBox()
-          await target.scrollIntoViewIfNeeded()
-          const to = await target.boundingBox()
-          if (!from || !to) throw new Error('Unframed drag source or destination')
           const pending = page.waitForResponse(response => new URL(response.url()).pathname === '/api/resources/operate')
           void pending.catch(() => {})
-          await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
-          await page.mouse.down()
-          await page.mouse.move(from.x + from.width / 2 + 8, from.y + from.height / 2, { steps: 4 })
-          await page.mouse.move(to.x + to.width / 2, to.y + Math.min(35, to.height / 2), { steps: 30 })
-          await page.mouse.up()
+          if (layout === 'compact') {
+            // Keyboard/touch alternative is an actual client control, not a handler shortcut.
+            await card.locator('.board-card__move select').selectOption(targetLane)
+          } else {
+            await card.scrollIntoViewIfNeeded()
+            const from = await card.locator('.board-card__drag-handle').boundingBox()
+            const to = await target.boundingBox()
+            if (!from || !to) throw new Error('Unframed drag source or destination')
+            await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+            await page.mouse.down()
+            await page.mouse.move(from.x + from.width / 2 + 8, from.y + from.height / 2, { steps: 4 })
+            await page.mouse.move(to.x + to.width / 2, to.y + Math.min(35, to.height / 2), { steps: 30 })
+            await page.mouse.up()
+          }
           const response = await pending
           if (!response.ok() || !(await response.json()).ok) throw new Error('Board move failed to persist')
           await page.reload({ waitUntil: 'domcontentloaded' })
           await ready()
           await reveal(widget)
           await expect(board.locator(`[data-webui-board-lane-id=${JSON.stringify(targetLane)}] [data-webui-board-item-id=${JSON.stringify(record)}]`)).toBeVisible()
-          sample.checks.push({ kind: 'drag-persist-reload', widget: widget.id, record, originalLane, targetLane })
+          sample.checks.push({ kind: layout === 'compact' ? 'move-menu-persist-reload' : 'drag-persist-reload', widget: widget.id, record, originalLane, targetLane })
         }
       }
       const settings = widgets.find(widget => widget.id === 'prototype-settings')

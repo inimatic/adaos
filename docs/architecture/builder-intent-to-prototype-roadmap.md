@@ -1659,6 +1659,27 @@ a task-quality failure, independent of the obsolete gate. The generic gate now
 recognizes query-toolbar state writes and guarded edit commands reached after
 selection; it still rejects unrelated state and unguarded entries.
 
+Run 02 was interrupted by PowerShell stderr redirection before generation and
+is excluded from model scores. Run 03 reached two passing cases and one compiler
+failure. Both retained library responses replay successfully after allowing the
+string-choice parent references produced by relationship lowering; the model's
+original short-text field was valid. Board primary and repair both put two
+explicitly requested views into one tab. Grader v15 and the clarified evaluation
+rubric require distinct targets and exclusive content; old scores are unchanged.
+Desktop browser evidence proves a persisted lane move after reload. Compact
+qualification uses the accessible move menu separately; it does not claim a
+touch-drag test. Browser probes must await populated rows before taking a reset
+baseline, not snapshot the transient empty response.
+
+- [x] `[must]` Fix technological transcript storage without a Router subscriber;
+  use opt-in durable scoped IO append, preserve thread context, avoid per-project
+  E2E message-ID reuse, and report scheduled versus persisted honestly. SDK and
+  Builder tests pass; the browser-visible end-to-end checkbox above remains open.
+- [ ] `[must]` Remove false operational obligations from descriptive empty-search
+  state clauses in the Brief compiler. Runs 01/03 required unnecessary full
+  semantic repairs for a second search binding. Preserve the state requirement
+  and genuine search operation; do not weaken binding validation to hide it.
+
 Browser evidence is distinct from grader success. Daily readings passes tabs,
 query disclosure, date filtering/reset and five numeric graph points (including
 zero) on both viewports. Earlier probe failures caught unrelated requests and

@@ -1,11 +1,54 @@
 import hashlib
 import json
+from uuid import uuid4
 from types import SimpleNamespace
+
+import pytest
 
 from adaos.sdk.io import out
 from adaos.sdk.io.context import io_meta
 from adaos.services.eventbus import LocalEventBus
 from adaos.services.webspace_id import coerce_webspace_id
+
+
+def test_durable_chat_survives_missing_router_and_projection_replay(monkeypatch):
+    from adaos.services import conversation_store
+
+    monkeypatch.setattr(out, '_publish', lambda *args, **kwargs: None)
+    conversation_id = f'conv.test.{uuid4().hex}'
+    metadata = dict(conversation_id=conversation_id, conversation_owner='skill:test',
+                    webspace_id='test', dialog_channel_id='test', thread_id='project:one')
+    message_id = f'm.test.{uuid4().hex}'
+    for _ in range(2):
+        assert out.chat_append('Readable user request', from_='user', msg_id=message_id,
+                               persist=True, _meta=metadata) == {'ok': True, 'persisted': True}
+    messages = conversation_store.list_messages(conversation_id, thread_id='project:one')
+    assert len(messages) == 1
+    assert messages[0]['text'] == 'Readable user request'
+    assert messages[0]['id'] == message_id
+
+
+def test_durable_chat_requires_scope_and_does_not_claim_unavailable_storage(monkeypatch):
+    from adaos.services import conversation_store
+
+    monkeypatch.setattr(out, '_publish', lambda *args, **kwargs: pytest.fail('No projection before durable ack'))
+    with pytest.raises(ValueError, match='explicit conversation'):
+        out.chat_append('Message', persist=True, _meta={})
+    monkeypatch.setattr(conversation_store, 'materialize_message', lambda **kwargs: None)
+    result = out.chat_append('Message', persist=True, _meta=dict(conversation_id='conv.test',
+                            conversation_owner='skill:test', webspace_id='test', dialog_channel_id='test'))
+    assert result == {'ok': False, 'persisted': False}
+
+
+def test_durable_chat_reuses_canonical_progress_id_for_projection(monkeypatch):
+    from adaos.services import conversation_store
+
+    projected = []
+    monkeypatch.setattr(out, '_publish', lambda topic, payload, **kwargs: projected.append(payload))
+    monkeypatch.setattr(conversation_store, 'materialize_message', lambda **kwargs: {'id': 'm.canonical.job'})
+    out.chat_append('Completed', persist=True, _meta=dict(conversation_id='conv.test', progress_group_id='job.test',
+                    conversation_owner='skill:test', webspace_id='test', dialog_channel_id='test'))
+    assert projected[0]['id'] == 'm.canonical.job'
 
 
 def test_coerce_webspace_id_unwraps_nested_and_stringified_values() -> None:

@@ -75,6 +75,28 @@ def test_non_numeric_chart_is_rejected_not_coerced():
         compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
 
 
+def test_tree_parent_reference_survives_relationship_selector_lowering():
+    brief, semantic = _multi_resource_fixture()
+    resource = semantic['resources'][0]
+    resource['fields'].append(dict(id='parent', value_type='short_text', label=_text('parent', 'Parent', 'Parent'), required=False, editable=True))
+    for i, record in enumerate(resource['records']):
+        record['parent'] = resource['records'][0]['id'] if i else None
+    semantic['relationships'].append({
+        'id': 'parent-link', 'from_resource_ref': resource['id'], 'from_field_ref': 'parent',
+        'to_resource_ref': resource['id'], 'to_field_ref': 'id', 'cardinality': 'many_to_one',
+        'label_field_refs': ['title'],
+    })
+    view = copy.deepcopy(semantic['views'][0])
+    view.update(id='hierarchy', presentation='tree', field_refs=['title'], presentation_options={
+        'group_field_ref': None, 'parent_field_ref': 'parent', 'value_field_ref': None, 'draggable': False,
+    })
+    semantic['views'].append(view)
+    result = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
+    widget = next(item for item in result['webui']['ui']['application']['desktop']['pageSchema']['widgets'] if item['id'] == 'hierarchy')
+    assert widget['inputs']['parentIdKey'] == 'parent'
+    assert next(field for field in result['semantic_document']['resources'][0]['fields'] if field['id'] == 'parent')['value_type'] == 'choice'
+
+
 def test_sections_group_existing_content_without_changing_resource_identity():
     brief, semantic = _multi_resource_fixture()
     for view in semantic['views']:

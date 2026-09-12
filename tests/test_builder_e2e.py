@@ -78,6 +78,20 @@ def test_generation_diagnostic_exposes_truncation_without_copying_response() -> 
     assert "large partial output" not in json.dumps(diagnostic)
 
 
+def test_sdk_ingress_ids_are_stable_per_step_not_shared_by_project(tmp_path, monkeypatch):
+    from adaos.sdk.builder import prototype
+    import adaos.e2e.builder as builder
+
+    ids = []
+    monkeypatch.setattr(builder, '_generation_metadata', lambda context: {})
+    monkeypatch.setattr(prototype, 'submit_request', lambda text, **kwargs: ids.append(kwargs['metadata']['message_id']) or {})
+    executor = SdkBuilderExecutor(repo_root=tmp_path)
+    for step in ('create', 'design', 'design'):
+        executor._chat({'text': 'Same prompt'}, {'run_id': 'run', 'case_id': 'case', 'repetition': 1, 'locale': 'en', 'step_id': step})
+    assert ids[0] != ids[1]
+    assert ids[1] == ids[2]
+
+
 def test_reasoning_override_is_explicit_and_validated(monkeypatch):
     from adaos.e2e.builder import _generation_metadata
     monkeypatch.delenv("ADAOS_BUILDER_LLM_REASONING_EFFORT", raising=False)
@@ -660,7 +674,7 @@ def test_baseline_remains_comparable_across_implementation_commits(
     assert comparison["reasons"] == []
     assert baseline["reference"]["adapter"] == "fixture.v1"
     assert baseline["cohort"]["grader_model"] == "gpt-4.1"
-    assert baseline["cohort"]["grader_version"] == "14"
+    assert baseline["cohort"]["grader_version"] == "15"
 
 
 def test_runner_rejects_undeclared_executor_adapter(tmp_path: Path) -> None:
@@ -807,7 +821,7 @@ def test_runner_injects_case_oracle_only_into_prototype_grade(tmp_path: Path) ->
     assert run_manifest["evaluation"]["prototype_grader"] == {
         "kind": "model",
         "model": "gpt-4.1",
-        "version": "14",
+        "version": "15",
     }
 
 
