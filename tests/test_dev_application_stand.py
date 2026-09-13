@@ -71,3 +71,48 @@ def test_retained_http_acceptance_plans_have_explicit_contracts():
     root = Path(__file__).parents[1] / 'e2e/builder/development/lifecycle/acceptance'
     for path in root.glob('*.yaml'):
         stand.validate_plan(yaml.safe_load(path.read_text(encoding='utf-8')))
+
+
+def test_race_plan_is_bounded_and_does_not_count_rejected_http_200_as_success():
+    step = {'id': 'race', 'tool': 'save', 'concurrent_arguments': [{}, {}],
+            'expect': {'values': {'success_count': 1}}}
+    stand.validate_plan({'schema': 'adaos.e2e.application_tools.v1', 'steps': [step]})
+    for variants in ([], [{}], [{}] * 5, [None, {}]):
+        with pytest.raises(ValueError, match='two to four'):
+            stand.validate_plan({'schema': 'adaos.e2e.application_tools.v1', 'steps': [{**step, 'concurrent_arguments': variants}]})
+    results = [{'http_status': 200, 'body': {'ok': True, 'result': {'ok': True}}},
+               {'http_status': 200, 'body': {'ok': True, 'result': {'ok': False, 'error': 'conflict'}}}]
+    assert stand.race_summary(results) == {'results': results, 'http_statuses': [200, 200], 'success_count': 1}
+    assert stand.race_summary([{'http_status': 409, 'body': {'detail': 'conflict'}}])['success_count'] == 0
+
+
+def test_race_uses_independent_sessions_and_keeps_submission_order(monkeypatch):
+    from threading import Barrier
+    barrier = Barrier(2, timeout=2)
+    sessions = []
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, value):
+            self.value = value
+
+        def json(self):
+            return {'result': self.value}
+
+    class Session:
+        def __enter__(self):
+            sessions.append(self)
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def post(self, url, **kwargs):
+            barrier.wait()
+            return Response(kwargs['json'])
+
+    monkeypatch.setattr(stand.requests, 'Session', Session)
+    result = stand.concurrent_calls('http://127.0.0.1', {}, [{'id': 1}, {'id': 2}])
+    assert len(sessions) == 2 and sessions[0] is not sessions[1]
+    assert [item['body']['result']['id'] for item in result['results']] == [1, 2]

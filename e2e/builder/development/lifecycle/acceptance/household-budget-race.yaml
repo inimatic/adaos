@@ -1,0 +1,46 @@
+schema: adaos.e2e.application_tools.v1
+steps:
+  - id: concurrent-create
+    tool: budget_save
+    concurrent_arguments:
+      - &create
+        entity: transaction
+        request_token: '${case_instance_id}'
+        values: &record
+          type: expense
+          date: '2112-04-01'
+          Transaction.category: groceries
+          Transaction.currency: USD
+          person: alex
+          amount: '1.00'
+          note: '${case_instance_id}'
+      - *create
+    expect: {values: {http_statuses: [200, 200], success_count: 2}}
+  - id: unique-created-record
+    tool: budget_list
+    arguments: {entity: transaction, search: '${case_instance_id}'}
+    expect:
+      values:
+        body.result.items.0.id: $steps.concurrent-create.results.0.body.result.item.id
+        body.result.items.0.revision: 1
+      paths_absent: [body.result.items.1]
+  - id: concurrent-update
+    tool: budget_save
+    concurrent_arguments:
+      - entity: transaction
+        id: $steps.unique-created-record.body.result.items.0.id
+        revision: 1
+        values: {<<: *record, amount: '2.00'}
+      - entity: transaction
+        id: $steps.unique-created-record.body.result.items.0.id
+        revision: 1
+        values: {<<: *record, amount: '3.00'}
+    expect: {values: {http_statuses: [200, 400], success_count: 1}}
+  - id: winning-revision
+    tool: budget_get
+    arguments: {entity: transaction, id: $steps.unique-created-record.body.result.items.0.id}
+    expect: {values: {body.result.item.revision: 2}, values_in: {body.result.item.amount: ['2.00', '3.00']}}
+  - id: cleanup
+    tool: budget_delete
+    arguments: {entity: transaction, id: $steps.unique-created-record.body.result.items.0.id, revision: 2}
+    expect: {values: {body.result.ok: true}}

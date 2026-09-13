@@ -1,6 +1,7 @@
 """Independent declarative DEV-owner tool checks against a pinned TEST Automation."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import copy
 import json
 import os
@@ -51,7 +52,40 @@ def validate_plan(plan):
             raise ValueError('Steps need unique IDs and local tool names')
         if step.get('caller', 'owner') not in {'owner', 'anonymous'} or not step.get('expect'):
             raise ValueError('DEV checks require explicit expectations and owner/anonymous ingress')
+        if 'concurrent_arguments' in step:
+            variants = step['concurrent_arguments']
+            if ('arguments' in step or not isinstance(variants, list) or not 2 <= len(variants) <= 4
+                    or not all(isinstance(item, dict) for item in variants)):
+                raise ValueError('A race requires two to four argument objects and no sequential arguments')
         seen.add(key)
+
+
+def observe_response(response):
+    return {'http_status': response.status_code, 'body': response.json()}
+
+
+def race_summary(results):
+    def successful(item):
+        body = item['body']
+        result = body.get('result', body)
+        return (200 <= item['http_status'] < 300 and body.get('ok') is not False
+                and (not isinstance(result, dict) or result.get('ok') is not False))
+    return {'results': results, 'http_statuses': sorted(item['http_status'] for item in results),
+            'success_count': sum(successful(item) for item in results)}
+
+
+def concurrent_calls(hub, headers, bodies):
+    # Separate sessions avoid sharing mutable connection/cookie state between racers.
+    from threading import Barrier
+    barrier = Barrier(len(bodies), timeout=10)
+
+    def request(body):
+        with requests.Session() as client:
+            barrier.wait()
+            return observe_response(client.post(hub + '/api/tools/call', headers=headers, json=body, timeout=60))
+
+    with ThreadPoolExecutor(max_workers=len(bodies)) as executor:
+        return race_summary(list(executor.map(request, bodies)))
 
 
 def main():
@@ -94,20 +128,25 @@ def main():
         try:
             for step in plan['steps']:
                 step_id = step['id']
-                arguments = _resolve_value(step.get('arguments', {}), context)
-                if arguments.get('webspace_id', webspace) != webspace:
-                    raise ValueError('An operation cannot override the pinned webspace')
-                arguments['webspace_id'] = webspace
-                body = {'tool': f'{args.skill}:{step["tool"]}', 'arguments': arguments,
-                        'dev': True, 'context': {'webspace_id': webspace, 'current_scenario_id': scenario}}
+                bodies = []
+                for raw in step.get('concurrent_arguments', [step.get('arguments', {})]):
+                    arguments = _resolve_value(raw, context)
+                    if arguments.get('webspace_id', webspace) != webspace:
+                        raise ValueError('An operation cannot override the pinned webspace')
+                    arguments['webspace_id'] = webspace
+                    bodies.append({'tool': f'{args.skill}:{step["tool"]}', 'arguments': arguments,
+                                   'dev': True, 'context': {'webspace_id': webspace, 'current_scenario_id': scenario}})
                 report['active_step'] = step_id
                 _write_json(output, redact_value(report))
                 started = time.perf_counter()
-                response = client.post(hub + '/api/tools/call', headers=headers[step.get('caller', 'owner')],
-                                       json=body, timeout=60)
-                observed = {'http_status': response.status_code, 'body': response.json()}
+                credential = headers[step.get('caller', 'owner')]
+                if 'concurrent_arguments' in step:
+                    observed = concurrent_calls(hub, credential, bodies)
+                else:
+                    observed = observe_response(client.post(hub + '/api/tools/call', headers=credential,
+                                                            json=bodies[0], timeout=60))
                 findings = _expectation_findings(observed, _resolve_value(step['expect'], context))
-                report['steps'].append({'id': step_id, 'input': body, 'output': observed,
+                report['steps'].append({'id': step_id, 'input': bodies if len(bodies) > 1 else bodies[0], 'output': observed,
                                        'duration_ms': round((time.perf_counter() - started) * 1000, 2),
                                        'status': 'failed' if findings else 'passed', 'findings': findings})
                 report['active_step'] = None
