@@ -32,7 +32,7 @@ const report = { scope: 'Independent DEV-owner browser journey, not delegated au
 const browser = await chromium.launch({ headless: true })
 try {
   for (const [layout, viewport] of Object.entries({ wide: { width: 1440, height: 1000 }, compact: { width: 390, height: 844 } })) {
-    const sample = { layout, checks: [], errors: [], network: [], marker: `E2E-${layout}-${Date.now()}` }
+    const sample = { layout, startedAt: Date.now(), checks: [], errors: [], requests: [], network: [], marker: `E2E-${layout}-${Date.now()}` }
     report.samples.push(sample)
     const context = await browser.newContext({ viewport })
     await context.addInitScript(({ hub, token, subnet, webspace, locale }) => {
@@ -50,15 +50,24 @@ try {
     page.on('pageerror', error => sample.errors.push(error.message))
     const responses = []
     const started = new WeakMap()
-    page.on('request', request => started.set(request, Date.now()))
+    page.on('request', request => {
+      started.set(request, Date.now())
+      if (new URL(request.url()).pathname === '/api/tools/call') {
+        sample.requests.push({ elapsedMs: Date.now() - sample.startedAt, body: request.postDataJSON() })
+      }
+    })
     page.on('response', response => {
       if (new URL(response.url()).pathname !== '/api/tools/call') return
       responses.push(response.json().then(body => sample.network.push({
-        status: response.status(), elapsedMs: Date.now() - started.get(response.request()),
+        status: response.status(), elapsedMs: Date.now() - started.get(response.request()), timing: response.request().timing(),
         request: response.request().postDataJSON(), body,
       })).catch(() => {}))
     })
-    const expand = value => typeof value === 'string' ? value.replaceAll('${marker}', sample.marker) : value
+    const variables = { marker: sample.marker }
+    const expand = value => typeof value === 'string' ? value.replace(/\$\{([A-Za-z0-9_]+)\}/g, (_, key) => {
+      if (!(key in variables)) throw new Error(`Unknown journey variable: ${key}`)
+      return variables[key]
+    }) : value
     const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).last()
     const locator = step => step.role ? (step.widget ? host(step.widget) : page).getByRole(step.role, { name: step.namePattern ? new RegExp(step.namePattern, 'i') : step.name, exact: true }) : step.selector ? (step.hasText ? page.locator(step.selector).filter({ hasText: new RegExp(step.hasText, 'i') }) : page.locator(step.selector)) : step.field
       ? host(step.widget).locator(`[data-webui-field-id=${JSON.stringify(step.field)}]`).locator(step.control || 'input,textarea,select')
@@ -89,8 +98,18 @@ try {
           case 'fill': await locator(step).fill(expand(step.value)); break
           case 'select': {
             const field = host(step.widget).locator(`[data-webui-field-id=${JSON.stringify(step.field)}]`)
+            await expect(field).toBeVisible({ timeout: 15_000 })
             if (await field.locator('select').count()) {
-              await field.locator('select').selectOption(step.label ? { label: expand(step.label) } : { value: expand(step.value) })
+              const select = field.locator('select')
+              if (step.label) await select.selectOption({ label: expand(step.label) })
+              else {
+                // Angular ngValue prefixes the native option value with its internal index.
+                const value = String(expand(step.value))
+                const option = () => select.locator('option').evaluateAll((nodes, expected) =>
+                  nodes.find(node => node.value === expected || node.value.replace(/^\d+: /, '') === expected)?.value, value)
+                await expect.poll(option, { timeout: 15_000 }).toBeTruthy()
+                await select.selectOption({ value: await option() })
+              }
             } else {
               await field.getByRole('radio', { name: expand(step.label || step.value), exact: true }).check()
             }
@@ -119,6 +138,11 @@ try {
             const body = await response.json()
             const result = body.result ?? body
             expect(response.ok() && body.ok !== false && result.ok !== false).toBe(step.ok !== false)
+            for (const [key, field] of Object.entries(step.capture || {})) {
+              const value = field.split('.').reduce((item, segment) => item?.[segment], result)
+              if (!['string', 'number', 'boolean'].includes(typeof value)) throw new Error(`Missing scalar capture: ${field}`)
+              variables[key] = value
+            }
             if (step.error) expect(result.error).toBe(step.error)
             if (step.ok === false || step.keepOpen) await expect(host(step.widget)).toBeVisible()
             else await expect(host(step.widget)).toHaveCount(0)
@@ -136,6 +160,7 @@ try {
     } catch (error) {
       sample.failure = error.message
       sample.modalControls = await page.locator('ion-modal ion-button,ion-modal button').evaluateAll(nodes => nodes.map(node => node.outerHTML))
+      sample.runtimeDiagnostics = await page.evaluate(() => window.__ADAOS_RUNTIME_DEBUG__?.get?.() ?? null)
     }
     await Promise.all(responses)
     sample.text = await page.locator('body').innerText()

@@ -2840,16 +2840,25 @@ Inspections Automation against one frozen existing Prototype.
   `journey-02` repeats all 60 steps per viewport and captures an opaque compact
   editor with animations disabled. This was a transition capture, not a Client
   surface defect; no Client change was required.
-- [ ] `[must]` Inventory/Procurement: atomic stock movements, computed deficit,
+- [x] `[must]` Inventory/Procurement: atomic stock movements, computed deficit,
   quote comparison, request/line relationships and submit without fake approval.
   `automation-cohort-20260913-inventory-procurement-ru`: first task
   `task.01M2DPZFW3J0XK7BPQ6VV76YMA` passes 11 skill and 5 scenario package tests
   without worker repair. `http-01.json` passes 40 independent steps, including
   concurrent overspend, replay, mixed-currency rejection and submitted locks.
-  Browser qualification remains open: `journey-01` exposed a shared Client
-  caption loader restricted to Prototype resource queries; `journey-02` then
-  encountered slow DEV reads during overlapping test/build work. Keep these
-  attempts separate from a completed browser verdict.
+  `journey-04` passes all 72 steps on each wide/compact viewport. `journey-01`
+  exposed a shared Client caption loader restricted to Prototype resource queries;
+  the generic loader now accepts owned-skill reads as well. Earlier attempts also
+  exposed intermittent startup delays; functional passage does not close the
+  separate runtime-latency investigation below. First implementation took 14.5
+  minutes; provider totals are 63,673 fresh input, 853,888 cached input and 24,017
+  output tokens. Trial and installed authorization remain outside this verdict.
+- [ ] `[must]` Local runtime latency: profile startup/read fan-out and post-save
+  refresh under real browser journeys. Inventory `journey-02/03` and Roster
+  `journey-03` encountered slow calls despite successful persistence. Preserve
+  request-start, HTTP timing and runtime diagnostics; do not mask the delay by
+  raising assertion or tool timeouts. One successful repetition is not a latency
+  qualification. Separate browser queueing, ingress, tool loading and execution.
 - [ ] `[must]` Volunteer Roster: availability, overlap/capacity guards,
   cancellation/reassignment and derived staffing counts.
   The first admission (`automation-01`) stopped before any model call:
@@ -2857,11 +2866,20 @@ Inspections Automation against one frozen existing Prototype.
   absent from persisted acceptance snapshots. The evaluator now also checks
   executable relationship policies, matching the same command target and
   editable reference field; it does not infer resource identity from names.
-  The unchanged Prototype `002` is admitted in `automation-02`; implementation
-  is running, not yet qualified. Regression tests cover compiler and persisted
+  The unchanged Prototype `002` is admitted in `automation-02`; task
+  `task.01M2DR64GPKMHD24HJHZXZG8SN` passes 15 skill and 4 scenario package tests
+  after one worker repair of a BOM-prefixed JSON file. Independent `http-01.json`
+  passes 31 checks, including failed reassignment retention, cancellation/history
+  and capacity concurrency. Browser qualification remains open; initial stand
+  option-selection assumptions and later refresh latency are retained separately.
+  Regression tests cover compiler and persisted
   projections plus rejection when the editable relationship field is absent.
 - [ ] `[must]` Operations Queue: saved board transitions including drag, details,
   assignment, filters and computed overdue state.
+  `automation-01` failed before any model call while Git indexed a long Windows
+  source path. The worker now sets `core.longpaths=true` only in its isolated
+  repository; a deep-path regression passes. Retry `automation-02` retains the
+  same accepted Prototype and full original brief, verified in its admitted input.
 - [ ] `[must]` Knowledge Library: persistent content, search/filter,
   publish/archive/read-only enforcement and editor failure recovery.
 - [ ] `[must]` Media Review: real media URLs, revision-bound comments/status,
@@ -2877,8 +2895,13 @@ Inspections Automation against one frozen existing Prototype.
   recovery compatibility. This prevents successful repairs from erasing evidence
   of the original failure. Historical overwritten responses cannot be recovered
   by this change; qualify the archive on the next actual worker repair.
-- [ ] `[must]` Verify retained model-attempt archives on an actual worker repair,
-  beyond the passing unit tests. Preserve exact input/output attribution.
+- [x] `[must]` Verify retained model-attempt archives on an actual worker repair,
+  beyond the passing unit tests. Roster task `task.01M2DR64GPKMHD24HJHZXZG8SN`
+  retains `output/model-attempts/001` with the original journal, final message,
+  stderr and failed validation; all four byte counts/SHA-256 receipts match.
+  The second admitted prompt and live output describe the separate BOM repair.
+  Automation input now explicitly requires UTF-8 without BOM; strict parsing is
+  retained rather than making the validator silently accept malformed artifacts.
 
 ## Could And Deferred Work
 

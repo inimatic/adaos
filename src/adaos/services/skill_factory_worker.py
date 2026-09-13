@@ -6292,7 +6292,7 @@ when a governed Dev Ticket repair explicitly supplies its separate contract.
 7. Do not edit anything outside these task paths: {allowed_paths}.
 8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. This is AdaOS project source work, not Codex skill authoring. Do not load generic skill-creator instructions or personal/global skills.
 2. The packet, accepted prototype, companion scaffold, and rule capsules are authoritative; do not rediscover them.{accepted_prototype_instruction}
-3. Use public `adaos.sdk` contracts only. Edit only: {allowed_paths}. Preserve unrelated behavior, UTF-8, immutable inputs, and manifest `version`/`updated_at`; Forge owns release metadata.
+3. Use public `adaos.sdk` contracts only. Edit only: {allowed_paths}. Preserve unrelated behavior, immutable inputs, and manifest `version`/`updated_at`; Forge owns release metadata. Write text as UTF-8 without BOM; Windows PowerShell `-Encoding UTF8` can emit a BOM, so use a BOM-free writer for JSON.
 4. Inspect manifests/handlers, UI bindings, and tests in exact files or JSON slices: at most {command_output_lines} lines and {command_output_bytes} bytes per response; there is no fixed first-edit line quota for a full implementation. Do not scan the complete SDK, repository, or task tree.
 5. Search compact MCP headers, then read the selected method. Repeat for independently needed contracts and reuse prior results. Empty search/catalog headers are not proof of a missing capability: narrow the query or read the admitted public symbol before reporting a blocker.
 6. Use `ADAOS_PYTHON`, commit-bound `ADAOS_REPO_ROOT`/`PYTHONPATH`, `skill_data_root()` and ContentRef. Runtime files belong under `ADAOS_BASE_DIR`/`ADAOS_TASK_RUNTIME_DIR`. Declare imports, tools and data routes.
@@ -6594,6 +6594,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
 
     def _init_git_workspace(self, workspace: Path, branch: str) -> None:
         _git(["init"], cwd=workspace)
+        # Isolated task roots add depth to otherwise valid source paths on Windows.
+        _git(["config", "core.longpaths", "true"], cwd=workspace)
         _git(["config", "user.name", "AdaOS Local Skill Factory"], cwd=workspace)
         _git(["config", "user.email", "skill-factory@localhost"], cwd=workspace)
         _git(["add", "-A"], cwd=workspace)

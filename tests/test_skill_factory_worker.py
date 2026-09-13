@@ -1160,6 +1160,32 @@ def test_local_worker_materializes_and_syncs_all_companion_skills(
         ).read_text(encoding="utf-8")
 
 
+def test_worker_automation_prompt_requires_bom_free_json(tmp_path: Path) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state", repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios",
+    )
+    workspace, inputs = tmp_path / "workspace", tmp_path / "input"
+    (workspace / "skills" / "demo").mkdir(parents=True)
+    worker._build_packet({"task_id": "task.encoding", "target": {"type": "skill", "id": "demo"},
+                          "forge": {"sparse_paths": ["skills/demo/"]}}, workspace, inputs)
+    assert "UTF-8 without BOM" in (inputs / "task.md").read_text(encoding="utf-8")
+
+
+def test_worker_git_workspace_supports_deep_source_paths(tmp_path: Path) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state", repo_root=tmp_path,
+        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    source = workspace / ("a" * 90) / ("b" * 90) / "source.json"
+    source.parent.mkdir(parents=True)
+    source.write_text("{}\n", encoding="utf-8")
+    worker._init_git_workspace(workspace, "test/long-path")
+    assert worker_module._git(["config", "--local", "core.longpaths"], cwd=workspace) == "true"
+    assert source.relative_to(workspace).as_posix() in worker_module._git(["ls-files"], cwd=workspace)
+
+
 def test_worker_rejects_codex_changes_to_checkpoint_owned_manifest_metadata(
     tmp_path: Path,
 ) -> None:
