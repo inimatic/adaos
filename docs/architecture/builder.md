@@ -266,6 +266,11 @@ package checks; independent review owns browser and deployed-runtime evidence.
 The model must mark unexecuted checks explicitly, not turn implementation
 claims into successful acceptance. A correction gets a newly admitted context;
 never rewrite the input files of an already running task.
+Retain the exact UTF-8 prompt of **every** model invocation before execution,
+including automatic validation repairs, with a byte digest. `task.md` alone is
+the authoring base, not proof of the full follow-up input. Repair prompts keep
+the same verification ownership; feedback blockers are checked on every turn.
+Package tests inherit SDK imports but cannot require Codex-only checkout paths.
 
 Feedback reference grammar is part of the exposed parser contract. Fully
 qualified SDK symbols may normalize to `sdk:` references; ambiguous bare names

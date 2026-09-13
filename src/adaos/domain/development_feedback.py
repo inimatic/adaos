@@ -189,7 +189,7 @@ def development_feedback_model_rules() -> dict[str, Any]:
 def _target_ref(value: Any) -> str:
     value = _text(value, field="target_ref", limit=500, required=True)
     if re.fullmatch(r"adaos\.sdk\.[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", value, flags=re.ASCII):
-        return "sdk:" + value
+        return _text("sdk:" + value, field="target_ref", limit=500, required=True)
     return value
 
 

@@ -23,6 +23,9 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
     assert "Prototype" in guide["binding_rules"]["attachments"] or "Preview" in guide["binding_rules"]["attachments"]
     assert "metadata only" in guide["binding_rules"]["attachments"]
     assert "workspace.write" in guide["binding_rules"]["authorization"]
+    assert "data_routes[*].tool is the LOCAL" in guide["binding_rules"]["tool_declarations"]
+    assert "callSkill.target are QUALIFIED" in guide["binding_rules"]["tool_declarations"]
+    assert "not an installed-skill contract" in guide["binding_rules"]["package_tests"]
     guide["examples"].clear()
     assert implementation_binding_contract()["examples"]
 

@@ -4246,7 +4246,8 @@ class LocalSkillFactoryWorker:
                     prompt
                     + "\n\n# Deterministic validation repair\n\n"
                     + "The previous implementation did not pass the worker checks below. Continue in the existing workspace, "
-                    + "fix every reported issue, rerun relevant checks, and leave the workspace in a valid state.\n\n"
+                    + "fix every reported issue and add focused regression coverage. Do not execute tests or validation; "
+                    + "the trusted worker reruns them. Preserve unrelated behavior and mark unexecuted checks explicitly.\n\n"
                     + "\n".join(f"- {item}" for item in test_report["errors"][:40])
                 )
                 repair_root_mcp = root_mcp
@@ -4272,6 +4273,14 @@ class LocalSkillFactoryWorker:
                         f"Codex repair exited with code {codex_result.returncode}: "
                         f"{_codex_failure_detail(codex_result)}"
                     )
+                failure_stage = "development_feedback"
+                repair_feedback = parse_development_feedback(codex_result.final_message)
+                development_feedback.extend(self._record_codex_development_feedback(assignment, repair_feedback))
+                if any(item.get("blocking") for item in repair_feedback):
+                    failure_feedback_refs = [item["feedback_id"] for item in development_feedback]
+                    raise ValueError("Automation blocked by reported development feedback; candidate was not applied")
+                if parse_development_escalations(codex_result.final_message):
+                    raise ValueError("Validation repair escalation requires a separate governed no-source repair")
             self._cleanup_generated_files(workspace)
             if root_mcp_evidence:
                 test_report.setdefault("checks", []).append(
@@ -4701,6 +4710,18 @@ class LocalSkillFactoryWorker:
         agent_profile: Mapping[str, Any] | None = None,
         root_mcp: Mapping[str, Any] | None = None,
     ) -> CodexRunResult:
+        input_root = output_dir.parent / "input" / "model-attempts"
+        input_root.mkdir(parents=True, exist_ok=True)
+        attempt = len(list(input_root.glob("*.prompt.md"))) + 1
+        prompt_path = input_root / f"{attempt:03}.prompt.md"
+        raw_prompt = prompt.encode("utf-8")
+        with prompt_path.open("xb") as stream:
+            stream.write(raw_prompt)
+        _write_json(prompt_path.with_suffix(".json"), {
+            "schema": "adaos.skill_factory.model_input.v1", "task_id": task_id,
+            "attempt": attempt, "prompt_bytes": len(raw_prompt),
+            "prompt_sha256": hashlib.sha256(raw_prompt).hexdigest(),
+        })
         if isinstance(self.executor, SubprocessCodexExecutor):
             profile = dict(agent_profile or {})
             provider = str(profile.get("provider") or "openai-codex-cli").strip()
@@ -7833,6 +7854,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             )._execution_environment(
                 runtime_base_dir=workspace.parent / "adaos-runtime-packaged"
             )
+            # Native installed tests have SDK imports, not an authoring checkout.
+            environment.pop("ADAOS_REPO_ROOT", None)
             if owner_kind == "skills":
                 skill_id = tests_dir.parent.name
                 internal_data_root = (

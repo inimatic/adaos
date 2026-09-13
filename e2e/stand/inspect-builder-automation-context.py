@@ -28,6 +28,11 @@ def inspect_admitted_input(input_dir: Path) -> dict:
         receipts[name] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
         text = raw.decode("utf-8")
         documents[name] = text if name.endswith(".md") else json.loads(text)
+    model_attempts = []
+    for path in sorted((input_dir / "model-attempts").glob("*.prompt.md")):
+        raw = path.read_bytes()
+        model_attempts.append({"path": path.relative_to(input_dir).as_posix(),
+                               "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
     packet = documents["packet.json"]
     prompt = documents["task.md"]
     brief = packet.get("brief") or ""
@@ -52,6 +57,8 @@ def inspect_admitted_input(input_dir: Path) -> dict:
         "scope": "retained model input audit; structural checks are not semantic or Automation acceptance",
         "task_id": packet.get("task_id"),
         "inputs": receipts,
+        "model_attempts": model_attempts,
+        "model_attempt_capture": "present" if model_attempts else "not_recorded_or_no_model_call",
         "brief": {"characters": len(brief), "sha256": hashlib.sha256(brief.encode("utf-8")).hexdigest()},
         "prototype": {key: acceptance.get(key) for key in ("acceptance_id", "revision", "webui_digest")},
         "handoff_mode": handoff.get("mode"),

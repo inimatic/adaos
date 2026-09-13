@@ -2237,7 +2237,8 @@ def test_worker_records_exhausted_public_contract_validation_feedback(
     }
 
 
-def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_path, monkeypatch):
+@pytest.mark.parametrize("during_repair", [False, True])
+def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_path, monkeypatch, during_repair):
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev/skills"
@@ -2254,13 +2255,24 @@ def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_pat
         "target_refs": ["sdk:identity"], "details": "No caller authority was admitted.",
         "recommendation": "Disclose the supported identity contract.", "evidence_refs": [],
     }]}
+    model_calls = []
+    def execute(**kwargs):
+        model_calls.append(kwargs["prompt"])
+        return CodexRunResult(returncode=0, final_message=(
+            "Initial implementation" if during_repair and len(model_calls) == 1 else
+            "```adaos-development-feedback\n" + json.dumps(envelope) + "\n```"))
     worker = LocalSkillFactoryWorker(
         state_dir=state_dir, repo_root=repo_root, dev_skills_root=dev_skills,
         dev_scenarios_root=tmp_path / "dev/scenarios", runs_root=tmp_path / "runs",
-        executor=lambda **kwargs: CodexRunResult(returncode=0, final_message=(
-            "```adaos-development-feedback\n" + json.dumps(envelope) + "\n```")),
+        executor=execute, max_repair_attempts=1,
     )
-    monkeypatch.setattr(worker, "_validate_workspace", lambda *args: pytest.fail("must not validate an unresolved blocker"))
+    validations = []
+    def validate(*args):
+        validations.append(True)
+        if not during_repair or len(validations) > 1:
+            pytest.fail("must not validate an unresolved blocker")
+        return {"ok": False, "status": "failed", "checks": [], "errors": ["Repair the binding"]}
+    monkeypatch.setattr(worker, "_validate_workspace", validate)
     monkeypatch.setattr(worker, "_sync_artifacts", lambda *args: pytest.fail("must not activate blocked source"))
     result = worker.run_once()
     assert result["ok"] is False
@@ -2268,6 +2280,9 @@ def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_pat
     assert failure["stage"] == "development_feedback"
     assert failure["failure_class"] == "capability_blocked"
     assert len(failure["details"]["development_feedback_refs"]) == 1
+    assert len(model_calls) == (2 if during_repair else 1)
+    if during_repair:
+        assert "Do not execute tests or validation" in model_calls[-1]
 
 
 def test_worker_links_final_validator_feedback_to_failed_task(
@@ -4298,6 +4313,7 @@ def test_generated_tests_receive_task_owned_runtime_outside_candidate(
         "    assert runtime != workspace\n"
         "    assert workspace not in runtime.parents\n"
         "    assert os.environ['ADAOS_SKILL_NAME'] == 'candidate'\n"
+        "    assert 'ADAOS_REPO_ROOT' not in os.environ\n"
         "    assert internal == runtime / 'skill-data' / 'candidate'\n"
         "    assert not (workspace / 'scenarios').exists()\n"
         "    assert list((workspace / 'skills').iterdir()) == [workspace / 'skills' / 'candidate']\n"
@@ -4408,6 +4424,24 @@ def test_worker_applies_frozen_agent_profile_to_codex_executor(
         "reasoning_effort": "high",
         "timeout_seconds": 600,
     }
+    prompt_path = tmp_path / "input/model-attempts/001.prompt.md"
+    assert prompt_path.read_bytes() == b"bounded task"
+    receipt = json.loads(prompt_path.with_suffix(".json").read_text(encoding="utf-8"))
+    assert receipt["prompt_sha256"] == hashlib.sha256(b"bounded task").hexdigest()
+
+
+def test_worker_retains_each_exact_model_input_before_execution(tmp_path):
+    observed = []
+    def execute(**kwargs):
+        observed.append(kwargs["prompt"])
+        path = tmp_path / "input/model-attempts" / f"{len(observed):03}.prompt.md"
+        assert path.read_text(encoding="utf-8") == kwargs["prompt"]
+        return CodexRunResult(returncode=0)
+    worker = LocalSkillFactoryWorker(state_dir=tmp_path / "state", repo_root=tmp_path,
+        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios", executor=execute)
+    for prompt in ("Initial task", "Correction: \u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430"):
+        worker._execute_codex(task_id="task.inputs", workspace=tmp_path / "workspace", prompt=prompt, output_dir=tmp_path / "output")
+    assert len(list((tmp_path / "input/model-attempts").glob("*.prompt.md"))) == 2
 
 
 def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
