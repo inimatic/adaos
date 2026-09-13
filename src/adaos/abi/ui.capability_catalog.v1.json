@@ -115,7 +115,7 @@
         "query": "Prefer dataSource.kind=resourceQuery for typed filters, search, sort, cursor, and relevance over Resource Workbench.",
         "crud": "Use action.type=resourceOperation for ordinary create/update/delete. action.target is resource_type; params.operation_id selects the declared operation.",
         "button_scope": "inputs.buttons are repeated on every card. Do not put a board-level Add command there; use the lane add event.",
-        "drag_drop": "Set inputs.dragDrop=true and declare on=move. The event contains record id, fromLaneId, toLaneId, positions, laneKey, and patch; resourceOperation(update) can persist the patch without a skill-specific method.",
+        "drag_drop": "Set inputs.dragDrop=true and declare on=move. The event spreads displayed item fields at top level, including id and revision when supplied by the read, then adds fromLaneId, toLaneId, previousIndex, currentIndex, interaction, laneKey and patch. The lane value is already optimistic. For owned tools bind callSkill params.id=$event.id, revision=$event.revision and patch=$event.patch; not event.record.revision. The renderer awaits the action and rolls back on false/denied result or throw. Do not fetch a newer revision to overwrite a stale view. resourceOperation(update) remains supported for ordinary declarative mutations.",
         "accessible_move": "A lane selector is rendered with draggable cards so the same move is available without a dragging gesture.",
         "lane_create": "Declare on=add to expose one add command per lane. The event provides laneId and defaults containing the lane field, but never payload. When required fields must be entered, on=add opens a typed create form; it must not directly create from $event.payload."
       },

@@ -15,6 +15,25 @@ from adaos.sdk.core import decorators as sdk_decorators
 from adaos.services import skills_loader_importlib as skills_loader_module
 
 
+def test_prioritize_import_paths_does_not_resolve_unrelated_entries(tmp_path, monkeypatch):
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    original_resolve = Path.resolve
+    resolved = []
+
+    def resolve(path, *args, **kwargs):
+        resolved.append(path)
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "path", ["", "./first", str(second), "unrelated.zip", "absent"])
+    monkeypatch.setattr(Path, "resolve", resolve)
+    runtime_runner_module._prioritize_import_paths([first, second, first])
+    assert sys.path == [str(first), str(second), "", "unrelated.zip", "absent"]
+    assert resolved == [first, second, first]
+
+
 def _write_skill(root: Path, name: str, marker: str) -> Path:
     skill_dir = root / name
     (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)

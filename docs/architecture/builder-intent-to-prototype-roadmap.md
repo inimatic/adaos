@@ -2859,7 +2859,14 @@ Inspections Automation against one frozen existing Prototype.
   request-start, HTTP timing and runtime diagnostics; do not mask the delay by
   raising assertion or tool timeouts. One successful repetition is not a latency
   qualification. Separate browser queueing, ingress, tool loading and execution.
-- [ ] `[must]` Volunteer Roster: availability, overlap/capacity guards,
+  Roster `api-profile-01.json` records 90 seconds at 50 Hz: about 98 aggregate
+  thread-seconds waiting for the module-load lock and 25 resolving existing
+  `sys.path` entries beneath it (not CPU seconds). Promotion now normalizes
+  existing entries lexically in one pass, resolving only requested paths. All
+  15 runtime-loader regressions pass, including isolation and reload. Live API
+  verification remains open: the environment rejected its restart, so process
+  9432 was not changed. Do not attribute later old-process timings to this fix.
+- [x] `[must]` Volunteer Roster: availability, overlap/capacity guards,
   cancellation/reassignment and derived staffing counts.
   The first admission (`automation-01`) stopped before any model call:
   `resource.assignment_operation` depended on a compiler-only resource alias
@@ -2870,8 +2877,13 @@ Inspections Automation against one frozen existing Prototype.
   `task.01M2DR64GPKMHD24HJHZXZG8SN` passes 15 skill and 4 scenario package tests
   after one worker repair of a BOM-prefixed JSON file. Independent `http-01.json`
   passes 31 checks, including failed reassignment retention, cancellation/history
-  and capacity concurrency. Browser qualification remains open; initial stand
-  option-selection assumptions and later refresh latency are retained separately.
+  and capacity concurrency. `journey-04` passes 48 steps per wide/compact viewport,
+  including create/edit, readable choices, failed-draft retention, reassignment,
+  reload and cancellation. Initial stand option-selection assumptions and later
+  refresh latency are retained separately. Realization took 15.5 minutes;
+  provider totals are 79,779 fresh input, 984,960 cached input and 24,363 output.
+  This is DEV functional qualification, not broad UX approval: long UTC captions
+  in a native compact select and dense tables remain presentation debt.
   Regression tests cover compiler and persisted
   projections plus rejection when the editable relationship field is absent.
 - [ ] `[must]` Operations Queue: saved board transitions including drag, details,
@@ -2880,6 +2892,12 @@ Inspections Automation against one frozen existing Prototype.
   source path. The worker now sets `core.longpaths=true` only in its isolated
   repository; a deep-path regression passes. Retry `automation-02` retains the
   same accepted Prototype and full original brief, verified in its admitted input.
+  That retry stopped on a valid missing public contract: board move documentation
+  omitted displayed record fields/revision. The Client already spreads these at
+  event top level. Catalog and bounded Automation capsule now document
+  `$event.revision`, awaited command rejection and rollback; 11 Client board tests
+  pass with explicit drag/menu revision assertions. `automation-03` acknowledges
+  this supplied contract and proceeds; no Prototype or renderer rewrite was used.
 - [ ] `[must]` Knowledge Library: persistent content, search/filter,
   publish/archive/read-only enforcement and editor failure recovery.
 - [ ] `[must]` Media Review: real media URLs, revision-bound comments/status,

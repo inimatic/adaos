@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
+import os
 import sys
 import threading
 from contextlib import contextmanager
@@ -203,15 +204,13 @@ def _module_file_is_under(module: Any, root: Path) -> bool:
 
 
 def _prioritize_import_paths(paths: Iterable[Path]) -> None:
-    ordered = [str(Path(path).resolve()) for path in paths]
-    for path_text in reversed(ordered):
-        path_key = str(Path(path_text)).casefold()
-        sys.path[:] = [
-            existing
-            for existing in sys.path
-            if str(Path(existing or ".").resolve()).casefold() != path_key
-        ]
-        sys.path.insert(0, path_text)
+    ordered = list(dict.fromkeys(str(Path(path).resolve()) for path in paths))
+    keys = {os.path.normcase(path) for path in ordered}
+    # Existing entries only need lexical deduplication, not filesystem traversal
+    # for every entry and every promoted path while holding the import lock.
+    retained = [existing for existing in sys.path
+                if os.path.normcase(os.path.abspath(existing or ".")) not in keys]
+    sys.path[:] = ordered + retained
 
 
 def _local_import_roots(skill_path: Path) -> set[str]:

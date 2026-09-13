@@ -511,6 +511,20 @@ the same resource-backed label contract as form selectors, with source-map links
 Host language remains the user's setting; evaluation browsers must set their
 declared locale rather than changing a user's browser preference implicitly.
 
+## Automation Event Contracts
+
+- [x] `[must]` Describe and test loaded revision propagation in board moves,
+  including the lane-selector alternative and optimistic rollback. The renderer
+  spreads displayed fields at event top level; owned tools bind `$event.revision`,
+  while forms use `$event.record.revision`. The catalog and Automation binding
+  guide now state this existing distinction. Eleven focused board tests pass.
+  A model correctly stopped at the former documentation gap instead of inventing
+  an event field or reading a newer revision to bypass stale-write checks.
+- [ ] `[should]` Keep human-readable related-choice captions short enough for
+  native compact selects while retaining precise details elsewhere. Roster's
+  long UTC interval labels are truthful but truncated by the native control;
+  functional Automation acceptance is not unconditional visual approval.
+
 ## Deferred
 
 - [ ] `[deferred]` Generate or ship arbitrary Angular/JavaScript renderer code

@@ -16,7 +16,7 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
     for name, receipt in guide["sources"].items():
         raw = (root / name).read_bytes()
         assert receipt == {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
-    for name in ("read_collection", "record_editor"):
+    for name in ("read_collection", "record_editor", "board_move"):
         ref = guide["schema_refs"][name].split("#", 1)[1]
         jsonschema.Draft202012Validator({**schema, "$ref": f"#{ref}"}).validate(guide["examples"][name])
     assert len(json.dumps(guide, ensure_ascii=False).encode("utf-8")) < 12_000
@@ -31,6 +31,8 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
     assert "entity/projection tags" in guide["binding_rules"]["result"]
     assert "derived captions, choices or locks" in guide["binding_rules"]["result"]
     assert "every changed consumer is refreshed" in guide["binding_rules"]["result"]
+    assert guide["examples"]["board_move"]["params"]["revision"] == "$event.revision"
+    assert "rolls" in guide["binding_rules"]["board_move"]
     guide["examples"].clear()
     assert implementation_binding_contract()["examples"]
 
