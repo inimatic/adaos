@@ -1,10 +1,47 @@
 from types import SimpleNamespace
+import copy
+import json
 
 import pytest
 
 from adaos.services.builder.workbench import BuilderWorkbenchService
 from adaos.services.scenario.webspace_components.builder_publication import WebspaceBuilderPublicationService
 from adaos.services.scenario import webspace_runtime as runtime_module
+
+
+def test_selected_prototype_recovers_revision_not_current_dev(monkeypatch, tmp_path):
+    target = {"stage": "prototype", "object_id": "example", "revision": "002"}
+    monkeypatch.setattr(BuilderWorkbenchService, "from_context", lambda: SimpleNamespace(
+        existing_preview_target=lambda webspace: target,
+    ))
+    revisions = tmp_path / "ui_revisions"
+    revisions.mkdir()
+    pinned = {"ui": {"application": {"desktop": {"pageSchema": {
+        "title": "Approved", "widgets": [{"id": "collection", "type": "ui.table"}],
+    }}}}}
+    (revisions / "002.json").write_text(json.dumps({"after_webui": pinned}), encoding="utf-8")
+
+    def read_current(*args, **kwargs):
+        pytest.fail("a pinned Prototype must not read the current Automation UI")
+
+    operations = SimpleNamespace(
+        scenarios_loader=SimpleNamespace(scenario_root_for_space=lambda *args: tmp_path, read_content=read_current),
+        clone_json_like=copy.deepcopy, canonical_materialization_identity=lambda **kwargs: kwargs,
+    )
+    service = WebspaceBuilderPublicationService()
+    result = service.selected_preview_inputs("preview", scenario_id="example", operations=operations)
+    assert result["scenario_content_override"]["ui"]["application"]["desktop"]["pageSchema"]["widgets"] == [
+        {"id": "collection", "type": "ui.table"},
+    ]
+    assert result["materialization_identity"]["source_fingerprint"].startswith("prototype:sha256:")
+    assert result["materialization_identity"]["revision"] == "002"
+    assert result["skill_decls_snapshot"] is None
+    (revisions / "002.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="no WebUI"):
+        service.selected_preview_inputs("preview", scenario_id="example", operations=operations)
+    target["revision"] = "003"
+    with pytest.raises(ValueError, match="unavailable"):
+        service.selected_preview_inputs("preview", scenario_id="example", operations=operations)
 
 
 def test_selected_trial_recovery_binds_candidate_ui_tools_and_identity(monkeypatch, tmp_path):
@@ -31,18 +68,18 @@ def test_selected_trial_recovery_binds_candidate_ui_tools_and_identity(monkeypat
         ),
         canonical_materialization_identity=lambda **kwargs: kwargs,
     )
-    result = service.selected_trial_inputs("preview", scenario_id="example", operations=operations)
+    result = service.selected_preview_inputs("preview", scenario_id="example", operations=operations)
     assert result["scenario_content_override"] == {"candidate": True}
     assert result["skill_decls_snapshot"] == [{"name": "candidate_skill"}]
     assert result["materialization_identity"]["source_fingerprint"] == "trial:sha256:exact"
     assert result["materialization_identity"]["revision"] == "candidate-1"
     assert calls == [("example", "candidate-1")]
-    assert service.selected_trial_inputs("ordinary", scenario_id="example", operations=operations) == {}
+    assert service.selected_preview_inputs("ordinary", scenario_id="example", operations=operations) == {}
     with pytest.raises(ValueError, match="identity"):
-        service.selected_trial_inputs("preview", scenario_id="other", operations=operations)
+        service.selected_preview_inputs("preview", scenario_id="other", operations=operations)
     target["revision"] = ""
     with pytest.raises(ValueError, match="identity"):
-        service.selected_trial_inputs("preview", scenario_id="example", operations=operations)
+        service.selected_preview_inputs("preview", scenario_id="example", operations=operations)
 
 
 @pytest.mark.asyncio
@@ -53,7 +90,7 @@ async def test_room_resolution_recovers_selected_trial_before_generic_source_loa
         "skill_decls_snapshot": [{"name": "candidate_skill"}], "skill_decls_fingerprint": "exact-tools",
         "materialization_identity": {"revision": "candidate-1"},
     }
-    monkeypatch.setattr(runtime_module, "_selected_trial_preview_inputs", lambda *args: selected)
+    monkeypatch.setattr(runtime_module, "_selected_preview_inputs", lambda *args: selected)
     runtime = runtime_module.WebspaceScenarioRuntime()
     captured = {}
     expected = object()
@@ -83,7 +120,7 @@ async def test_room_resolution_recovers_selected_trial_before_generic_source_loa
 async def test_explicit_materialization_is_not_overridden_by_previous_trial(monkeypatch):
     def unexpected(*args):
         pytest.fail("explicit source selection must not read the old preview target")
-    monkeypatch.setattr(runtime_module, "_selected_trial_preview_inputs", unexpected)
+    monkeypatch.setattr(runtime_module, "_selected_preview_inputs", unexpected)
     captured = {}
     async def resolve(*args, **kwargs):
         captured.update(kwargs)

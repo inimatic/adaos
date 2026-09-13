@@ -209,7 +209,7 @@ The supported transitions are:
 | Change-set gate | Action | Next gate | Durable effect |
 | --- | --- | --- | --- |
 | Prototype | approve/stabilize Prototype | Automation | approved revision becomes immutable requirement input |
-| Automation | isolated Codex completes | Trial | result, checks, source Prototype, and member changes are checkpointed |
+| Automation | isolated Codex completes | Automation review, then optional Trial | result, technical checks, source Prototype, and member changes are checkpointed; functional acceptance is separate |
 | Trial | reject or request changes | Prototype or Automation | candidate stays non-promotable and the affected issue items reopen |
 | Trial | accept | Publication | accepted trial evidence admits stable promotion |
 | Publication | publish | Complete | immutable release and publication evidence reference the change set |
@@ -232,6 +232,28 @@ changes it, and is stripped before DEV activation and package construction.
 If adaptation fails, Builder records the adaptation diagnostic and restores
 the retained Automation to `completed`; the failed side process never
 invalidates the last working implementation or Publication snapshot.
+
+### Frozen Prototype Automation Evaluation
+
+Debugging realization must keep one explicitly accepted Prototype revision as
+the immutable design baseline. Compare its actual revision, resource snapshots,
+locales and interaction evidence, not the mutable DEV WebUI already replaced by
+Automation. A preview reopen must recover the selected snapshot or report its
+absence; it must not silently show the latest DEV source under the old stage.
+
+An Automation brief separates preserved interactions from explicitly authorized
+additions and production-only rules. Missing create/edit paths needed for empty
+installation are explicit requirements, not presumed Prototype achievements.
+Preserve selection versus editing semantics, visible parent captions, filters,
+field meaning and modal reachability. Intentional changes to mock-only guards
+must be recorded rather than mistaken for accidental parity regressions.
+
+`completed` is an executor/activation result, not functional acceptance. Independent
+acceptance exercises complete browser journeys and server rules, persistence,
+failure recovery and access under the actual caller. Unit stubs, visible buttons
+and successful activation alone cannot close that gate. Keep unavailable checks
+open. Automation-only evaluation is allowed to stop before Trial or publication;
+that pause neither waives delivery checks nor authorizes preparing a candidate.
 
 Lifecycle projects dependency, not three independent stage buckets:
 

@@ -1,6 +1,7 @@
 import { chromium } from 'playwright'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 
 const scenario = process.env.ADAOS_E2E_SCENARIO_ID
 const webspace = process.env.ADAOS_E2E_WEBSPACE_ID
@@ -17,6 +18,8 @@ if (!['prototype', 'automation', 'trial', 'publication'].includes(reviewStage)) 
 if (!['development', 'workspace'].includes(spaceKind)) throw new Error('Unsupported review space')
 if (emptyMode && spaceKind !== 'development') throw new Error('Empty fixture probes require development space')
 const dictionaryProbe = process.env.ADAOS_E2E_DICTIONARY_PROBE === '1'
+const expectedWebui = process.env.ADAOS_E2E_EXPECTED_WEBUI
+  ? JSON.parse(await fs.readFile(process.env.ADAOS_E2E_EXPECTED_WEBUI, 'utf8')) : null
 let expectedTranslation
 if (dictionaryProbe) {
   const checkpoint = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CHECKPOINT, 'utf8'))
@@ -107,6 +110,16 @@ try {
       await page.locator('ada-page-widget-host, ada-widget').first().waitFor({ timeout: 15_000 })
       await page.evaluate(() => document.fonts.ready)
       console.log(`${layout}: materialization and fonts ready`)
+      if (expectedWebui) {
+        const signature = widget => ({ id: widget.id, type: widget.type, dataSource: widget.dataSource ?? null })
+        const expected = expectedWebui.ui.application.desktop.pageSchema.widgets.map(signature)
+        const actual = await page.locator('ada-page-widget-host').evaluateAll(elements => elements.map(element => {
+          const widget = window.ng?.getComponent(element)?.widget
+          return widget ? { id: widget.id, type: widget.type, dataSource: widget.dataSource ?? null } : null
+        }).filter(Boolean))
+        await fs.writeFile(path.join(output, `${layout}-source-parity.json`), JSON.stringify({ expected, actual }, null, 2) + '\n', 'utf8')
+        if (!isDeepStrictEqual(actual, expected)) throw new Error('Rendered widget sources differ from the pinned WebUI')
+      }
       if (reviewStage === 'trial') {
         await page.waitForFunction(() => {
           const source = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization

@@ -106,8 +106,8 @@ def _builder_publication_operations() -> BuilderPublicationOperations:
     )
 
 
-def _selected_trial_preview_inputs(webspace_id: str, scenario_id: str | None) -> dict[str, Any]:
-    return _RUNTIME.builder_publication.selected_trial_inputs(
+def _selected_preview_inputs(webspace_id: str, scenario_id: str | None) -> dict[str, Any]:
+    return _RUNTIME.builder_publication.selected_preview_inputs(
         webspace_id, scenario_id=scenario_id, operations=_builder_publication_operations(),
     )
 
@@ -5554,7 +5554,7 @@ class WebspaceScenarioRuntime:
 
         if materialization_identity is None and scenario_content_override is None:
             selected = await _run_materialization_cpu(
-                _selected_trial_preview_inputs, webspace_id, scenario_id,
+                _selected_preview_inputs, webspace_id, scenario_id,
             )
             if selected:
                 scenario_id = selected["scenario_id"]
@@ -5624,7 +5624,7 @@ class WebspaceScenarioRuntime:
     ) -> WebUIRegistryEntry:
         if materialization_identity is None and scenario_content_override is None:
             selected = await _run_materialization_cpu(
-                _selected_trial_preview_inputs, webspace_id, scenario_id,
+                _selected_preview_inputs, webspace_id, scenario_id,
             )
             if selected:
                 scenario_id = selected["scenario_id"]

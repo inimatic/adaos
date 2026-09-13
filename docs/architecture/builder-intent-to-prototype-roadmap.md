@@ -2496,7 +2496,37 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
 - [ ] `[should]` Resolve the isolated Builder browser's node-status 401/Limited
   indicator separately from scenario rendering and source publication health.
 
-## Could And Deferred
+## Current Small Automation Focus
+
+Trial and publication experiments are paused by the 2026-09-13 user decision,
+not removed from the target lifecycle. The next gate is a working Equipment
+Inspections Automation against one frozen existing Prototype.
+
+- [x] `[must]` Compare the three retained UI revision `002` artifacts separately
+  from current DEV source. The two older examples and lifecycle example were
+  independent generations, not sequential revisions. Evidence:
+  `equipment-automation-frozen-20260913-01/baselines`.
+- [x] `[must]` Select `test_-20260912-e2ebac45ec1a5c5_f3cce37d`, UI `002`, as
+  the design baseline: equipment table, inspection list, checklist table,
+  search/filter controls and separate editors. Repeat capability and interaction
+  probes for the original run 20 attempt 02 on wide/compact screens. They pass;
+  creation/deletion and production rules are not claimed as Prototype passes.
+- [ ] `[must]` Freeze its exact acceptance and source digests through Builder.
+  Preserve other experiments and user data; do not regenerate the Prototype.
+- [ ] `[must]` Recover pinned Prototype previews after room reopen. Review of
+  the lifecycle example exposed current Automation UI replacing revision `002`.
+  A render-only success without source parity is insufficient evidence.
+- [ ] `[must]` Run the separate Automation-only declarative brief, inspect its
+  actual input and result, and preserve comparison of existing interactions.
+  Add equipment editing and a visible selected parent/dropdown for creation.
+- [ ] `[must]` Independently exercise creation, editing, cancellation, parent
+  selection/reset, search/filtering, draft save, invalid/valid completion,
+  completed-record locks, restart persistence, revision conflicts and error
+  recovery. Keep direct server authorization evidence separate from DEV-owner
+  browser evidence. Stop at blockers, collect reachable findings, then repair
+  through Builder before another acceptance pass.
+
+## Could And Deferred Work
 
 - [ ] `[deferred]` Large-prototype decomposition, shared entity/navigation/locale
   contracts, dependency invalidation, resumable work units and atomic assembly.

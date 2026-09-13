@@ -34,23 +34,40 @@ class BuilderPublicationOperations:
 class WebspaceBuilderPublicationService:
     """Own Builder preview materialization and publication consumer reloads."""
 
-    def selected_trial_inputs(
+    def selected_preview_inputs(
         self,
         webspace_id: str,
         *,
         scenario_id: str | None,
         operations: BuilderPublicationOperations,
     ) -> dict[str, Any]:
-        """Recover a pinned Trial during room bootstrap or effective-branch repair."""
+        """Recover a pinned source during room bootstrap or effective-branch repair."""
         from adaos.services.builder.workbench import BuilderWorkbenchService
 
         target = BuilderWorkbenchService.from_context().existing_preview_target(webspace_id)
-        if not target or target.get("stage") != "trial":
+        if not target or target.get("stage") not in {"prototype", "trial"}:
             return {}
+        stage = target["stage"]
         selected = str(target.get("object_id") or "").strip()
         revision = str(target.get("revision") or "").strip()
         if not selected or not revision or (scenario_id and scenario_id != selected):
-            raise ValueError("selected Trial preview identity does not match the requested scenario")
+            raise ValueError("selected preview identity does not match the requested scenario")
+        if stage == "prototype":
+            from adaos.services.resources.prototype import prototype_webui_digest
+
+            content, _ = self.preview_content_override(
+                selected, stage=stage, revision=revision, label=target.get("label"), operations=operations,
+            )
+            return {
+                "scenario_id": selected,
+                "scenario_content_override": content,
+                "skill_decls_snapshot": None,
+                "skill_decls_fingerprint": None,
+                "materialization_identity": operations.canonical_materialization_identity(
+                    webspace_id=webspace_id, scenario_id=selected, revision=revision,
+                    source_fingerprint=f"prototype:{prototype_webui_digest(content)}",
+                ),
+            }
         activation, root = self.trial_workspace_for_preview(selected, revision=revision, operations=operations)
         release_digest = str((activation.get("candidate_ref") or {}).get("release_digest") or "").strip()
         if not release_digest:
@@ -347,6 +364,8 @@ class WebspaceBuilderPublicationService:
                 if isinstance(loaded, Mapping):
                     content = loaded
                     break
+        if stage_token == "prototype" and revision_token and not isinstance(content, Mapping):
+            raise ValueError(f"Builder prototype revision has no WebUI: {revision}")
         if stage_token == "trial" and not isinstance(content, Mapping):
             raise ValueError(
                 f"Builder Trial package content is unavailable: {scenario_id}"
