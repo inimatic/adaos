@@ -4519,8 +4519,8 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     assert "Previous Automation" not in prompt
     assert "workflow.json" in prompt
     assert "irrelevant.full.catalog" not in prompt
-    # Includes parser vocabulary and exact read-only input paths, not just prose.
-    assert len(prompt.encode("utf-8")) < 8_700
+    # Includes reference grammar and validation ownership, not application examples.
+    assert len(prompt.encode("utf-8")) < 9_500
     assert [item["id"] for item in packet["prompt_rule_capsules"]] == [
         "adaos.builder.execution_boundary.v1",
         "adaos.skill.sdk_boundary.v1",
@@ -6170,6 +6170,7 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
     [
         "deterministic_validation_failure",
         "publication_gate_validation_failure",
+        "development_feedback_requalified",
     ],
 )
 def test_worker_restores_candidate_after_deterministic_project_validation(
@@ -6215,6 +6216,12 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
         encoding="utf-8",
     )
     failure_id = "failure.validation"
+    if continuation_reason == "development_feedback_requalified":
+        (source_run / "runtime").mkdir()
+        (source_run / "runtime" / "codex-final.md").write_text(
+            '```adaos-development-feedback\n{"schema":"adaos.development_feedback_output.v1",'
+            '"items":[{"category":"validation_gap","summary":"Browser not checked",'
+            '"blocking":false,"target_refs":["adaos.sdk.access.require"]}]}\n```', encoding="utf-8")
     monkeypatch.setattr(
         SkillFactoryService,
         "read_task",
@@ -6224,7 +6231,10 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
             "failure_history": [
                 {
                     "failure_id": failure_id,
+                    "stage": "development_feedback" if continuation_reason == "development_feedback_requalified" else "deterministic_validation",
                     "message": (
+                        "ValueError: development feedback target_refs are invalid"
+                        if continuation_reason == "development_feedback_requalified" else
                         "RuntimeError: Generated project validation failed: "
                         "skills/demo/skill.yaml: data_routes.budget_missing"
                     ),
@@ -6265,6 +6275,13 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
     assert restored["source_task_id"] == source_task_id
     assert restored["changed_paths"] == ["skills/demo/webui.json"]
     assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
+
+    if continuation_reason == "development_feedback_requalified":
+        assert "Browser not checked" in restored["requalified_feedback_message"]
+        final = source_run / "runtime" / "codex-final.md"
+        final.write_text(final.read_text(encoding="utf-8").replace('"blocking":false', '"blocking":true'), encoding="utf-8")
+        with pytest.raises(ValueError, match="eligible preservation boundary"):
+            worker._restore_continuation_candidate(assignment, workspace)
 
 
 def test_worker_ignores_budget_stopped_continuation_without_source_changes(
@@ -6943,6 +6960,10 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     assert bindings_path.resolve().as_posix() in prompt
     assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
     assert "sample_skill.save_record" in bindings_path.read_text(encoding="utf-8")
+    assert "stateKey" in bindings["binding_rules"]["creation"]
+    assert "independent acceptance owns browser journeys" in prompt
+    assert "Explicitly mark checks not executed" in prompt
+    assert "These are implementation claims, not passing checks" in prompt
     assert project_id not in bindings_path.read_text(encoding="utf-8")
     assert "Do not create custom CRUD handlers" not in prompt
     assert "Fresh installation starts with empty user data" in prompt

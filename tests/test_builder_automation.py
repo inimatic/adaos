@@ -2378,15 +2378,23 @@ def test_structured_mcp_retry_recovers_checkpoint_from_task_history(
     assert checkpoint["reason"] == "deterministic_validation_failure"
 
 
+@pytest.mark.parametrize("reason", ["deterministic_validation_failure", "development_feedback_requalified"])
 def test_project_validation_failure_preserves_candidate_for_structured_repair(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    reason: str,
 ) -> None:
     service = _service(tmp_path)
     task_id = "task.validation-candidate"
     run_root = service.runs_root / task_id
     (run_root / "workspace" / ".git").mkdir(parents=True)
     (run_root / "input").mkdir(parents=True)
+    if reason == "development_feedback_requalified":
+        (run_root / "runtime").mkdir()
+        (run_root / "runtime" / "codex-final.md").write_text(
+            '```adaos-development-feedback\n{"schema":"adaos.development_feedback_output.v1",'
+            '"items":[{"category":"validation_gap","summary":"Browser not checked",'
+            '"blocking":false,"target_refs":["adaos.sdk.access.require"]}]}\n```', encoding="utf-8")
     continuation_contract = automation_module._continuation_contract()
     (run_root / "input" / "assignment.json").write_text(
         json.dumps(
@@ -2405,7 +2413,10 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
             "failure_history": [
                 {
                     "failure_id": "failure.validation",
+                    "stage": "development_feedback" if reason == "development_feedback_requalified" else "deterministic_validation",
                     "message": (
+                        "ValueError: development feedback target_refs are invalid"
+                        if reason == "development_feedback_requalified" else
                         "RuntimeError: Generated project validation failed: "
                         "skills/demo/skill.yaml: data_routes.budget_missing"
                     ),
@@ -2426,7 +2437,7 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
     assert checkpoint is not None
     assert checkpoint["source_task_id"] == task_id
     assert checkpoint["failure_id"] == "failure.validation"
-    assert checkpoint["reason"] == "deterministic_validation_failure"
+    assert checkpoint["reason"] == reason
 
 
 def test_publication_gate_reuses_related_failed_task_candidate_across_sessions(

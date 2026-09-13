@@ -182,7 +182,15 @@ def development_feedback_model_rules() -> dict[str, Any]:
     """Expose parser vocabulary without a second hand-maintained prompt enum."""
     return {"category": sorted(_CATEGORIES), "impact": sorted(_IMPACTS),
             "max_items": 8, "max_target_refs": 20, "max_evidence_refs": 20,
+            "target_refs": "Use kind:identifier, e.g. sdk:adaos.sdk.access.require. Fully qualified adaos.sdk symbols normalize to sdk: references; other bare names are invalid.",
             "text_limits": {"summary": 1000, "details": 3000, "recommendation": 2000}}
+
+
+def _target_ref(value: Any) -> str:
+    value = _text(value, field="target_ref", limit=500, required=True)
+    if re.fullmatch(r"adaos\.sdk\.[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", value, flags=re.ASCII):
+        return "sdk:" + value
+    return value
 
 
 def normalize_development_feedback(value: Any) -> list[dict[str, Any]]:
@@ -223,7 +231,7 @@ def normalize_development_feedback(value: Any) -> list[dict[str, Any]]:
             raise ValueError("development feedback impact contains unsupported values")
         target_refs = list(
             dict.fromkeys(
-                _text(value, field="target_ref", limit=500, required=True)
+                _target_ref(value)
                 for value in item.get("target_refs") or []
             )
         )

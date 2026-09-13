@@ -248,6 +248,34 @@ Preserve selection versus editing semantics, visible parent captions, filters,
 field meaning and modal reachability. Intentional changes to mock-only guards
 must be recorded rather than mistaken for accidental parity regressions.
 
+Automation input review examines the **admitted** `task.md`, packet, resource
+handoff and binding capsule, not just a reconstructed prompt or the model's
+answer. Retain their digests and check complete brief delivery, exact accepted
+revision, empty production seeds, authorized additions and platform limitations.
+Structural checks cannot prove that the task is unambiguous: also review the
+goal, conflicting instructions and usefulness of actual MCP discovery results.
+The retained-input mode of `e2e/stand/inspect-builder-automation-context.py`
+reports these checks without emitting task credentials or submitting work.
+
+The bounded binding contract describes both editing and creation, including
+state initialization, visible parent choice, cancellation and failed writes.
+Do not imply that literal form defaults resolve expressions or that an empty
+record read initializes a child form. Contract examples must be backed by
+Client tests. Codex implements and adds coverage; the trusted worker executes
+package checks; independent review owns browser and deployed-runtime evidence.
+The model must mark unexecuted checks explicitly, not turn implementation
+claims into successful acceptance. A correction gets a newly admitted context;
+never rewrite the input files of an already running task.
+
+Feedback reference grammar is part of the exposed parser contract. Fully
+qualified SDK symbols may normalize to `sdk:` references; ambiguous bare names
+remain invalid. After a parser correction, a failed feedback-stage candidate
+may be requalified only if the retained worker message parses, contains no
+blocking feedback or escalation, and the normal target, source, continuation
+and path guards still match. Carry the original feedback into the new run and
+repeat validation; never mark the historical failed run successful or discard
+its warning to activate an implementation.
+
 `completed` is an executor/activation result, not functional acceptance. Independent
 acceptance exercises complete browser journeys and server rules, persistence,
 failure recovery and access under the actual caller. Unit stubs, visible buttons

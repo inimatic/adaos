@@ -2526,6 +2526,24 @@ Inspections Automation against one frozen existing Prototype.
   before model submission because its full brief exceeded the 4000-character
   scope contract. A bounded, explicitly partial projection references the full
   brief by digest; the task specification keeps the complete original text.
+- [x] `[must]` Audit actual Codex inputs, not just output. The frozen run receives
+  all 4171 brief characters and the correct acceptance. Fix missing generic
+  create-form initialization guidance and ambiguous verification ownership;
+  clarify that canonical UI authority does not forbid owned implementation files.
+  Retained-input diagnostics expose these gaps without leaking credentials.
+  Client: 30 form tests pass, including state-initialized parent choices;
+  Core: binding and packet tests preserve the bounded capsule and full brief.
+- [ ] `[must]` Requalify the next admitted correction with the updated input
+  contract. Current `automation-02` retains its original inputs; these fixes
+  must not be credited to that in-flight generation.
+- [x] `[must]` Expose feedback reference grammar and normalize only unambiguous
+  fully qualified SDK symbols. `automation-02` generated code in about 17.5
+  minutes but stopped before validation on bare `adaos.sdk.access.require`
+  feedback references. Preserve this failure. Add guarded continuation after
+  parser requalification, retaining the original feedback and rejecting blockers.
+- [ ] `[must]` Exercise that continuation on the retained candidate, then
+  independently qualify its real UI and operations; metadata recovery is not
+  application acceptance.
 - [ ] `[must]` Run the separate Automation-only declarative brief, inspect its
   actual input and result, and preserve comparison of existing interactions.
   Add equipment editing and a visible selected parent/dropdown for creation.

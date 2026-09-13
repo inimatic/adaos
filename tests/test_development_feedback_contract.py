@@ -1,8 +1,27 @@
 from __future__ import annotations
 
 import pytest
+import json
 
-from adaos.domain.development_feedback import parse_development_feedback
+from adaos.domain.development_feedback import parse_development_feedback, development_feedback_model_rules
+
+
+@pytest.mark.parametrize("ref", ["adaos.sdk.access.require", "sdk:adaos.sdk.access.require"])
+def test_feedback_normalizes_unambiguous_sdk_symbols_only(ref):
+    item = {"category": "validation_gap", "summary": "Needs independent validation", "blocking": False,
+            "target_refs": [ref, "sdk:adaos.sdk.access.require"]}
+    envelope = {"schema": "adaos.development_feedback_output.v1", "items": [item]}
+    message = "```adaos-development-feedback\n" + json.dumps(envelope) + "\n```"
+    assert parse_development_feedback(message)[0]["target_refs"] == ["sdk:adaos.sdk.access.require"]
+    assert "kind:identifier" in development_feedback_model_rules()["target_refs"]
+
+
+@pytest.mark.parametrize("ref", ["access.require", "adaos.sdk.", "adaos.sdk.access.require()", "adaos.sdk.access require"])
+def test_feedback_rejects_ambiguous_bare_references(ref):
+    envelope = {"schema": "adaos.development_feedback_output.v1", "items": [
+        {"category": "validation_gap", "summary": "Check", "target_refs": [ref]}]}
+    with pytest.raises(ValueError, match="target_refs"):
+        parse_development_feedback("```adaos-development-feedback\n" + json.dumps(envelope) + "\n```")
 
 
 def test_parse_development_feedback_envelope() -> None:

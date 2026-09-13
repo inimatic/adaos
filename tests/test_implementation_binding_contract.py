@@ -40,6 +40,20 @@ def test_editor_binding_retains_loaded_revision_and_does_not_fake_upload():
     assert guide["examples"]["rejected_write"]["ok"] is False
 
 
+def test_creation_contract_matches_state_hydration_instead_of_dynamic_defaults():
+    guide = implementation_binding_contract()
+    rule = guide["binding_rules"]["creation"]
+    assert "without dataSource" in rule
+    assert "form.<widget.id>.<field.id>" in rule
+    assert "literal values, not $state expressions" in rule
+    assert "empty selected id ignores" in rule
+    assert "related_choices" in rule
+    root = Path(__file__).resolve().parents[1] / "src/adaos/abi"
+    catalog = json.loads((root / "ui.capability_catalog.v1.json").read_text(encoding="utf-8"))
+    form = next(item for item in catalog["components"] if item["id"] == "ui.form")
+    assert "state_initialized_creation" in form["manifest"]
+
+
 def test_skill_choice_source_is_admitted_but_arbitrary_transports_are_not():
     root = Path(__file__).resolve().parents[1] / "src/adaos/abi"
     schema = json.loads((root / "webui.v1.schema.json").read_text(encoding="utf-8"))

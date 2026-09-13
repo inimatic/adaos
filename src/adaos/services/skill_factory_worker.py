@@ -3310,6 +3310,20 @@ class SubprocessCodexExecutor:
         return environment
 
 
+def requalified_feedback_message(run_root: Path, failure: Mapping[str, Any]) -> str | None:
+    """Recheck retained feedback after a parser fix; never waive a blocking report."""
+    if failure.get("stage") != "development_feedback" or "development feedback" not in str(failure.get("message") or ""):
+        return None
+    try:
+        message = (run_root / "runtime" / "codex-final.md").read_text(encoding="utf-8")
+        items = parse_development_feedback(message)
+        if not items or any(item.get("blocking") for item in items) or parse_development_escalations(message):
+            return None
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return None
+    return message
+
+
 class LocalSkillFactoryWorker:
     """One-task local Skill Factory worker used by Prompt IDE automation."""
 
@@ -4011,11 +4025,13 @@ class LocalSkillFactoryWorker:
                 codex_result = CodexRunResult(
                     returncode=0,
                     final_message=(
+                        continuation.get("requalified_feedback_message") or (
                         "Applied qualified deterministic edits and finalized the preserved "
                         f"candidate from {continuation['source_task_id']} without repeating model work."
                         if structured_edits
                         else "Validated and finalized the preserved candidate from "
                         f"{continuation['source_task_id']} without repeating model work."
+                        )
                     ),
                 )
                 _write_json(runtime_dir / "continuation.json", continuation)
@@ -5234,7 +5250,11 @@ class LocalSkillFactoryWorker:
             }
             and "Generated project validation failed:" in failure_message
         )
-        if not token_boundary and not deterministic_validation:
+        feedback_message = (
+            requalified_feedback_message(self.runs_root / _safe_token(source_task_id), failure)
+            if continuation_reason == "development_feedback_requalified" else None
+        )
+        if not token_boundary and not deterministic_validation and not feedback_message:
             raise ValueError(
                 "continuation source task did not stop at an eligible preservation boundary"
             )
@@ -5361,6 +5381,7 @@ class LocalSkillFactoryWorker:
             "source_snapshot_digest": current_digest,
             "changed_paths": restored_paths,
             "root_mcp_evidence": root_mcp_evidence,
+            **({"requalified_feedback_message": feedback_message} if feedback_message else {}),
             "restored_at": _now_iso(),
         }
 
@@ -6152,8 +6173,9 @@ when a governed Dev Ticket repair explicitly supplies its separate contract.
         accepted_revision = str(prototype_acceptance.get("revision") or "").strip()
         accepted_prototype_instruction = (
             f" The accepted Prototype revision is {accepted_revision}; its materialized "
-            f"source authority is scenarios/{target_id}/webui.json. Read and edit that "
-            "canonical file only. ui_revisions is immutable audit evidence and must not "
+            f"source authority is scenarios/{target_id}/webui.json. For UI changes, use that "
+            "canonical file; admitted handlers, manifests, locales and tests remain editable. "
+            "ui_revisions is immutable audit evidence and must not "
             "be opened unless the packet reports a digest mismatch."
             if target_type == "scenario" and accepted_revision
             else ""
@@ -6215,9 +6237,9 @@ when a governed Dev Ticket repair explicitly supplies its separate contract.
 4. Inspect manifests/handlers, UI bindings, and tests in exact files or JSON slices: at most {command_output_lines} lines and {command_output_bytes} bytes per response; there is no fixed first-edit line quota for a full implementation. Do not scan the complete SDK, repository, or task tree.
 5. Search compact MCP headers, then read the selected method. Repeat for independently needed contracts and reuse prior results. Empty search/catalog headers are not proof of a missing capability: narrow the query or read the admitted public symbol before reporting a blocker.
 6. Use `ADAOS_PYTHON`, commit-bound `ADAOS_REPO_ROOT`/`PYTHONPATH`, `skill_data_root()` and ContentRef. Runtime files belong under `ADAOS_BASE_DIR`/`ADAOS_TASK_RUNTIME_DIR`. Declare imports, tools and data routes.
-7. Add focused hermetic regression coverage; test allowance is {generated_test_timeout_seconds} seconds. Do not run tests, validation, status, or diff commands; the trusted worker runs tests and install-strict validation.
-8. No publication, installation, activation or external IO; the trusted worker owns finalization and rollback evidence.
-9. Report every acceptance point and any unmet point."""
+7. Implement the requested behavior and add focused hermetic regression coverage; the trusted worker test allowance is {generated_test_timeout_seconds} seconds. Do not run tests, validation, status, or diff commands. The trusted worker executes tests and install-strict validation; independent acceptance owns browser journeys and deployed-runtime checks.
+8. No publication, installation, activation or external IO beyond the admitted read-only MCP discovery; the trusted worker owns finalization and rollback evidence.
+9. Report each acceptance point as implemented, coverage added, or blocked, with the relevant source/test reference. These are implementation claims, not passing checks. Explicitly mark checks not executed in this turn; never claim browser, restart, authorization or test success without execution evidence. Report unsupported requirements rather than silently replacing them."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,

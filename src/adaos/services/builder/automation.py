@@ -37,7 +37,7 @@ from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_sources import capture_source_snapshot
-from adaos.services.skill_factory_worker import LocalSkillFactoryWorker, context_packet_prompt_projection
+from adaos.services.skill_factory_worker import LocalSkillFactoryWorker, context_packet_prompt_projection, requalified_feedback_message
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
@@ -3782,6 +3782,8 @@ class BuilderAutomationService:
             retry_reason = None
             if "Generated project validation failed:" in failure_message:
                 retry_reason = "deterministic_validation_failure"
+            elif requalified_feedback_message(Path(self.runs_root) / _safe_token(task_id), failure):
+                retry_reason = "development_feedback_requalified"
             elif "changed paths outside the exact repair files:" in failure_message:
                 retry_reason = "repair_envelope_requalified_after_path_guard"
             elif any(
@@ -3797,7 +3799,7 @@ class BuilderAutomationService:
                 retry_reason = "trusted_root_mcp_validation_retry"
             if retry_reason is None:
                 return None
-            if retry_reason == "deterministic_validation_failure":
+            if retry_reason in {"deterministic_validation_failure", "development_feedback_requalified"}:
                 reason = retry_reason
             else:
                 failed_run_root = Path(self.runs_root) / _safe_token(task_id)
