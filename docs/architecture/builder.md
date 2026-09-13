@@ -280,6 +280,11 @@ State side-effect defaults explicitly. For current Client callSkill actions,
 omitting invalidates triggers global refresh; read actions declare an empty
 list and mutations declare affected tags. A read tool's side_effects metadata
 alone does not suppress the Client's legacy refresh behavior.
+Invalidation tags express data dependencies. Prefer entity/projection groups
+over blanket application refresh, while propagating changes to derived captions,
+choices and locks. Tests assert that changed consumers are refreshed, not a
+particular tag spelling. Compare actual requests and cache hits on the same
+journey; fewer requests alone do not establish lower latency or correct freshness.
 
 Record editors keep the loaded edit baseline (including its revision) separate
 from the latest observed record. Background reads must not replace dirty input

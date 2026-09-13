@@ -2584,7 +2584,7 @@ Inspections Automation against one frozen existing Prototype.
   filter/search controls and changing parent selection. `automation-05/journey-03`
   passes 13/13 wide and 13/13 compact, with no browser exceptions. Parent-choice
   and final screenshots inspected. No Prototype regeneration or Trial involved.
-- [ ] `[should]` Profile remaining source-readiness and request latency without
+- [x] `[should]` Profile remaining source-readiness and request latency without
   raising interaction acceptance timeouts. Successful journey 02 records 83/82
   tool calls, p95 about 3.17/2.87s; direct sequential HTTP calls take 0.42-0.79s.
   Live readiness after open/reload takes about 6.6-12s. Avoid duplicate reads
@@ -2597,13 +2597,30 @@ Inspections Automation against one frozen existing Prototype.
   after restart, compact journey 05/06 read p50 falls from 1309 to 698ms and
   p95 from 2633 to 1245ms. Counts remain 105/107; source readiness is not improved.
   Wide timings include concurrent verification traffic, not a clean benchmark.
-  Remaining work is causal duplicate-read reduction, not a larger timeout.
+  Follow-up work targets causal duplicate-read reduction, not a larger timeout.
   The retained compact trace segment has 40 identity-triggered requests, 49
   invalidation-triggered requests and 83 cache hits. Eleven mutations share one
   application-wide tag, refreshing unrelated collections as well as affected
   records. This is generated binding granularity, not evidence that the generic
-  cache is absent. Next optimization must preserve relationship/lock propagation;
+  cache is absent. Optimization must preserve relationship/lock propagation;
   qualify it on a separate candidate, not silently edit the protected baseline.
+- [x] `[should]` Measure narrower mutation invalidation on the independent C
+  candidate through Builder. `optimized-01` changes only runtime tags and scenario
+  regression checks; its worker commit changes two files, while Forge separately
+  updates manifest metadata. The UI excluding tags, semantic design and companion
+  implementation remain unchanged (`scope-check-02.json`). Both paired journeys
+  pass 8/8 on wide/compact and the final HTTP probe passes 11 checks. Total tool
+  calls fall 61 to 48 and 59 to 45 (21.3%/23.7%); reads fall 52 to 39 and 50 to 36.
+  Evidence: `equipment-automation-repeat-20260913-c/performance-before`,
+  `performance-after`, `optimized-01/read-comparison.json` and `http-after.json`.
+  This is one paired experiment: read latency is noisy (wide p95 increases), not
+  evidence of a general latency improvement. The protected original is untouched.
+  Carry only generic dependency/caption/choice/lock guidance into the bounded
+  binding capsule, never the application's entities or implementation. The updated
+  capsule remains below 12 KB; 33 contract/lifecycle/stand checks pass.
+- [ ] `[should]` Reduce cached-to-live source-readiness latency on a fixed
+  initial-open/reload probe. The read-cost and invalidation improvements above
+  do not yet establish an improvement to the 6.6-12s materialization wait.
 - [x] `[must]` Protect dirty record forms from background refresh without
   silently advancing their edit revision. Latest server locks remain effective;
   missing-record recovery and successful repeated saves have regression tests.
@@ -2682,6 +2699,13 @@ Inspections Automation against one frozen existing Prototype.
   metadata; new scaffolds now name their owning project and refer to the separate
   brief. Existing generated candidates and admitted inputs remain unchanged.
   Matched model cost improvement is not yet established.
+  The independent C tag correction uses one captured 32135-byte prompt with the
+  full unchanged 4171-character brief, current narrow instruction and accepted
+  `002`. It completes in about 243s of observed Automation wait with 400840 input
+  tokens (370432 cached) and 4522 output tokens. The model reads actual projection
+  dependencies and adds corresponding checks; only WebUI tags and scenario tests
+  change. This is useful scoped behavior, not a matched cost reduction versus the
+  earlier seven-binding repair. Full input audits and model attempts remain local.
 - [x] `[must]` Run the separate Automation-only declarative brief, inspect its
   actual input and result, and preserve comparison of existing interactions.
   Add equipment editing and a visible selected parent/dropdown for creation.

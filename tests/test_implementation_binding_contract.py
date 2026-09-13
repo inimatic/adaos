@@ -28,6 +28,9 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
     assert "not an installed-skill contract" in guide["binding_rules"]["package_tests"]
     assert "invalidates:[]" in guide["binding_rules"]["result"]
     assert "GLOBAL refresh default" in guide["binding_rules"]["result"]
+    assert "entity/projection tags" in guide["binding_rules"]["result"]
+    assert "derived captions, choices or locks" in guide["binding_rules"]["result"]
+    assert "every changed consumer is refreshed" in guide["binding_rules"]["result"]
     guide["examples"].clear()
     assert implementation_binding_contract()["examples"]
 
