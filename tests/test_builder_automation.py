@@ -917,6 +917,24 @@ def test_large_dev_ticket_brief_uses_bounded_workflow_projection(tmp_path: Path)
     assert projected["brief_digest"].startswith("sha256:")
 
 
+def test_long_plain_brief_keeps_all_instructions_outside_bounded_scope(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(BuilderAutomationService, "_launch_worker", lambda *args: None)
+    brief = "Implement the accepted interface.\n" + "Preserve existing behavior and verify it.\n" * 140 + "FINAL_REQUIREMENT_DO_NOT_DROP"
+    result = service.start_from_execute(object_type="scenario", object_id="recipes", implementation_brief=brief)
+    assert result["ok"]
+    assert result["session"]["implementation_brief"] == brief
+    task = next(item for item in service.factory.snapshot(include_tasks=True)["tasks"]
+                if item["task_id"] == result["session"]["current_task_id"])
+    request = service._contexts().get_artifact(task["realize_request_ref"])
+    assert request["source"]["text"] == brief
+    assert request["artifacts"]["implementation_brief"] == brief
+    projected = json.loads(automation_module._workflow_request_projection(brief))
+    assert len(automation_module._workflow_request_projection(brief)) < 4000
+    assert projected["summary_only"] is True
+    assert projected["brief_digest"] == "sha256:" + hashlib.sha256(brief.encode()).hexdigest()
+
+
 def test_terminal_skill_candidate_runtime_release_is_exact_and_idempotent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

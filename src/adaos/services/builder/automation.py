@@ -323,7 +323,16 @@ def _workflow_request_projection(value: Any) -> str:
     brief = str(value or "").strip()
     payload = _brief_payload(brief)
     if not payload:
-        return " ".join(brief.split())[:3800]
+        summary = " ".join(brief.split())
+        if len(summary) <= 3800:
+            return summary
+        return json.dumps({
+            "schema": "adaos.builder.workflow_request.v1",
+            "summary": summary[:1600].rsplit(" ", 1)[0] + "...",
+            "summary_only": True,
+            "instruction_source": "Full implementation_brief in the task specification is authoritative.",
+            "brief_digest": "sha256:" + hashlib.sha256(brief.encode("utf-8")).hexdigest(),
+        }, ensure_ascii=False, separators=(",", ":"))
     repair_hints = (
         dict(payload.get("repair_hints"))
         if isinstance(payload.get("repair_hints"), Mapping)
@@ -6711,7 +6720,11 @@ class BuilderAutomationService:
                         or ""
                     ).strip()
                 ],
-                "intent": _brief_summary(execution_brief),
+                "intent": (
+                    _brief_summary(execution_brief)
+                    if len(_brief_summary(execution_brief)) <= 3800
+                    else _workflow_request_projection(execution_brief)
+                ),
             },
             run_purpose=str(session.get("run_purpose") or "iteration"),
             required_facets=required_context_facets,

@@ -2511,11 +2511,21 @@ Inspections Automation against one frozen existing Prototype.
   search/filter controls and separate editors. Repeat capability and interaction
   probes for the original run 20 attempt 02 on wide/compact screens. They pass;
   creation/deletion and production rules are not claimed as Prototype passes.
-- [ ] `[must]` Freeze its exact acceptance and source digests through Builder.
+- [x] `[must]` Freeze its exact acceptance and source digests through Builder.
   Preserve other experiments and user data; do not regenerate the Prototype.
-- [ ] `[must]` Recover pinned Prototype previews after room reopen. Review of
+  Acceptance `acceptance:e2e:automation-01:equipment-inspections-frozen-ru:1:approve`,
+  WebUI digest `98f3e9605af2ea177831ce912ece7a7aee8754dcc2450df65acfe6ab8150048a`.
+- [x] `[must]` Recover pinned Prototype previews after room reopen. Review of
   the lifecycle example exposed current Automation UI replacing revision `002`.
   A render-only success without source parity is insufficient evidence.
+  Core/Yjs: 298 checks pass in 25.14s. `baselines/eed-after-recovery` verifies
+  exact widget/data-source parity, UI `002` and Prototype source fingerprint
+  on both layouts after API restart, despite different current DEV source.
+- [x] `[must]` Keep long free-form Automation briefs out of the bounded execution
+  intent field without discarding requirements. Initial `automation-01` stopped
+  before model submission because its full brief exceeded the 4000-character
+  scope contract. A bounded, explicitly partial projection references the full
+  brief by digest; the task specification keeps the complete original text.
 - [ ] `[must]` Run the separate Automation-only declarative brief, inspect its
   actual input and result, and preserve comparison of existing interactions.
   Add equipment editing and a visible selected parent/dropdown for creation.
