@@ -41,6 +41,13 @@ from adaos.services.workspaces import (
 )
 
 
+def _pair_preview(target, source="preview-owner"):
+    from adaos.services.workspaces.relations import WebspaceRelationshipRegistry, BUILDER_PROJECT_PREVIEW
+
+    ensure_workspace(source)
+    WebspaceRelationshipRegistry().ensure(source, purpose=BUILDER_PROJECT_PREVIEW, legacy_target_webspace_id=target)
+
+
 def _clear_member_snapshot_task_state() -> None:
     state = webspace_runtime_module._RUNTIME.tasks  # noqa: SLF001
     state.clear_tasks(state.MEMBER_SNAPSHOT, cancel=True)
@@ -1465,6 +1472,7 @@ def test_ydoc_defaults_keep_shared_skill_state_when_ui_owner_is_shared() -> None
 
 def test_describe_webspace_operational_state_exposes_manifest_and_current_scenario(monkeypatch) -> None:
     webspace_id = "phase2-describe"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -1545,6 +1553,7 @@ def test_describe_webspace_projection_state_reports_active_layer(monkeypatch) ->
 
 def test_describe_webspace_projection_state_detects_space_mismatch(monkeypatch) -> None:
     webspace_id = "phase4-projection-dev-mismatch"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -2312,6 +2321,7 @@ def test_switch_webspace_scenario_does_not_defer_non_lock_database_error(monkeyp
 
 def test_switch_webspace_scenario_keeps_home_unchanged_by_default_for_dev_webspace(monkeypatch) -> None:
     webspace_id = "phase2-dev-pointer-home"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -2707,6 +2717,7 @@ def test_switch_webspace_scenario_deprecated_pointer_env_keeps_dev_home_unchange
     monkeypatch.setenv("ADAOS_WEBSPACE_POINTER_SCENARIO_SWITCH", "1")
 
     webspace_id = "phase-pointer-dev-auto-home"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -3893,6 +3904,7 @@ def test_rebuild_webspace_async_prefers_live_room_ydoc_session(monkeypatch) -> N
 
 def test_go_home_webspace_uses_manifest_home_scenario(monkeypatch) -> None:
     webspace_id = "phase2-go-home"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -4146,7 +4158,11 @@ def test_webspace_service_update_metadata_updates_title_and_home(monkeypatch) ->
 
 
 def test_ensure_dev_webspace_for_scenario_reuses_existing_dev_space() -> None:
+    from adaos.services.workspaces.relations import WebspaceRelationshipRegistry, BUILDER_PROJECT_PREVIEW
+
+    ensure_workspace("preview-owner")
     webspace_id = "phase2-dev-existing"
+    WebspaceRelationshipRegistry().ensure("preview-owner", purpose=BUILDER_PROJECT_PREVIEW, legacy_target_webspace_id=webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -4156,7 +4172,7 @@ def test_ensure_dev_webspace_for_scenario_reuses_existing_dev_space() -> None:
         home_scenario="prompt_engineer_scenario",
     )
 
-    result = asyncio.run(webspace_runtime_module.ensure_dev_webspace_for_scenario("prompt_engineer_scenario"))
+    result = asyncio.run(webspace_runtime_module.ensure_dev_webspace_for_scenario("prompt_engineer_scenario", requested_id=webspace_id))
 
     assert result["ok"] is True
     assert result["created"] is False
@@ -4165,6 +4181,10 @@ def test_ensure_dev_webspace_for_scenario_reuses_existing_dev_space() -> None:
 
 
 def test_ensure_dev_webspace_for_scenario_creates_missing_dev_space(monkeypatch) -> None:
+    from adaos.services.workspaces.relations import WebspaceRelationshipRegistry, BUILDER_PROJECT_PREVIEW
+
+    ensure_workspace("preview-owner")
+    WebspaceRelationshipRegistry().ensure("preview-owner", purpose=BUILDER_PROJECT_PREVIEW)
     async def _fake_seed(webspace_id: str, scenario_id: str, *, dev=None) -> None:  # noqa: ARG001
         return None
 
@@ -4174,7 +4194,7 @@ def test_ensure_dev_webspace_for_scenario_creates_missing_dev_space(monkeypatch)
     monkeypatch.setattr(webspace_runtime_module, "_seed_webspace_from_scenario", _fake_seed)
     monkeypatch.setattr(webspace_runtime_module, "_sync_webspace_listing", _fake_sync_listing)
 
-    result = asyncio.run(webspace_runtime_module.ensure_dev_webspace_for_scenario("phase2_fresh_scenario"))
+    result = asyncio.run(webspace_runtime_module.ensure_dev_webspace_for_scenario("phase2_fresh_scenario", requested_id="preview-owner-dev"))
 
     row = get_workspace(str(result["webspace_id"]))
     assert row is not None
@@ -4314,6 +4334,8 @@ def test_reload_preview_webspaces_for_scenario_project(monkeypatch) -> None:
     scenario_id = "prompt_engineer_scenario"
     preview_a = "dev-prompt-a"
     preview_b = "dev-prompt-b"
+    _pair_preview(preview_a, "builder-source-a")
+    _pair_preview(preview_b, "builder-source-b")
     ensure_workspace(preview_a)
     ensure_workspace(preview_b)
     set_workspace_manifest(
@@ -4333,6 +4355,8 @@ def test_reload_preview_webspaces_for_scenario_project(monkeypatch) -> None:
     from adaos.services.workspaces.relations import BUILDER_PROJECT_PREVIEW, WebspaceRelationshipRegistry
 
     relationships = WebspaceRelationshipRegistry.from_context()
+    ensure_workspace("builder-source-a")
+    ensure_workspace("builder-source-b")
     relationships.ensure(
         "builder-source-a",
         purpose=BUILDER_PROJECT_PREVIEW,
@@ -4346,13 +4370,10 @@ def test_reload_preview_webspaces_for_scenario_project(monkeypatch) -> None:
         legacy_target_webspace_id=preview_b,
     )
     ensure_workspace("stale-dev-preview")
-    set_workspace_manifest(
-        "stale-dev-preview",
-        display_name="DEV: stale",
-        kind="dev",
-        source_mode="dev",
-        home_scenario=scenario_id,
-    )
+    with get_ctx().sql.connect() as con:
+        con.execute("UPDATE y_workspaces SET kind='dev' WHERE workspace_id='stale-dev-preview'")
+        con.commit()
+    # Legacy corruption is seeded directly; public writes now reject orphans.
 
     captured: list[tuple[str, str, str]] = []
 
@@ -4377,6 +4398,7 @@ def test_reload_preview_webspaces_for_scenario_project(monkeypatch) -> None:
 
 def test_reload_preview_webspaces_for_skill_dependency(monkeypatch) -> None:
     preview = "dev-scenario-preview"
+    _pair_preview(preview, "builder-source-skill")
     ensure_workspace(preview)
     set_workspace_manifest(
         preview,
@@ -4387,6 +4409,7 @@ def test_reload_preview_webspaces_for_skill_dependency(monkeypatch) -> None:
     )
     from adaos.services.workspaces.relations import BUILDER_PROJECT_PREVIEW, WebspaceRelationshipRegistry
 
+    ensure_workspace("builder-source-skill")
     WebspaceRelationshipRegistry.from_context().ensure(
         "builder-source-skill",
         purpose=BUILDER_PROJECT_PREVIEW,
@@ -4420,6 +4443,7 @@ def test_reload_preview_webspace_discovery_runs_off_event_loop(monkeypatch) -> N
     import threading
 
     preview = "dev-threaded-preview"
+    _pair_preview(preview, "builder-source-threaded")
     scenario_id = "threaded_preview_scenario"
     ensure_workspace(preview)
     set_workspace_manifest(
@@ -4432,6 +4456,7 @@ def test_reload_preview_webspace_discovery_runs_off_event_loop(monkeypatch) -> N
     from adaos.services.builder.workbench import BuilderWorkbenchService
     from adaos.services.workspaces.relations import BUILDER_PROJECT_PREVIEW, WebspaceRelationshipRegistry
 
+    ensure_workspace("builder-source-threaded")
     WebspaceRelationshipRegistry.from_context().ensure(
         "builder-source-threaded",
         purpose=BUILDER_PROJECT_PREVIEW,
@@ -5258,6 +5283,7 @@ def test_builder_revision_apply_invalidates_loader_cache_without_reseed(monkeypa
 
 def test_builder_revision_apply_persists_dev_home_without_listing_sync(monkeypatch) -> None:
     webspace_id = "phase2-builder-dev-home"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -5508,6 +5534,7 @@ def test_builder_trial_apply_uses_candidate_preflight_and_exact_skill_snapshot(
     tmp_path: Path,
 ) -> None:
     webspace_id = "phase2-exact-trial-preview"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -5828,6 +5855,7 @@ def test_legacy_automation_preview_falls_back_to_current_dev_descriptor(monkeypa
 
 def test_builder_revision_apply_skips_superseded_source_binding(monkeypatch) -> None:
     webspace_id = "phase2-builder-superseded-dev"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -5885,6 +5913,7 @@ def test_builder_revision_apply_skips_superseded_source_binding(monkeypatch) -> 
 
 def test_phase4_projection_refresh_uses_dev_space_for_dev_webspace(monkeypatch) -> None:
     webspace_id = "phase4-dev-refresh"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,

@@ -219,8 +219,13 @@ manifest digest. It writes a pre-step checkpoint before invoking an adapter,
 so an interrupted state-changing step is replayed with the same deterministic
 request identity and retained as an `interrupted` attempt. A retry is measured
 as a retry; it never overwrites the first attempt. Ordinary retries are opt-in
-per step by failure class and bounded. Case/repetition webspaces are distinct,
-and a completed resumed run returns its existing immutable report.
+per step by failure class and bounded. Sequential cases and repetitions reuse
+one existing Builder host selected by `ADAOS_BUILDER_E2E_WEBSPACE_ID` (standalone
+diagnostics use `--host`). No `e2e-<run>-<case>` host is synthesized. Preflight
+checks the registered host, production ancestor and active Builder before model
+submission. Resume must keep the same host. A completed resumed run returns its
+existing immutable report. Case isolation belongs to projects, data, sessions
+and evidence, not webspaces; parallel preview allocation remains deferred.
 
 The executable model-input receipt is
 `adaos.builder.llm_input_attribution.v1`. The scenario-owned
@@ -387,8 +392,8 @@ inventory evidence and catalog/runtime drift are configuration failures, not
 lower prototype scores. Unsupported semantic lowering kinds remain recorded
 in the run environment for later C1/C2 gating.
 
-The current adapter is explicitly `legacy_dev_chat.v1`. Case/repetition
-webspaces are isolated; checkpoints and run identity support interruption and
+The bootstrap adapter is explicitly `legacy_dev_chat.v1`. Case/repetition
+artifacts are isolated within one selected Builder; checkpoints and run identity support interruption and
 resume; retry attempts remain explicit; and actual input receipts are checked
 before cleanup. Isolated filesystem/state provisioning, internal
 Core/provider/runtime stage spans, browser task assertions, calibrated

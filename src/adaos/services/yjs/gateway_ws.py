@@ -8579,6 +8579,8 @@ async def stop_y_server() -> None:
 
 
 def _workspace_bootstrap_snapshot_sync(webspace_id: str) -> dict[str, Any]:
+    if get_workspace(webspace_id) is None and webspace_id != default_webspace_id():
+        raise ValueError("Webspace not found; open preview through its Builder host")
     ensure_workspace(webspace_id)
     row = get_workspace(webspace_id)
     if row is None:

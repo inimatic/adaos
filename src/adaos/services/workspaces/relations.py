@@ -196,12 +196,50 @@ class WebspaceRelationshipRegistry:
         )
         return current
 
-    def allocate_preview_webspace_id(self) -> str:
-        for _ in range(32):
-            candidate = f"preview-{secrets.token_hex(6)}"
-            if self.get_incoming(candidate) is None and self.get_outgoing(candidate) is None:
-                return candidate
-        raise RuntimeError("failed to allocate preview webspace id")
+    def _workspace(self, webspace_id: str) -> dict[str, Any] | None:
+        # Topology validation must not create a workspace or repair its manifest.
+        with self.sql.connect() as con:
+            if not con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='y_workspaces'"
+            ).fetchone():
+                return None
+            row = con.execute(
+                "SELECT kind, home_scenario, ui_overlay_json FROM y_workspaces WHERE workspace_id=?",
+                (webspace_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        overlay = _decode_metadata(row[2])
+        workspace = overlay.get("workspace") or {}
+        return {"kind": row[0], "scenario": workspace.get("currentScenario") or row[1]}
+
+    def require_preview_host(self, source_webspace_id: Any) -> str:
+        source = _workspace_id(source_webspace_id)
+        workspace = self._workspace(source)
+        if workspace is None:
+            raise ValueError(f"Builder preview source webspace does not exist: {source!r}")
+        incoming = self.get_incoming(source)
+        if workspace["kind"] == "workspace" and incoming is None:
+            return source
+        if workspace["kind"] != "dev" or incoming is None:
+            raise ValueError("DEV preview requires a registered production parent")
+        if incoming.purpose != BUILDER_SELF_HOST:
+            raise ValueError("ordinary preview webspaces cannot own a child preview")
+        parent = self._workspace(incoming.source_webspace_id)
+        if (parent is None or parent["kind"] != "workspace"
+                or self.get_incoming(incoming.source_webspace_id) is not None):
+            raise ValueError("Builder self-host requires a production parent; depth is limited to one")
+        if workspace["scenario"] not in _builder_scenario_ids():
+            raise ValueError("Only an active DEV Builder can own a child preview")
+        return source
+
+    def require_preview_target(self, target_webspace_id: Any) -> WebspaceRelation:
+        target = _workspace_id(target_webspace_id)
+        incoming = self.get_incoming(target)
+        if incoming is None:
+            raise ValueError("DEV webspace requires an explicit Builder preview relation")
+        self.require_preview_host(incoming.source_webspace_id)
+        return incoming
 
     def ensure(
         self,
@@ -219,6 +257,8 @@ class WebspaceRelationshipRegistry:
         if purpose_token == BUILDER_SELF_HOST and str(scenario_id or "").strip() not in _builder_scenario_ids():
             raise ValueError("builder_self_host requires a Builder scenario")
 
+        self.require_preview_host(source)
+
         incoming = self.get_incoming(source)
         if incoming is not None:
             if incoming.purpose != BUILDER_SELF_HOST:
@@ -233,19 +273,17 @@ class WebspaceRelationshipRegistry:
             else _workspace_id(legacy_target_webspace_id)
             if str(legacy_target_webspace_id or "").strip()
             else _workspace_id(f"{source}-dev")
-            if incoming is not None and incoming.purpose == BUILDER_SELF_HOST
-            else self.allocate_preview_webspace_id()
         )
         if target == source:
             raise ValueError("webspace relation cannot target itself")
+        target_workspace = self._workspace(target)
+        if target_workspace is not None and target_workspace["kind"] != "dev":
+            raise ValueError("preview target already exists and is not a DEV webspace")
         target_incoming = self.get_incoming(target)
         if target_incoming is not None and target_incoming.source_webspace_id != source:
             raise ValueError("preview webspace is already paired with another Builder host")
-        target_outgoing = self.get_outgoing(target)
-        if purpose_token != BUILDER_SELF_HOST and target_outgoing is not None:
-            # Selecting a non-Builder project demotes the previous self-host.
-            # Detach only topology; the child workspace itself remains intact.
-            self.remove_outgoing(target)
+        # Keep a self-host child paired when Builder is not selected. Its host
+        # validation fails while dormant; switching back reuses the same child.
 
         next_metadata = dict(existing.metadata) if existing is not None else {}
         next_metadata.update(dict(metadata or {}))

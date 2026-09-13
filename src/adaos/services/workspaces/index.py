@@ -960,6 +960,10 @@ def ensure_workspace(workspace_id: str) -> WebspaceManifest:
 
         created_at = int(_time.time() * 1000)
         inferred_kind = _infer_kind(workspace_id, None, None)
+        if inferred_kind == KIND_DEV:
+            from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
+
+            WebspaceRelationshipRegistry(sql).require_preview_target(workspace_id)
         display_name = _default_display_name(workspace_id, kind=inferred_kind)
         con.execute(
             """
@@ -1014,6 +1018,10 @@ def set_workspace_manifest(
     ui_overlay_json: Any = _UNSET,
 ) -> WebspaceManifest:
     workspace_id = _normalize_workspace_id(workspace_id)
+    if kind is not _UNSET and _normalize_kind(kind) == KIND_DEV:
+        from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
+
+        WebspaceRelationshipRegistry().require_preview_target(workspace_id)
     current = ensure_workspace(workspace_id)
     next_display_name = current.display_name if display_name is _UNSET else _normalize_optional_text(display_name)
     next_kind_raw = current.kind if kind is _UNSET else _normalize_kind(kind)

@@ -53,8 +53,8 @@ def main():
     parser.add_argument("--probe", choices=("review", "equipment-journey", "equipment-repeat"), default="review")
     args = parser.parse_args()
     load_dotenv()
-    if os.getenv("ENV_TYPE") != "dev" or not args.host.startswith("e2e-"):
-        parser.error("Requires a DEV node and an explicit isolated E2E Builder host")
+    if os.getenv("ENV_TYPE") != "dev":
+        parser.error("Requires a DEV node")
     if args.stage == "prototype" and not args.revision.isdigit():
         parser.error("Requires an exact numeric UI revision")
     if args.probe != "review" and args.stage != "automation":
@@ -64,6 +64,9 @@ def main():
     if not output.is_relative_to(root) or output == root:
         parser.error("Evidence must stay inside e2e/artifacts/builder")
     init_ctx(Settings.from_sources())
+    from adaos.e2e.builder_host import require_builder_host
+
+    require_builder_host(args.host)
     files = {}
     names = ["webui.json", "semantic.webui.json", "builder.draft.json"]
     if args.stage == "prototype":

@@ -296,7 +296,7 @@ and transport failure after a committed write, not only mocked error envelopes.
 
 Repeat Automation evaluation imports only the accepted Prototype into a new
 TEST application. Require reversible identifier-only WebUI equivalence,
-accepted resource and locale digests, isolated hosts and fresh sessions. Retain
+accepted resource and locale digests, one existing Builder host and fresh sessions. Retain
 the good Automation candidate, unchanged. Inherited Prototype review is stated
 as inherited, never presented as another independent generation or review.
 No Automation code, corrective history or external acceptance fixtures enter
@@ -396,8 +396,8 @@ mapping, migration checklist, and deferred granularity work live in
 
 Project selection and preview materialization follow the explicit topology,
 event, reconcile, catalog, and process-isolation contracts in
-[Builder Preview Runtime](builder-preview-runtime.md). A preview webspace ID is
-opaque; `-dev` is accepted only while migrating an existing binding.
+[Builder Preview Runtime](builder-preview-runtime.md). The owner allocates
+`W-dev` for registered production host `W`; only DEV Builder may own `W-dev-dev`.
 
 ## Relationship To Scenarios
 
@@ -870,8 +870,8 @@ The rapid-prototyping Builder experience uses two cooperating surfaces:
 
 Builder Workbench may be loaded in any Builder source Webspace. Each host owns one
 explicit `builder_project_preview` relation to its preview webspace. Neither
-side of the relation is inferred from an id suffix; ids are opaque and legacy
-names such as `dev1-dev` are adopted only as relation targets during migration.
+side of the relation is inferred from an id suffix. New target names are
+deterministic; a name alone never establishes a valid production parent.
 Selecting another project changes the binding carried by that relation. It
 does not change or rematerialize the Builder host scenario.
 

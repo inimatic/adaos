@@ -1647,8 +1647,16 @@ def test_diagnostic_room_skips_empty_y_update() -> None:
     assert room._diag_empty_update_skip_bytes == 2
 
 
+def _pair_preview(target):
+    from adaos.services.workspaces.relations import WebspaceRelationshipRegistry, BUILDER_PROJECT_PREVIEW
+
+    ensure_workspace("preview-owner")
+    WebspaceRelationshipRegistry().ensure("preview-owner", purpose=BUILDER_PROJECT_PREVIEW, legacy_target_webspace_id=target)
+
+
 def test_ensure_webspace_ready_uses_manifest_defaults(monkeypatch) -> None:
     webspace_id = "gateway-home"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -1792,6 +1800,7 @@ def test_ensure_webspace_ready_explicit_scenario_overrides_manifest_home(monkeyp
 
 def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
     webspace_id = "gateway-room"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -1961,6 +1970,7 @@ def test_get_room_does_not_cancel_slow_durable_materialization(monkeypatch) -> N
 
 def test_get_room_bootstraps_from_materialized_payload_without_semantic_rebuild(monkeypatch) -> None:
     webspace_id = "gateway-room-materialized"
+    _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -6055,6 +6065,16 @@ def test_ws_event_send_queue_coalesces_hot_events(monkeypatch) -> None:
 
     asyncio.run(_run())
     gateway_module._WS_EVENT_SEND_STATES.clear()
+
+
+def test_unknown_preview_url_does_not_recreate_deleted_workspace(monkeypatch) -> None:
+    import pytest
+    from adaos.services.yjs import gateway_ws as gateway_module
+
+    monkeypatch.setattr(gateway_module, "get_workspace", lambda _: None)
+    monkeypatch.setattr(gateway_module, "ensure_workspace", lambda _: pytest.fail("must not create"))
+    with pytest.raises(ValueError, match="Webspace not found"):
+        gateway_module._workspace_bootstrap_snapshot_sync("deleted-preview")
 
 
 def test_workspace_bootstrap_snapshot_keeps_sqlite_work_off_event_loop(monkeypatch) -> None:

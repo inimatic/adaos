@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from adaos.apps.cli.app import Settings, init_ctx
 from adaos.e2e.builder import _expectation_findings, _load_document, _resolve_value, _write_json
 from adaos.e2e.builder_lifecycle import _target, execute
+from adaos.e2e.builder_host import require_builder_host
 from adaos.e2e.stand import redact_value
 
 
@@ -52,8 +53,10 @@ def main():
     parser.add_argument("--host", required=True)
     args = parser.parse_args()
     load_dotenv()
-    if os.getenv("ENV_TYPE") != "dev" or not args.host.startswith("e2e-"):
-        parser.error("Requires a DEV node and an isolated E2E Builder host")
+    if os.getenv("ENV_TYPE") != "dev":
+        parser.error("Requires a DEV node")
+    init_ctx(Settings.from_sources())
+    require_builder_host(args.host)
     plan = _load_document(args.plan)
     validate_plan(plan)
     original = _load_document(args.checkpoint)
@@ -71,7 +74,6 @@ def main():
     context.update(bundle_dir=str(output), run_id=output.name, case_id=plan["case_id"],
                    repetition=1, webspace_id=args.host, outputs={}, scenario_id=identifier,
                    object_type=kind, step_id="")
-    init_ctx(Settings.from_sources())
     _write_json(output / "parent-checkpoint.json", original)
     report = {"scope": "frozen Prototype Automation diagnostic; original generation verdict unchanged",
               "parent_sha256": hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(),

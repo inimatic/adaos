@@ -93,7 +93,9 @@ context formerly stored directly by Prompt IDE handlers:
 - reload or materialize a validated Builder revision.
 
 Source identity is resolved through the persisted Builder preview relation.
-Preview IDs are opaque and SDK consumers never append or remove `-dev`.
+SDK consumers obtain Preview IDs from the topology service and never append or
+remove `-dev` themselves. The owner allocates `W-dev`, or `W-dev-dev` for the
+single DEV Builder self-host level, only under a registered production host.
 The one nested exception is self-hosted Builder development: a DEV preview
 running Builder may own one terminal project preview. See
 [Builder Preview Runtime](builder-preview-runtime.md).
@@ -409,8 +411,11 @@ The functional Builder pass was verified on the development machine on
   project type, canonical preview identity, local QR rendering, executable
   discovery, and render-safe Automation diagnostics.
 
-The repeatable isolated smoke uses a dedicated source webspace so it does not
-change the operator's Prompt IDE selection. On PowerShell:
+The sequential smoke uses an existing registered Builder host. It changes that
+host's selection; it must never synthesize a separate host for each case.
+The example assumes `builder-sdk-control` has already been explicitly created
+as a production webspace with Builder active. Otherwise substitute your existing
+Builder host. On PowerShell:
 
 ```powershell
 $payload = '{"webspace_id":"builder-sdk-control"}'.Replace('"', '\"')

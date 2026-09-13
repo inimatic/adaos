@@ -62,9 +62,7 @@ def dev_webspace_id_for_source(source_webspace_id: Any) -> str:
     source = source_webspace_id_for(source_webspace_id)
     registry = WebspaceRelationshipRegistry.from_context()
     relation = registry.get_outgoing(source)
-    if relation is None:
-        relation, _created = registry.ensure(source, purpose=BUILDER_PROJECT_PREVIEW)
-    return relation.target_webspace_id
+    return relation.target_webspace_id if relation is not None else f"{source}-dev"
 
 
 def _now() -> float:
@@ -742,14 +740,7 @@ class BuilderWorkbenchService:
                 continue
             source = safe_source_webspace_id(legacy.get("source_webspace_id") or path.stem)
             scenario_id = str(legacy.get("runtime_scenario_id") or "").strip() or None
-            relation, _created = self.relationships.ensure(
-                source,
-                purpose=relation_purpose_for_scenario(scenario_id),
-                scenario_id=scenario_id,
-                legacy_target_webspace_id=token,
-                metadata={"migrated_from": "builder_workbench_binding"},
-            )
-            return token if relation.purpose == BUILDER_SELF_HOST else source
+            return token if relation_purpose_for_scenario(scenario_id) == BUILDER_SELF_HOST else source
         return self.relationships.resolve_builder_host(token)
 
     def resolve_action_source_webspace_id(
@@ -888,6 +879,11 @@ class BuilderWorkbenchService:
             home_scenario = str(info.get("home_scenario") or "").strip()
             effective_scenario = current_scenario or home_scenario
             if effective_scenario not in builder_scenarios:
+                continue
+
+            try:
+                self.relationships.require_preview_host(webspace_id)
+            except ValueError:
                 continue
 
             relation = self.relationships.get_outgoing(webspace_id)
@@ -1151,21 +1147,17 @@ class BuilderWorkbenchService:
                 fallback_object_id=runtime_scenario_id or "builder",
                 fallback_title="Builder" if not runtime_scenario_id else None,
             )
-            relation, _created = self._ensure_preview_relation(
-                source_id,
-                scenario_id=runtime_scenario_id,
-                legacy_target_webspace_id=str(
-                    normalized.get("preview_webspace_id") or normalized.get("dev_webspace_id") or ""
-                ).strip() or None,
+            relation = self.relationships.get_outgoing(source_id)
+            dev_id = relation.target_webspace_id if relation is not None else str(
+                normalized.get("preview_webspace_id") or normalized.get("dev_webspace_id") or f"{source_id}-dev"
             )
-            dev_id = relation.target_webspace_id
             refreshed_dialog = self.dialog_widget_config(
                 source_id,
                 active_draft_id=active_draft_id,
                 runtime_scenario_id=runtime_scenario_id,
                 dev_webspace_id=dev_id,
             )
-            relation_payload = relation.to_dict()
+            relation_payload = relation.to_dict() if relation is not None else None
             if (
                 normalized.get("dialog") != refreshed_dialog
                 or normalized.get("preview_webspace_id") != dev_id
@@ -1178,15 +1170,14 @@ class BuilderWorkbenchService:
                 normalized["relationship"] = relation_payload
                 normalized["selection"] = selection
                 normalized["dialog"] = refreshed_dialog
-                normalized["updated_at"] = _now()
-                _write_json(self.binding_path(source_id), normalized)
             return normalized
-        relation, _created = self._ensure_preview_relation(source_id, scenario_id=None)
+        relation = self.relationships.get_outgoing(source_id)
+        dev_id = relation.target_webspace_id if relation is not None else f"{source_id}-dev"
         return {
             "source_webspace_id": source_id,
-            "dev_webspace_id": relation.target_webspace_id,
-            "preview_webspace_id": relation.target_webspace_id,
-            "relationship": relation.to_dict(),
+            "dev_webspace_id": dev_id,
+            "preview_webspace_id": dev_id,
+            "relationship": relation.to_dict() if relation is not None else None,
             "scenario_id": BUILDER_WORKBENCH_SCENARIO_ID,
             "runtime_scenario_id": None,
             "purpose": "builder_prompt_ide",
@@ -1195,7 +1186,7 @@ class BuilderWorkbenchService:
             "preview_target": None,
             "dialog": self.dialog_widget_config(
                 source_id,
-                dev_webspace_id=relation.target_webspace_id,
+                dev_webspace_id=dev_id,
             ),
             "created_at": None,
             "updated_at": None,
@@ -1677,12 +1668,9 @@ class BuilderWorkbenchService:
     ) -> dict[str, Any]:
         source_id = self.resolve_source_webspace_id(source_webspace_id)
         relation = self.relationships.get_outgoing(source_id)
-        if relation is None:
-            relation, _created = self._ensure_preview_relation(
-                source_id,
-                scenario_id=str(runtime_scenario_id or "").strip() or None,
-            )
-        dev_id = str(dev_webspace_id or relation.target_webspace_id).strip()
+        dev_id = str(dev_webspace_id or (
+            relation.target_webspace_id if relation is not None else f"{source_id}-dev"
+        )).strip()
         try:
             from adaos.services.conversation_links import ensure_builder_topic
 

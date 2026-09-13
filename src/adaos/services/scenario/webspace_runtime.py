@@ -6619,7 +6619,13 @@ class WebspaceService:
         scenario_ref: Any = None,
         dev: bool = False,
     ) -> WebspaceInfo:
+        if dev:
+            from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
+
+            WebspaceRelationshipRegistry(self.ctx.sql).require_preview_target(requested_id)
         webspace_id = _allocate_webspace_id(requested_id)
+        if dev and webspace_id != requested_id:
+            raise ValueError("Paired DEV webspace already exists; reuse it instead of allocating another")
         _log.info("creating webspace %s (requested=%s dev=%s)", webspace_id, requested_id, dev)
         kind = "dev" if dev else "workspace"
         source_mode = "dev" if dev else "workspace"
@@ -6736,23 +6742,22 @@ class WebspaceService:
         if not scenario_id:
             raise ValueError("scenario_id is required")
 
+        from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
+
+        if requested_id is None:
+            raise ValueError("Select a Builder preview first; scenario IDs do not allocate DEV webspaces")
+        WebspaceRelationshipRegistry(self.ctx.sql).require_preview_target(requested_id)
+
         existing: Optional[workspace_index.WebspaceManifest] = None
         if requested_id:
             row = workspace_index.get_workspace(requested_id)
             if row and not row.is_dev:
                 raise ValueError("requested webspace is not a dev webspace")
             existing = row
-        if existing is None:
-            for row in workspace_index.list_workspaces():
-                if row.is_dev and row.effective_home_scenario == scenario_id:
-                    existing = row
-                    break
-
         created = False
         if existing is None:
-            preferred_id = requested_id or f"dev-{scenario_id}"
             info = await self.create(
-                preferred_id,
+                requested_id,
                 title or scenario_id,
                 scenario_id=scenario_id,
                 dev=True,

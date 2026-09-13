@@ -850,6 +850,36 @@ def public_app_base() -> str:
         return DEFAULT_PUBLIC_APP_BASE_URL
 
 
+def ensure_selected_target(source_webspace_id: str | None = None) -> dict[str, Any]:
+    """Recreate a deleted Preview on an explicit open command, retaining its pin."""
+
+    from adaos.services.workspaces.index import get_workspace
+
+    source = canonical_source_webspace_id(source_webspace_id)
+    binding = get_binding(source)
+    preview_id = str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or "").strip()
+    if preview_id and get_workspace(preview_id) is not None:
+        _service().relationships.require_preview_target(preview_id)
+        return {"ok": True, "recreated": False, "preview_webspace_id": preview_id}
+    target = _plain(binding.get("preview_target"))
+    if target.get("object_type") == "scenario" and target.get("stage"):
+        result = select_target(
+            "scenario", str(target["object_id"]), stage=str(target["stage"]),
+            revision=target.get("revision"), source_webspace_id=source, via_owner=True,
+        )
+    else:
+        scenario = str(binding.get("runtime_scenario_id") or "").strip()
+        if not scenario:
+            raise ValueError("Select an application Preview before opening it")
+        result = select_project(
+            "scenario", scenario, source_webspace_id=source,
+            ensure_ready=True, wait_for_rebuild=True, publish_event=False,
+        )
+    if result.get("ok") is False:
+        raise RuntimeError("Selected Preview could not be recreated")
+    return {**result, "recreated": True}
+
+
 def navigation_link(
     source_webspace_id: str | None = None,
     *,

@@ -663,8 +663,8 @@ Open work:
   second chat/transcript surface. `BuilderWorkbenchService.dialog_widget_config`
   and `builder_skill.attach_dialog_widget` publish the first embedded widget
   contract.
-- [x] `[must]` Add explicit Builder host-to-preview relationships. Webspace ids
-  are opaque; legacy suffix-shaped ids are migration inputs, not topology.
+- [x] `[must]` Add explicit Builder host-to-preview relationships. New previews
+  use `W-dev`; persisted ownership, not naming, validates their production root.
   Builder self-development is the only two-level case: production Builder to
   development Builder through `builder_self_host`, then development Builder to
   its project preview through `builder_project_preview`.

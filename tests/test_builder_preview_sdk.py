@@ -6,6 +6,21 @@ from adaos.sdk.builder import preview
 from adaos.services.builder.workbench import _preview_state_projection
 
 
+def test_explicit_open_recreates_missing_preview_with_exact_revision(monkeypatch):
+    from adaos.services.workspaces import index
+
+    service = _Workbench(follow_active=False)
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(index, "get_workspace", lambda _: None)
+    calls = []
+    monkeypatch.setattr(preview, "select_target", lambda *args, **kwargs: calls.append((args, kwargs)) or {"ok": True})
+    result = preview.ensure_selected_target("desktop")
+    assert result["recreated"] is True
+    assert calls == [(("scenario", "recipes"), {
+        "stage": "prototype", "revision": "003", "source_webspace_id": "desktop", "via_owner": True,
+    })]
+
+
 class _Workbench:
     def __init__(self, *, follow_active: bool = True) -> None:
         self.target = {

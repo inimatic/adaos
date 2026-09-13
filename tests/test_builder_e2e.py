@@ -87,7 +87,7 @@ def test_sdk_ingress_ids_are_stable_per_step_not_shared_by_project(tmp_path, mon
     monkeypatch.setattr(prototype, 'submit_request', lambda text, **kwargs: ids.append(kwargs['metadata']['message_id']) or {})
     executor = SdkBuilderExecutor(repo_root=tmp_path)
     for step in ('create', 'design', 'design'):
-        executor._chat({'text': 'Same prompt'}, {'run_id': 'run', 'case_id': 'case', 'repetition': 1, 'locale': 'en', 'step_id': step})
+        executor._chat({'text': 'Same prompt'}, {'run_id': 'run', 'case_id': 'case', 'repetition': 1, 'locale': 'en', 'step_id': step, 'webspace_id': 'desktop'})
     assert ids[0] != ids[1]
     assert ids[1] == ids[2]
 
@@ -738,6 +738,7 @@ def test_sdk_adapter_routes_declared_generation_contract(
         {"text": "Create a queue"},
         {
             "run_id": "semantic-run",
+            "webspace_id": "desktop",
             "case_id": "queue",
             "repetition": 1,
             "locale": "en",
@@ -752,7 +753,8 @@ def test_sdk_adapter_routes_declared_generation_contract(
     assert captured["metadata"]["builder_semantic_compiler"] is True
 
 
-def test_case_repetitions_use_distinct_webspaces(tmp_path: Path) -> None:
+def test_case_repetitions_reuse_one_builder_preview(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_BUILDER_E2E_WEBSPACE_ID", "desktop")
     case = _case()
     case["steps"] = case["steps"][:1]
     suite = _write_suite(tmp_path / "definitions", cases=[case], repetitions=2)
@@ -769,8 +771,7 @@ def test_case_repetitions_use_distinct_webspaces(tmp_path: Path) -> None:
     ).run()
 
     webspaces = [str(inputs["webspace_id"]) for _, inputs in executor.calls]
-    assert len(set(webspaces)) == 2
-    assert all("case-en" in item for item in webspaces)
+    assert webspaces == ["desktop", "desktop"]
 
 
 def test_runner_injects_case_oracle_only_into_prototype_grade(tmp_path: Path) -> None:
@@ -1308,7 +1309,8 @@ def test_compatibility_executor_waits_for_durable_terminal_artifact(
     )
 
 
-def test_runner_injects_case_webspace_into_builder_wait(tmp_path: Path) -> None:
+def test_runner_injects_case_webspace_into_builder_wait(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_BUILDER_E2E_WEBSPACE_ID", "desktop")
     case = _case()
     case["steps"] = [
         {
@@ -1345,7 +1347,7 @@ def test_runner_injects_case_webspace_into_builder_wait(tmp_path: Path) -> None:
 
     step_type, inputs = executor.calls[1]
     assert step_type == "builder.wait"
-    assert inputs["webspace_id"] == "e2e-wait-context-case-en-1"
+    assert inputs["webspace_id"] == "desktop"
     assert inputs["artifact_root"] == str(tmp_path / "scenario")
 
 

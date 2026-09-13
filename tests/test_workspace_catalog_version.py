@@ -62,6 +62,8 @@ def test_explicit_workspace_kind_is_not_overridden_by_legacy_suffix(monkeypatch,
         lambda webspace_id: tmp_path / f"{webspace_id}.yjs",
     )
 
+    workspace_index.ensure_workspace("named")
+    WebspaceRelationshipRegistry(sql).ensure("named", purpose=BUILDER_PROJECT_PREVIEW)
     legacy = workspace_index.ensure_workspace("named-dev")
     assert legacy.effective_kind == "dev"
 
@@ -82,6 +84,7 @@ def test_workspace_delete_removes_explicit_preview_relations(monkeypatch, tmp_pa
         lambda webspace_id: tmp_path / f"{webspace_id}.yjs",
     )
     registry = WebspaceRelationshipRegistry(sql)
+    workspace_index.ensure_workspace("builder-host")
     relation, _created = registry.ensure(
         "builder-host",
         purpose=BUILDER_PROJECT_PREVIEW,
@@ -95,6 +98,7 @@ def test_workspace_delete_removes_explicit_preview_relations(monkeypatch, tmp_pa
     assert registry.get_outgoing("builder-host") is None
     assert registry.get_incoming(relation.target_webspace_id) is None
 
+    workspace_index.ensure_workspace("another-builder")
     registry.ensure(
         "another-builder",
         purpose=BUILDER_PROJECT_PREVIEW,

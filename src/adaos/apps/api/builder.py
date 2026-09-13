@@ -544,14 +544,15 @@ async def ensure_workbench(
     body: BuilderWorkbenchEnsureRequest,
     service: BuilderWorkbenchService = Depends(_get_workbench_service),
 ) -> dict[str, Any]:
-    return {
-        "ok": True,
-        "binding": await service.ensure_dev_webspace(
+    try:
+        binding = await service.ensure_dev_webspace(
             body.webspace_id,
             active_draft_id=body.active_draft_id,
             runtime_scenario_id=body.runtime_scenario_id,
-        ),
-    }
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "binding": binding}
 
 
 @router.get("/workbench/binding")

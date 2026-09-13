@@ -56,9 +56,14 @@ for ordinary selection.
 ## Explicit Topology
 
 `webspace_relations` stores one outgoing preview relation per Builder host and
-one incoming owner per preview. New preview IDs are opaque `preview-*` values.
-Existing binding files may adopt a legacy ID such as `dev1-dev` during
-migration, but the suffix has no runtime semantics.
+one incoming owner per preview. A registered production host `W` creates
+`W-dev` on the first explicit Preview request and reuses it across applications,
+Prototype and Automation. Only Builder running in `W-dev` can own
+`W-dev-dev`. Naming is deterministic; persisted relationships and registered
+manifest kinds, not suffix parsing, establish ownership. Existing opaque IDs
+may be preserved during migration, but are never allocated for new previews.
+Missing production parents and standalone DEV hosts are rejected before
+relationship or runtime creation. Binding/dialog reads never allocate topology.
 
 Two purposes are valid:
 
@@ -76,8 +81,8 @@ production Builder host
 
 An ordinary preview cannot own a child, and the child preview cannot own a
 grandchild. When the outer host switches from Builder to an ordinary scenario,
-the child relation is detached; its workspace is retained for explicit
-cleanup or diagnostics.
+its child remains paired but dormant. It cannot execute as a preview host
+until Builder is active again; it must not become an orphan on demotion.
 
 The runtime may promote an existing outer `builder_project_preview` relation
 to `builder_self_host` only when the scenario actually running in its target
@@ -87,7 +92,14 @@ For the self-hosted local development case, the terminal child uses the
 deterministic `<builder-preview>-dev` identifier (for example,
 `dev1-dev-dev`) so the operator can inspect it directly. The persisted
 relation remains authoritative; the suffix still has no general identity
-semantics and ordinary previews remain opaque.
+semantics. The same deterministic allocation rule applies to the first level.
+
+Sequential E2E work uses one explicitly selected existing Builder and its one
+preview. Application IDs, revisions, sessions and evidence bundles isolate
+cases, not fabricated webspace IDs. Queues, parallel execution and any future
+preview leasing require a separate design and are deferred. Direct scenario
+materialization requires an explicitly paired target and cannot create
+`dev-<scenario>` or select another host's preview by matching its scenario.
 
 Deleting a source or preview workspace removes every incident relation in the
 same SQLite transaction as the catalog row. Catalog reset clears relations as

@@ -169,7 +169,17 @@ def _patch_reload_dependencies(
     )
 
 
+def _pair_preview(target):
+    from adaos.services.workspaces.relations import WebspaceRelationshipRegistry, BUILDER_PROJECT_PREVIEW
+
+    ensure_workspace("preview-owner")
+    WebspaceRelationshipRegistry().ensure(
+        "preview-owner", purpose=BUILDER_PROJECT_PREVIEW, legacy_target_webspace_id=target,
+    )
+
+
 def test_webspace_service_create_persists_manifest(monkeypatch) -> None:
+    _pair_preview("prompt-lab")
     async def _fake_seed(_webspace_id: str, _scenario_id: str, *, dev: bool | None = None) -> None:
         return None
 
@@ -201,6 +211,7 @@ def test_webspace_service_create_persists_manifest(monkeypatch) -> None:
 
 
 def test_webspace_service_list_filters_by_manifest_kind(monkeypatch) -> None:
+    _pair_preview("dev-space")
     async def _fake_seed(_webspace_id: str, _scenario_id: str, *, dev: bool | None = None) -> None:
         return None
 
@@ -231,6 +242,7 @@ def test_webspace_service_list_filters_by_manifest_kind(monkeypatch) -> None:
 
 
 def test_webspace_listing_exposes_manifest_metadata(monkeypatch) -> None:
+    _pair_preview("metadata-space")
     async def _fake_seed(_webspace_id: str, _scenario_id: str, *, dev: bool | None = None) -> None:
         return None
 

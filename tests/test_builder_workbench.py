@@ -23,6 +23,13 @@ from adaos.services.development_feedback import DevelopmentFeedbackService
 from adaos.services.development_tickets import DevelopmentTicketService
 
 
+@pytest.fixture(autouse=True)
+def registered_builder_host():
+    from adaos.services.workspaces import index
+
+    index.ensure_workspace("desktop")
+
+
 def test_existing_preview_target_does_not_create_or_repair_topology(tmp_path):
     relations = SimpleNamespace(
         get_incoming=lambda token: SimpleNamespace(source_webspace_id="host") if token == "preview" else None,
@@ -38,12 +45,11 @@ def test_existing_preview_target_does_not_create_or_repair_topology(tmp_path):
     assert path.stat().st_mtime_ns == before
 
 
-def test_preview_webspace_id_is_opaque_and_source_ids_are_not_parsed() -> None:
+def test_preview_lookup_is_named_without_allocating_topology() -> None:
     assert safe_source_webspace_id("desktop") == "desktop"
     assert safe_source_webspace_id("Prompt IDE / Lab") == "Prompt-IDE-Lab"
     preview_id = dev_webspace_id_for_source("desktop")
-    assert preview_id.startswith("preview-")
-    assert preview_id != "desktop-dev"
+    assert preview_id == "desktop-dev"
     assert dev_webspace_id_for_source("desktop") == preview_id
     assert source_webspace_id_for("unrelated-dev") == "unrelated-dev"
 
@@ -75,7 +81,7 @@ async def test_ensure_dev_webspace_creates_explicit_prompt_ide_binding(tmp_path:
     binding = await service.ensure_dev_webspace("desktop", active_draft_id="draft.shopping")
     assert binding["source_webspace_id"] == "desktop"
     preview_id = binding["preview_webspace_id"]
-    assert preview_id.startswith("preview-")
+    assert preview_id == "desktop-dev"
     assert binding["dev_webspace_id"] == preview_id
     assert binding["relationship"]["target_webspace_id"] == preview_id
     assert binding["scenario_id"] == "prompt_engineer_scenario"
@@ -881,7 +887,7 @@ def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
     response = client.post("/api/builder/workbench/active-draft", json={"webspace_id": "desktop", "draft_id": "draft.one"})
     assert response.status_code == 200
     preview_id = response.json()["binding"]["preview_webspace_id"]
-    assert preview_id.startswith("preview-")
+    assert preview_id == "desktop-dev"
 
     response = client.get("/api/builder/workbench/binding", params={"webspace_id": "desktop"})
     assert response.status_code == 200

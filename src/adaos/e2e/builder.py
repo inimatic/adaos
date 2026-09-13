@@ -844,6 +844,11 @@ class CompatibilityBuilderExecutor:
         self.browser_mode = browser_mode
         self._skill_manager: Any = None
 
+    def prepare_host(self, requested: str) -> str:
+        from adaos.e2e.builder_host import require_builder_host
+
+        return require_builder_host(requested)
+
     def _manager(self) -> Any:
         if self._skill_manager is None:
             from adaos.adapters.db import SqliteSkillRegistry
@@ -898,9 +903,9 @@ class CompatibilityBuilderExecutor:
         text = str(inputs.get("text") or "").strip()
         if not text:
             raise BuilderE2EError("builder.chat requires input.text")
-        webspace_id = str(
-            inputs.get("webspace_id") or f"e2e-{context['run_id']}"
-        ).strip()
+        from adaos.e2e.builder_host import step_builder_host
+
+        webspace_id = step_builder_host(inputs, context)
         conversation_id = str(
             inputs.get("conversation_id")
             or f"conversation:e2e:{context['run_id']}:{context['case_id']}:{context['repetition']}"
@@ -948,9 +953,9 @@ class CompatibilityBuilderExecutor:
         session_id = str(inputs.get("session_id") or "").strip()
         if not session_id:
             raise BuilderE2EError("builder.session requires input.session_id")
-        webspace_id = str(
-            inputs.get("webspace_id") or f"e2e-{context['run_id']}"
-        ).strip()
+        from adaos.e2e.builder_host import step_builder_host
+
+        webspace_id = step_builder_host(inputs, context)
         return self._manager().run_dev_tool(
             "builder_skill",
             "get_session",
@@ -989,9 +994,9 @@ class CompatibilityBuilderExecutor:
         if not session_id:
             raise BuilderE2EError("builder.wait requires input.session_id")
         job_id = str(inputs.get("job_id") or "").strip()
-        webspace_id = str(
-            inputs.get("webspace_id") or f"e2e-{context['run_id']}"
-        ).strip()
+        from adaos.e2e.builder_host import step_builder_host
+
+        webspace_id = step_builder_host(inputs, context)
         timeout = float(
             inputs.get("timeout_seconds") or context.get("timeout_seconds") or 300
         )
@@ -1624,9 +1629,9 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
         statement = str(inputs.get("text") or "").strip()
         if not statement:
             raise BuilderE2EError("builder.chat requires input.text")
-        webspace_id = str(
-            inputs.get("webspace_id") or f"e2e-{context['run_id']}"
-        ).strip()
+        from adaos.e2e.builder_host import step_builder_host
+
+        webspace_id = step_builder_host(inputs, context)
         conversation_id = str(
             inputs.get("conversation_id")
             or f"conversation:e2e:{context['run_id']}:{context['case_id']}:{context['repetition']}"
@@ -1673,9 +1678,9 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
         session_id = str(inputs.get("session_id") or "").strip()
         if not session_id:
             raise BuilderE2EError("builder.session requires input.session_id")
-        webspace_id = str(
-            inputs.get("webspace_id") or f"e2e-{context['run_id']}"
-        ).strip()
+        from adaos.e2e.builder_host import step_builder_host
+
+        webspace_id = step_builder_host(inputs, context)
         return prototype.candidate_status(
             session_id,
             webspace_id=webspace_id,
@@ -1971,6 +1976,7 @@ class BuilderE2ERunner:
                 f"{configured_adapter} != {executor.adapter_id}"
             )
         self.executor = executor
+        self.builder_webspace_id = str(os.getenv("ADAOS_BUILDER_E2E_WEBSPACE_ID") or "").strip()
 
     def _emit_progress(self, event: str, **fields: Any) -> None:
         if self.progress is None:
@@ -2071,10 +2077,7 @@ class BuilderE2ERunner:
         checkpoint_path = self._checkpoint_path(case, repetition)
         started_at = _utc_now()
         elapsed_before_ms = 0.0
-        case_webspace_id = _safe_token(
-            f"e2e-{self.run_id}-{case['case_id']}-{repetition}",
-            fallback=f"e2e-{self.run_id}-{repetition}",
-        )
+        case_webspace_id = self.builder_webspace_id
         instance_seed = {
             "run_id": self.run_id,
             "case_id": case["case_id"],
@@ -2130,6 +2133,8 @@ class BuilderE2ERunner:
                     "checkpoint identity mismatch: " + ", ".join(mismatches)
                 )
             context = copy.deepcopy(dict(checkpoint["context"]))
+            if str(context.get("webspace_id") or "") != self.builder_webspace_id:
+                raise BuilderE2EError("checkpoint Builder host differs from the selected existing host")
             context["bundle_dir"] = str(self.bundle_dir)
             steps = copy.deepcopy(list(checkpoint["steps"]))
             full_outputs = copy.deepcopy(list(checkpoint["full_outputs"]))
@@ -2597,6 +2602,11 @@ class BuilderE2ERunner:
     def run(self) -> dict[str, Any]:
         _generation_metadata({})
         selected = self._selected_cases()
+        prepare_host = getattr(self.executor, "prepare_host", None)
+        if callable(prepare_host) and any(
+            step["type"] != "observe.path" for case in selected for step in case["steps"]
+        ):
+            self.builder_webspace_id = prepare_host(self.builder_webspace_id)
         self._emit_progress("run_started", case_count=len(selected))
         if self.bundle_dir.exists() and not self.resume:
             raise BuilderE2EError(

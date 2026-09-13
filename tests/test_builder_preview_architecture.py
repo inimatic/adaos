@@ -28,6 +28,11 @@ class _Sql:
     def connect(self):
         return sqlite3.connect(self.path)
 
+    def workspace(self, identifier, *, kind="workspace", scenario="builder"):
+        with self.connect() as con:
+            con.execute("CREATE TABLE IF NOT EXISTS y_workspaces(workspace_id TEXT PRIMARY KEY, kind TEXT, home_scenario TEXT, ui_overlay_json TEXT)")
+            con.execute("INSERT OR REPLACE INTO y_workspaces VALUES(?,?,?,NULL)", (identifier, kind, scenario))
+
 
 class _Webspaces:
     def __init__(self, *items) -> None:
@@ -36,6 +41,82 @@ class _Webspaces:
     def list(self, *, mode: str = "mixed"):
         assert mode == "mixed"
         return list(self.items)
+
+
+def test_preview_rejects_missing_and_orphan_hosts_without_allocating(tmp_path):
+    registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    for source in ("e2e-invented", "missing-dev"):
+        with pytest.raises(ValueError, match="does not exist"):
+            registry.ensure(source, purpose=BUILDER_PROJECT_PREVIEW)
+    registry.sql.workspace("orphan", kind="dev")
+    with pytest.raises(ValueError, match="production parent"):
+        registry.ensure("orphan", purpose=BUILDER_PROJECT_PREVIEW)
+    assert registry.list() == []
+
+
+def test_preview_reads_do_not_allocate_and_creation_reuses_one_target(tmp_path):
+    registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    service = BuilderWorkbenchService(state_dir=tmp_path, relationship_registry=registry)
+    binding = service.get_workspace_binding("absent")
+    assert binding["relationship"] is None
+    assert registry.list() == []
+    assert not service.binding_path("absent").exists()
+    registry.sql.workspace("desktop")
+    first, _ = registry.ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW, scenario_id="one")
+    second, created = registry.ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW, scenario_id="two")
+    assert not created
+    assert first.target_webspace_id == second.target_webspace_id == "desktop-dev"
+    assert len(registry.list()) == 1
+
+
+def test_self_host_checks_actual_scenario_and_production_ancestor(tmp_path):
+    registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    registry.sql.workspace("desktop")
+    registry.ensure("desktop", purpose=BUILDER_SELF_HOST, scenario_id="builder")
+    registry.sql.workspace("desktop-dev", kind="dev", scenario="another-app")
+    with pytest.raises(ValueError, match="active DEV Builder"):
+        registry.ensure("desktop-dev", purpose=BUILDER_PROJECT_PREVIEW)
+    registry.sql.workspace("desktop-dev", kind="dev")
+    child, _ = registry.ensure("desktop-dev", purpose=BUILDER_PROJECT_PREVIEW)
+    assert child.target_webspace_id == "desktop-dev-dev"
+    with registry.sql.connect() as con:
+        con.execute("DELETE FROM y_workspaces WHERE workspace_id='desktop'")
+    with pytest.raises(ValueError, match="production parent"):
+        registry.require_preview_target(child.target_webspace_id)
+
+
+@pytest.mark.asyncio
+async def test_direct_dev_creation_requires_builder_pair_and_recreates_after_delete(monkeypatch):
+    from adaos.services.scenario import webspace_runtime as runtime
+    from adaos.services.workspaces import index
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(runtime, "_seed_webspace_from_scenario", noop)
+    monkeypatch.setattr(runtime, "rebuild_webspace_from_sources", noop)
+    monkeypatch.setattr(runtime.WebspaceService, "_sync_listing", noop)
+    service = runtime.WebspaceService()
+    with pytest.raises(ValueError, match="explicit Builder"):
+        await service.create("orphan-dev", "orphan", dev=True)
+    assert index.get_workspace("orphan-dev") is None
+    with pytest.raises(ValueError, match="explicit Builder"):
+        index.ensure_workspace("orphan-dev")
+    with pytest.raises(ValueError, match="explicit Builder"):
+        index.set_workspace_manifest("orphan", kind="dev")
+    assert index.get_workspace("orphan") is None
+    with pytest.raises(ValueError, match="Select a Builder preview"):
+        await service.ensure_dev_for_scenario("example")
+    index.ensure_workspace("desktop")
+    registry = WebspaceRelationshipRegistry()
+    registry.ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW)
+    first, created = await service.ensure_dev_for_scenario("one", requested_id="desktop-dev")
+    assert created and first.id == "desktop-dev"
+    index.delete_workspace("desktop-dev")
+    registry.ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW)
+    second, created = await service.ensure_dev_for_scenario("two", requested_id="desktop-dev")
+    assert created and second.id == first.id
+    assert service.list_ids(mode="dev") == ["desktop-dev"]
 
 
 def _webspace(
@@ -64,6 +145,8 @@ def _webspace(
 
 def test_builder_host_discovery_uses_active_scenario_and_existing_topology_only(tmp_path: Path) -> None:
     registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    for identifier in ("dev1", "default", "lab", "broken"):
+        registry.sql.workspace(identifier)
     valid_relation, _created = registry.ensure(
         "dev1",
         purpose=BUILDER_SELF_HOST,
@@ -135,6 +218,7 @@ def test_legacy_selection_reasons_never_map_to_content_reload(reason: str) -> No
 
 def test_builder_preview_topology_allows_only_one_self_host_level(tmp_path: Path) -> None:
     registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    registry.sql.workspace("prod-builder")
 
     self_host, created = registry.ensure(
         "prod-builder",
@@ -142,8 +226,8 @@ def test_builder_preview_topology_allows_only_one_self_host_level(tmp_path: Path
         scenario_id="builder",
     )
     assert created is True
-    assert self_host.target_webspace_id.startswith("preview-")
-    assert not self_host.target_webspace_id.endswith("-dev")
+    assert self_host.target_webspace_id == "prod-builder-dev"
+    registry.sql.workspace(self_host.target_webspace_id, kind="dev")
     assert registry.resolve_builder_host(self_host.target_webspace_id) == self_host.target_webspace_id
 
     child, _created = registry.ensure(
@@ -153,6 +237,7 @@ def test_builder_preview_topology_allows_only_one_self_host_level(tmp_path: Path
     )
     assert child.source_webspace_id == self_host.target_webspace_id
     assert child.target_webspace_id == f"{self_host.target_webspace_id}-dev"
+    registry.sql.workspace(child.target_webspace_id, kind="dev", scenario="target-scenario")
     assert registry.resolve_builder_host(child.target_webspace_id) == self_host.target_webspace_id
 
     with pytest.raises(ValueError, match="cannot own"):
@@ -169,11 +254,14 @@ def test_builder_preview_topology_allows_only_one_self_host_level(tmp_path: Path
     )
     assert created is False
     assert demoted.target_webspace_id == self_host.target_webspace_id
-    assert registry.get_outgoing(self_host.target_webspace_id) is None
+    assert registry.get_outgoing(self_host.target_webspace_id) == child
+    with pytest.raises(ValueError, match="cannot own"):
+        registry.require_preview_target(child.target_webspace_id)
 
 
 def test_builder_preview_topology_adopts_legacy_binding_without_parsing_it(tmp_path: Path) -> None:
     registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    registry.sql.workspace("dev1")
 
     relation, created = registry.ensure(
         "dev1",
@@ -191,6 +279,8 @@ def test_builder_preview_topology_adopts_legacy_binding_without_parsing_it(tmp_p
 
 def test_active_builder_claims_legacy_preview_and_owns_one_named_child(tmp_path: Path) -> None:
     registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    registry.sql.workspace("dev1")
+    registry.sql.workspace("dev1-dev", kind="dev")
     original, _created = registry.ensure(
         "dev1",
         purpose=BUILDER_PROJECT_PREVIEW,
@@ -213,6 +303,7 @@ def test_active_builder_claims_legacy_preview_and_owns_one_named_child(tmp_path:
     )
     assert child.source_webspace_id == "dev1-dev"
     assert child.target_webspace_id == "dev1-dev-dev"
+    registry.sql.workspace(child.target_webspace_id, kind="dev", scenario="test05_recipes")
 
     with pytest.raises(ValueError, match="cannot own"):
         registry.ensure(

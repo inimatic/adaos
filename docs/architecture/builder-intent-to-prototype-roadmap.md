@@ -2498,6 +2498,32 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
 
 ## Current Small Automation Focus
 
+### Preview Topology Prerequisite
+
+- [x] `[must]` Sequential Prototype/Automation runs reuse one existing Builder
+  and one Preview. Remove synthetic per-case/repetition hosts from E2E and
+  standalone frozen-Prototype diagnostics. Require explicit host preflight.
+- [x] `[must]` Reject missing production ancestors and standalone DEV hosts at
+  relationship, runtime and workspace-index creation boundaries. Allocate
+  `W-dev`; permit `W-dev-dev` only for an active DEV Builder. Retain a dormant
+  child relation rather than orphaning it on self-host demotion.
+- [x] `[must]` Binding/dialog reads cannot allocate topology. A stale browser
+  URL cannot bootstrap a deleted non-default webspace. Explicit Preview open
+  recreates a missing target while retaining its selected Lifecycle revision.
+- [x] `[must]` Reset the local polluted preview catalog at the user's request,
+  preserving application sources, data and production selections. The audit
+  found 246 DEV webspaces and 637 relations; 236 materialized targets had no
+  registered source. Backups are under `.adaos/state/backups/dev-webspaces-*`.
+  The first restart exposed an additional index-level recreation path, now
+  guarded; its single recreated orphan was also removed.
+- [ ] `[must]` Browser qualification: `desktop:builder` opens the selected
+  application at `desktop-dev`; repeat opens and application switches reuse
+  that target, including recovery after explicit deletion.
+- [ ] `[deferred]` Queues, concurrent Builder execution and any preview leasing
+  model. Do not emulate those future features with synthetic current hosts.
+
+### Frozen Automation Evaluation
+
 Trial and publication experiments are paused by the 2026-09-13 user decision,
 not removed from the target lifecycle. The next gate is a working Equipment
 Inspections Automation against one frozen existing Prototype.
