@@ -2799,6 +2799,10 @@ Inspections Automation against one frozen existing Prototype.
   contracts rather than accepting simulated calculations or external effects.
 - [ ] `[must]` Household Budget: exact currency-separated calculations, limits,
   previous-month comparison, CRUD, invalid input, persistence and browser flow.
+  First attempt found an input-contract gap: the capsule named `read_policy`
+  but omitted its object shape, causing a scalar declaration and a worker repair.
+  The generic capsule now includes an ABI-validated tool route with nested causal
+  triggers/tags; application-specific HTTP/browser journeys stay in E2E fixtures.
 - [ ] `[must]` Service Appointments: real availability, interval conflicts,
   rescheduling/cancellation, parent choices, persistence and browser flow.
 - [ ] `[must]` Inventory/Procurement: atomic stock movements, computed deficit,

@@ -3,7 +3,7 @@
   "stage": "automation",
   "purpose": "Bounded authoring reference for replacing disposable Prototype bindings with owned skill tools. This is not an application template or an additional WebUI schema.",
   "binding_rules": {
-    "tool_declarations": "Expose each callable with @tool in the skill manifest entry module (use a thin decorated wrapper when implementation lives in another module), and list it in exports.tools and tools with its entry and input/output schemas. Reads declare side_effects=none; mutations declare accurate write effects. A tool-backed browser data route declares route=tool, tool, first_paint, recovery, guard_visibility, budget.max_payload_bytes and a causal read_policy (not live polling); targeted_invalidation requires matching invalidation_tags. In skill.yaml, data_routes[*].tool is the LOCAL declared name, e.g. list_records. In WebUI, dataSource.name and callSkill.target are QUALIFIED, e.g. sample_skill.list_records. Do not interchange these namespaces.",
+    "tool_declarations": "Expose each callable with @tool in the skill manifest entry module (use a thin decorated wrapper when implementation lives in another module), and list it in exports.tools and tools with its entry and input/output schemas. Reads declare side_effects=none; mutations declare accurate write effects. A tool-backed browser data route declares route=tool, tool, first_paint, recovery, guard_visibility, budget.max_payload_bytes and a causal read_policy OBJECT, not a string. See examples.tool_data_route: mode, triggers, max_request_hz and preserve_last_value are required; targeted_invalidation is a trigger and its invalidation_tags belong INSIDE read_policy. No live polling. In skill.yaml, data_routes[*].tool is the LOCAL declared name, e.g. list_records. In WebUI, dataSource.name and callSkill.target are QUALIFIED, e.g. sample_skill.list_records. Do not interchange these namespaces.",
     "package_tests": "Skill tests run inside that skill package alone; sibling scenarios/projects are absent. Put cross-component UI/manifest checks under the scenario tests in the admitted application closure, not in skill unit tests. ADAOS_REPO_ROOT is an authoring aid, not an installed-skill contract: tests must not require a repository checkout. Subprocess tests use sys.executable and inherit the supplied SDK PYTHONPATH; do not rebuild it from ADAOS_REPO_ROOT. Move checks to their proper owner rather than skipping them. Use temporary owned data and close SQLite connections, including test connections: the connection context manager commits/rolls back but does not close it.",
     "source_edits": "Use Unicode-safe file edits. On Windows PowerShell, piping source code through the default external-command encoding can replace non-ASCII literals with question marks even when the output file is UTF-8. Prefer apply_patch for edits and UTF-8 script files for structured rewrites; do not pipe localized source literals through a default-encoded shell. Preserve existing localization and current user language.",
     "related_choices": "A form choice field may declare optionsDataSource with kind=skill, name=<owned_skill>.<read_tool>, params and invalidationTags, plus optionValuePath=id and optionLabelPaths=[name]. Return an array or {items:[...]}. The loader shares the normal causal read/cache/retry path; it never submits writes. Unavailable or malformed choices block writable submission without clearing the draft. Do not copy installation records into static options.",
@@ -53,6 +53,22 @@
         "resultStateKey": "savedRecord",
         "resultPath": "item"
       }]
+    },
+    "tool_data_route": {
+      "surface": "widget:records",
+      "route": "tool",
+      "tool": "list_records",
+      "first_paint": "empty until the authorized read completes",
+      "recovery": "explicit retry; preserve the last successful value",
+      "guard_visibility": "show the read error without reporting success",
+      "budget": {"max_payload_bytes": 65536},
+      "read_policy": {
+        "mode": "stale_while_revalidate",
+        "triggers": ["mount", "explicit_refresh", "targeted_invalidation", "state_dependency_changed"],
+        "max_request_hz": 1,
+        "preserve_last_value": true,
+        "invalidation_tags": ["sample.records"]
+      }
     },
     "read_result": {"item": {"id": "r1", "revision": 3, "name": "Example"}},
     "write_result": {"ok": true, "item": {"id": "r1", "revision": 4, "name": "Changed"}},

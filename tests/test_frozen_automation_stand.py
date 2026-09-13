@@ -113,3 +113,17 @@ def test_automation_caller_contract_distinguishes_dev_owner_from_delegation():
     assert "does not configure this transport" in contract
     assert "node-owner credential" in access.caller.__doc__
     assert "do not qualify delegated" in access.caller.__doc__
+
+
+def test_automation_read_policy_example_conforms_to_skill_abi():
+    import jsonschema
+
+    abi = Path(__file__).parents[1] / "src/adaos/abi"
+    capsule = json.loads((abi / "implementation.bindings.v1.json").read_text(encoding="utf-8"))
+    schema = json.loads((abi / "skill.schema.json").read_text(encoding="utf-8"))
+    route = capsule["examples"]["tool_data_route"]
+    fragment = {"$ref": "#/$defs/dataRoute", "$defs": schema["$defs"]}
+    jsonschema.Draft202012Validator(fragment).validate(route)
+    assert route["read_policy"]["invalidation_tags"] == capsule["examples"]["record_editor"]["dataSource"]["invalidationTags"]
+    broken = {**route, "read_policy": "targeted_invalidation"}
+    assert list(jsonschema.Draft202012Validator(fragment).iter_errors(broken))
