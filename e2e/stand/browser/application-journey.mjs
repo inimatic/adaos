@@ -206,6 +206,40 @@ try {
             await page.mouse.up()
             break
           }
+          case 'media': {
+            const preview = host(step.widget).locator('.media-preview').first()
+            if (!['ready', 'error', 'empty'].includes(step.state)) throw new Error('Explicit media state required')
+            await expect(preview).toBeVisible()
+            await expect(preview).toHaveAttribute('data-media-state', step.state)
+            await preview.evaluate(node => node.scrollIntoView({ block: 'center', inline: 'nearest' }))
+            if (step.state !== 'ready') {
+              await expect(preview.getByRole('status')).toBeVisible()
+              expect((await preview.getByRole('status').innerText()).trim()).not.toBe('')
+              break
+            }
+            if (!['image', 'video'].includes(step.kind)) throw new Error('Explicit image/video kind required')
+            const media = preview.locator(step.kind === 'image' ? 'img' : 'video')
+            await expect(media).toBeVisible()
+            const frame = await media.boundingBox()
+            expect(frame?.width).toBeGreaterThan(30)
+            expect(frame?.height).toBeGreaterThan(30)
+            expect(frame.x).toBeGreaterThanOrEqual(0)
+            expect(frame.y).toBeGreaterThanOrEqual(0)
+            expect(frame.x + frame.width).toBeLessThanOrEqual(viewport.width)
+            expect(frame.y + frame.height).toBeLessThanOrEqual(viewport.height)
+            if (step.kind === 'image') {
+              expect(await media.evaluate(node => node.complete && node.naturalWidth > 1 && node.naturalHeight > 1)).toBe(true)
+            } else {
+              expect(await media.evaluate(node => node.controls && !node.autoplay && node.videoWidth > 1)).toBe(true)
+              await media.evaluate(node => node.play())
+              const initial = await media.evaluate(node => node.currentTime)
+              await expect.poll(() => media.evaluate(node => node.currentTime)).toBeGreaterThan(initial + 0.1)
+              await media.evaluate(node => node.pause())
+            }
+            sample.media = [...(sample.media || []), { step: step.id, kind: step.kind,
+              frame, source: await media.evaluate(node => node.currentSrc) }]
+            break
+          }
           case 'reload': await page.reload({ waitUntil: 'domcontentloaded' }); await ready(); break
           case 'screenshot': await page.screenshot({ path: path.join(output, `${layout}-${step.id}.png`), fullPage: true, animations: 'disabled' }); break
           default: throw new Error(`Unknown journey action: ${step.type}`)

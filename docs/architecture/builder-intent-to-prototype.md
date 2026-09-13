@@ -392,6 +392,19 @@ because its final business behavior cannot run in the declarative preview.
   fixtures and disclosures alone cannot satisfy those checks. Trial/release
   readiness requires the separate implementation and verification gates.
 
+Pending obligations retain provenance: a source user clause, an explicitly
+approved addition, or a model-proposed assumption. Approval of the visible
+Prototype alone does not promote a suggested external integration into a new
+mandatory user requirement. Review must expose its channel, recipients and
+authorization uncertainties before accepting that obligation. Missing delivery
+contracts must not be replaced by successful-looking local writes.
+
+An explicitly scoped Automation iteration may implement independent local
+branches while an external dependency remains blocked. Its completion is partial
+case progress, not full acceptance: preserve the unresolved obligation and the
+original failed attempt, and report implemented, verified and blocked behavior
+separately. Do not drop an obligation merely to obtain a passing cohort score.
+
 The implementation handoff is not a copy of disposable storage into production.
 New installations start with empty user data unless a separate explicit data
 policy authorizes installation seeds. Representative records remain test evidence.

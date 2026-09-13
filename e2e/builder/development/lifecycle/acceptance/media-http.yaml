@@ -1,0 +1,131 @@
+schema: adaos.e2e.application_tools.v1
+steps:
+  - id: anonymous
+    tool: list_media
+    caller: anonymous
+    arguments: {}
+    expect: {values_in: {http_status: [401, 403]}}
+  - id: token
+    tool: begin_draft
+    arguments: {}
+    expect: {paths_present: [body.result.token]}
+  - id: create
+    tool: register_media
+    arguments: &create
+      token: $steps.token.body.result.token
+      values: &values {title: '${case_instance_id}', project: promo, type: image, edition: 1, url: 'https://example.com/image.jpg', cover: 'https://example.com/image.jpg'}
+    expect: {values: {body.result.ok: true, body.result.item.status: in_review, body.result.item.has_comments: false, body.result.item.revision: 1}}
+  - id: replay
+    tool: register_media
+    arguments: *create
+    expect: {values: {body.result.ok: true, body.result.item.id: $steps.create.body.result.item.id}}
+  - id: reused-token
+    tool: register_media
+    arguments: {<<: *create, values: {<<: *values, title: changed}}
+    expect: {values: {body.result.ok: false, body.result.error: review_rejected}}
+  - id: filter
+    tool: list_media
+    arguments: {search: '${case_instance_id}', project: promo, type: image, status: in_review}
+    expect: {values: {body.result.items.0.id: $steps.create.body.result.item.id}, paths_absent: [body.result.items.1]}
+  - id: wrong-project
+    tool: list_media
+    arguments: {search: '${case_instance_id}', project: doc}
+    expect: {paths_absent: [body.result.items.0]}
+  - id: second-token
+    tool: begin_draft
+    arguments: {}
+    expect: {paths_present: [body.result.token]}
+  - id: second
+    tool: register_media
+    arguments: {token: $steps.second-token.body.result.token, values: {<<: *values, title: '${case_instance_id}-other', project: doc, type: video, url: 'https://example.com/video.mp4'}}
+    expect: {values: {body.result.ok: true}}
+  - id: comment-token
+    tool: begin_draft
+    arguments: {id: $steps.create.body.result.item.id}
+    expect: {values: {body.result.revision: 1}, paths_present: [body.result.token]}
+  - id: negative-time
+    tool: request_fix
+    arguments: {id: $steps.create.body.result.item.id, revision: 1, token: $steps.comment-token.body.result.token, values: {text: Invalid, position_kind: time, timecode: -1}}
+    expect: {values: {body.result.ok: false, body.result.error: review_rejected}}
+  - id: request
+    tool: request_fix
+    arguments: &request
+      id: $steps.create.body.result.item.id
+      revision: 1
+      token: $steps.comment-token.body.result.token
+      values: {text: '${case_instance_id}-comment', position_kind: region, region: 'Upper left caption'}
+    expect: {values: {body.result.ok: true, body.result.item.revision: 2, body.result.item.status: needs_changes, body.result.item.has_comments: true}}
+  - id: request-replay
+    tool: request_fix
+    arguments: *request
+    expect: {values: {body.result.ok: true, body.result.item.revision: 2}}
+  - id: comments
+    tool: list_comments
+    arguments: {id: $steps.create.body.result.item.id}
+    expect: {values: {body.result.items.0.text: '${case_instance_id}-comment', body.result.items.0.media_ref: $steps.create.body.result.item.id, body.result.items.0.material_id: $steps.create.body.result.item.material_id}, paths_absent: [body.result.items.1]}
+  - id: isolated-comments
+    tool: list_comments
+    arguments: {id: $steps.second.body.result.item.id}
+    expect: {paths_absent: [body.result.items.0]}
+  - id: reject-open-approval
+    tool: approve_media
+    arguments: {id: $steps.create.body.result.item.id, revision: 2}
+    expect: {values: {body.result.ok: false, body.result.error: review_rejected}}
+  - id: stale-approval
+    tool: approve_media
+    arguments: {id: $steps.create.body.result.item.id, revision: 1}
+    expect: {values: {body.result.ok: false, body.result.error: review_rejected}}
+  - id: resolve
+    tool: resolve_comment
+    arguments: {id: $steps.comments.body.result.items.0.id, revision: 1}
+    expect: {values: {body.result.ok: true, body.result.item.has_comments: false, body.result.item.revision: 3}}
+  - id: stale-resolve
+    tool: resolve_comment
+    arguments: {id: $steps.comments.body.result.items.0.id, revision: 1}
+    expect: {values: {body.result.ok: false, body.result.error: review_rejected}}
+  - id: approve-race
+    tool: approve_media
+    concurrent_arguments:
+      - {id: $steps.create.body.result.item.id, revision: 3}
+      - {id: $steps.create.body.result.item.id, revision: 3}
+    expect: {values: {success_count: 1}}
+  - id: approved
+    tool: get_media
+    arguments: {id: $steps.create.body.result.item.id}
+    expect: {values: {body.result.status: approved, body.result.revision: 4}}
+  - id: edition-token
+    tool: begin_draft
+    arguments: {id: $steps.create.body.result.item.id}
+    expect: {paths_present: [body.result.token]}
+  - id: duplicate-edition
+    tool: register_media
+    arguments: {id: $steps.create.body.result.item.id, revision: 4, token: $steps.edition-token.body.result.token, values: *values}
+    expect: {values: {body.result.ok: false, body.result.error: review_rejected}}
+  - id: invalid-url
+    tool: register_media
+    arguments: {id: $steps.create.body.result.item.id, revision: 4, token: $steps.edition-token.body.result.token, values: {<<: *values, edition: 2, url: 'javascript:alert(1)'}}
+    expect: {values: {body.result.ok: false, body.result.error: review_rejected}}
+  - id: edition
+    tool: register_media
+    arguments: {id: $steps.create.body.result.item.id, revision: 4, token: $steps.edition-token.body.result.token, values: {<<: *values, edition: 2, title: '${case_instance_id}-v2'}}
+    expect: {values: {body.result.ok: true, body.result.item.material_id: $steps.create.body.result.item.material_id, body.result.item.status: in_review, body.result.item.has_comments: false, body.result.item.revision: 1}}
+  - id: new-comments-empty
+    tool: list_comments
+    arguments: {id: $steps.edition.body.result.item.id}
+    expect: {paths_absent: [body.result.items.0]}
+  - id: old-comments-kept
+    tool: list_comments
+    arguments: {id: $steps.create.body.result.item.id}
+    expect: {values: {body.result.items.0.c_status: resolved, body.result.items.0.text: '${case_instance_id}-comment'}}
+  - id: old-approval-kept
+    tool: get_media
+    arguments: {id: $steps.create.body.result.item.id}
+    expect: {values: {body.result.status: approved, body.result.revision: 5}}
+  - id: history
+    tool: list_history
+    arguments: {id: $steps.edition.body.result.item.id}
+    expect: {values: {body.result.items.0.action: registered, body.result.items.0.edition: 2, body.result.items.1.action: approved, body.result.items.1.edition: 1}, paths_present: [body.result.items.4], paths_absent: [body.result.items.5]}
+  - id: other-history
+    tool: list_history
+    arguments: {id: $steps.second.body.result.item.id}
+    expect: {values: {body.result.items.0.action: registered}, paths_absent: [body.result.items.1]}

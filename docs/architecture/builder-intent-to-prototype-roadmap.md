@@ -2866,6 +2866,10 @@ Inspections Automation against one frozen existing Prototype.
   15 runtime-loader regressions pass, including isolation and reload. Live API
   verification remains open: the environment rejected its restart, so process
   9432 was not changed. Do not attribute later old-process timings to this fix.
+  Media `visual-02` repeats a compact startup/filter timeout after the full
+  functional journey passed: initial reads fan out twice and filtered rows do not
+  arrive within the stand's five-second check. This remains a reliability blocker,
+  not a missing record or an excuse to extend the assertion budget.
 - [x] `[must]` Volunteer Roster: availability, overlap/capacity guards,
   cancellation/reassignment and derived staffing counts.
   The first admission (`automation-01`) stopped before any model call:
@@ -2906,13 +2910,17 @@ Inspections Automation against one frozen existing Prototype.
   errors, not application defects. Implementation `automation-03` took 9.6 minutes,
   70,356 fresh input, 921,984 cached input and 14,140 output tokens; earlier blocked
   attempts remain separate evidence. No Prototype or renderer rewrite was used.
-- [ ] `[must]` Knowledge Library: persistent content, search/filter,
+- [x] `[must]` Knowledge Library: persistent content, search/filter,
   publish/archive/read-only enforcement and editor failure recovery.
   First implementation passes 24 skill/four scenario tests and all 27 independent
   HTTP steps. `journey-01` exposes an actual Client inconsistency: item.details
   only dispatched its first named action, so read/selection/open-modal never
-  completed. Named-command sequencing now has 24 focused Client tests; requalify
-  the unchanged application. First model attempt took 10.7 minutes, 55,357 fresh
+  completed. Named-command sequencing now has 24 focused Client tests;
+  `journey-04` qualifies all 46 steps on each viewport without changing the
+  application: full-text round-trip, failed draft retention, publish/archive,
+  read-only enforcement, reload, cancel and archive discovery. Intermediate
+  attempts also corrected stand handling of Ionic disabled controls and the
+  authored active-only filter caption. First model attempt took 10.7 minutes, 55,357 fresh
   input, 1,053,184 cached input and 16,085 output tokens.
 - [ ] `[must]` Media Review: real media URLs, revision-bound comments/status,
   new-revision isolation and truthful unavailable media handling.
@@ -2923,17 +2931,52 @@ Inspections Automation against one frozen existing Prototype.
   (33,883 fresh input, 414,720 cached input, 3,072 output tokens). A separately
   scoped local-only iteration must not count as full acceptance or simulate
   notification delivery; recipient/channel clarification remains open.
+  The local-only `automation-02` now passes 40 skill/five scenario tests after
+  one worker repair of an INSERT placeholder mismatch. Both numbered prompts
+  retain the complete brief and explicit partial scope; all four archived output
+  byte counts/digests match. Independent `http-01.json` passes 30 steps;
+  `journey-01` passes 74 steps per viewport, covering image/video playback,
+  unavailable URLs, comment resolution, rejected approval, new editions,
+  preserved history, reload and arbitrary-project filtering. `visual-01` then
+  checks eight read-only steps per viewport on the same saved records: media
+  is scrolled into view and its bounds verified before capture. Earlier compact
+  screenshots captured the catalog above a working but off-screen player;
+  DOM visibility alone was insufficient visual evidence. No application rewrite
+  was needed. `visual-03` passes four read-only steps per viewport with a visible
+  localized unavailable-media message; the preceding `visual-02` latency failure
+  remains open above. Final shared Core/SDK/stand regression selection passes
+  83 tests; Client details has 24 passing tests and its boundary/inventory checks
+  remain clean. Local realization took 14.1 minutes, 82,044 fresh input, 941,824
+  cached input and 21,887 output tokens, separate from the blocked first attempt.
+- [ ] `[should]` Review Automation presentation separately from functional gates:
+  truncated command labels, action-label/field-label localization key reuse,
+  raw boolean/actor projections, and navigation from long mobile collections to
+  their details. Use generic authoring guidance and renderer contracts, not
+  archetype-specific Core branches. Negative HTTP fixtures intentionally retain
+  unavailable links in TEST applications; do not mistake them for successful
+  visual media fixtures or delete records through unsupported private operations.
 - [ ] `[must]` Preserve requirement provenance across Prototype/Automation:
   distinguish user obligations, explicitly approved additions, model suggestions
   and unresolved external dependencies. A generic approval of the visible UI must
   not silently turn speculative integration suggestions into user requirements.
   Admission must expose that distinction; independently test partial progress
   without silently weakening the full case verdict.
+- [ ] `[should]` Qualify discovery relevance and drill-down completeness with
+  actual Automation queries. Media's `ContentRef https media source` search
+  returned publication/research functions, while `ContentRef` alone returned no
+  matches. Architecture drill-down exposed metadata rather than a callable
+  notification contract. Distinguish unsupported contract, absent indexed data
+  and low-relevance matches; do not solve this with media-specific query rewrites
+  or more unconditional prompt payload.
 - [ ] `[must]` Retain each first-run result separately from corrected candidates;
   inspect reachable behavior to the blocker before submitting one combined repair.
   Report package checks, independent DEV-owner HTTP/browser acceptance, latency
   and token usage separately. Delegated installed-delivery authorization remains
   outside the explicitly paused delivery scope.
+  All seven independent HTTP/browser attempts and their corrections are retained
+  under `automation-cohort-20260913-*`. Historical Budget/Service worker outputs
+  overwritten before attempt archival was introduced cannot be reconstructed;
+  this cohort is development evidence, not a pristine first-attempt baseline.
 - [x] `[must]` Preserve each preceding model journal, final message and validation
   report before a worker repair replaces its live output paths. Pair archived
   bytes/digests with the numbered admitted prompt; retain latest live paths for
