@@ -4573,6 +4573,26 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     ]
 
 
+def test_worker_prompt_distinguishes_accepted_design_from_editable_candidate(tmp_path):
+    worker = LocalSkillFactoryWorker(state_dir=tmp_path / "state", repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios")
+    assignment = {"task_id": "task.correction", "target": {"type": "scenario", "id": "demo"},
+        "forge": {"sparse_paths": ["scenarios/demo/"]}, "realize_request": {
+            "target": {"type": "scenario", "id": "demo"}, "artifacts": {
+                "implementation_brief": "Preserve the approved interface.",
+                "context_packet": {"artifacts": {"prototype": {"acceptance": {"revision": "002"}}}},
+            }}}
+    workspace = tmp_path / "workspace"
+    (workspace / "scenarios/demo").mkdir(parents=True)
+    worker._build_packet(assignment, workspace, tmp_path / "input")
+    prompt = (tmp_path / "input/task.md").read_text(encoding="utf-8")
+    assert "immutable design baseline is accepted Prototype revision 002" in prompt
+    assert "editable candidate is scenarios/demo/webui.json" in prompt
+    assert "not a new Prototype acceptance" in prompt
+    assert "after_webui slices" in prompt
+    assert "its materialized source authority" not in prompt
+
+
 def test_worker_prompt_adds_provider_contract_capsule_only_for_admitted_contract(
     tmp_path: Path,
 ) -> None:

@@ -1,4 +1,4 @@
-"""Pin and inspect an existing test Prototype without regenerating or accepting it."""
+"""Inspect a retained test Prototype or Automation without regeneration or acceptance."""
 
 import argparse
 import hashlib
@@ -16,6 +16,18 @@ from adaos.e2e.stand import redact_value
 from adaos.sdk.builder import preview, workflow
 from adaos.sdk.developer import projects
 from adaos.services.resources.prototype import prototype_webui_digest
+from adaos.services.builder.workflow import BuilderWorkflowService
+
+
+def read_automation_snapshot(snapshot: Path, scenario: str, revision: str):
+    metadata = json.loads((snapshot / "snapshot.json").read_text(encoding="utf-8"))
+    if (metadata.get("object_type") != "scenario" or metadata.get("object_id") != scenario
+            or metadata.get("task_id") != revision or not revision.startswith("task.")):
+        raise ValueError("Automation review requires the exact retained task revision")
+    ui = json.loads((snapshot / "webui.json").read_text(encoding="utf-8"))
+    if not isinstance(ui.get("ui", {}).get("application"), dict):
+        raise ValueError("Automation snapshot has no application UI")
+    return metadata, ui
 
 
 def main():
@@ -25,20 +37,26 @@ def main():
     parser.add_argument("--host", required=True)
     parser.add_argument("--subnet", required=True)
     parser.add_argument("--revision", default="002")
+    parser.add_argument("--stage", choices=("prototype", "automation"), default="prototype")
+    parser.add_argument("--probe", choices=("review", "equipment-journey"), default="review")
     args = parser.parse_args()
     load_dotenv()
     if os.getenv("ENV_TYPE") != "dev" or not args.host.startswith("e2e-"):
         parser.error("Requires a DEV node and an explicit isolated E2E Builder host")
-    if not args.revision.isdigit():
+    if args.stage == "prototype" and not args.revision.isdigit():
         parser.error("Requires an exact numeric UI revision")
+    if args.probe != "review" and args.stage != "automation":
+        parser.error("Equipment journey requires an Automation snapshot")
     root = (Path.cwd() / "e2e/artifacts/builder").resolve()
     output = args.output.resolve()
     if not output.is_relative_to(root) or output == root:
         parser.error("Evidence must stay inside e2e/artifacts/builder")
     init_ctx(Settings.from_sources())
     files = {}
-    for name in ("webui.json", "semantic.webui.json", "builder.draft.json",
-                 f"ui_revisions/{args.revision}.json"):
+    names = ["webui.json", "semantic.webui.json", "builder.draft.json"]
+    if args.stage == "prototype":
+        names.append(f"ui_revisions/{args.revision}.json")
+    for name in names:
         result = projects.read_file("scenario", args.scenario, name, max_bytes=2_097_152)
         if result.get("truncated"):
             raise ValueError(f"Cannot pin a truncated source: {name}")
@@ -46,18 +64,26 @@ def main():
     draft = files["builder.draft.json"]
     if "[TEST]" not in json.dumps(draft, ensure_ascii=False):
         raise ValueError("Existing scenario must be explicitly marked as a test")
-    revision = files[f"ui_revisions/{args.revision}.json"]
-    ui = revision["after_webui"]
+    state = workflow.get_state("scenario", args.scenario)
+    if args.stage == "prototype":
+        ui = files[f"ui_revisions/{args.revision}.json"]["after_webui"]
+    else:
+        snapshot = BuilderWorkflowService.from_context().automation_snapshot_root("scenario", args.scenario)
+        metadata, ui = read_automation_snapshot(snapshot, args.scenario, args.revision)
+        files["automation-snapshot.json"] = metadata
     output.mkdir(parents=True, exist_ok=False)
     for name, content in files.items():
         _write_json(output / "source" / name, content)
-    _write_json(output / "prototype.webui.json", ui)
-    _write_json(output / "workflow-before.json", workflow.get_state("scenario", args.scenario))
+    ui_path = output / f"{args.stage}.webui.json"
+    _write_json(ui_path, ui)
+    _write_json(output / "workflow-before.json", state)
     receipt = {
-        "scope": "existing Prototype comparison; no acceptance or Automation submission",
+        "scope": "existing snapshot comparison; no acceptance or Automation submission",
+        "stage": args.stage,
         "scenario_id": args.scenario, "revision": args.revision,
         "webui_digest": prototype_webui_digest(ui),
         "current_source_matches": prototype_webui_digest(files["webui.json"]) == prototype_webui_digest(ui),
+        "current_application_matches": files["webui.json"].get("ui", {}).get("application") == ui.get("ui", {}).get("application"),
         "source_digests": {name: hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
                            for name, value in files.items()},
         "core_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
@@ -65,20 +91,22 @@ def main():
                                                    "rev-parse", "HEAD"], text=True).strip(),
     }
     _write_json(output / "pin.json", receipt)
-    selected = preview.select_target("scenario", args.scenario, stage="prototype", revision=args.revision,
+    selected = preview.select_target("scenario", args.scenario, stage=args.stage, revision=args.revision,
                                      source_webspace_id=args.host, via_owner=True)
     _write_json(output / "selection.json", redact_value(selected))
     if not selected.get("ok"):
-        raise ValueError("Pinned Prototype materialization failed")
+        raise ValueError("Pinned snapshot materialization failed")
     hub = "http://127.0.0.1:8778"
     env = {**os.environ, "ADAOS_E2E_SCENARIO_ID": args.scenario,
            "ADAOS_E2E_WEBSPACE_ID": selected["preview_webspace_id"],
            "ADAOS_E2E_SUBNET_ID": args.subnet, "ADAOS_E2E_LOCALE": "ru",
            "ADAOS_E2E_HUB_URL": hub, "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub),
-           "ADAOS_E2E_CLIENT_URL": "http://127.0.0.1:8100/", "ADAOS_E2E_REVIEW_STAGE": "prototype",
-           "ADAOS_E2E_EXPECTED_WEBUI": str(output / "prototype.webui.json"),
+           "ADAOS_E2E_CLIENT_URL": "http://127.0.0.1:8100/", "ADAOS_E2E_REVIEW_STAGE": args.stage,
+           "ADAOS_E2E_EXPECTED_WEBUI": str(ui_path),
+           "ADAOS_E2E_SNAPSHOT_PIN": str(output / "pin.json"),
            "ADAOS_E2E_OUTPUT": str(output / "browser")}
-    result = subprocess.run(["node", str(Path(__file__).with_name("browser") / "prototype-review.mjs")],
+    script = "prototype-review.mjs" if args.probe == "review" else "equipment-automation.mjs"
+    result = subprocess.run(["node", str(Path(__file__).with_name("browser") / script)],
                             env=env, capture_output=True, text=True, encoding="utf-8")
     (output / "browser.log").write_text(result.stdout + result.stderr, encoding="utf-8")
     receipt.update(browser_exit_code=result.returncode, preview_webspace_id=selected["preview_webspace_id"])

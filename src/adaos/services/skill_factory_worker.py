@@ -6193,11 +6193,14 @@ when a governed Dev Ticket repair explicitly supplies its separate contract.
         )
         accepted_revision = str(prototype_acceptance.get("revision") or "").strip()
         accepted_prototype_instruction = (
-            f" The accepted Prototype revision is {accepted_revision}; its materialized "
-            f"source authority is scenarios/{target_id}/webui.json. For UI changes, use that "
-            "canonical file; admitted handlers, manifests, locales and tests remain editable. "
-            "ui_revisions is immutable audit evidence and must not "
-            "be opened unless the packet reports a digest mismatch."
+            f" The immutable design baseline is accepted Prototype revision {accepted_revision}. "
+            f"The editable candidate is scenarios/{target_id}/webui.json; on a correction it "
+            "already contains Automation changes and is not a new Prototype acceptance. "
+            "Use the approved brief for initial realization; on a correction preserve authorized "
+            "working behavior and apply only that correction. "
+            "Admitted handlers, manifests, locales and tests remain editable. "
+            f"ui_revisions/{accepted_revision}.json is immutable audit evidence; read only bounded "
+            "after_webui slices when a preservation question or digest mismatch requires comparison."
             if target_type == "scenario" and accepted_revision
             else ""
         )

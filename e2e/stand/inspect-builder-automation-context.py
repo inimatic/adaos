@@ -28,11 +28,6 @@ def inspect_admitted_input(input_dir: Path) -> dict:
         receipts[name] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
         text = raw.decode("utf-8")
         documents[name] = text if name.endswith(".md") else json.loads(text)
-    model_attempts = []
-    for path in sorted((input_dir / "model-attempts").glob("*.prompt.md")):
-        raw = path.read_bytes()
-        model_attempts.append({"path": path.relative_to(input_dir).as_posix(),
-                               "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
     packet = documents["packet.json"]
     prompt = documents["task.md"]
     brief = packet.get("brief") or ""
@@ -42,6 +37,25 @@ def inspect_admitted_input(input_dir: Path) -> dict:
     bindings = documents.get("implementation-bindings.json", {})
     rules = bindings.get("binding_rules", {})
     normalize = lambda text: text.replace("\r\n", "\n").strip()
+    model_attempts = []
+    for path in sorted((input_dir / "model-attempts").glob("*.prompt.md")):
+        raw = path.read_bytes()
+        actual = raw.decode("utf-8")
+        digest = hashlib.sha256(raw).hexdigest()
+        receipt_path = path.with_suffix(".json")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
+        iteration = packet.get("iteration_instruction") or ""
+        model_attempts.append({
+            "path": path.relative_to(input_dir).as_posix(), "bytes": len(raw), "sha256": digest,
+            "checks": {
+                "receipt_matches": receipt.get("task_id") == packet.get("task_id")
+                and receipt.get("prompt_sha256") == digest and receipt.get("prompt_bytes") == len(raw),
+                "full_brief_present": bool(brief) and normalize(brief) in normalize(actual),
+                "current_iteration_present": not iteration or normalize(iteration) in normalize(actual),
+                "verification_ownership_explicit": "independent acceptance owns browser journeys" in actual
+                and "Explicitly mark checks not executed" in actual,
+            },
+        })
     checks = {
         "full_brief_in_task": bool(brief) and normalize(brief) in normalize(prompt),
         "accepted_revision_present": bool(acceptance.get("revision")),

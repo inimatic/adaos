@@ -271,6 +271,15 @@ including automatic validation repairs, with a byte digest. `task.md` alone is
 the authoring base, not proof of the full follow-up input. Repair prompts keep
 the same verification ownership; feedback blockers are checked on every turn.
 Package tests inherit SDK imports but cannot require Codex-only checkout paths.
+Audit each captured attempt against its receipt and full brief/current correction,
+not only the authoring file. Name the accepted design and editable candidate
+separately: after realization the current WebUI is an Automation candidate,
+not another Prototype acceptance. Bounded immutable revision slices may answer
+a preservation question without rediscovering or regenerating the design.
+State side-effect defaults explicitly. For current Client callSkill actions,
+omitting invalidates triggers global refresh; read actions declare an empty
+list and mutations declare affected tags. A read tool's side_effects metadata
+alone does not suppress the Client's legacy refresh behavior.
 
 Feedback reference grammar is part of the exposed parser contract. Fully
 qualified SDK symbols may normalize to `sdk:` references; ambiguous bare names

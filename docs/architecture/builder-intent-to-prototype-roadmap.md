@@ -2553,9 +2553,24 @@ Inspections Automation against one frozen existing Prototype.
   environments in the bounded capsule. Remove `ADAOS_REPO_ROOT` from packaged
   tests to match the native check. Capture every exact model prompt, including
   automatic repair suffixes, and enforce feedback blockers on repair turns too.
-- [ ] `[must]` Repair the generated persistence test through Builder without
-  changing the accepted UI or removing its persistence assertion. Rerun native
-  checks and independently qualify the real UI; recovery is not acceptance.
+- [x] `[must]` Repair the generated persistence test through Builder without
+  changing the accepted UI or removing its persistence assertion. `automation-04`
+  changes only the test environment; native installation passes 19 tests in
+  9.20s. Exact Automation snapshot/widget/data-source parity passes wide/compact.
+  Independent functional acceptance below remains open.
+- [x] `[must]` Verify captured model attempts, not just task.md: receipt digest,
+  full brief and current correction, explicit verification ownership. Name the
+  immutable accepted design separately from the editable Automation candidate.
+  `automation-05/input-audit.json` passes four per-attempt and six base checks.
+- [x] `[must]` Expose read-action invalidation defaults in the generic binding
+  capsule. Live tracing in `automation-04/journey-03` through `journey-05` shows
+  successful writes and delayed reads, not lost records. Read-only callSkill
+  actions with omitted invalidates globally refresh all sources; explicit empty
+  tags suppress this fanout. Client: 200 action/data regressions pass.
+- [ ] `[must]` Qualify Builder correction of read-triggered global refresh
+  (`automation-05`) and repeat complete browser acceptance. Preserve failed
+  journey evidence; observing late responses must not upgrade a failed verdict.
+  Profile remaining per-request latency separately from correctness.
 - [ ] `[must]` Run the separate Automation-only declarative brief, inspect its
   actual input and result, and preserve comparison of existing interactions.
   Add equipment editing and a visible selected parent/dropdown for creation.
@@ -2565,6 +2580,10 @@ Inspections Automation against one frozen existing Prototype.
   recovery. Keep direct server authorization evidence separate from DEV-owner
   browser evidence. Stop at blockers, collect reachable findings, then repair
   through Builder before another acceptance pass.
+  Current partial evidence: equipment create/edit/cancel, visible parent choices,
+  draft defects, completion refusal, invalid-link draft retention and completed
+  record locks pass in reachable wide/compact runs. No run yet passes the entire
+  journey reliably. DEV-owner checks are not delegated-reader authorization.
 
 ## Could And Deferred Work
 
