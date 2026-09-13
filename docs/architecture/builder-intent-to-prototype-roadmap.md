@@ -2516,9 +2516,19 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
   registered source. Backups are under `.adaos/state/backups/dev-webspaces-*`.
   The first restart exposed an additional index-level recreation path, now
   guarded; its single recreated orphan was also removed.
-- [ ] `[must]` Browser qualification: `desktop:builder` opens the selected
+- [x] `[must]` Browser qualification: `desktop:builder` opens the selected
   application at `desktop-dev`; repeat opens and application switches reuse
-  that target, including recovery after explicit deletion.
+  that target, including recovery after explicit deletion. Evidence:
+  `preview-topology-20260913/browser-select`, `browser-recreated-02` (retains
+  exact Prototype `002` and visible fixture data), `browser-switch-existing`
+  (second original application, same target). Core/SDK/Yjs: 434 checks pass;
+  catalog/recovery services: 24; Builder control skill: 88. The control-skill
+  opening fix is mirrored in Workspace and DEV and checkpointed in Forge.
+- [ ] `[should]` Qualify application presentation metadata in frozen Automation
+  repeat fixtures before treating them as project-picker UI samples. The
+  `test_automation_repeat_20260913_b` diagnostic opened generic `skill_preview`
+  from its Project entrypoint, unlike explicit scenario snapshot selection.
+  This is separate from topology: the existing Preview was reused, not duplicated.
 - [ ] `[deferred]` Queues, concurrent Builder execution and any preview leasing
   model. Do not emulate those future features with synthetic current hosts.
 
