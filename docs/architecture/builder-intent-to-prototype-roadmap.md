@@ -2516,6 +2516,23 @@ scope, not evidence for higher reasoning effort or weakened acceptance.
   registered source. Backups are under `.adaos/state/backups/dev-webspaces-*`.
   The first restart exposed an additional index-level recreation path, now
   guarded; its single recreated orphan was also removed.
+- [x] `[must]` Complete the explicitly requested local experimental-webspace
+  cleanup beyond `kind=dev`: remove 20 legacy `preview-*`, `builder_session*`,
+  E2E, Codex and validation hosts misclassified as ordinary workspaces, plus
+  one malformed legacy identifier by exact key without normalizing it to
+  `desktop`. Backup and before/after evidence:
+  `.adaos/state/backups/experimental-webspaces-20260913-165351`.
+  Verify absence in SQLite and the live API catalog. Preserve application
+  sources, ordinary user hosts and the valid `desktop` / `desktop-dev` /
+  `desktop-dev-dev` chain, including concurrent user changes.
+- [ ] `[must]` Make webspace-deletion command admission and completion
+  observable: an events-channel receipt ACK must not hide a core handler
+  admission rejection. During sequential cleanup, a second deletion arrived
+  after the previous row disappeared but before its runtime cleanup completed;
+  the subscription limit (`pending=1 limit=1`) dropped the command after an
+  `ok=true` ACK. Qualify successive requests through terminal completion or
+  explicit retryable rejection; include regression coverage for overlapping
+  cleanup and ensure the client never reports deletion from receipt alone.
 - [x] `[must]` Browser qualification: `desktop:builder` opens the selected
   application at `desktop-dev`; repeat opens and application switches reuse
   that target, including recovery after explicit deletion. Evidence:
