@@ -2797,12 +2797,28 @@ Inspections Automation against one frozen existing Prototype.
   Keep these domain descriptions in evaluation inputs, outside Core/Client and
   generic Builder context. Review actual admitted prompts and report missing
   contracts rather than accepting simulated calculations or external effects.
-- [ ] `[must]` Household Budget: exact currency-separated calculations, limits,
+- [x] `[must]` Household Budget: exact currency-separated calculations, limits,
   previous-month comparison, CRUD, invalid input, persistence and browser flow.
   First attempt found an input-contract gap: the capsule named `read_policy`
   but omitted its object shape, causing a scalar declaration and a worker repair.
   The generic capsule now includes an ABI-validated tool route with nested causal
   triggers/tags; application-specific HTTP/browser journeys stay in E2E fixtures.
+  `automation-cohort-20260913-household-budget-en`: task
+  `task.01M2DM0CRQZ0MJS5Q49HQVZ6HF` completed after one worker validation repair;
+  packaged checks (including fresh-process SQLite reads) passed. Independent
+  `http-01.json` and `errors-02.json` pass 20 + 11 real DEV-owner/anonymous ingress
+  checks. `journey-05` passes 42 steps on each wide/compact viewport, including
+  create, edit, reload, failed-draft retention, cancel, delete and limits.
+  Earlier browser stand failures remain recorded: choice renderer and the final
+  candidate's separate Cancel widget differed from the stand's assumptions.
+  Submission/wait took 15.6 minutes; provider totals are 97,078 fresh input,
+  1,250,048 cached input and 23,720 output tokens (not a single prompt size).
+  DEV qualification does not claim installed delegation or migration coverage.
+- [ ] `[should]` Improve generic action semantics and small-screen scanability:
+  an unconfigured `ui.actions` Cancel currently renders as a tab, and dense
+  multi-column lists/tables need deliberate wrapping and compact presentation.
+  Treat these observed UX findings separately from functional Automation gates;
+  do not regenerate the accepted prototypes or silently add stricter layout rules.
 - [ ] `[must]` Service Appointments: real availability, interval conflicts,
   rescheduling/cancellation, parent choices, persistence and browser flow.
 - [ ] `[must]` Inventory/Procurement: atomic stock movements, computed deficit,
