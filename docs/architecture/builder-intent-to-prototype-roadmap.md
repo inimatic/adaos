@@ -2834,13 +2834,32 @@ Inspections Automation against one frozen existing Prototype.
   Submission/wait took 20.3 minutes; provider totals are 116,189 fresh input,
   1,330,560 cached input and 33,114 output tokens. This is DEV functional
   qualification, not installed delegation or unconditional visual approval.
-- [ ] `[should]` Recheck the compact Service editor screenshot with animation
+- [x] `[should]` Recheck the compact Service editor screenshot with animation
   disabled: background text shows through the modal in `journey-01`. Distinguish
   a transition capture from a shared Client surface defect before changing code.
+  `journey-02` repeats all 60 steps per viewport and captures an opaque compact
+  editor with animations disabled. This was a transition capture, not a Client
+  surface defect; no Client change was required.
 - [ ] `[must]` Inventory/Procurement: atomic stock movements, computed deficit,
   quote comparison, request/line relationships and submit without fake approval.
+  `automation-cohort-20260913-inventory-procurement-ru`: first task
+  `task.01M2DPZFW3J0XK7BPQ6VV76YMA` passes 11 skill and 5 scenario package tests
+  without worker repair. `http-01.json` passes 40 independent steps, including
+  concurrent overspend, replay, mixed-currency rejection and submitted locks.
+  Browser qualification remains open: `journey-01` exposed a shared Client
+  caption loader restricted to Prototype resource queries; `journey-02` then
+  encountered slow DEV reads during overlapping test/build work. Keep these
+  attempts separate from a completed browser verdict.
 - [ ] `[must]` Volunteer Roster: availability, overlap/capacity guards,
   cancellation/reassignment and derived staffing counts.
+  The first admission (`automation-01`) stopped before any model call:
+  `resource.assignment_operation` depended on a compiler-only resource alias
+  absent from persisted acceptance snapshots. The evaluator now also checks
+  executable relationship policies, matching the same command target and
+  editable reference field; it does not infer resource identity from names.
+  The unchanged Prototype `002` is admitted in `automation-02`; implementation
+  is running, not yet qualified. Regression tests cover compiler and persisted
+  projections plus rejection when the editable relationship field is absent.
 - [ ] `[must]` Operations Queue: saved board transitions including drag, details,
   assignment, filters and computed overdue state.
 - [ ] `[must]` Knowledge Library: persistent content, search/filter,

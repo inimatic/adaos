@@ -1354,17 +1354,30 @@ def evaluate_ui_request(
         assignment_ok = "update" in actual_operations
         resource_runtime_types = {item.get("resource_ref"): item.get("resource_type") for item in resource_sidecars}
         for _, page in _page_schemas(webui):
-            relationships = dict(dict(page.get("meta") or {}).get("builder") or {}).get("relationships") or []
-            for relation in relationships:
-                if not isinstance(relation, Mapping):
+            metadata = dict(dict(page.get("meta") or {}).get("builder") or {})
+            relationships = metadata.get("relationships") or []
+            assignment_fields = {
+                (resource_runtime_types.get(relation.get("from_resource_ref")), relation.get("from_field_ref"))
+                for relation in relationships if isinstance(relation, Mapping)
+            }
+            # Persisted snapshots have runtime identities, not compiler-only aliases.
+            for target, policy in dict(metadata.get("prototype_resource_policies") or {}).items():
+                if target not in resource_types or not isinstance(policy, Mapping):
                     continue
-                target = resource_runtime_types.get(relation.get("from_resource_ref"))
+                assignment_fields.update(
+                    (target, relation.get("field_ref"))
+                    for relation in policy.get("relationships") or []
+                    if isinstance(relation, Mapping) and relation.get("target_resource_type") in resource_types
+                )
+            for target, field_ref in assignment_fields:
+                if not target or not field_ref:
+                    continue
                 for _, form_page in _page_schemas(webui):
                     for widget in form_page.get("widgets") or []:
                         if widget.get("type") != "ui.form":
                             continue
-                        editable_fields = {field.get("id") for field in dict(widget.get("inputs") or {}).get("fields") or [] if not field.get("disabled")}
-                        if relation.get("from_field_ref") not in editable_fields:
+                        editable_fields = {field.get("id") for field in dict(widget.get("inputs") or {}).get("fields") or [] if not field.get("disabled") and not field.get("readOnly")}
+                        if field_ref not in editable_fields:
                             continue
                         assignment_ok |= any(action.get("target") == target and action in resource_actions and dict(action.get("params") or {}).get("operation_id") == "create" for action in widget.get("actions") or [])
         if "assign" in brief_operations:

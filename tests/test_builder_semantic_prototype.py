@@ -2726,7 +2726,8 @@ def test_all_invalid_state_predicates_are_reported_before_repair_scope() -> None
     assert len(invalid) == 2
 
 
-def test_assignment_can_create_a_relationship_but_not_an_unrelated_record() -> None:
+@pytest.mark.parametrize("persisted_snapshot", [False, True])
+def test_assignment_can_create_a_relationship_but_not_an_unrelated_record(persisted_snapshot) -> None:
     from adaos.services.ui_capabilities import evaluate_ui_request
     _, semantic = _multi_resource_fixture()
     editor = next(view for view in semantic["views"] if view["role"] == "editor")
@@ -2736,12 +2737,16 @@ def test_assignment_can_create_a_relationship_but_not_an_unrelated_record() -> N
         command.setdefault("input_field_refs", []).append("work_owner_id")
     compiled = compile_semantic_prototype(semantic)
     request = "Show items and assign their owner."
-    accepted = evaluate_ui_request(request, compiled["webui"], prototype_resources=compiled["prototype_resources"])
+    resources = copy.deepcopy(compiled["prototype_resources"])
+    if persisted_snapshot:
+        for resource in resources:
+            resource.pop("resource_ref", None)
+    accepted = evaluate_ui_request(request, compiled["webui"], prototype_resources=resources)
     assert next(item for item in accepted["postconditions"] if item["id"] == "resource.assignment_operation")["ok"]
     page = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]
     form = next(widget for widget in page["widgets"] if widget["type"] == "ui.form")
     form["inputs"]["fields"] = [field for field in form["inputs"]["fields"] if field["id"] != "work_owner_id"]
-    rejected = evaluate_ui_request(request, compiled["webui"], prototype_resources=compiled["prototype_resources"])
+    rejected = evaluate_ui_request(request, compiled["webui"], prototype_resources=resources)
     assert not next(item for item in rejected["postconditions"] if item["id"] == "resource.assignment_operation")["ok"]
 
 
