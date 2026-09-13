@@ -46,6 +46,7 @@ def isolated_skill_import_state(
         import_paths = [skill_path, skill_path.parent]
         import_paths.extend(Path(extra).resolve() for extra in extra_paths or ())
         _prioritize_import_paths(import_paths)
+        _bind_owned_namespace_packages(skill_path)
         importlib.invalidate_caches()
         try:
             yield
@@ -85,6 +86,7 @@ def execute_tool(
         _prioritize_import_paths(import_paths)
         _purge_conflicting_local_modules(skill_path)
         _reload_skill_modules_if_sources_changed(skill_path)
+        _bind_owned_namespace_packages(skill_path)
         module_name = module or "handlers.main"
         mod = _load_skill_module(skill_path, module_name)
     func = getattr(mod, attr)
@@ -222,7 +224,7 @@ def _local_import_roots(skill_path: Path) -> set[str]:
         name = child.name
         if name.startswith(".") or name in {"__pycache__", "adaos", "skills"}:
             continue
-        if child.is_dir() and (child / "__init__.py").is_file():
+        if child.is_dir() and any(child.glob("*.py")):
             roots.add(name)
         elif child.is_file() and child.suffix == ".py" and child.stem != "__init__":
             roots.add(child.stem)
@@ -246,6 +248,21 @@ def _purge_conflicting_local_modules(skill_path: Path) -> None:
             continue
         if not _module_file_is_under(loaded, skill_path):
             sys.modules.pop(key, None)
+
+
+def _bind_owned_namespace_packages(skill_path: Path) -> None:
+    # A later regular package on sys.path otherwise wins over the active skill's
+    # namespace directory, even when the active path is first. Confine its search.
+    for name in _local_import_roots(skill_path):
+        directory = skill_path / name
+        if not directory.is_dir() or (directory / "__init__.py").exists():
+            continue
+        existing = sys.modules.get(name)
+        if existing is not None and list(getattr(existing, "__path__", [])) == [str(directory)]:
+            continue
+        spec = importlib.machinery.ModuleSpec(name, loader=None, is_package=True)
+        spec.submodule_search_locations = [str(directory)]
+        sys.modules[name] = importlib.util.module_from_spec(spec)
 
 
 def _purge_skill_source_modules(skill_path: Path) -> None:

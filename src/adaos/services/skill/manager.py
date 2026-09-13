@@ -3906,7 +3906,7 @@ class SkillManager:
             private_roots.update(
                 child.name
                 for child in skill_package_root.iterdir()
-                if child.is_dir() and (child / "__init__.py").is_file()
+                if child.is_dir() and any(child.glob("*.py"))
             )
             private_roots.update(
                 child.stem
@@ -3954,7 +3954,7 @@ class SkillManager:
                     )
                 )
             ]
-            paths_to_add = []
+            paths_to_add = [str(skill_package_root)]
             if vendor_path.is_dir():
                 paths_to_add.append(str(vendor_path))
             paths_to_add.append(str(src_path))
@@ -3964,7 +3964,8 @@ class SkillManager:
             for mod in displaced_modules:
                 sys.modules.pop(mod, None)
             importlib.invalidate_caches()
-            importlib.import_module(module_name)
+            with isolated_skill_import_state(skill_package_root, extra_paths=[src_path, vendor_path]):
+                importlib.import_module(module_name)
         except Exception as exc:
             raise RuntimeError(f"failed to import handler module for {name}: {exc}") from exc
         finally:

@@ -36,8 +36,9 @@ def test_acceptance_order_and_single_submission():
         stand.validate_plan(plan("automation.start", "automation.submit"))
 
 
-def test_observation_resume_cannot_follow_an_unpinned_task():
-    value = plan("automation.wait")
+@pytest.mark.parametrize("step", ["automation.wait", "automation.recover"])
+def test_observation_resume_cannot_follow_an_unpinned_task(step):
+    value = plan(step)
     with pytest.raises(ValueError, match="exact session and task"):
         stand.validate_plan(value)
     value["steps"][0]["input"] = {"session_id": "automation.scenario.test", "expected_task_id": "task.one"}

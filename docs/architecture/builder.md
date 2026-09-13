@@ -311,6 +311,12 @@ metrics are referenced evidence, not application implementation instructions.
 Measure context byte changes separately from model cost and acceptance outcomes.
 Independent deployed-tool checks are required even after package tests pass:
 the real executor must support the package/import semantics used by the app.
+Dynamic validation, activation smoke imports and execution use the same owned
+package resolution, including relative helpers and namespace packages. A model
+must not need path hacks to reconcile those gates. Infrastructure-only recovery
+may reuse a completed, validated task at its exact failed activation/checkpoint;
+it must retain failed receipts, preserve partial checkpoints and never trigger
+an unrequested Trial. Requalification is not a first-pass generation success.
 
 Feedback reference grammar is part of the exposed parser contract. Fully
 qualified SDK symbols may normalize to `sdk:` references; ambiguous bare names

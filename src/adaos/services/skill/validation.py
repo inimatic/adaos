@@ -1390,15 +1390,13 @@ if 'ypy_websocket' not in sys.modules:
     ystore_mod = types.SimpleNamespace(BaseYStore=object, YDocNotFound=RuntimeError)
     sys.modules['ypy_websocket'] = types.SimpleNamespace(ystore=ystore_mod)
     sys.modules['ypy_websocket.ystore'] = ystore_mod
-mod_name = 'adaos_skill_{skill_name}_handlers_main'
-handler_file = r'{(skill_dir / 'handlers' / 'main.py').as_posix()}'
-spec = importlib.util.spec_from_file_location(mod_name, handler_file)
-if spec is None or spec.loader is None:
-    print(json.dumps({{"ok": False, "error": "spec/load failure"}}))
-    raise SystemExit(0)
-module = importlib.util.module_from_spec(spec)
-sys.modules[mod_name] = module
-spec.loader.exec_module(module)
+from pathlib import Path
+from adaos.skills.runtime_runner import isolated_skill_import_state, _ensure_skill_module_parents
+skill_root = Path({str(skill_dir.resolve())!r})
+with isolated_skill_import_state(skill_root):
+    namespace = _ensure_skill_module_parents(skill_root, 'handlers.main')
+    mod_name = namespace + '.handlers.main'
+    module = importlib.import_module(mod_name)
 
 # попытка получить новые публичные реестры (с fallback на старые)
 try:
@@ -1417,7 +1415,7 @@ required_dp = getattr(module, 'REQUIRES_DATA_PROJECTIONS', None)
 exports = list(mod_tools.keys())
 print(json.dumps({{"ok": True, "tools": exports, "subs": subs, "requires_data_projections": required_dp}}))
 """
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    proc = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, text=True, encoding="utf-8")
     issues: List[Issue] = []
     if proc.returncode != 0:
         issues.append(Issue("error", "import.failed", f"handler import failed: {proc.stderr.strip() or proc.stdout.strip()}"))

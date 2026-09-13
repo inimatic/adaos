@@ -74,6 +74,25 @@ def test_wait_reports_exact_terminal_session_not_queued_ack(context, monkeypatch
         steps.execute("automation.wait", {"object_id": "example", "session_id": "other"}, context)
 
 
+@pytest.mark.parametrize("stage,method", [("activation", "recover_validated_result"), ("forge_checkpoint", "reconcile_checkpoint")])
+def test_recovery_is_pinned_and_never_delivers_trial(context, monkeypatch, stage, method):
+    current = {"session": {"session_id": "s1", "current_task_id": "task.1"},
+               "automation": {"failure_stage": stage, "delivery": {"aprobation_required": False}}}
+    monkeypatch.setattr(steps.automation, "get_state", lambda **kwargs: current)
+    for name in ("recover_validated_result", "reconcile_checkpoint"):
+        monkeypatch.setattr(steps.automation, name, lambda **kwargs: pytest.fail("wrong recovery method"))
+    monkeypatch.setattr(steps.automation, method, lambda **kwargs: {"ok": True, "target": kwargs})
+    inputs = {"object_id": "example", "session_id": "s1", "expected_task_id": "task.1"}
+    assert steps.execute("automation.recover", inputs, context)["target"] == {"object_type": "scenario", "object_id": "example"}
+    for patch in ({"session_id": ""}, {"session_id": "other"}, {"expected_task_id": "task.2"}):
+        with pytest.raises(ValueError, match="exact task"):
+            steps.execute("automation.recover", {**inputs, **patch}, context)
+    for delivery in ({}, {"aprobation_required": True}):
+        current["automation"]["delivery"] = delivery
+        with pytest.raises(ValueError, match="automatic Trial"):
+            steps.execute("automation.recover", inputs, context)
+
+
 def test_release_uses_current_candidate_and_explicit_confirmation(context, monkeypatch):
     monkeypatch.setattr(steps.workflow, "get_state", lambda *args: {"delivery": {"candidate_id": "beta", "package_digest": "digest"}})
     monkeypatch.setattr(steps.lifecycle, "publish_candidate", lambda *args, **kwargs: {"ok": True, "target": args, "identity": kwargs})

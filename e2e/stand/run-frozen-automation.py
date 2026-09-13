@@ -18,7 +18,7 @@ from adaos.e2e.builder_lifecycle import _target, execute
 from adaos.e2e.stand import redact_value
 
 
-ALLOWED = {"prototype.accept", "automation.start", "automation.submit", "automation.wait", "builder.workflow"}
+ALLOWED = {"prototype.accept", "automation.start", "automation.submit", "automation.wait", "automation.recover", "builder.workflow"}
 
 
 def validate_plan(plan):
@@ -31,7 +31,7 @@ def validate_plan(plan):
     if len(ids) != len(set(ids)):
         raise ValueError("Step IDs must be unique")
     types = [step["type"] for step in steps]
-    if types == ["automation.wait"]:
+    if types in (["automation.wait"], ["automation.recover"]):
         inputs = steps[0].get("input") or {}
         if not inputs.get("session_id") or not str(inputs.get("expected_task_id") or "").startswith("task."):
             raise ValueError("Observation-only resume requires the exact session and task")

@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pin", type=Path)
     parser.add_argument("output", type=Path)
-    parser.add_argument("--contract", choices=("separate-parent", "embedded-parent"), default="separate-parent")
+    parser.add_argument("--contract", choices=("separate-parent", "embedded-parent", "embedded-entity"), default="separate-parent")
     args = parser.parse_args()
     load_dotenv()
     root = (Path.cwd() / "e2e/artifacts/builder").resolve()
@@ -45,7 +45,7 @@ def main():
               "records": "New labelled E2E records retained; existing user data untouched", "contract": args.contract}
 
     def call(method, **values):
-        if args.contract == "embedded-parent":
+        if args.contract in {"embedded-parent", "embedded-entity"}:
             if method == "save_record":
                 fields = dict(values.get("values") or {})
                 parent = values.pop("parent_id", None)
@@ -53,9 +53,11 @@ def main():
                     fields.setdefault("asset_id" if values["kind"] == "inspections" else "inspection_id", parent)
                 values["values"] = fields
                 if values.pop("complete", False):
-                    values["command"] = "complete"
+                    values["operation" if args.contract == "embedded-entity" else "command"] = "complete"
             elif method == "delete_record":
                 values.pop("token", None)
+        if args.contract == "embedded-entity" and "kind" in values:
+            values["entity"] = values.pop("kind")
         started = time.perf_counter()
         response = client.post(hub + "/api/tools/call", json={"tool": scenario + "_skill:" + method,
             "arguments": {"webspace_id": webspace, **values}}, timeout=30)
@@ -101,7 +103,8 @@ def main():
         completed = save("inspections", id=inspection["id"], revision=inspection["revision"], parent_id=asset["id"], complete=True)
         persisted = call("get_record", kind="inspections", id=inspection["id"])["item"]
         check("completion-atomic-with-problem-items", completed.get("ok") is False and
-              any(problem["id"] == item["id"] for problem in completed.get("problems" if args.contract == "embedded-parent" else "items", [])) and
+              any(problem["id"] == item["id"] for problem in completed.get({"separate-parent": "items",
+                  "embedded-parent": "problems", "embedded-entity": "problem_items"}[args.contract], [])) and
               persisted["status"] == "draft" and persisted["revision"] == inspection["revision"])
         item = save("inspection_items", id=item["id"], revision=item["revision"], parent_id=inspection["id"],
                     values={"comment": "Confirmed defect"})["item"]

@@ -8044,9 +8044,12 @@ def test_checkpoint_reconciliation_reuses_change_id_for_partially_committed_pair
     assert finalized[0]["reconciliation_history"][-1]["mode"] == "resume_partial"
 
 
+@pytest.mark.parametrize("failure_stage,readiness_stage", [("live_readiness", "materialization"), ("activation", "activation"), ("tests", "activation")])
 def test_validated_result_recovery_reuses_completed_task_after_live_readiness_failure(
     tmp_path: Path,
     monkeypatch,
+    failure_stage,
+    readiness_stage,
 ) -> None:
     service = _service(tmp_path)
     session = {
@@ -8056,10 +8059,11 @@ def test_validated_result_recovery_reuses_completed_task_after_live_readiness_fa
         "status": "failed",
         "task": {"task_id": "task.1", "status": "completed", "result": {"summary": "ready"}},
         "last_result": {"summary": "ready"},
-        "last_failure": {"stage": "live_readiness", "message": "preview failed"},
+        "last_failure": {"stage": failure_stage, "message": "preview failed"},
         "completion_readiness": {
             "ok": False,
             "task_id": "task.1",
+            "stage": readiness_stage,
             "vcs_checkpoints": [{"ok": True, "kind": "scenario", "commit": "forge-1"}],
         },
     }

@@ -13,8 +13,24 @@ if (env.ENV_TYPE !== 'dev' || pin.stage !== 'automation' || pin.scenario_id !== 
   || !scenario.startsWith('test_') || !webspace.startsWith('preview-')) throw new Error('Pinned TEST Automation only')
 const widgets = [...app.desktop.pageSchema.widgets, ...Object.values(app.modals).flatMap(m => m.schema.widgets)]
 const forms = widgets.filter(w => w.type === 'ui.form')
+const aliases = {}
+for (const [kind, alias] of [['assets', 'create-asset-form'], ['inspections', 'create-inspection-form'], ['inspection_items', 'create-item-form']]) {
+  const matches = forms.filter(f => !f.dataSource && f.actions?.some(a => (a.params?.kind ?? a.params?.entity) === kind && a.target?.endsWith('.save_record')))
+  if (matches.length !== 1) throw new Error(`Review the create-form binding for ${kind}; found ${matches.length}`)
+  aliases[alias] = matches[0].id
+}
+const commandAliases = {}
+for (const [key, formAlias] of [['asset-actions:create-asset', 'create-asset-form'], ['asset-actions:edit', 'asset_editor'],
+  ['open-inspection_editor:create-inspection', 'create-inspection-form'], ['item-actions:create-item', 'create-item-form']]) {
+  const formId = aliases[formAlias] ?? formAlias
+  const modal = Object.entries(app.modals).find(([, m]) => m.schema.widgets.some(w => w.id === formId))?.[0]
+  const matches = widgets.flatMap(w => (w.actions ?? []).filter(a => a.type === 'openModal' && a.params?.modalId === modal
+    && a.on?.startsWith('click:')).map(a => [w.id, a.on.slice(6)]))
+  if (matches.length !== 1) throw new Error(`Review the explicit command for ${formAlias}`)
+  commandAliases[key] = matches[0]
+}
 const report = { scope: 'DEV owner, independent repeat lifecycle; not delegated access or concurrent-editor acceptance',
-  task: pin.revision, scenario, samples: [] }
+  task: pin.revision, scenario, discoveredBindings: { aliases, commandAliases }, samples: [] }
 await fs.mkdir(output, { recursive: true })
 const browser = await chromium.launch({ headless: true })
 try {
@@ -35,10 +51,15 @@ try {
     const url = new URL(env.ADAOS_E2E_CLIENT_URL)
     for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo', subnet_id: env.ADAOS_E2E_SUBNET_ID,
       webspace_id: webspace, space_kind: 'development', expected_scenario_id: scenario, try_local_hub: '1' })) url.searchParams.set(key, value)
-    const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).last()
+    const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(aliases[id] ?? id)}]`).last()
     const rows = id => host(id).locator('tr.row-selectable,.collection-focus-item')
     const field = (form, id) => host(form).locator(`[data-webui-field-id=${JSON.stringify(id)}]`)
-    const command = (widget, id) => host(widget).locator(`[data-command-id=${JSON.stringify(id)}]`)
+    const buttonId = (form, id) => id === 'save'
+      ? forms.find(f => f.id === (aliases[form] ?? form))?.actions.find(a => a.target?.endsWith('.save_record'))?.id ?? id : id
+    const command = (widget, id) => {
+      const [target, button] = commandAliases[`${widget}:${id}`] ?? [widget, buttonId(widget, id)]
+      return host(target).locator(`[data-command-id=${JSON.stringify(button)}]`)
+    }
     const fill = (form, id, text) => field(form, id).locator('input,textarea').fill(text)
     const ready = () => page.waitForFunction(id => {
       const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
@@ -51,7 +72,7 @@ try {
         && r.request().postDataJSON()?.tool?.endsWith(':save_record'))
       void pending.catch(() => {})
       await command(form, button).click()
-      const confirmation = forms.find(f => f.id === form)?.actions.find(a => a.id === button)?.confirmation
+      const confirmation = forms.find(f => f.id === (aliases[form] ?? form))?.actions.find(a => a.id === buttonId(form, button))?.confirmation
       if (confirmation) await page.locator('ion-alert').last().getByRole('button', { name: confirmation.confirmLabel, exact: true }).click()
       const response = await pending
       const body = await response.json()
@@ -63,10 +84,16 @@ try {
     }
     const parent = async (form, id, caption) => {
       const select = field(form, id).locator('select')
-      await expect(select).toBeEnabled()
       const option = select.locator('option', { hasText: caption })
       await expect(option).toHaveCount(1)
-      await select.selectOption({ label: (await option.innerText()).trim() })
+      const declaration = forms.find(f => f.id === (aliases[form] ?? form)).inputs.fields.find(f => f.id === id)
+      if (declaration.readOnly || declaration.readonly) {
+        await expect(select).toHaveValue(await option.getAttribute('value'))
+        await expect(select.locator('option:checked')).toContainText(caption)
+      } else {
+        await expect(select).toBeEnabled()
+        await select.selectOption({ label: (await option.innerText()).trim() })
+      }
     }
     const marker = `E2E-REPEAT-${layout}-${Date.now()}`
     sample.marker = marker
@@ -111,7 +138,7 @@ try {
         await command('item-actions', 'create-item').click()
         await parent('create-item-form', 'inspection_id', marker)
         await fill('create-item-form', 'title', marker + '-item')
-        const options = forms.find(f => f.id === 'create-item-form').inputs.fields.find(f => f.id === 'result').options
+        const options = forms.find(f => f.id === aliases['create-item-form']).inputs.fields.find(f => f.id === 'result').options
         await field('create-item-form', 'result').locator('input[type=radio]').nth(options.findIndex(o => o.value === 'defect')).check()
         await submit('create-item-form', 'save')
         await expect(rows('items_col').filter({ hasText: marker })).toHaveCount(1)

@@ -140,6 +140,16 @@ def execute(step_type: str, inputs: Mapping[str, Any], context: Mapping[str, Any
         if result.get("status") == "automation_busy":
             return {**result, "ok": False, "review_interventions": 1}
         return {**result, "review_interventions": 1}
+    if step_type == "automation.recover":
+        current = automation.get_state(object_type=kind, object_id=identifier, webspace_id=webspace)
+        session = current.get("session") or {}
+        if (not inputs.get("expected_task_id") or session.get("current_task_id") != inputs["expected_task_id"]
+                or not inputs.get("session_id") or session.get("session_id") != inputs["session_id"]
+                or (current.get("automation") or {}).get("delivery", {}).get("aprobation_required") is not False):
+            raise ValueError("Recovery requires the exact task without automatic Trial delivery")
+        if (current.get("automation") or {}).get("failure_stage") == "forge_checkpoint":
+            return automation.reconcile_checkpoint(object_type=kind, object_id=identifier)
+        return automation.recover_validated_result(object_type=kind, object_id=identifier)
     if step_type == "automation.wait":
         timeout = max(1.0, float(inputs.get("timeout_seconds") or context.get("timeout_seconds") or 1800))
         started, polls = time.monotonic(), 0

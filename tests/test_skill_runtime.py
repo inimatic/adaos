@@ -133,15 +133,10 @@ def test_smoke_import_does_not_leak_sdk_decorator_registries(skill_factory):
     assert decorators.tools_meta == baseline_tools_meta
 
 
-def test_sequential_smoke_imports_isolate_same_named_private_packages(skill_factory):
+@pytest.mark.parametrize("namespace_package", [False, True])
+def test_sequential_smoke_imports_isolate_same_named_private_packages(skill_factory, namespace_package):
     def prepare(name: str, expected: str):
         source = f"""
-        import sys
-        from pathlib import Path
-
-        root = Path(__file__).resolve().parents[1]
-        if str(root) not in sys.path:
-            sys.path.insert(0, str(root))
         from research.marker import VALUE
         assert VALUE == {expected!r}
 
@@ -156,7 +151,8 @@ def test_sequential_smoke_imports_isolate_same_named_private_packages(skill_fact
         skill_root = env.build_slot_paths(version, "A").src_dir / "skills" / name
         private_package = skill_root / "research"
         private_package.mkdir()
-        private_package.joinpath("__init__.py").write_text("", encoding="utf-8")
+        if not namespace_package:
+            private_package.joinpath("__init__.py").write_text("", encoding="utf-8")
         private_package.joinpath("marker.py").write_text(
             f"VALUE = {expected!r}\n",
             encoding="utf-8",

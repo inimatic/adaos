@@ -4132,12 +4132,19 @@ class BuilderAutomationService:
             ):
                 raise ValueError("validated result recovery requires a failed Automation task")
             failure_stage = str(failure.get("stage") or "")
+            native_activation_pending = bool(
+                current_status == "failed" and task_status == "completed"
+                and readiness.get("stage") == "activation"
+                and readiness.get("task_id") == task_id and not readiness.get("ok")
+                and isinstance(current.get("last_result"), Mapping)
+            )
             if (
                 recovered_transition_pending
                 or workflow_checkpoint_pending
                 or trial_checkpoint_rebind_pending
                 or validated_activation_pending
                 or interrupted_finalization_pending
+                or native_activation_pending
                 or task_status == "completed"
                 and failure_stage
                 in {
@@ -4164,6 +4171,8 @@ class BuilderAutomationService:
                         if validated_activation_pending
                         else "interrupted_finalization"
                         if interrupted_finalization_pending
+                        else "activation"
+                        if native_activation_pending
                         else failure_stage
                     ),
                 }
@@ -8169,7 +8178,7 @@ class BuilderAutomationService:
             lowered_error = readiness["error"].lower()
             if "validation failed" in lowered_error:
                 failed_gate = "validation"
-            elif "test" in lowered_error:
+            elif "tests failed" in lowered_error or "pytest failed" in lowered_error:
                 failed_gate = "tests"
             current["completion_readiness"] = readiness
             current["status"] = "failed"

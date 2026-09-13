@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill.validation import SkillValidationService, validate_webui_file_contract
 
@@ -76,6 +78,23 @@ def ping():
     report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
 
     assert "import.failed" not in {issue.code for issue in report.issues}
+
+
+@pytest.mark.parametrize("statement", ["from handlers.helper import VALUE", "from .helper import VALUE"])
+@pytest.mark.parametrize("regular_package", [False, True])
+def test_dynamic_validation_supports_runtime_sibling_imports(tmp_path: Path, statement: str, regular_package: bool) -> None:
+    extra = {"handlers/helper.py": "VALUE = 42\n"}
+    if regular_package:
+        extra["handlers/__init__.py"] = ""
+    skill_dir = _write_skill(tmp_path, handler=(
+        "from adaos.sdk.core.decorators import tool\n"
+        f"{statement}\n"
+        "@tool(summary='ping')\ndef ping():\n    return {'value': VALUE}\n"
+    ), extra_files=extra)
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+    assert not {issue.code for issue in report.issues} & {
+        "import.failed", "introspect.invalid_json", "introspect.failed", "tools.missing_export",
+    }
 
 
 def test_validation_rejects_capability_mapping_not_consumed_by_admission(tmp_path: Path) -> None:

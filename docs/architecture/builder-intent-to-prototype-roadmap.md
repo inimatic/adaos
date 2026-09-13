@@ -2636,6 +2636,21 @@ Inspections Automation against one frozen existing Prototype.
   initialization and reloads owned siblings; 13 executor regressions pass.
   Native/browser requalification follows the batched restart after active model
   work finishes. Do not patch generated app code to hide an executor defect.
+  B requalification now passes 11 HTTP checks and 8/8 independent browser steps
+  on both widths (`equipment-automation-repeat-20260913-b/http-02.json` and
+  `journey-02`). This repeat probe does not cover the original candidate's
+  concurrent-editor/lost-response checks. C's clarified task completes package
+  checks (26 skill, 3 scenario) in 1055s with 1.368M cumulative tokens (1.260M
+  cached), then exposes absolute helper-import differences in activation and
+  Forge validation. Shared import isolation now covers regular and namespace
+  packages in all three gates. `recovered-03` completes the same C task through
+  guarded partial-checkpoint reconciliation without another model call; live
+  requalification remains outstanding. Historical failures remain failed.
+- [ ] `[should]` Resolve mobile modal theme/header inconsistency and surface
+  actionable server conflict/validation details, not only generic failure
+  feedback. B wide/compact parent screenshots confirm visible selected equipment,
+  but compact uses a light modal with a truncated Homepoint title. Keep these
+  presentation findings separate from the passing functional assertions.
 - [ ] `[should]` Reduce Automation correction context after matched evaluation.
   The successful seven-binding repair retains a 35.8 KB prompt, including
   13.4 KB Change projection and 7.5 KB approved brief. Six source reads,
@@ -2646,7 +2661,8 @@ Inspections Automation against one frozen existing Prototype.
   First safe reduction: keep prior run status/error/evidence, but reference its
   orchestrator topology/rate metrics instead of injecting those into app context.
   Full immutable input evidence and the approved brief remain available.
-  The retained correction packet drops 2053 UTF-8 bytes (11523 to 9470).
+  Replacing metrics in the retained correction projection saves 984 UTF-8 bytes
+  (10454 to 9470); this comparison holds other projection rules constant.
   A second discovered duplicate is the full brief appended to companion skill
   metadata; new scaffolds now name their owning project and refer to the separate
   brief. Existing generated candidates and admitted inputs remain unchanged.

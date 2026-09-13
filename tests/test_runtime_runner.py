@@ -508,3 +508,16 @@ def test_relative_helpers_are_isolated_and_reload_after_source_change(tmp_path, 
     os.utime(alpha / "shared.py", (future, future))
     assert invoke(alpha) == ("changed", "changed")
     assert invoke(beta) == ("beta", "beta")
+
+
+def test_absolute_namespace_helpers_do_not_resolve_to_another_skill(tmp_path):
+    def create(name, value):
+        root = tmp_path / name
+        (root / "handlers").mkdir(parents=True)
+        (root / "handlers" / "helper.py").write_text(f"VALUE = {value!r}\n", encoding="utf-8")
+        (root / "handlers" / "main.py").write_text(
+            "from handlers.helper import VALUE\ndef read(): return VALUE\n", encoding="utf-8")
+        return root
+    alpha, beta = create("namespace_alpha", "alpha"), create("namespace_beta", "beta")
+    for root, expected in ((alpha, "alpha"), (beta, "beta"), (alpha, "alpha")):
+        assert runtime_runner_module.execute_tool(root, module="handlers.main", attr="read", payload={}) == expected
