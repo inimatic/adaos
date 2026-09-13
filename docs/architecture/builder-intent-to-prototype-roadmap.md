@@ -2785,6 +2785,38 @@ Inspections Automation against one frozen existing Prototype.
   installed delivery context and remains blocked while Trial/publication is
   paused; do not treat those 403s as successful reader/writer application tests.
 
+### Remaining Small Automation Cohort
+
+- [ ] `[must]` Qualify the seven remaining archetypes through sequential Builder
+  Automation using retained Prototype `002` from the complete visible run
+  `context-archetypes-gpt5-low-20260912-22`. Keep Equipment's accepted candidate
+  unchanged. No Prototype regeneration, additional layout restrictions, Trial or
+  publication in this qualification. Use one existing DEV Builder and preview.
+- [x] `[must]` Declare application-specific Automation obligations separately
+  from Prototype fixtures in `e2e/builder/development/lifecycle/frozen-cohort.yaml`.
+  Keep these domain descriptions in evaluation inputs, outside Core/Client and
+  generic Builder context. Review actual admitted prompts and report missing
+  contracts rather than accepting simulated calculations or external effects.
+- [ ] `[must]` Household Budget: exact currency-separated calculations, limits,
+  previous-month comparison, CRUD, invalid input, persistence and browser flow.
+- [ ] `[must]` Service Appointments: real availability, interval conflicts,
+  rescheduling/cancellation, parent choices, persistence and browser flow.
+- [ ] `[must]` Inventory/Procurement: atomic stock movements, computed deficit,
+  quote comparison, request/line relationships and submit without fake approval.
+- [ ] `[must]` Volunteer Roster: availability, overlap/capacity guards,
+  cancellation/reassignment and derived staffing counts.
+- [ ] `[must]` Operations Queue: saved board transitions including drag, details,
+  assignment, filters and computed overdue state.
+- [ ] `[must]` Knowledge Library: persistent content, search/filter,
+  publish/archive/read-only enforcement and editor failure recovery.
+- [ ] `[must]` Media Review: real media URLs, revision-bound comments/status,
+  new-revision isolation and truthful unavailable media handling.
+- [ ] `[must]` Retain each first-run result separately from corrected candidates;
+  inspect reachable behavior to the blocker before submitting one combined repair.
+  Report package checks, independent DEV-owner HTTP/browser acceptance, latency
+  and token usage separately. Delegated installed-delivery authorization remains
+  outside the explicitly paused delivery scope.
+
 ## Could And Deferred Work
 
 - [ ] `[deferred]` Large-prototype decomposition, shared entity/navigation/locale

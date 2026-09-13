@@ -1,0 +1,144 @@
+schema: adaos.e2e.frozen_cohort.v1
+prototype_run: context-archetypes-gpt5-low-20260912-22
+revision: '002'
+scope: Existing small Prototypes, sequential Automation only; no Trial or publication.
+common_brief: |
+  Automate the accepted existing Prototype, not a new UI generation. Preserve its
+  user workflows, collection/detail organization, filters, editors and existing
+  localization. Add the commands needed to operate an empty installation. Replace
+  disposable prototype queries and operations with owned persistent implementation.
+  Prototype records are fixtures, not production seed data. Computed fixture fields
+  must become server-derived read-only values, not editable assertions of results.
+  Keep data outside package sources using supported SDK paths. Validate inputs,
+  relationships and rules server-side. Use the public caller-access contract on
+  reads and writes; personal DEV preview uses propagated DEV-owner identity, not
+  invented grants. Use revisions to reject stale updates/deletes and a stable
+  request token to make retried creates idempotent. Preserve drafts on failure,
+  show truthful errors, cancel without writes, refresh affected reads after saves.
+  Keep model-owned skill tests independent of sibling scenarios; put UI wiring
+  tests in the scenario. Test real persistence and rules, including a fresh process,
+  invalid input and stale writes. The worker runs package checks; independent
+  evaluation owns browser journeys and HTTP probes. Report checks not executed.
+  Modify only the admitted application sources. Do not modify Core/Client, copy
+  other test applications, regenerate the accepted Prototype, prepare Trial or
+  publish. Report a precise missing platform contract instead of simulating success.
+cases:
+  household-budget-en:
+    locale: en
+    brief: |
+      Implement the existing household transaction, category-limit and monthly
+      comparison workflows. Enable creation/editing/deletion of income and expenses
+      and monthly category limits. Keep date, category, person, positive monetary
+      amount, currency and note. Amounts must be finite and exact to two decimal
+      places; use decimal or integer minor units, not binary float accumulation.
+      Derive income, expense, balance, per-category spending and exceeded limits
+      from saved transactions. A limit is unique per month/category/currency.
+      Never sum different currencies or invent conversion rates; group all totals
+      and limits by currency and display it. Month selection compares that calendar
+      month to its predecessor, including year rollover and an empty month. Do not
+      hardcode fixture dates or totals. Filters must query saved data. Summary and
+      spent/exceeded fields cannot be user-edited or trusted from write payloads.
+      Recalculate after create, edit, category/month/currency change and delete.
+      Remove obsolete Fixture wording only where the value is now really computed.
+      Exercise a complete transaction/limit/summary journey with exact arithmetic,
+      two currencies, a month boundary, within/over limit, cancellation and reload.
+  service-appointments-ru:
+    locale: ru
+    brief: |
+      Реализуй запись на услуги по существующему прототипу: день/неделя,
+      свободное время, создание, перенос, отмена и карточка клиента. Для пустой
+      установки добавь минимальное управление клиентами, специалистами, услугами
+      и их длительностью/рабочими интервалами, если эти данные нужны форме.
+      Ссылки выбираются по понятным названиям. Используй единый явно указанный
+      часовой пояс расписания. Конец записи вычисляется из начала и длительности.
+      Атомарно запрещай пересекающиеся активные записи одного специалиста,
+      выход за рабочий интервал, некорректную длительность и отсутствующие ссылки.
+      Смежные интервалы допустимы; отмененные записи не занимают время.
+      Перенос не конфликтует сам с собой и сохраняет старое время при отказе.
+      Дневная/недельная загрузка и свободные интервалы вычисляются из сохраненных
+      данных, а не из фиксированных дат или демо-списка. Отмена сохраняет историю.
+      Проверь создание, карточку клиента, перенос, отказ конфликта и отмену;
+      отдельно повтор запроса, смену дня/недели и два конкурирующих назначения.
+      Внешние уведомления, платежи и интеграции не нужны.
+  inventory-procurement-ru:
+    locale: ru
+    brief: |
+      Реализуй остатки, историю движения, сравнение предложений и заявки из
+      прототипа. Для пустой установки нужны создание/редактирование номенклатуры,
+      категорий, минимального остатка, единиц, поставщиков и предложений, а также
+      ввод прихода/расхода с количеством. Остаток выводится из истории движения;
+      не разрешай отрицательное количество движения или расход сверх остатка.
+      Повтор движения идемпотентен, проверка и запись атомарны. Дефицит вычисляй
+      по текущему остатку и минимуму, фильтр категории работает на сервере.
+      Создание/редактирование заявки и строк сохраняет существующие ссылки,
+      положительное количество и видимого родителя. Валюту, цену и срок показывай
+      явно; разные валюты не складывай и не конвертируй без заданного курса.
+      Отправка непустой заявки переводит ее в ожидание решения; повтор безопасен,
+      отправленные строки не редактируются как черновик. Не имитируй внешнее
+      согласование: прием решения другим пользователем вне текущего задания.
+      Удаление ссылочной записи с зависимостями отклоняется без потери истории.
+      Проверь приход/расход/дефицит, два предложения, заявку из нескольких строк,
+      отправку, защиту отправленной заявки и независимость выбранных родителей.
+  volunteer-roster-en:
+    locale: en
+    brief: |
+      Implement volunteers, availability, shifts and assignments from the accepted
+      Prototype. Add minimal create/edit commands for volunteers and shifts so an
+      empty installation is usable. Availability must have explicit time intervals;
+      use one declared schedule timezone. A shift has start/end, role and required
+      capacity. Assignment chooses an existing volunteer and shift by readable
+      labels. Atomically reject overlaps for the same volunteer, unavailable times,
+      duplicate active assignment and exceeding capacity; adjacent intervals are
+      allowed. Cancellation releases capacity and preserves history. Reassignment
+      validates the new target before removing the old assignment. Derive filled/
+      unfilled counts from saved active assignments, not fixture counters. Keep
+      filters and selected-volunteer details. Exercise an available assignment,
+      overlapping conflict, capacity limit, cancellation, reassignment and reload.
+      Notifications, payroll and multi-user collaboration are outside this task.
+  operations-work-queue-en:
+    locale: en
+    brief: |
+      Implement the existing work board, item details and create/assign/status
+      editors. Persist title/description, priority, owner, due date and New,
+      In progress, Blocked and Done states. Keep the board and selection visible
+      during details. Support the Prototype's drag-between-columns interaction
+      through a real server update; rollback the optimistic move on error and
+      retain keyboard/editor alternatives. Derive overdue from due date and current
+      date, excluding Done. Do not retain sample overdue flags as facts. Search and
+      filters operate on saved records. Allow unassigned work and readable assignee
+      choices without requiring real team identities in the personal DEV test.
+      Exercise create, assign, drag/status edit, filter, overdue/Done behavior,
+      cancellation, stale conflict and reload. No escalations or external tickets.
+  knowledge-library-en:
+    locale: en
+    brief: |
+      Implement the accepted article collection, detail view and editor with saved
+      title, text, topic, owner, tags and publication/archive status. Creation,
+      editing, search, filters and publish/archive must be usable from
+      the UI and persist across reload. Add only missing commands needed by these
+      flows. Preserve detailed content, long text and metadata, not only excerpts.
+      Search text/title and filter topic/owner/status on saved data. Archived records
+      remain discoverable and read-only through the archive filter; reject archived
+      content changes server-side as well as in the UI, and do not delete content.
+      If links or attachments exist, use supported storage/HTTPS links and truthful
+      unavailable states, not ephemeral prototype storage. Validate supported status
+      changes and preserve selection/drafts on failure. Exercise create/edit/search,
+      publish/archive/read-only rejection, cancel and stale concurrent save. Full-text ranking,
+      external connectors and document collaboration are not required.
+  media-review-ru:
+    locale: ru
+    brief: |
+      Реализуй каталог, просмотр, замечания и согласование медиаредакций из
+      прототипа. Для пустой установки добавь регистрацию изображения/видео с
+      проектом, названием, типом, номером редакции, HTTPS URL и обложкой. Реальный
+      upload делай только при наличии поддерживаемого постоянного хранилища;
+      URL-ввод достаточен, но он должен быть явно подписан. Не скачивай URL сервером.
+      Просмотр использует поддерживаемый renderer, показывает загрузку/недоступность.
+      Замечание принадлежит конкретному материалу и редакции, сохраняет текст и
+      неотрицательную временную отметку либо описание области. Новый материал не
+      наследует замечания предыдущего выбранного. Запрос исправлений и одобрение
+      изменяют статус выбранной редакции с проверкой ревизии; публикации нет.
+      После регистрации новой редакции прежнее одобрение не означает ее одобрения,
+      старые замечания и история не теряются. Фильтры проекта/типа/статуса работают
+      по сохраненным данным. Проверь два материала, просмотр изображения и видео,
+      замечание, исправления, одобрение, новую редакцию и недоступную ссылку.
