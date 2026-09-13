@@ -100,13 +100,20 @@ try {
       await expect(select).not.toHaveValue('')
     }
     const marker = `E2E-${layout}-${Date.now()}`
+    const ready = async () => {
+      const started = Date.now()
+      await page.waitForFunction(id => {
+        const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
+        return sync?.providerSynced && sync?.materializationReady && sync?.materialization?.currentScenario === id
+      }, scenario, { timeout: 60_000 })
+      ;(sample.readinessMs ??= []).push(Date.now() - started)
+    }
     const dismiss = () => page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
     const openInspection = () => command('open-inspection_editor', 'edit').click()
     sample.marker = marker
     try {
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
-      await page.waitForFunction(id => window.__ADAOS_DEBUG_STATE__?.()?.sync?.materializationReady
-        && window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization?.currentScenario === id, scenario, { timeout: 60_000 })
+      await ready()
       await checkpoint('create-equipment', async () => {
         await command('create-asset').click()
         await fill('asset_editor', 'name', marker)
@@ -130,6 +137,21 @@ try {
         await command('edit-asset').click()
         await expect(field('asset_editor', 'location').locator('input')).toHaveValue('Updated location')
         await dismiss()
+      })
+      await checkpoint('injected-write-error-retains-draft', async () => {
+        await command('edit-asset').click()
+        await fill('asset_editor', 'location', 'Retained draft')
+        const failWrite = route => route.request().postDataJSON()?.tool?.endsWith(':save_record')
+          ? route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true,
+            result: { ok: false, error: 'storage_unavailable', message: 'E2E injected storage failure' } }) })
+          : route.continue()
+        await page.route('**/api/tools/call', failWrite)
+        try {
+          await submit('asset_editor', 'save-asset', false)
+          await expect(field('asset_editor', 'location').locator('input')).toHaveValue('Retained draft')
+        } finally { await page.unroute('**/api/tools/call', failWrite) }
+        await fill('asset_editor', 'location', 'Updated location')
+        await submit('asset_editor', 'save-asset')
       })
       await checkpoint('create-inspection-visible-parent', async () => {
         await command('create-inspection').click()
@@ -187,12 +209,49 @@ try {
       })
       await checkpoint('reload-and-reopen', async () => {
         await page.reload({ waitUntil: 'domcontentloaded' })
+        await ready()
         await rows('assets_col').filter({ hasText: marker }).click()
         await rows('inspections_col').filter({ hasText: marker }).click()
         await expect(rows('items_col').filter({ hasText: marker })).toContainText('Observed defect')
         await rows('items_col').filter({ hasText: marker }).click()
         await expect(field('item_editor', 'defect_photo').locator('input')).toHaveValue('https://example.org/photo.jpg')
         await expect(field('item_editor', 'comment').locator('textarea')).toBeDisabled()
+        await dismiss()
+      })
+      await checkpoint('query-filters-and-search', async () => {
+        const filter = async (widget, value) => {
+          const declaration = application.desktop.pageSchema.widgets.find(item => item.id === widget)
+          const control = declaration.inputs.controls.find(item => item.kind === 'filter')
+          const toggle = host(widget).locator('.query-toolbar__toggle')
+          if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+          await host(widget).locator('select').selectOption({ index: control.options.findIndex(option => option.value === value) })
+        }
+        await filter('queries-items_col', 'ok')
+        await expect(rows('items_col')).toHaveCount(0)
+        await filter('queries-items_col', 'defect')
+        await expect(rows('items_col').filter({ hasText: marker })).toHaveCount(1)
+        await filter('queries-items_col', '')
+        await filter('queries-inspections_col', 'draft')
+        await expect(rows('inspections_col')).toHaveCount(0)
+        await filter('queries-inspections_col', 'completed')
+        await expect(rows('inspections_col').filter({ hasText: marker })).toHaveCount(1)
+        await filter('queries-inspections_col', '')
+        const search = host('queries-inspections_col').locator('input[type=search]')
+        await search.fill(marker + '-missing')
+        await expect(rows('inspections_col')).toHaveCount(0)
+        await search.fill(marker)
+        await expect(rows('inspections_col').filter({ hasText: marker })).toHaveCount(1)
+        await search.fill('')
+      })
+      await checkpoint('changing-parent-clears-dependent-selection', async () => {
+        await command('create-asset').click()
+        await fill('asset_editor', 'name', marker + '-empty')
+        await submit('asset_editor', 'save-asset')
+        await rows('assets_col').filter({ hasText: marker + '-empty' }).click()
+        await expect(rows('inspections_col')).toHaveCount(0)
+        await expect(rows('items_col')).toHaveCount(0)
+        await expect(command('create-item')).toBeDisabled()
+        await expect(command('create-inspection')).toBeEnabled()
       })
     } catch (error) {
       sample.failure = String(error)

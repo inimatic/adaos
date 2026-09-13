@@ -2567,11 +2567,36 @@ Inspections Automation against one frozen existing Prototype.
   successful writes and delayed reads, not lost records. Read-only callSkill
   actions with omitted invalidates globally refresh all sources; explicit empty
   tags suppress this fanout. Client: 200 action/data regressions pass.
-- [ ] `[must]` Qualify Builder correction of read-triggered global refresh
-  (`automation-05`) and repeat complete browser acceptance. Preserve failed
-  journey evidence; observing late responses must not upgrade a failed verdict.
-  Profile remaining per-request latency separately from correctness.
-- [ ] `[must]` Run the separate Automation-only declarative brief, inspect its
+- [x] `[must]` Qualify Builder correction of read-triggered global refresh
+  (`automation-05`): seven read actions now use empty tags, writes retain their
+  targeted tags; browser trace has zero global invalidations. Preserve failed
+  journey evidence; observing late responses does not upgrade a failed verdict.
+- [x] `[must]` Independently exercise DEV-owner HTTP invariants. `automation-05/http-01.json`:
+  11 checks across 26 calls pass, including unauthenticated ingress denial,
+  duplicate retry, stale revision, parent mismatch/missing parent, dependency
+  deletion guard, atomic completion, completed parent/child locks and server
+  filters. These are actual deployed tools, not mocked unit assertions.
+- [x] `[must]` Qualify the ten-step browser lifecycle after live materialization
+  on both layouts. `automation-05/journey-02` passes 10/10 wide and 10/10 compact.
+  Earlier reload failures mixed cached pre-sync rendering with live-read timing;
+  retain them as source-readiness findings, not application data loss.
+- [x] `[must]` Extend that browser pass to injected write failure/draft retention,
+  filter/search controls and changing parent selection. `automation-05/journey-03`
+  passes 13/13 wide and 13/13 compact, with no browser exceptions. Parent-choice
+  and final screenshots inspected. No Prototype regeneration or Trial involved.
+- [ ] `[should]` Profile remaining source-readiness and request latency without
+  raising interaction acceptance timeouts. Successful journey 02 records 83/82
+  tool calls, p95 about 3.17/2.87s; direct sequential HTTP calls take 0.42-0.79s.
+  Live readiness after open/reload takes about 6.6-12s. Avoid duplicate reads
+  during cached-to-live materialization while preserving real source changes.
+- [ ] `[should]` Reduce Automation correction context after matched evaluation.
+  The successful seven-binding repair retains a 35.8 KB prompt, including
+  13.4 KB Change projection and 7.5 KB approved brief. Six source reads,
+  297,228 cumulative input tokens (252,928 cached) and 2,253 output tokens show
+  a correct but expensive narrow repair. Preserve exact authority, full brief
+  availability and stable cached contracts; measure smaller repair projections
+  rather than truncating model output or hiding requirements.
+- [x] `[must]` Run the separate Automation-only declarative brief, inspect its
   actual input and result, and preserve comparison of existing interactions.
   Add equipment editing and a visible selected parent/dropdown for creation.
 - [ ] `[must]` Independently exercise creation, editing, cancellation, parent
@@ -2580,10 +2605,12 @@ Inspections Automation against one frozen existing Prototype.
   recovery. Keep direct server authorization evidence separate from DEV-owner
   browser evidence. Stop at blockers, collect reachable findings, then repair
   through Builder before another acceptance pass.
-  Current partial evidence: equipment create/edit/cancel, visible parent choices,
-  draft defects, completion refusal, invalid-link draft retention and completed
-  record locks pass in reachable wide/compact runs. No run yet passes the entire
-  journey reliably. DEV-owner checks are not delegated-reader authorization.
+  Browser paths and direct DEV-owner HTTP invariants now pass as detailed above.
+  Remaining qualification: delegated reader/writer ingress outside personal DEV,
+  process restart/compatible update with real retained data, and actual transport
+  interruption (the browser write-error case uses explicit fault injection).
+  Native tests prove fresh-subprocess persistence, not the full update lifecycle.
+  DEV-owner checks are not delegated-reader authorization; Trial remains paused.
 
 ## Could And Deferred Work
 
