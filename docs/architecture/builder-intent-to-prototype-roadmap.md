@@ -2589,6 +2589,19 @@ Inspections Automation against one frozen existing Prototype.
   tool calls, p95 about 3.17/2.87s; direct sequential HTTP calls take 0.42-0.79s.
   Live readiness after open/reload takes about 6.6-12s. Avoid duplicate reads
   during cached-to-live materialization while preserving real source changes.
+- [x] `[must]` Protect dirty record forms from background refresh without
+  silently advancing their edit revision. Latest server locks remain effective;
+  missing-record recovery and successful repeated saves have regression tests.
+  Client form suite: 37 passing. Two real browser editors plus a diagnostic
+  source retry retain the first draft and reject its stale write on both widths
+  (`automation-05/journey-04`); the later transport probe exposed automatic HTTP
+  retries and its harness is being corrected, not relabelled successful.
+- [ ] `[must]` Repeat Automation independently from the same accepted `002`,
+  without regenerating the design or overwriting the successful candidate.
+  `e2e/stand/fork-frozen-prototype.py` imports new TEST copies from retained
+  pre-Automation Git assets and exact accepted resources. Inheritance is checked
+  by reversible identity remapping and resource/locale digests. Run at least two
+  fresh sessions, audit actual inputs and independently assess their outputs.
 - [ ] `[should]` Reduce Automation correction context after matched evaluation.
   The successful seven-binding repair retains a 35.8 KB prompt, including
   13.4 KB Change projection and 7.5 KB approved brief. Six source reads,

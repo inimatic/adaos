@@ -138,6 +138,73 @@ try {
         await expect(field('asset_editor', 'location').locator('input')).toHaveValue('Updated location')
         await dismiss()
       })
+      await checkpoint('two-editors-retain-draft-and-reject-stale-revision', async () => {
+        await command('edit-asset').click()
+        await expect(field('asset_editor', 'location').locator('input')).toHaveValue('Updated location')
+        await fill('asset_editor', 'location', 'First editor draft')
+        const second = await context.newPage()
+        try {
+          await second.goto(url.href, { waitUntil: 'domcontentloaded' })
+          await second.waitForFunction(id => {
+            const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
+            return sync?.providerSynced && sync?.materializationReady && sync?.materialization?.currentScenario === id
+          }, scenario, { timeout: 60_000 })
+          const secondRows = second.locator('[data-webui-widget-id="assets_col"] tr.row-selectable')
+          await secondRows.filter({ hasText: marker }).click()
+          await second.locator('[data-command-id="edit-asset"]').click()
+          const editor = second.locator('[data-webui-widget-id="asset_editor"]').last()
+          await expect(editor.locator('[data-webui-field-id="location"] input')).toHaveValue('Updated location')
+          await editor.locator('[data-webui-field-id="location"] input').fill('Second editor saved')
+          await editor.locator('[data-command-id="save-asset"]').click()
+          await expect(editor).toHaveCount(0)
+          await expect(secondRows.filter({ hasText: marker })).toContainText('Second editor saved')
+          // Force only a real background read through the DEV diagnostic injector.
+          // No record, draft, revision, response or authorization is replaced by the probe.
+          await host('asset_editor').locator('ada-form-widget').evaluate(element => {
+            const c = window.ng.getComponent(element)
+            if (!c.data.retryRuntimeDataSource(c.widget.dataSource)) throw new Error('Background retry unavailable')
+          })
+          await expect(host('asset_editor').getByRole('status')).toBeVisible()
+          await expect(field('asset_editor', 'location').locator('input')).toHaveValue('First editor draft')
+          const result = await submit('asset_editor', 'save-asset', false)
+          expect(result.error).toBe('revision_conflict')
+          await expect(field('asset_editor', 'location').locator('input')).toHaveValue('First editor draft')
+          await page.screenshot({ path: path.join(output, `${layout}-conflict.png`), fullPage: true })
+        } finally { await second.close() }
+        await dismiss()
+        await command('edit-asset').click()
+        await expect(field('asset_editor', 'location').locator('input')).toHaveValue('Second editor saved')
+        await fill('asset_editor', 'location', 'Updated location')
+        await submit('asset_editor', 'save-asset')
+      })
+      await checkpoint('lost-write-response-retains-draft-and-retries-once', async () => {
+        await command('edit-asset').click()
+        await fill('asset_editor', 'location', 'Transport retry')
+        let committed
+        const loseResponse = async route => {
+          if (!route.request().postDataJSON()?.tool?.endsWith(':save_record')) return route.continue()
+          const response = await route.fetch()
+          committed = await response.json()
+          await route.abort('connectionreset')
+        }
+        await page.route('**/api/tools/call', loseResponse)
+        try {
+          const failed = page.waitForEvent('requestfailed', request => request.postDataJSON()?.tool?.endsWith(':save_record'))
+          await command('asset_editor', 'save-asset').click()
+          await failed
+          await expect.poll(() => host('asset_editor').locator('ada-form-widget').evaluate(element => window.ng.getComponent(element).submitting)).toBe(false)
+          await expect(command('asset_editor', 'save-asset')).toBeEnabled()
+          await expect(field('asset_editor', 'location').locator('input')).toHaveValue('Transport retry')
+          expect(committed.result.ok).toBe(true)
+        } finally { await page.unroute('**/api/tools/call', loseResponse) }
+        const retried = await submit('asset_editor', 'save-asset')
+        expect(retried.item.id).toBe(committed.result.item.id)
+        expect(retried.item.revision).toBe(committed.result.item.revision)
+        await command('edit-asset').click()
+        await expect(field('asset_editor', 'location').locator('input')).toHaveValue('Transport retry')
+        await fill('asset_editor', 'location', 'Updated location')
+        await submit('asset_editor', 'save-asset')
+      })
       await checkpoint('injected-write-error-retains-draft', async () => {
         await command('edit-asset').click()
         await fill('asset_editor', 'location', 'Retained draft')

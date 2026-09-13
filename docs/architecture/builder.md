@@ -281,6 +281,22 @@ omitting invalidates triggers global refresh; read actions declare an empty
 list and mutations declare affected tags. A read tool's side_effects metadata
 alone does not suppress the Client's legacy refresh behavior.
 
+Record editors keep the loaded edit baseline (including its revision) separate
+from the latest observed record. Background reads must not replace dirty input
+or silently rebase a stale write. Latest server locks still apply. Successful
+writes may acknowledge the matching draft; failed writes and edits made while
+a write is pending remain intact. Explicit record selection resets the editor.
+Acceptance includes two concurrent browser editors, a real refreshed record,
+and transport failure after a committed write, not only mocked error envelopes.
+
+Repeat Automation evaluation imports only the accepted Prototype into a new
+TEST application. Require reversible identifier-only WebUI equivalence,
+accepted resource and locale digests, isolated hosts and fresh sessions. Retain
+the good Automation candidate, unchanged. Inherited Prototype review is stated
+as inherited, never presented as another independent generation or review.
+No Automation code, corrective history or external acceptance fixtures enter
+the repeated model input. Trial and delivery are separate gates.
+
 Feedback reference grammar is part of the exposed parser contract. Fully
 qualified SDK symbols may normalize to `sdk:` references; ambiguous bare names
 remain invalid. After a parser correction, a failed feedback-stage candidate

@@ -56,3 +56,17 @@ def test_automation_review_requires_exact_existing_task(tmp_path):
     (tmp_path / "webui.json").unlink()
     with pytest.raises(FileNotFoundError):
         review.read_automation_snapshot(tmp_path, "test_demo", "task.current")
+
+
+def test_frozen_fixture_remaps_only_identifiers_and_confines_paths(tmp_path):
+    spec = importlib.util.spec_from_file_location("fork_snapshot", Path(__file__).parents[1] / "e2e/stand/fork-frozen-prototype.py")
+    fork = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fork)
+    original = {"scenario:test_original": ["prototype.test_original.records", {"title": "Neutral title", "count": 4}]}
+    mapped = fork.remap(original, "test_original", "test_repeat")
+    assert mapped == {"scenario:test_repeat": ["prototype.test_repeat.records", {"title": "Neutral title", "count": 4}]}
+    assert fork.remap(mapped, "test_repeat", "test_original") == original
+    assert fork.confined(tmp_path, "assets/en.json") == tmp_path / "assets/en.json"
+    for relative in (".", "../escape.json", str(tmp_path.parent / "outside.json")):
+        with pytest.raises(ValueError, match="escapes"):
+            fork.confined(tmp_path, relative)
