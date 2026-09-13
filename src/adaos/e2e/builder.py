@@ -607,8 +607,11 @@ def _client_capability_environment(repo_root: Path) -> dict[str, Any]:
 
 def _path_get(value: Any, path: str) -> tuple[bool, Any]:
     current = value
-    for token in str(path or "").split("."):
-        if not token:
+    path = str(path or "")
+    pointer = path.startswith("/")
+    tokens = [part.replace("~1", "/").replace("~0", "~") for part in path[1:].split("/")] if pointer else path.split(".")
+    for token in tokens:
+        if not token and not pointer:
             continue
         if isinstance(current, Mapping) and token in current:
             current = current[token]
@@ -616,6 +619,8 @@ def _path_get(value: Any, path: str) -> tuple[bool, Any]:
         if isinstance(current, Sequence) and not isinstance(
             current, (str, bytes, bytearray)
         ):
+            if pointer and not re.fullmatch(r"0|[1-9][0-9]*", token):
+                return False, None
             try:
                 current = current[int(token)]
                 continue

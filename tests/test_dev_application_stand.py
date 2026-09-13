@@ -116,3 +116,11 @@ def test_race_uses_independent_sessions_and_keeps_submission_order(monkeypatch):
     result = stand.concurrent_calls('http://127.0.0.1', {}, [{'id': 1}, {'id': 2}])
     assert len(sessions) == 2 and sessions[0] is not sessions[1]
     assert [item['body']['result']['id'] for item in result['results']] == [1, 2]
+def test_expectations_support_literal_dotted_fields_with_json_pointer():
+    from adaos.e2e.builder import _expectation_findings, _path_get
+
+    value = {"items": [{"sample.name": "Текст", "a/b~c": 3, "": False}]}
+    assert _expectation_findings(value, {"values": {"/items/0/sample.name": "Текст", "/items/0/a~1b~0c": 3, "/items/0/": False}}) == []
+    assert _path_get(value, "items.0") == (True, value["items"][0])
+    for path in ("/items/-1", "/items/01", "/items/1", "/items/0/missing", "items.0.sample.name"):
+        assert _path_get(value, path) == (False, None)

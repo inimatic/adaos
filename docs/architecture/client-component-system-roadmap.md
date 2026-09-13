@@ -494,6 +494,13 @@ domain branches or regressing Client conformance, bundle, or latency gates.
   list metadata and details; preserve scalar canonical IDs, invalidate on source
   changes and release subscriptions. Choice captions retain the authored locale
   as a fallback without demanding another language from generation.
+- [x] `[must]` Admit owned `skill` reads for the same related-record caption
+  projection during Automation, not only Prototype `resourceQuery` sources.
+  Inventory's independent browser journey exposed UUIDs after otherwise valid
+  Automation because the shared parser dropped the skill source. Use the shared
+  causal data loader; keep IDs unchanged and cover updates, failure cleanup and
+  literal dotted label fields. The focused table/list/label suite passes 58 tests;
+  live browser qualification below remains a separate gate.
 - [ ] `[must]` Qualify rename, removal, reload and unavailable lookups through
   real browser surfaces in both layouts. Unit tests do not prove HTTP latency
   or live materialization. Collection-filter lookups and datasets exceeding the
