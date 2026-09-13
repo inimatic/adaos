@@ -150,6 +150,8 @@ def execute(step_type: str, inputs: Mapping[str, Any], context: Mapping[str, Any
             expected_session = str(inputs.get("session_id") or "")
             if not expected_session or session.get("session_id", session.get("id")) != expected_session:
                 raise ValueError("Automation wait must observe its exact started session")
+            if inputs.get("expected_task_id") and session.get("current_task_id") != inputs["expected_task_id"]:
+                raise ValueError("Automation observation must not follow a replacement task")
             polls += 1
             if status in {"completed", "failed", "cancelled", "expired", "awaiting_input"}:
                 return {**result, "ok": status == "completed", "status": status, "poll_count": polls,

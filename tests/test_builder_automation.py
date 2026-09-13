@@ -3932,6 +3932,12 @@ def test_writable_resource_prototype_materializes_project_owned_provider_skill(
     assert started["session"]["created_artifacts"][0]["source"] == (
         "accepted_resource_provider_scaffold"
     )
+    brief = "Implement the accepted writable recipe board."
+    assert started["session"]["implementation_brief"] == brief
+    for name in ("skill.yaml", "builder.draft.json"):
+        metadata = (service.dev_skills_root / "recipes_skill" / name).read_text(encoding="utf-8")
+        assert brief not in metadata
+        assert "project:recipes" in metadata
 
 
 def test_locale_evidence_alone_does_not_require_a_resource_provider():

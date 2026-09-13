@@ -422,6 +422,30 @@ def test_skill_factory_reads_do_not_mutate_or_wait_for_mutation_lock(
     assert snapshot["diagnostics"]["projection_consistency"] == "atomic_document"
 
 
+def test_atomic_state_read_retries_sharing_errors_but_not_corrupt_documents(tmp_path, monkeypatch):
+    from adaos.services.artifact_pipeline import storage
+    path = tmp_path / "state.json"
+    calls = []
+    def read(_self, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise PermissionError("replacement in progress")
+        return '{"tasks": {"task.one": {"status": "running"}}}'
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(storage, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(storage.time, "sleep", lambda _delay: None)
+    assert storage.read_atomic_json(path)["tasks"]["task.one"]["status"] == "running"
+    assert len(calls) == 2
+    monkeypatch.setattr(Path, "read_text", lambda *a, **kw: "broken JSON")
+    with pytest.raises(json.JSONDecodeError):
+        storage.read_atomic_json(path)
+    def denied(*args, **kwargs):
+        raise PermissionError("permanent failure")
+    monkeypatch.setattr(Path, "read_text", denied)
+    with pytest.raises(PermissionError):
+        storage.read_atomic_json(path, attempts=2)
+
+
 def test_skill_factory_rejects_result_outside_sparse_paths(tmp_path: Path) -> None:
     service = SkillFactoryService(state_dir=tmp_path)
     task = service.submit_realize_request({"target": {"type": "scenario", "id": "morning"}})["task"]

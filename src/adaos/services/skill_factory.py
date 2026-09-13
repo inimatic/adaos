@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
-from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock, read_atomic_json
 from adaos.services.context_control import ContextControlService
 from adaos.services.id_gen import new_id
 from adaos.services.runtime_paths import current_state_dir
@@ -1834,10 +1834,10 @@ class SkillFactoryService:
 
     def _read_state(self) -> dict[str, Any]:
         path = self.state_path
-        if not path.exists():
-            return self._initial_state()
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = read_atomic_json(path)
+        except FileNotFoundError:
+            return self._initial_state()
         except Exception as exc:
             raise RuntimeError(f"failed to read Skill Factory state: {path}") from exc
         if not isinstance(data, dict):

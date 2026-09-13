@@ -250,6 +250,7 @@ def _purge_conflicting_local_modules(skill_path: Path) -> None:
 
 def _purge_skill_source_modules(skill_path: Path) -> None:
     skill_pkg = skill_path.name
+    namespace = _skill_namespace(skill_path)
     for key, module in list(sys.modules.items()):
         if key == "skills" or key.startswith("adaos.") or key.startswith("adaos_skill_"):
             continue
@@ -259,7 +260,7 @@ def _purge_skill_source_modules(skill_path: Path) -> None:
             or key == skill_pkg
             or key.startswith(f"{skill_pkg}.")
         )
-        if skill_scoped or _module_file_is_under(module, skill_path):
+        if skill_scoped or key == namespace or key.startswith(namespace + ".") or _module_file_is_under(module, skill_path):
             sys.modules.pop(key, None)
 
 
@@ -312,6 +313,32 @@ def _load_skill_module(skill_path: Path, module_name: str):
     return importlib.import_module(module_name)
 
 
+def _skill_namespace(skill_path: Path) -> str:
+    path_key = hashlib.sha256(str(skill_path.resolve()).encode("utf-8")).hexdigest()[:12]
+    return f"_adaos_runtime.{skill_path.name}.{path_key}"
+
+
+def _ensure_skill_module_parents(skill_path: Path, module_name: str) -> str:
+    namespace = _skill_namespace(skill_path)
+    parts = namespace.split(".")
+    for index in range(1, len(parts) + 1):
+        name = ".".join(parts[:index])
+        if name not in sys.modules:
+            spec = importlib.machinery.ModuleSpec(name, loader=None, is_package=True)
+            spec.submodule_search_locations = [str(skill_path)] if name == namespace else []
+            package = importlib.util.module_from_spec(spec)
+            sys.modules[name] = package
+            parent, _, child = name.rpartition(".")
+            if parent:
+                setattr(sys.modules[parent], child, package)
+    parent = module_name.rpartition(".")[0]
+    if parent:
+        # Let importlib execute real __init__.py files (or namespace packages),
+        # so both eager and lazy relative sibling imports have normal semantics.
+        importlib.import_module(f"{namespace}.{parent}")
+    return namespace
+
+
 def _load_module_from_skill_source(skill_path: Path, module_name: str):
     relative = Path(*[segment for segment in str(module_name or "").split(".") if segment])
     # Build the file path without relying on platform-specific anchors.
@@ -326,8 +353,8 @@ def _load_module_from_skill_source(skill_path: Path, module_name: str):
         loaded_handler = None
     if loaded_handler is not None:
         return loaded_handler
-    path_key = hashlib.sha256(str(skill_path.resolve()).encode("utf-8")).hexdigest()[:12]
-    synthetic_name = f"_adaos_runtime.{skill_path.name}.{path_key}.{module_name}"
+    namespace = _skill_namespace(skill_path)
+    synthetic_name = f"{namespace}.{module_name}"
     existing = sys.modules.get(synthetic_name)
     if (
         existing is not None
@@ -346,6 +373,7 @@ def _load_module_from_skill_source(skill_path: Path, module_name: str):
     configure_skill_module_logging(synthetic_name)
     sys.modules[synthetic_name] = module
     try:
+        _ensure_skill_module_parents(skill_path, module_name)
         spec.loader.exec_module(module)
     except BaseException:
         if sys.modules.get(synthetic_name) is module:
@@ -357,6 +385,6 @@ def _load_module_from_skill_source(skill_path: Path, module_name: str):
         # event subscriptions into the process-wide declaration registry.
         from adaos.sdk.core.decorators import retire_module_declarations
 
-        retire_module_declarations({synthetic_name})
+        retire_module_declarations({name for name in sys.modules if name.startswith(namespace + ".")} | {synthetic_name})
     setattr(module, _MODULE_LOAD_COMPLETE, True)
     return module

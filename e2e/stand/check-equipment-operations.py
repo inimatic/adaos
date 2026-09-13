@@ -18,6 +18,7 @@ from adaos.apps.api.tool_bridge import _skill_manager_for_context
 from adaos.domain.personalization_access import Grant, ScopeRef, SessionKey, SubjectRef
 from adaos.e2e.builder import _write_json
 from adaos.services.agent_context import get_ctx
+from adaos.services.builder.workflow import BuilderWorkflowService
 from adaos.services.personalization_runtime import personalization_access_service
 
 
@@ -45,6 +46,10 @@ def main():
         raise ValueError("Only probe-owned records may be inspected")
     init_ctx(Settings.from_sources())
     ctx = get_ctx()
+    snapshot = BuilderWorkflowService.from_context().automation_snapshot_root("scenario", scenario)
+    metadata = json.loads((snapshot / "snapshot.json").read_text(encoding="utf-8"))
+    if pin.get("stage") != "automation" or metadata.get("object_id") != scenario or metadata.get("task_id") != pin["revision"]:
+        raise ValueError("Operations must target the exact retained Automation task")
     skill = scenario + "_skill"
     source = Path(ctx.paths.dev_skills_dir()) / skill
     manager = asyncio.run(_skill_manager_for_context(ctx))
@@ -53,7 +58,7 @@ def main():
         for p in source.rglob("*") if p.is_file() and not any(part in {"__pycache__", ".pytest_cache", ".git"} for part in p.parts)}
     hub = "http://127.0.0.1:8778"
     owner = {"X-AdaOS-Token": resolve_control_token(base_url=hub)}
-    report = {"scope": "Retained DEV data; compatible same-version redeploy, not migration or Trial", "scenario": scenario,
+    report = {"scope": "Retained DEV data; compatible patch redeploy, not schema migration or Trial", "scenario": scenario,
         "task": pin["revision"], "marker": marker, "calls": [], "checks": [], "ok": False,
         "runtime_before": {key: before.get(key) for key in ("version", "active_slot", "ready")}}
 

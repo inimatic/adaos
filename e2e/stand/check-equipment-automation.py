@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pin", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--contract", choices=("separate-parent", "embedded-parent"), default="separate-parent")
     args = parser.parse_args()
     load_dotenv()
     root = (Path.cwd() / "e2e/artifacts/builder").resolve()
@@ -41,9 +42,20 @@ def main():
     client.headers["X-AdaOS-Token"] = resolve_control_token(base_url=hub)
     report = {"scope": "Actual DEV-owner tools; not delegated reader/writer acceptance", "scenario": scenario,
               "task": pin["revision"], "checks": [], "calls": [], "ok": False,
-              "records": "New labelled E2E records retained; existing user data untouched"}
+              "records": "New labelled E2E records retained; existing user data untouched", "contract": args.contract}
 
     def call(method, **values):
+        if args.contract == "embedded-parent":
+            if method == "save_record":
+                fields = dict(values.get("values") or {})
+                parent = values.pop("parent_id", None)
+                if parent is not None:
+                    fields.setdefault("asset_id" if values["kind"] == "inspections" else "inspection_id", parent)
+                values["values"] = fields
+                if values.pop("complete", False):
+                    values["command"] = "complete"
+            elif method == "delete_record":
+                values.pop("token", None)
         started = time.perf_counter()
         response = client.post(hub + "/api/tools/call", json={"tool": scenario + "_skill:" + method,
             "arguments": {"webspace_id": webspace, **values}}, timeout=30)
@@ -79,7 +91,8 @@ def main():
         missing = save("inspections", parent_id=str(uuid4()), values={"note": marker})
         check("missing-parent-denied", missing.get("ok") is False)
         inspection = save("inspections", parent_id=asset["id"], values={"note": marker, "started_at": "2026-09-13"})["item"]
-        mismatch = save("inspections", parent_id=asset["id"], values={"asset_id": str(uuid4())})
+        mismatch = save("inspections", id=inspection["id"], revision=inspection["revision"],
+                        parent_id=asset["id"], values={"asset_id": str(uuid4())})
         check("parent-mismatch-denied", mismatch.get("ok") is False)
         deleted = call("delete_record", kind="assets", id=asset["id"], revision=edited["revision"], token=str(uuid4()))
         check("dependent-delete-denied", deleted.get("ok") is False and
@@ -88,7 +101,7 @@ def main():
         completed = save("inspections", id=inspection["id"], revision=inspection["revision"], parent_id=asset["id"], complete=True)
         persisted = call("get_record", kind="inspections", id=inspection["id"])["item"]
         check("completion-atomic-with-problem-items", completed.get("ok") is False and
-              any(problem["id"] == item["id"] for problem in completed.get("items", [])) and
+              any(problem["id"] == item["id"] for problem in completed.get("problems" if args.contract == "embedded-parent" else "items", [])) and
               persisted["status"] == "draft" and persisted["revision"] == inspection["revision"])
         item = save("inspection_items", id=item["id"], revision=item["revision"], parent_id=inspection["id"],
                     values={"comment": "Confirmed defect"})["item"]

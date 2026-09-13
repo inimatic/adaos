@@ -17,8 +17,13 @@ def caller() -> dict[str, str] | None:
     ``actor``/``role`` supplied in arguments. An absent caller must not be treated
     as owner. Use ``require`` for authorization, not comparisons of display names.
     Core binds owner or purpose-scoped local session credentials at /api/tools/call.
+    Personal DEV preview uses this same ingress: the Client presents its existing
+    node-owner credential, Core verifies it and propagates the owner identity to
+    the selected DEV skill handler. No installed release, app-side authentication
+    setup or application-issued grant is required for this owner path.
     A scoped session admits only its named installed skill; administrative and
-    legacy resource endpoints do not accept it. Application code must not issue
+    legacy resource endpoints and personal DEV do not accept it. DEV-owner tests
+    do not qualify delegated reader/writer access. Application code must not issue
     credentials or implement its own user/role authentication.
     """
     actor = current_caller()

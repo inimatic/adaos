@@ -297,6 +297,21 @@ as inherited, never presented as another independent generation or review.
 No Automation code, corrective history or external acceptance fixtures enter
 the repeated model input. Trial and delivery are separate gates.
 
+Authentication guidance distinguishes personal DEV owner invocation from
+delegated installed application access. Both use the Core tool ingress, but
+scoped credentials deliberately cannot enter personal DEV. The Client supplies
+its existing owner credential; the application uses the verified SDK caller and
+capability checks, without installing credentials or creating its own grants.
+Unit access doubles do not qualify HTTP identity propagation. Preserve an
+ambiguity report when this distinction was absent from admitted context.
+
+Keep the full Automation brief in its authoritative task field, not copied
+into companion skill descriptions or scaffolding metadata. Runtime and compiler
+metrics are referenced evidence, not application implementation instructions.
+Measure context byte changes separately from model cost and acceptance outcomes.
+Independent deployed-tool checks are required even after package tests pass:
+the real executor must support the package/import semantics used by the app.
+
 Feedback reference grammar is part of the exposed parser contract. Fully
 qualified SDK symbols may normalize to `sdk:` references; ambiguous bare names
 remain invalid. After a parser correction, a failed feedback-stage candidate

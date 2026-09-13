@@ -2594,20 +2594,48 @@ Inspections Automation against one frozen existing Prototype.
   Reuse the existing successful-read audit suppression policy (with diagnostic
   counters), without caching grants or suppressing denials/writes. Isolated
   profiles 02/03 reduce warm calls from 1.26-1.77s to 0.21-0.32s under cProfile;
-  live HTTP/browser comparison remains required after the batched node restart.
+  after restart, compact journey 05/06 read p50 falls from 1309 to 698ms and
+  p95 from 2633 to 1245ms. Counts remain 105/107; source readiness is not improved.
+  Wide timings include concurrent verification traffic, not a clean benchmark.
+  Remaining work is causal duplicate-read reduction, not a larger timeout.
 - [x] `[must]` Protect dirty record forms from background refresh without
   silently advancing their edit revision. Latest server locks remain effective;
   missing-record recovery and successful repeated saves have regression tests.
   Client form suite: 37 passing. Two real browser editors plus a diagnostic
   source retry retain the first draft and reject its stale write on both widths
-  (`automation-05/journey-04`); the later transport probe exposed automatic HTTP
-  retries and its harness is being corrected, not relabelled successful.
-- [ ] `[must]` Repeat Automation independently from the same accepted `002`,
+  (`automation-05/journey-04`). Corrected transport observation waits for builtin
+  retries to settle. Journey 06 passes 15/15 on both layouts, including a lost
+  response after a committed write and an idempotent retry. Conflict screenshots
+  reviewed; old failed receipts remain failed. This is controlled transport
+  fault injection, not a physical network disconnection.
+- [x] `[must]` Repeat Automation independently from the same accepted `002`,
   without regenerating the design or overwriting the successful candidate.
   `e2e/stand/fork-frozen-prototype.py` imports new TEST copies from retained
   pre-Automation Git assets and exact accepted resources. Inheritance is checked
   by reversible identity remapping and resource/locale digests. Run at least two
   fresh sessions, audit actual inputs and independently assess their outputs.
+  Repeats B/C retain the same 4171-character brief and only identity-remapped
+  design. B completes with one automatic locale repair (1128s, 2.071M cumulative
+  tokens, 1.932M cached). C stops on a genuine missing DEV identity explanation
+  (139s execution, 364829 tokens), without editing the app. Their first-run
+  outcomes are not two successful Automations. B generic render/source parity
+  passes both widths, but real tool invocation exposes a runtime relative-import
+  defect before functional acceptance. A node restart during B also interrupted
+  one MCP call; keep that interference separate from clean latency evaluation.
+- [x] `[must]` Clarify personal DEV caller propagation in the public SDK and
+  bounded binding capsule, without weakening authorization. Resume C with the
+  unchanged approved design and full brief; retain its original blocked verdict.
+  Focused context/access/queue checks: 45 pass; broader regression: 422 pass.
+- [x] `[must]` Recover queue observation from transient Windows sharing errors
+  during atomic state replacement. Retry only the file read, not task submission;
+  corruption/permanent denial remain errors. Observation-only resume pins both
+  session and task. The B observer resumes without regenerating its candidate.
+- [ ] `[must]` Qualify B/C after shared infrastructure corrections. B proves
+  package checks alone miss lazy relative imports in the actual executor.
+  The generic loader now creates isolated parent packages with real package
+  initialization and reloads owned siblings; 13 executor regressions pass.
+  Native/browser requalification follows the batched restart after active model
+  work finishes. Do not patch generated app code to hide an executor defect.
 - [ ] `[should]` Reduce Automation correction context after matched evaluation.
   The successful seven-binding repair retains a 35.8 KB prompt, including
   13.4 KB Change projection and 7.5 KB approved brief. Six source reads,
@@ -2618,6 +2646,11 @@ Inspections Automation against one frozen existing Prototype.
   First safe reduction: keep prior run status/error/evidence, but reference its
   orchestrator topology/rate metrics instead of injecting those into app context.
   Full immutable input evidence and the approved brief remain available.
+  The retained correction packet drops 2053 UTF-8 bytes (11523 to 9470).
+  A second discovered duplicate is the full brief appended to companion skill
+  metadata; new scaffolds now name their owning project and refer to the separate
+  brief. Existing generated candidates and admitted inputs remain unchanged.
+  Matched model cost improvement is not yet established.
 - [x] `[must]` Run the separate Automation-only declarative brief, inspect its
   actual input and result, and preserve comparison of existing interactions.
   Add equipment editing and a visible selected parent/dropdown for creation.
@@ -2628,11 +2661,14 @@ Inspections Automation against one frozen existing Prototype.
   browser evidence. Stop at blockers, collect reachable findings, then repair
   through Builder before another acceptance pass.
   Browser paths and direct DEV-owner HTTP invariants now pass as detailed above.
-  Remaining qualification: delegated reader/writer ingress outside personal DEV,
-  process restart/compatible update with real retained data, and actual transport
-  interruption (the browser write-error case uses explicit fault injection).
-  Native tests prove fresh-subprocess persistence, not the full update lifecycle.
-  DEV-owner checks are not delegated-reader authorization; Trial remains paused.
+  `operations-before.json` and `operations-after-restart.json` compare the same
+  real equipment/inspection/item across API restart and native tested update
+  0.1.0 slot B to 0.1.1 slot A, with unchanged source and retained data. This is a
+  compatible patch update, not schema migration. HTTP 03 again passes 11 checks.
+  Both real reader/writer scoped credentials are rejected at the personal DEV
+  boundary and revoked afterwards. Actual delegated application use requires an
+  installed delivery context and remains blocked while Trial/publication is
+  paused; do not treat those 403s as successful reader/writer application tests.
 
 ## Could And Deferred Work
 

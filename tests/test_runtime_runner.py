@@ -477,3 +477,34 @@ def test_execute_tool_serializes_concurrent_first_imports(tmp_path: Path) -> Non
         results = list(pool.map(invoke, (1, 2)))
 
     assert sorted(item["value"] for item in results) == [1, 2]
+
+
+@pytest.mark.parametrize("regular_package", [True, False])
+def test_relative_helpers_are_isolated_and_reload_after_source_change(tmp_path, regular_package):
+    def create(name, value):
+        root = tmp_path / name
+        handlers = root / "handlers"
+        handlers.mkdir(parents=True)
+        if regular_package:
+            (handlers / "__init__.py").write_text("INITIALIZED = True\n", encoding="utf-8")
+        (root / "shared.py").write_text(f"VALUE = {value!r}\n", encoding="utf-8")
+        (handlers / "helper.py").write_text("from ..shared import VALUE\n", encoding="utf-8")
+        (handlers / "main.py").write_text(
+            "from .helper import VALUE as EAGER\n"
+            "def read():\n"
+            "    from . import helper\n"
+            "    return EAGER, helper.VALUE\n", encoding="utf-8")
+        return root
+    alpha, beta = create("relative_alpha", "alpha"), create("relative_beta", "beta")
+    def invoke(root):
+        return runtime_runner_module.execute_tool(root, module="handlers.main", attr="read", payload={})
+    assert invoke(alpha) == ("alpha", "alpha")
+    assert invoke(beta) == ("beta", "beta")
+    assert invoke(alpha) == ("alpha", "alpha")
+    if regular_package:
+        assert sys.modules[runtime_runner_module._skill_namespace(alpha) + ".handlers"].INITIALIZED
+    (alpha / "shared.py").write_text("VALUE = 'changed'\n", encoding="utf-8")
+    future = time.time() + 2
+    os.utime(alpha / "shared.py", (future, future))
+    assert invoke(alpha) == ("changed", "changed")
+    assert invoke(beta) == ("beta", "beta")

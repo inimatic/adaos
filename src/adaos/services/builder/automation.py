@@ -2315,7 +2315,6 @@ class BuilderAutomationService:
                 project_id=project_id,
                 links=external_links,
                 prototype_acceptance=prototype_acceptance,
-                implementation_brief=brief,
             )
             companion_skill_ids = self._resolve_companion_skill_ids(
                 kind,
@@ -2898,7 +2897,6 @@ class BuilderAutomationService:
         project_id: str,
         links: Mapping[str, Any],
         prototype_acceptance: Mapping[str, Any] | None,
-        implementation_brief: str,
     ) -> list[dict[str, Any]]:
         """Materialize authority needed by an accepted writable resource UI."""
 
@@ -2938,8 +2936,8 @@ class BuilderAutomationService:
                 kind="skill",
                 artifact_id=skill_id,
                 source_idea=(
-                    "Project-owned typed resource provider for the accepted prototype. "
-                    + implementation_brief
+                    f"Project-owned resource implementation for project:{owner_project_id}. "
+                    "Realize the accepted Prototype according to the separate Automation brief."
                 ),
                 template_id="skill_default",
             )
@@ -3583,7 +3581,6 @@ class BuilderAutomationService:
                 kind=str(session["object_type"]), project_id=str(session["object_id"]),
                 links=dict(session.get("links") or {}),
                 prototype_acceptance=session.get("prototype_acceptance"),
-                implementation_brief=str(session.get("implementation_brief") or ""),
             )
             session.setdefault("created_artifacts", []).extend(provider_artifacts)
             self._refresh_session_companion_skill_ids(session)

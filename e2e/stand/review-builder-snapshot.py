@@ -14,7 +14,7 @@ from adaos.apps.cli.app import Settings, init_ctx
 from adaos.e2e.builder import _write_json
 from adaos.e2e.stand import redact_value
 from adaos.sdk.builder import preview, workflow
-from adaos.sdk.developer import projects
+from adaos.sdk.developer import compositions, projects
 from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.builder.workflow import BuilderWorkflowService
 
@@ -30,6 +30,18 @@ def read_automation_snapshot(snapshot: Path, scenario: str, revision: str):
     return metadata, ui
 
 
+def require_test_ownership(scenario, draft, project=None):
+    if "[TEST]" in json.dumps(draft, ensure_ascii=False):
+        return
+    project = project or {}
+    catalog = project.get("catalog") or {}
+    owned = (project.get("components") or {}).get("owned") or []
+    if (not scenario.startswith("test_") or "[TEST]" not in str(catalog.get("title") or "")
+            or "test" not in catalog.get("tags", [])
+            or not any(item.get("ref") == f"scenario:{scenario}" for item in owned)):
+        raise ValueError("Existing scenario must be explicitly marked as an owned test")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scenario")
@@ -38,7 +50,7 @@ def main():
     parser.add_argument("--subnet", required=True)
     parser.add_argument("--revision", default="002")
     parser.add_argument("--stage", choices=("prototype", "automation"), default="prototype")
-    parser.add_argument("--probe", choices=("review", "equipment-journey"), default="review")
+    parser.add_argument("--probe", choices=("review", "equipment-journey", "equipment-repeat"), default="review")
     args = parser.parse_args()
     load_dotenv()
     if os.getenv("ENV_TYPE") != "dev" or not args.host.startswith("e2e-"):
@@ -62,8 +74,10 @@ def main():
             raise ValueError(f"Cannot pin a truncated source: {name}")
         files[name] = json.loads(result["content"])
     draft = files["builder.draft.json"]
+    project = None
     if "[TEST]" not in json.dumps(draft, ensure_ascii=False):
-        raise ValueError("Existing scenario must be explicitly marked as a test")
+        project = compositions.get(args.scenario)
+    require_test_ownership(args.scenario, draft, project)
     state = workflow.get_state("scenario", args.scenario)
     if args.stage == "prototype":
         ui = files[f"ui_revisions/{args.revision}.json"]["after_webui"]
@@ -105,7 +119,8 @@ def main():
            "ADAOS_E2E_EXPECTED_WEBUI": str(ui_path),
            "ADAOS_E2E_SNAPSHOT_PIN": str(output / "pin.json"),
            "ADAOS_E2E_OUTPUT": str(output / "browser")}
-    script = "prototype-review.mjs" if args.probe == "review" else "equipment-automation.mjs"
+    script = {"review": "prototype-review.mjs", "equipment-journey": "equipment-automation.mjs",
+              "equipment-repeat": "equipment-repeat.mjs"}[args.probe]
     result = subprocess.run(["node", str(Path(__file__).with_name("browser") / script)],
                             env=env, capture_output=True, text=True, encoding="utf-8")
     (output / "browser.log").write_text(result.stdout + result.stderr, encoding="utf-8")

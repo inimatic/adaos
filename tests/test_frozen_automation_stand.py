@@ -36,6 +36,14 @@ def test_acceptance_order_and_single_submission():
         stand.validate_plan(plan("automation.start", "automation.submit"))
 
 
+def test_observation_resume_cannot_follow_an_unpinned_task():
+    value = plan("automation.wait")
+    with pytest.raises(ValueError, match="exact session and task"):
+        stand.validate_plan(value)
+    value["steps"][0]["input"] = {"session_id": "automation.scenario.test", "expected_task_id": "task.one"}
+    stand.validate_plan(value)
+
+
 def test_retained_equipment_plan_is_automation_only():
     path = Path(__file__).parents[1] / "e2e/builder/development/lifecycle/equipment-inspections-automation.yaml"
     stand.validate_plan(yaml.safe_load(path.read_text(encoding="utf-8")))
@@ -81,3 +89,26 @@ def test_generation_context_keeps_prior_failure_but_not_orchestrator_metrics():
     assert value["previous_run"] == {"run_id": "run:1", "status": "failed", "error": "Missing handler",
         "output_refs": ["evidence:failure"], "workflow_metrics_ref": {"report_id": "report:1", "evidence_digest": "sha256:abc"}}
     assert original["previous_run"]["workflow_metrics"] == metrics
+
+
+def test_review_accepts_test_composition_only_when_it_owns_the_scenario():
+    spec = importlib.util.spec_from_file_location("review_snapshot", Path(__file__).parents[1] / "e2e/stand/review-builder-snapshot.py")
+    review = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(review)
+    project = {"catalog": {"title": "Repeat [TEST]", "tags": ["test"]},
+        "components": {"owned": [{"ref": "scenario:test_repeat"}]}}
+    review.require_test_ownership("test_repeat", {}, project)
+    for target in ("real_app", "test_other"):
+        with pytest.raises(ValueError, match="owned test"):
+            review.require_test_ownership(target, {}, project)
+
+
+def test_automation_caller_contract_distinguishes_dev_owner_from_delegation():
+    from adaos.sdk import access
+    capsule = json.loads((Path(__file__).parents[1] / "src/adaos/abi/implementation.bindings.v1.json").read_text(encoding="utf-8"))
+    contract = capsule["binding_rules"]["authorization"]
+    assert "Personal DEV preview" in contract
+    assert "deliberately rejected in personal DEV" in contract
+    assert "does not configure this transport" in contract
+    assert "node-owner credential" in access.caller.__doc__
+    assert "do not qualify delegated" in access.caller.__doc__

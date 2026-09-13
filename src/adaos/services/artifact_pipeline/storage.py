@@ -196,6 +196,24 @@ def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def read_atomic_json(path: Path, *, attempts: int = 8) -> Any:
+    """Read a replaced document, retrying only transient Windows sharing failures.
+
+    Retry the file open/read, not a task, policy decision or state mutation.
+    Corrupt JSON and persistent access failures remain errors, never empty state.
+    """
+    for attempt in range(max(1, attempts)):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            sharing_failure = os.name == "nt" and (
+                isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in {5, 32, 33}
+            )
+            if not sharing_failure or attempt + 1 >= attempts:
+                raise
+            time.sleep(min(0.01 * (2**attempt), 0.25))
+
+
 def atomic_write_bytes(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
@@ -216,5 +234,6 @@ __all__ = [
     "atomic_write_json",
     "mutation_lock",
     "replace_with_retry",
+    "read_atomic_json",
     "sync_directory",
 ]

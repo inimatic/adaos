@@ -31,6 +31,11 @@ def validate_plan(plan):
     if len(ids) != len(set(ids)):
         raise ValueError("Step IDs must be unique")
     types = [step["type"] for step in steps]
+    if types == ["automation.wait"]:
+        inputs = steps[0].get("input") or {}
+        if not inputs.get("session_id") or not str(inputs.get("expected_task_id") or "").startswith("task."):
+            raise ValueError("Observation-only resume requires the exact session and task")
+        return
     if types.count("automation.start") + types.count("automation.submit") != 1:
         raise ValueError("Exactly one Automation start or correction is required")
     if "automation.submit" in types and "prototype.accept" in types:
