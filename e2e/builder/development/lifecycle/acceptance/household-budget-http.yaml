@@ -1,0 +1,110 @@
+schema: adaos.e2e.application_tools.v1
+# Exact contract of the retained household-budget-en Automation candidate.
+steps:
+  - id: empty-summary
+    tool: budget_summary
+    arguments: {month: '2112-01'}
+    expect:
+      values:
+        http_status: 200
+        body.result.previous_month: '2111-12'
+        body.result.items.0.balance: '0.00'
+        body.result.items.1.currency: EUR
+        body.result.items.2.balance: '0.00'
+  - id: limit-token
+    tool: budget_editor_token
+    expect: {paths_present: [body.result.token]}
+  - id: limit
+    tool: budget_save
+    arguments:
+      entity: limit
+      request_token: $steps.limit-token.body.result.token
+      values: {MonthlyLimit.month: '2112-01', MonthlyLimit.category: groceries, MonthlyLimit.currency: USD, limit_amount: '0.25'}
+    expect: {values: {body.result.ok: true, body.result.item.spent_this_month: '0.00', body.result.item.exceeded: false}}
+  - id: token-a
+    tool: budget_editor_token
+    expect: {paths_present: [body.result.token]}
+  - id: expense-a
+    tool: budget_save
+    arguments: &create-a
+      entity: transaction
+      request_token: $steps.token-a.body.result.token
+      values: &expense-values
+        type: expense
+        date: '2112-01-01'
+        Transaction.category: groceries
+        Transaction.currency: USD
+        person: alex
+        amount: '0.10'
+        note: '${case_instance_id}'
+    expect: {values: {body.result.ok: true, body.result.item.amount: '0.10', body.result.item.revision: 1}}
+  - id: retry-a
+    tool: budget_save
+    arguments: *create-a
+    expect: {values: {body.result.item.id: $steps.expense-a.body.result.item.id, body.result.item.revision: 1}}
+  - id: token-b
+    tool: budget_editor_token
+    expect: {paths_present: [body.result.token]}
+  - id: expense-b
+    tool: budget_save
+    arguments:
+      entity: transaction
+      request_token: $steps.token-b.body.result.token
+      values: {<<: *expense-values, amount: '0.20'}
+    expect: {values: {body.result.ok: true}}
+  - id: exact-total
+    tool: budget_summary
+    arguments: {month: '2112-01'}
+    expect: {values: {body.result.items.0.total_expenses: '0.30', body.result.items.0.balance: '-0.30', body.result.items.1.total_expenses: '0.00'}}
+  - id: exceeded
+    tool: budget_get
+    arguments: {entity: limit, id: $steps.limit.body.result.item.id}
+    expect: {values: {body.result.item.exceeded: true, body.result.item.spent_this_month: '0.30'}}
+  - id: switch-currency
+    tool: budget_save
+    arguments:
+      entity: transaction
+      id: $steps.expense-b.body.result.item.id
+      revision: 1
+      values: {<<: *expense-values, amount: '0.20', Transaction.currency: EUR}
+    expect: {values: {body.result.item.revision: 2}}
+  - id: separate-currencies
+    tool: budget_summary
+    arguments: {month: '2112-01'}
+    expect: {values: {body.result.items.0.total_expenses: '0.10', body.result.items.1.total_expenses: '0.20'}}
+  - id: no-longer-exceeded
+    tool: budget_get
+    arguments: {entity: limit, id: $steps.limit.body.result.item.id}
+    expect: {values: {body.result.item.exceeded: false, body.result.item.spent_this_month: '0.10'}}
+  - id: shift-month
+    tool: budget_save
+    arguments:
+      entity: transaction
+      id: $steps.expense-a.body.result.item.id
+      revision: 1
+      values: {<<: *expense-values, date: '2111-12-31'}
+    expect: {values: {body.result.item.revision: 2}}
+  - id: year-boundary
+    tool: budget_summary
+    arguments: {month: '2112-01'}
+    expect: {values: {body.result.items.0.balance: '0.00', body.result.items.1.balance: '-0.20', body.result.items.2.balance: '-0.10'}}
+  - id: date-search
+    tool: budget_list
+    arguments: {entity: transaction, date: '2111-12-31', search: '${case_instance_id}'}
+    expect: {values: {body.result.items.0.id: $steps.expense-a.body.result.item.id}, paths_absent: [body.result.items.1]}
+  - id: delete-a
+    tool: budget_delete
+    arguments: {entity: transaction, id: $steps.expense-a.body.result.item.id, revision: 2}
+    expect: {values: {body.result.ok: true}}
+  - id: delete-b
+    tool: budget_delete
+    arguments: {entity: transaction, id: $steps.expense-b.body.result.item.id, revision: 2}
+    expect: {values: {body.result.ok: true}}
+  - id: delete-limit
+    tool: budget_delete
+    arguments: {entity: limit, id: $steps.limit.body.result.item.id, revision: 1}
+    expect: {values: {body.result.ok: true}}
+  - id: recomputed-empty
+    tool: budget_summary
+    arguments: {month: '2112-01'}
+    expect: {values: {body.result.items.0.balance: '0.00', body.result.items.1.balance: '0.00', body.result.items.2.balance: '0.00'}}

@@ -51,7 +51,9 @@ def main():
     parser.add_argument("--revision", default="002")
     parser.add_argument("--locale", choices=("en", "ru"), default="ru")
     parser.add_argument("--stage", choices=("prototype", "automation"), default="prototype")
-    parser.add_argument("--probe", choices=("review", "equipment-journey", "equipment-repeat"), default="review")
+    parser.add_argument("--probe", choices=("review", "equipment-journey", "equipment-repeat", "application-journey"), default="review")
+    parser.add_argument("--plan", type=Path)
+    parser.add_argument("--checkpoint", type=Path)
     args = parser.parse_args()
     load_dotenv()
     if os.getenv("ENV_TYPE") != "dev":
@@ -59,7 +61,18 @@ def main():
     if args.stage == "prototype" and not args.revision.isdigit():
         parser.error("Requires an exact numeric UI revision")
     if args.probe != "review" and args.stage != "automation":
-        parser.error("Equipment journey requires an Automation snapshot")
+        parser.error("Functional journeys require an Automation snapshot")
+    if args.probe == "application-journey":
+        if not args.plan or not args.checkpoint:
+            parser.error("Application journeys require a plan and TEST ownership checkpoint")
+        plan = json.loads(args.plan.read_text(encoding="utf-8"))
+        checkpoint = json.loads(args.checkpoint.read_text(encoding="utf-8"))
+        if (plan.get("schema") != "adaos.e2e.application_journey.v1" or not plan.get("steps")
+                or not checkpoint.get("cleanup", {}).get("test")
+                or not checkpoint.get("context", {}).get("retain_test_projects")
+                or not any(item.get("primary_ref") == f"scenario:{args.scenario}"
+                           for item in checkpoint["context"].get("owned_artifacts", []))):
+            parser.error("Invalid journey or TEST ownership")
     root = (Path.cwd() / "e2e/artifacts/builder").resolve()
     output = args.output.resolve()
     if not output.is_relative_to(root) or output == root:
@@ -114,6 +127,8 @@ def main():
     _write_json(output / "selection.json", redact_value(selected))
     if not selected.get("ok"):
         raise ValueError("Pinned snapshot materialization failed")
+    receipt["preview_webspace_id"] = selected["preview_webspace_id"]
+    _write_json(output / "pin.json", receipt)
     hub = "http://127.0.0.1:8778"
     env = {**os.environ, "ADAOS_E2E_SCENARIO_ID": args.scenario,
            "ADAOS_E2E_WEBSPACE_ID": selected["preview_webspace_id"],
@@ -123,8 +138,11 @@ def main():
            "ADAOS_E2E_EXPECTED_WEBUI": str(ui_path),
            "ADAOS_E2E_SNAPSHOT_PIN": str(output / "pin.json"),
            "ADAOS_E2E_OUTPUT": str(output / "browser")}
+    if args.probe == "application-journey":
+        env.update(ADAOS_E2E_JOURNEY_PLAN=str(args.plan.resolve()),
+                   ADAOS_E2E_CHECKPOINT=str(args.checkpoint.resolve()))
     script = {"review": "prototype-review.mjs", "equipment-journey": "equipment-automation.mjs",
-              "equipment-repeat": "equipment-repeat.mjs"}[args.probe]
+              "equipment-repeat": "equipment-repeat.mjs", "application-journey": "application-journey.mjs"}[args.probe]
     result = subprocess.run(["node", str(Path(__file__).with_name("browser") / script)],
                             env=env, capture_output=True, text=True, encoding="utf-8")
     (output / "browser.log").write_text(result.stdout + result.stderr, encoding="utf-8")

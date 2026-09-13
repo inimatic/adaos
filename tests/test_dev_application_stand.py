@@ -65,3 +65,9 @@ def test_frozen_cohort_contains_only_remaining_existing_archetypes():
     assert set(plan['cases']) == {Path(ref).stem for ref in suite['case_refs']} - {'equipment-inspections-ru'}
     assert plan['revision'] == '002'
     assert all(case['locale'] in {'en', 'ru'} and case['brief'].strip() for case in plan['cases'].values())
+
+
+def test_retained_http_acceptance_plans_have_explicit_contracts():
+    root = Path(__file__).parents[1] / 'e2e/builder/development/lifecycle/acceptance'
+    for path in root.glob('*.yaml'):
+        stand.validate_plan(yaml.safe_load(path.read_text(encoding='utf-8')))

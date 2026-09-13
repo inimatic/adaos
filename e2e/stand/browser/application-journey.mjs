@@ -60,7 +60,7 @@ try {
     })
     const expand = value => typeof value === 'string' ? value.replaceAll('${marker}', sample.marker) : value
     const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).last()
-    const locator = step => step.selector ? page.locator(step.selector) : step.field
+    const locator = step => step.role ? (step.widget ? host(step.widget) : page).getByRole(step.role, { name: step.namePattern ? new RegExp(step.namePattern, 'i') : step.name, exact: true }) : step.selector ? (step.hasText ? page.locator(step.selector).filter({ hasText: new RegExp(step.hasText, 'i') }) : page.locator(step.selector)) : step.field
       ? host(step.widget).locator(`[data-webui-field-id=${JSON.stringify(step.field)}]`).locator(step.control || 'input,textarea,select')
       : step.widget ? host(step.widget) : page.locator('body')
     const command = step => (step.widget ? host(step.widget) : page).locator(`[data-command-id=${JSON.stringify(step.command)}]`)
@@ -87,7 +87,15 @@ try {
             break
           }
           case 'fill': await locator(step).fill(expand(step.value)); break
-          case 'select': await locator(step).selectOption(step.label ? { label: expand(step.label) } : { value: expand(step.value) }); break
+          case 'select': {
+            const field = host(step.widget).locator(`[data-webui-field-id=${JSON.stringify(step.field)}]`)
+            if (await field.locator('select').count()) {
+              await field.locator('select').selectOption(step.label ? { label: expand(step.label) } : { value: expand(step.value) })
+            } else {
+              await field.getByRole('radio', { name: expand(step.label || step.value), exact: true }).check()
+            }
+            break
+          }
           case 'check': await locator(step).setChecked(step.checked); break
           case 'text': await expect(locator(step)).toContainText(expand(step.text)); break
           case 'notText': await expect(locator(step)).not.toContainText(expand(step.text)); break
@@ -125,7 +133,10 @@ try {
         sample.active = null
         console.log(`${layout}: ${step.id} passed`)
       }
-    } catch (error) { sample.failure = error.message }
+    } catch (error) {
+      sample.failure = error.message
+      sample.modalControls = await page.locator('ion-modal ion-button,ion-modal button').evaluateAll(nodes => nodes.map(node => node.outerHTML))
+    }
     await Promise.all(responses)
     sample.text = await page.locator('body').innerText()
     await page.screenshot({ path: path.join(output, `${layout}-final.png`), fullPage: true })
