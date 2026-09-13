@@ -2598,6 +2598,12 @@ Inspections Automation against one frozen existing Prototype.
   p95 from 2633 to 1245ms. Counts remain 105/107; source readiness is not improved.
   Wide timings include concurrent verification traffic, not a clean benchmark.
   Remaining work is causal duplicate-read reduction, not a larger timeout.
+  The retained compact trace segment has 40 identity-triggered requests, 49
+  invalidation-triggered requests and 83 cache hits. Eleven mutations share one
+  application-wide tag, refreshing unrelated collections as well as affected
+  records. This is generated binding granularity, not evidence that the generic
+  cache is absent. Next optimization must preserve relationship/lock propagation;
+  qualify it on a separate candidate, not silently edit the protected baseline.
 - [x] `[must]` Protect dirty record forms from background refresh without
   silently advancing their edit revision. Latest server locks remain effective;
   missing-record recovery and successful repeated saves have regression tests.
@@ -2607,7 +2613,10 @@ Inspections Automation against one frozen existing Prototype.
   retries to settle. Journey 06 passes 15/15 on both layouts, including a lost
   response after a committed write and an idempotent retry. Conflict screenshots
   reviewed; old failed receipts remain failed. This is controlled transport
-  fault injection, not a physical network disconnection.
+  fault injection, not a physical network disconnection. Final Core restart
+  requalification `journey-07` again passes 15/15 on both layouts; the protected
+  WebUI raw SHA-256 remains unchanged. Screenshots retain readable conflict
+  feedback and the first editor's draft.
 - [x] `[must]` Repeat Automation independently from the same accepted `002`,
   without regenerating the design or overwriting the successful candidate.
   `e2e/stand/fork-frozen-prototype.py` imports new TEST copies from retained
@@ -2630,11 +2639,11 @@ Inspections Automation against one frozen existing Prototype.
   during atomic state replacement. Retry only the file read, not task submission;
   corruption/permanent denial remain errors. Observation-only resume pins both
   session and task. The B observer resumes without regenerating its candidate.
-- [ ] `[must]` Qualify B/C after shared infrastructure corrections. B proves
+- [x] `[must]` Qualify B/C after shared infrastructure corrections. B proves
   package checks alone miss lazy relative imports in the actual executor.
   The generic loader now creates isolated parent packages with real package
   initialization and reloads owned siblings; 13 executor regressions pass.
-  Native/browser requalification follows the batched restart after active model
+  Native/browser requalification uses the batched restart after active model
   work finishes. Do not patch generated app code to hide an executor defect.
   B requalification now passes 11 HTTP checks and 8/8 independent browser steps
   on both widths (`equipment-automation-repeat-20260913-b/http-02.json` and
@@ -2644,8 +2653,14 @@ Inspections Automation against one frozen existing Prototype.
   cached), then exposes absolute helper-import differences in activation and
   Forge validation. Shared import isolation now covers regular and namespace
   packages in all three gates. `recovered-03` completes the same C task through
-  guarded partial-checkpoint reconciliation without another model call; live
-  requalification remains outstanding. Historical failures remain failed.
+  guarded partial-checkpoint reconciliation without another model call.
+  C live `journey-01` passes 8/8 on both layouts and `http-01.json` passes 11
+  checks after the final Core restart. Import/recovery regression: 91 pass in
+  54.04s, plus 10 validated-result recovery checks. Historical failures remain
+  failed; no clean first-pass reliability rate is inferred from these repairs.
+  C `journey-02` also passes after the stand waits for modal dismissal before
+  screenshot capture. Wide/compact settled captures are nonblank; preserve the
+  earlier transition-frame image rather than mistaking it for persistent overlap.
 - [ ] `[should]` Resolve mobile modal theme/header inconsistency and surface
   actionable server conflict/validation details, not only generic failure
   feedback. B wide/compact parent screenshots confirm visible selected equipment,
@@ -2670,7 +2685,7 @@ Inspections Automation against one frozen existing Prototype.
 - [x] `[must]` Run the separate Automation-only declarative brief, inspect its
   actual input and result, and preserve comparison of existing interactions.
   Add equipment editing and a visible selected parent/dropdown for creation.
-- [ ] `[must]` Independently exercise creation, editing, cancellation, parent
+- [x] `[must]` Independently exercise DEV-owner creation, editing, cancellation, parent
   selection/reset, search/filtering, draft save, invalid/valid completion,
   completed-record locks, restart persistence, revision conflicts and error
   recovery. Keep direct server authorization evidence separate from DEV-owner
@@ -2681,6 +2696,13 @@ Inspections Automation against one frozen existing Prototype.
   real equipment/inspection/item across API restart and native tested update
   0.1.0 slot B to 0.1.1 slot A, with unchanged source and retained data. This is a
   compatible patch update, not schema migration. HTTP 03 again passes 11 checks.
+  Final restart verification (`operations-final-restart-02.json`) again retains
+  exact records and application source. The preceding failed stand invocation
+  selected an HTTP fixture with a different marker; its comparison was rejected
+  and is not treated as record loss or silently rewritten as a pass.
+- [ ] `[must]` Qualify delegated reader/writer application behavior in an
+  installed delivery context when delivery experiments resume. This is blocked
+  by the explicit Trial/publication pause, not waived by successful DEV tests.
   Both real reader/writer scoped credentials are rejected at the personal DEV
   boundary and revoked afterwards. Actual delegated application use requires an
   installed delivery context and remains blocked while Trial/publication is

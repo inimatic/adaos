@@ -35,7 +35,7 @@ await fs.mkdir(output, { recursive: true })
 const browser = await chromium.launch({ headless: true })
 try {
   for (const [layout, viewport] of Object.entries({ wide: { width: 1440, height: 1000 }, compact: { width: 390, height: 844 } })) {
-    const sample = { layout, checks: [], errors: [] }
+    const sample = { layout, checks: [], errors: [], network: [] }
     report.samples.push(sample)
     const context = await browser.newContext({ viewport })
     await context.addInitScript(({ hub, token, subnet, webspace }) => {
@@ -47,6 +47,20 @@ try {
         adaos_local_subnet_id: subnet, adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo', adaos_lang: 'ru' })) localStorage.setItem(key, value)
     }, { hub: env.ADAOS_E2E_HUB_URL, token: env.ADAOS_E2E_HUB_TOKEN, subnet: env.ADAOS_E2E_SUBNET_ID, webspace })
     const page = await context.newPage()
+    const requests = new Map()
+    const responseReads = []
+    page.on('request', request => {
+      if (new URL(request.url()).pathname === '/api/tools/call') requests.set(request, Date.now())
+    })
+    page.on('response', response => {
+      const request = response.request()
+      if (!requests.has(request)) return
+      const body = request.postDataJSON()
+      const entry = { tool: body?.tool, args: body?.arguments, status: response.status(),
+        elapsedMs: Date.now() - requests.get(request), step: sample.active }
+      sample.network.push(entry)
+      responseReads.push(response.json().then(body => { entry.ok = body.ok !== false && body.result?.ok !== false }).catch(() => {}))
+    })
     page.on('pageerror', error => sample.errors.push(error.message))
     const url = new URL(env.ADAOS_E2E_CLIENT_URL)
     for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo', subnet_id: env.ADAOS_E2E_SUBNET_ID,
@@ -65,7 +79,11 @@ try {
       const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
       return sync?.providerSynced && sync?.materializationReady && sync?.materialization?.currentScenario === id
     }, scenario, { timeout: 60_000 })
-    const dismiss = () => page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+    const dismiss = async () => {
+      const modal = page.locator('ion-modal').last()
+      await modal.getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+      await expect(modal).not.toBeVisible()
+    }
     const check = async (id, work) => { sample.active = id; await work(); sample.checks.push(id); sample.active = null }
     const submit = async (form, button, success = true) => {
       const pending = page.waitForResponse(r => new URL(r.url()).pathname === '/api/tools/call'
@@ -174,6 +192,7 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}-final.png`), fullPage: true }).catch(() => {})
       await fs.writeFile(path.join(output, `${layout}-body.txt`), await page.locator('body').innerText(), 'utf8')
       await context.close()
+      await Promise.allSettled(responseReads)
       await fs.writeFile(path.join(output, 'journey.json'), JSON.stringify(report, null, 2) + '\n', 'utf8')
       console.log(layout, sample.checks.length, sample.active, sample.failure ?? 'passed')
     }

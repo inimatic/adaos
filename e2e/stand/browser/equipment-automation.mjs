@@ -108,7 +108,11 @@ try {
       }, scenario, { timeout: 60_000 })
       ;(sample.readinessMs ??= []).push(Date.now() - started)
     }
-    const dismiss = () => page.locator('ion-modal').last().getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+    const dismiss = async () => {
+      const modal = page.locator('ion-modal').last()
+      await modal.getByRole('button', { name: /Close|Закрыть/, exact: true }).click()
+      await expect(modal).not.toBeVisible()
+    }
     const openInspection = () => command('open-inspection_editor', 'edit').click()
     sample.marker = marker
     try {
