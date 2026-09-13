@@ -20,6 +20,15 @@ if (env.ENV_TYPE !== 'dev' || pin.stage !== 'automation' || pin.scenario_id !== 
   throw new Error('Requires an explicit owned TEST Automation pin and existing DEV preview')
 }
 if (plan.schema !== 'adaos.e2e.application_journey.v1' || !plan.steps?.length) throw new Error('Journey plan is empty')
+const stepIds = new Set()
+for (const step of plan.steps) {
+  if (!step.id || stepIds.has(step.id)) throw new Error('Journey steps require unique IDs')
+  stepIds.add(step.id)
+  if (step.layouts && (!Array.isArray(step.layouts) || !step.layouts.length
+    || step.layouts.some(layout => !['wide', 'compact'].includes(layout)))) {
+    throw new Error(`Invalid journey layouts: ${step.id}`)
+  }
+}
 const output = path.resolve(env.ADAOS_E2E_OUTPUT)
 await fs.mkdir(output, { recursive: true })
 const url = new URL(env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
@@ -69,7 +78,7 @@ try {
       return variables[key]
     }) : value
     const host = id => page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).last()
-    const locator = step => step.role ? (step.widget ? host(step.widget) : page).getByRole(step.role, { name: step.namePattern ? new RegExp(step.namePattern, 'i') : step.name, exact: true }) : step.selector ? (step.hasText ? page.locator(step.selector).filter({ hasText: new RegExp(step.hasText, 'i') }) : page.locator(step.selector)) : step.field
+    const locator = step => step.role ? (step.widget ? host(step.widget) : page).getByRole(step.role, { name: step.namePattern ? new RegExp(expand(step.namePattern), 'i') : expand(step.name), exact: true }) : step.selector ? (step.hasText ? page.locator(expand(step.selector)).filter({ hasText: new RegExp(expand(step.hasText), 'i') }) : page.locator(expand(step.selector))) : step.field
       ? host(step.widget).locator(`[data-webui-field-id=${JSON.stringify(step.field)}]`).locator(step.control || 'input,textarea,select')
       : step.widget ? host(step.widget) : page.locator('body')
     const command = step => (step.widget ? host(step.widget) : page).locator(`[data-command-id=${JSON.stringify(step.command)}]`)
@@ -84,6 +93,10 @@ try {
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
       await ready()
       for (const step of plan.steps) {
+        if (step.layouts && !step.layouts.includes(layout)) {
+          sample.checks.push({ id: step.id, status: 'not_applicable', layout })
+          continue
+        }
         sample.active = step.id
         const start = Date.now()
         switch (step.type) {
@@ -97,10 +110,10 @@ try {
           }
           case 'fill': await locator(step).fill(expand(step.value)); break
           case 'select': {
-            const field = host(step.widget).locator(`[data-webui-field-id=${JSON.stringify(step.field)}]`)
+            const field = step.selector ? locator(step) : host(step.widget).locator(`[data-webui-field-id=${JSON.stringify(step.field)}]`)
             await expect(field).toBeVisible({ timeout: 15_000 })
-            if (await field.locator('select').count()) {
-              const select = field.locator('select')
+            if (step.selector || await field.locator('select').count()) {
+              const select = step.selector ? field : field.locator('select')
               if (step.label) await select.selectOption({ label: expand(step.label) })
               else {
                 // Angular ngValue prefixes the native option value with its internal index.
@@ -120,8 +133,17 @@ try {
           case 'notText': await expect(locator(step)).not.toContainText(expand(step.text)); break
           case 'value': await expect(locator(step)).toHaveValue(expand(step.value)); break
           case 'count': await expect(locator(step)).toHaveCount(step.count); break
-          case 'disabled': await expect(command(step)).toBeDisabled(); break
-          case 'enabled': await expect(command(step)).toBeEnabled(); break
+          case 'disabled':
+          case 'enabled': {
+            const control = step.command ? command(step) : locator(step)
+            await expect(control).toBeVisible()
+            if (await control.evaluate(node => node.localName === 'ion-button')) {
+              if (step.type === 'disabled') await expect(control).toHaveAttribute('aria-disabled', 'true')
+              else await expect(control).not.toHaveAttribute('aria-disabled', 'true')
+            } else if (step.type === 'disabled') await expect(control).toBeDisabled()
+            else await expect(control).toBeEnabled()
+            break
+          }
           case 'dismiss': {
             const modal = page.locator('ion-modal').last()
             await modal.getByRole('button', { name: /^(Close|Закрыть)$/i }).click()
@@ -148,7 +170,42 @@ try {
             else await expect(host(step.widget)).toHaveCount(0)
             break
           }
-          case 'drag': await locator(step).dragTo(page.locator(step.target)); break
+          case 'nextToolArguments': {
+            if (!/^[A-Za-z0-9_]+$/.test(step.tool) || !step.arguments || Array.isArray(step.arguments)
+              || typeof step.arguments !== 'object' || !Object.keys(step.arguments).length
+              || Object.keys(step.arguments).some(key => key.startsWith('_'))) {
+              throw new Error('Fault injection requires a local tool and explicit public argument overrides')
+            }
+            let consumed = false
+            const intercept = async route => {
+              try {
+                const body = route.request().postDataJSON()
+                if (consumed || !body?.tool?.endsWith(`:${step.tool}`)) return await route.continue()
+                consumed = true
+                sample.injectedArguments = { tool: step.tool, arguments: step.arguments }
+                await route.continue({ postData: JSON.stringify({ ...body, arguments: { ...body.arguments, ...step.arguments } }) })
+                await page.unroute('**/api/tools/call', intercept)
+              } catch (error) {
+                sample.errors.push(`Fault injection failed: ${error.message}`)
+                await route.abort().catch(() => {})
+              }
+            }
+            await page.route('**/api/tools/call', intercept)
+            break
+          }
+          case 'drag': {
+            const source = locator(step)
+            await source.scrollIntoViewIfNeeded()
+            const from = await source.boundingBox()
+            const to = await page.locator(expand(step.target)).boundingBox()
+            if (!from || !to) throw new Error('Unframed drag source or destination')
+            await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+            await page.mouse.down()
+            await page.mouse.move(from.x + from.width / 2 + 8, from.y + from.height / 2, { steps: 4 })
+            await page.mouse.move(to.x + to.width / 2, to.y + Math.min(35, to.height / 2), { steps: 30 })
+            await page.mouse.up()
+            break
+          }
           case 'reload': await page.reload({ waitUntil: 'domcontentloaded' }); await ready(); break
           case 'screenshot': await page.screenshot({ path: path.join(output, `${layout}-${step.id}.png`), fullPage: true, animations: 'disabled' }); break
           default: throw new Error(`Unknown journey action: ${step.type}`)

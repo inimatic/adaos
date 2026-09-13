@@ -315,7 +315,10 @@ def skill_env_path() -> Path:
 
 
 def skill_data_root() -> Path:
-    """Return the current skill's owner-scoped mutable data directory.
+    """Return the current skill's owner-scoped mutable data directory, creating it.
+
+    Call only after caller authorization. Use ``skill_data_root_path()`` for
+    a path-only check that must not create a directory (including denial tests).
 
     The runtime injects ``ADAOS_SKILL_INTERNAL_DATA_ROOT`` for isolated tool
     and Development-session execution.  Normal in-process calls resolve the

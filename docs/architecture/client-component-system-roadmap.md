@@ -513,6 +513,16 @@ declared locale rather than changing a user's browser preference implicitly.
 
 ## Automation Event Contracts
 
+- [x] `[must]` Align item.details named-command sequencing with command bars:
+  read/selection/open-editor actions sharing `on=click:<command>` run in order,
+  stop on false/throw and reject repeated clicks while pending. Honor enabledIf,
+  render one labeled command and preserve independent generic click buttons.
+  Library Automation exposed this renderer gap; 24 focused Client tests pass.
+  Actual unchanged-application qualification remains tracked in the Builder map.
+- [ ] `[should]` Audit action cancellation/failure semantics across remaining
+  widgets: named chains must not continue into side effects after a cancelled
+  confirmation or denied prerequisite. Do not assume all event dispatchers use
+  the same contract merely because WebUI shares an action schema.
 - [x] `[must]` Describe and test loaded revision propagation in board moves,
   including the lane-selector alternative and optimistic rollback. The renderer
   spreads displayed fields at event top level; owned tools bind `$event.revision`,

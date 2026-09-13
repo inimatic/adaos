@@ -1,0 +1,99 @@
+schema: adaos.e2e.application_tools.v1
+steps:
+  - id: anonymous
+    tool: list_tickets
+    caller: anonymous
+    arguments: {}
+    expect: {values_in: {http_status: [401, 403]}}
+  - id: token
+    tool: new_request_token
+    arguments: {}
+    expect: {paths_present: [body.result.token]}
+  - id: create
+    tool: create_ticket
+    arguments: &create
+      request_token: $steps.token.body.result.token
+      values: &values {title: '${case_instance_id}', description: 'Persistent detailed content', priority: high, owner: '', due_date: '2001-01-01', status: new}
+    expect: {values: {body.result.ok: true, body.result.item.overdue: true, body.result.item.revision: 1}}
+  - id: replay
+    tool: create_ticket
+    arguments: *create
+    expect: {values: {body.result.ok: true, body.result.item.id: $steps.create.body.result.item.id}}
+  - id: token-reused
+    tool: create_ticket
+    arguments: {request_token: $steps.token.body.result.token, values: {<<: *values, title: different}}
+    expect: {values: {body.result.ok: false, body.result.error: invalid_request}}
+  - id: unassigned
+    tool: list_tickets
+    arguments: {search: '${case_instance_id}', owner: '__unassigned__'}
+    expect: {values: {body.result.items.0.id: $steps.create.body.result.item.id}, paths_absent: [body.result.items.1]}
+  - id: assign
+    tool: update_ticket
+    arguments: {id: $steps.create.body.result.item.id, revision: 1, patch: {owner: Sam}}
+    expect: {values: {body.result.ok: true, body.result.item.owner: Sam, body.result.item.revision: 2}}
+  - id: stale
+    tool: update_ticket
+    arguments: {id: $steps.create.body.result.item.id, revision: 1, patch: {status: done}}
+    expect: {values: {body.result.ok: false, body.result.error: stale_revision}}
+  - id: retained
+    tool: get_ticket
+    arguments: {id: $steps.create.body.result.item.id}
+    expect: {values: {body.result.revision: 2, body.result.status: new, body.result.description: 'Persistent detailed content'}}
+  - id: doing
+    tool: update_ticket
+    arguments: {id: $steps.create.body.result.item.id, revision: 2, patch: {status: in_progress}}
+    expect: {values: {body.result.ok: true, body.result.item.revision: 3, body.result.item.overdue: true}}
+  - id: status-filter
+    tool: list_tickets
+    arguments: {search: '${case_instance_id}', status: in_progress, owner: Sam, due_date: '2001-01-01'}
+    expect: {values: {body.result.items.0.id: $steps.create.body.result.item.id}, paths_absent: [body.result.items.1]}
+  - id: done
+    tool: update_ticket
+    arguments: {id: $steps.create.body.result.item.id, revision: 3, patch: {status: done}}
+    expect: {values: {body.result.ok: true, body.result.item.revision: 4, body.result.item.overdue: false}}
+  - id: invalid-status
+    tool: update_ticket
+    arguments: {id: $steps.create.body.result.item.id, revision: 4, patch: {status: invented}}
+    expect: {values: {body.result.ok: false, body.result.error: invalid_request}}
+  - id: invalid-owner
+    tool: update_ticket
+    arguments: {id: $steps.create.body.result.item.id, revision: 4, patch: {owner: 'unknown-account'}}
+    expect: {values: {body.result.ok: false, body.result.error: invalid_request}}
+  - id: invalid-date
+    tool: update_ticket
+    arguments: {id: $steps.create.body.result.item.id, revision: 4, patch: {due_date: '2115-02-30'}}
+    expect: {values: {body.result.ok: false, body.result.error: invalid_request}}
+  - id: forged-overdue
+    tool: update_ticket
+    arguments: {id: $steps.create.body.result.item.id, revision: 4, patch: {overdue: true}}
+    expect: {values: {body.result.ok: false, body.result.error: invalid_request}}
+  - id: empty-title
+    tool: update_ticket
+    arguments: {id: $steps.create.body.result.item.id, revision: 4, patch: {title: ''}}
+    expect: {values: {body.result.ok: false, body.result.error: invalid_request}}
+  - id: race
+    tool: update_ticket
+    concurrent_arguments:
+      - {id: $steps.create.body.result.item.id, revision: 4, patch: {status: blocked}}
+      - {id: $steps.create.body.result.item.id, revision: 4, patch: {status: in_progress}}
+    expect: {values: {success_count: 1}}
+  - id: raced-once
+    tool: get_ticket
+    arguments: {id: $steps.create.body.result.item.id}
+    expect: {values: {body.result.revision: 5}, values_in: {body.result.status: [blocked, in_progress]}}
+  - id: stale-delete
+    tool: delete_ticket
+    arguments: {id: $steps.create.body.result.item.id, revision: 4}
+    expect: {values: {body.result.ok: false, body.result.error: stale_revision}}
+  - id: delete
+    tool: delete_ticket
+    arguments: {id: $steps.create.body.result.item.id, revision: 5}
+    expect: {values: {body.result.ok: true}}
+  - id: no-resurrection
+    tool: create_ticket
+    arguments: *create
+    expect: {values: {body.result.ok: false, body.result.error: invalid_request}}
+  - id: deleted-list
+    tool: list_tickets
+    arguments: {search: '${case_instance_id}'}
+    expect: {paths_absent: [body.result.items.0]}

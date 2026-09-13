@@ -2886,7 +2886,7 @@ Inspections Automation against one frozen existing Prototype.
   in a native compact select and dense tables remain presentation debt.
   Regression tests cover compiler and persisted
   projections plus rejection when the editable relationship field is absent.
-- [ ] `[must]` Operations Queue: saved board transitions including drag, details,
+- [x] `[must]` Operations Queue: saved board transitions including drag, details,
   assignment, filters and computed overdue state.
   `automation-01` failed before any model call while Git indexed a long Windows
   source path. The worker now sets `core.longpaths=true` only in its isolated
@@ -2897,11 +2897,38 @@ Inspections Automation against one frozen existing Prototype.
   event top level. Catalog and bounded Automation capsule now document
   `$event.revision`, awaited command rejection and rollback; 11 Client board tests
   pass with explicit drag/menu revision assertions. `automation-03` acknowledges
-  this supplied contract and proceeds; no Prototype or renderer rewrite was used.
+  this supplied contract; 34 skill and five scenario tests pass after one worker
+  repair of route/test declarations. Independent `http-01.json` passes 23 steps;
+  `journey-04` passes 35 applicable steps per viewport (plus one explicitly
+  inapplicable drag/menu alternative). Actual HTTP rejection of an injected stale
+  revision rolls the board back. Assignment, done/overdue, reload and cancel pass.
+  Earlier browser attempts exposed stand gesture, route-order and command-ID
+  errors, not application defects. Implementation `automation-03` took 9.6 minutes,
+  70,356 fresh input, 921,984 cached input and 14,140 output tokens; earlier blocked
+  attempts remain separate evidence. No Prototype or renderer rewrite was used.
 - [ ] `[must]` Knowledge Library: persistent content, search/filter,
   publish/archive/read-only enforcement and editor failure recovery.
+  First implementation passes 24 skill/four scenario tests and all 27 independent
+  HTTP steps. `journey-01` exposes an actual Client inconsistency: item.details
+  only dispatched its first named action, so read/selection/open-modal never
+  completed. Named-command sequencing now has 24 focused Client tests; requalify
+  the unchanged application. First model attempt took 10.7 minutes, 55,357 fresh
+  input, 1,053,184 cached input and 16,085 output tokens.
 - [ ] `[must]` Media Review: real media URLs, revision-bound comments/status,
   new-revision isolation and truthful unavailable media handling.
+  `automation-01` correctly stops at an unspecified external notification
+  obligation introduced by the retained Prototype's Automation handoff, absent
+  from the original case request. Targeted discovery exposes no callable delivery
+  contract or recipient/channel definition. Preserve this failed first attempt
+  (33,883 fresh input, 414,720 cached input, 3,072 output tokens). A separately
+  scoped local-only iteration must not count as full acceptance or simulate
+  notification delivery; recipient/channel clarification remains open.
+- [ ] `[must]` Preserve requirement provenance across Prototype/Automation:
+  distinguish user obligations, explicitly approved additions, model suggestions
+  and unresolved external dependencies. A generic approval of the visible UI must
+  not silently turn speculative integration suggestions into user requirements.
+  Admission must expose that distinction; independently test partial progress
+  without silently weakening the full case verdict.
 - [ ] `[must]` Retain each first-run result separately from corrected candidates;
   inspect reachable behavior to the blocker before submitting one combined repair.
   Report package checks, independent DEV-owner HTTP/browser acceptance, latency

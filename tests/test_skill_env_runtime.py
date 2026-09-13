@@ -929,6 +929,8 @@ def test_skill_data_root_prefers_explicit_owner_scoped_execution_root(
     explicit = tmp_path / "dev-slot" / "data"
     monkeypatch.setenv("ADAOS_SKILL_INTERNAL_DATA_ROOT", str(explicit))
 
+    assert skill_data_root_path() == explicit.resolve()
+    assert not explicit.exists()
     assert skill_data_root() == explicit.resolve()
     assert explicit.is_dir()
 
