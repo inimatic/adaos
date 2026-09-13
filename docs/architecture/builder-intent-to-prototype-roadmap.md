@@ -2836,6 +2836,12 @@ Inspections Automation against one frozen existing Prototype.
   Report package checks, independent DEV-owner HTTP/browser acceptance, latency
   and token usage separately. Delegated installed-delivery authorization remains
   outside the explicitly paused delivery scope.
+- [x] `[must]` Preserve each preceding model journal, final message and validation
+  report before a worker repair replaces its live output paths. Pair archived
+  bytes/digests with the numbered admitted prompt; retain latest live paths for
+  recovery compatibility. This prevents successful repairs from erasing evidence
+  of the original failure. Historical overwritten responses cannot be recovered
+  by this change; qualify the archive on the next actual worker repair.
 
 ## Could And Deferred Work
 

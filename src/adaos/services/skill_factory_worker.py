@@ -4706,6 +4706,30 @@ class LocalSkillFactoryWorker:
             "created_at": _now_iso(),
         }
 
+    @staticmethod
+    def _archive_model_output(task_id: str, output_dir: Path, attempt: int) -> None:
+        archive = output_dir / "model-attempts" / f"{attempt:03}"
+        artifacts = {}
+        for name in ("codex-live.jsonl", "codex-live.stderr.log", "last_message.md", "test_report.json"):
+            source = output_dir / name
+            if not source.is_file():
+                continue
+            raw = source.read_bytes()
+            archive.mkdir(parents=True, exist_ok=True)
+            destination = archive / name
+            if destination.exists():
+                if destination.read_bytes() != raw:
+                    raise ValueError("Refusing to overwrite retained model attempt output")
+            else:
+                with destination.open("xb") as stream:
+                    stream.write(raw)
+            artifacts[name] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+        if artifacts:
+            _write_json(archive / "receipt.json", {
+                "schema": "adaos.skill_factory.model_output.v1", "task_id": task_id,
+                "attempt": attempt, "artifacts": artifacts,
+            })
+
     def _execute_codex(
         self,
         *,
@@ -4720,6 +4744,10 @@ class LocalSkillFactoryWorker:
         input_root = output_dir.parent / "input" / "model-attempts"
         input_root.mkdir(parents=True, exist_ok=True)
         attempt = len(list(input_root.glob("*.prompt.md"))) + 1
+        if attempt > 1:
+            # Keep the preceding response and failed checks before the executor
+            # replaces compatibility live paths with the next repair attempt.
+            self._archive_model_output(task_id, output_dir, attempt - 1)
         prompt_path = input_root / f"{attempt:03}.prompt.md"
         raw_prompt = prompt.encode("utf-8")
         with prompt_path.open("xb") as stream:

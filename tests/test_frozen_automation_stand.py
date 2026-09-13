@@ -127,3 +127,22 @@ def test_automation_read_policy_example_conforms_to_skill_abi():
     assert route["read_policy"]["invalidation_tags"] == capsule["examples"]["record_editor"]["dataSource"]["invalidationTags"]
     broken = {**route, "read_policy": "targeted_invalidation"}
     assert list(jsonschema.Draft202012Validator(fragment).iter_errors(broken))
+
+
+def test_worker_retains_model_response_and_validation_before_repair(tmp_path):
+    from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
+
+    events = tmp_path / "codex-live.jsonl"
+    events.write_text('{"response":"Первый ответ"}\n', encoding="utf-8")
+    (tmp_path / "test_report.json").write_text('{"ok":false}', encoding="utf-8")
+    LocalSkillFactoryWorker._archive_model_output("task.test", tmp_path, 1)
+    LocalSkillFactoryWorker._archive_model_output("task.test", tmp_path, 1)
+    archive = tmp_path / "model-attempts/001"
+    assert (archive / "codex-live.jsonl").read_bytes() == events.read_bytes()
+    receipt = json.loads((archive / "receipt.json").read_text(encoding="utf-8"))
+    assert receipt["attempt"] == 1 and receipt["task_id"] == "task.test"
+    assert set(receipt["artifacts"]) == {"codex-live.jsonl", "test_report.json"}
+    events.write_text('{"response":"Следующий ответ"}\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="overwrite retained"):
+        LocalSkillFactoryWorker._archive_model_output("task.test", tmp_path, 1)
+    assert "Первый ответ" in (archive / "codex-live.jsonl").read_text(encoding="utf-8")
