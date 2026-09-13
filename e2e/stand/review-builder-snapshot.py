@@ -49,6 +49,7 @@ def main():
     parser.add_argument("--host", required=True)
     parser.add_argument("--subnet", required=True)
     parser.add_argument("--revision", default="002")
+    parser.add_argument("--locale", choices=("en", "ru"), default="ru")
     parser.add_argument("--stage", choices=("prototype", "automation"), default="prototype")
     parser.add_argument("--probe", choices=("review", "equipment-journey", "equipment-repeat"), default="review")
     args = parser.parse_args()
@@ -116,7 +117,7 @@ def main():
     hub = "http://127.0.0.1:8778"
     env = {**os.environ, "ADAOS_E2E_SCENARIO_ID": args.scenario,
            "ADAOS_E2E_WEBSPACE_ID": selected["preview_webspace_id"],
-           "ADAOS_E2E_SUBNET_ID": args.subnet, "ADAOS_E2E_LOCALE": "ru",
+           "ADAOS_E2E_SUBNET_ID": args.subnet, "ADAOS_E2E_LOCALE": args.locale,
            "ADAOS_E2E_HUB_URL": hub, "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub),
            "ADAOS_E2E_CLIENT_URL": "http://127.0.0.1:8100/", "ADAOS_E2E_REVIEW_STAGE": args.stage,
            "ADAOS_E2E_EXPECTED_WEBUI": str(ui_path),
