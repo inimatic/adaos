@@ -1,0 +1,156 @@
+schema: adaos.e2e.application_tools.v1
+steps:
+  - id: anonymous
+    tool: schedule_choices
+    caller: anonymous
+    arguments: {kind: clients}
+    expect: {values_in: {http_status: [401, 403]}}
+  - id: client
+    tool: schedule_save_entity
+    arguments:
+      kind: clients
+      request_token: '${case_instance_id}-client'
+      values: {clients.name: '${case_instance_id}', phone: '+70000000000', notes: 'Acceptance only'}
+    expect: {values: {body.result.ok: true, body.result.item.revision: 1}}
+  - id: master
+    tool: schedule_save_entity
+    arguments:
+      kind: masters
+      request_token: '${case_instance_id}-master'
+      values: {masters.name: '${case_instance_id}-master', specialty: 'Consultation', work_days: '1,2,3,4,5,6,7', work_intervals: '09:00-17:00'}
+    expect: {values: {body.result.ok: true}}
+  - id: service
+    tool: schedule_save_entity
+    arguments:
+      kind: services
+      request_token: '${case_instance_id}-service'
+      values: {services.name: '${case_instance_id}-service', services.duration_min: 30}
+    expect: {values: {body.result.ok: true}}
+  - id: free-initial
+    tool: schedule_slots
+    arguments: &slots
+      day: '2114-01-01'
+      master: $steps.master.body.result.item.id
+      service: $steps.service.body.result.item.id
+    expect: {values: {body.result.timezone: 'UTC+03:00', body.result.items.0.start_time: '09:00', body.result.items.0.latest_start: '16:30'}, paths_absent: [body.result.items.1]}
+  - id: first
+    tool: schedule_create
+    arguments: &create
+      request_token: '${case_instance_id}-first'
+      values: &appointment
+        appointments.date: '2114-01-01'
+        appointments.start_time: '09:00'
+        appointments.master_ref: $steps.master.body.result.item.id
+        appointments.service_ref: $steps.service.body.result.item.id
+        client_ref: $steps.client.body.result.item.id
+        note: '${case_instance_id}'
+    expect: {values: {body.result.ok: true, body.result.item.end_time: '09:30', body.result.item.client_name: '${case_instance_id}'}}
+  - id: repeated-first
+    tool: schedule_create
+    arguments: *create
+    expect: {values: {body.result.ok: true, body.result.item.id: $steps.first.body.result.item.id}}
+  - id: overlap
+    tool: schedule_create
+    arguments:
+      request_token: '${case_instance_id}-overlap'
+      values: {<<: *appointment, appointments.start_time: '09:15'}
+    expect: {values: {body.result.ok: false, body.result.error: time_conflict}}
+  - id: adjacent
+    tool: schedule_create
+    arguments:
+      request_token: '${case_instance_id}-adjacent'
+      values: {<<: *appointment, appointments.start_time: '09:30'}
+    expect: {values: {body.result.ok: true, body.result.item.end_time: '10:00'}}
+  - id: move-conflict
+    tool: schedule_move
+    arguments:
+      id: $steps.first.body.result.item.id
+      revision: 1
+      values: {appointments.date: '2114-01-01', appointments.start_time: '09:10', appointments.master_ref: $steps.master.body.result.item.id}
+    expect: {values: {body.result.ok: false, body.result.error: time_conflict}}
+  - id: move-kept-original
+    tool: schedule_get
+    arguments: {id: $steps.first.body.result.item.id}
+    expect: {values: {body.result.item.revision: 1, body.result.item.end_time: '09:30', body.result.item.history.0.event: created}, paths_absent: [body.result.item.history.1]}
+  - id: moved
+    tool: schedule_move
+    arguments: &move-second
+      id: $steps.adjacent.body.result.item.id
+      revision: 1
+      values: {appointments.date: '2114-01-01', appointments.start_time: '10:00', appointments.master_ref: $steps.master.body.result.item.id}
+    expect: {values: {body.result.ok: true, body.result.item.revision: 2, body.result.item.end_time: '10:30'}}
+  - id: stale-move
+    tool: schedule_move
+    arguments: *move-second
+    expect: {values: {body.result.ok: false, body.result.error: revision_conflict}}
+  - id: computed-free
+    tool: schedule_slots
+    arguments: *slots
+    expect: {values: {body.result.items.0.start_time: '09:30', body.result.items.0.latest_start: '09:30', body.result.items.1.start_time: '10:30', body.result.items.1.latest_start: '16:30'}, paths_absent: [body.result.items.2]}
+  - id: outside-hours
+    tool: schedule_create
+    arguments:
+      request_token: '${case_instance_id}-outside'
+      values: {<<: *appointment, appointments.start_time: '16:45'}
+    expect: {values: {body.result.ok: false, body.result.error: outside_working_interval}}
+  - id: missing-client
+    tool: schedule_create
+    arguments:
+      request_token: '${case_instance_id}-missing'
+      values: {<<: *appointment, client_ref: 'missing-reference'}
+    expect: {values: {body.result.ok: false, body.result.error: missing_reference}}
+  - id: invalid-duration
+    tool: schedule_save_entity
+    arguments:
+      kind: services
+      request_token: '${case_instance_id}-invalid'
+      values: {services.name: '${case_instance_id}-invalid', services.duration_min: 0}
+    expect: {values: {body.result.ok: false, body.result.error: invalid_duration}}
+  - id: canceled
+    tool: schedule_cancel
+    arguments: {id: $steps.first.body.result.item.id, revision: 1, values: {note: '${case_instance_id}-canceled'}}
+    expect: {values: {body.result.ok: true, body.result.item.status: canceled, body.result.item.revision: 2}}
+  - id: freed-after-cancel
+    tool: schedule_slots
+    arguments: *slots
+    expect: {values: {body.result.items.0.start_time: '09:00', body.result.items.0.latest_start: '09:30'}}
+  - id: canceled-history
+    tool: schedule_get
+    arguments: {id: $steps.first.body.result.item.id}
+    expect: {values: {body.result.item.history.0.event: created, body.result.item.history.1.event: canceled}}
+  - id: race
+    tool: schedule_create
+    concurrent_arguments:
+      - request_token: '${case_instance_id}-race-a'
+        values: {<<: *appointment, appointments.start_time: '11:00'}
+      - request_token: '${case_instance_id}-race-b'
+        values: {<<: *appointment, appointments.start_time: '11:00'}
+    expect: {values: {http_statuses: [200, 200], success_count: 1}}
+  - id: day
+    tool: schedule_list
+    arguments: {day: '2114-01-01', period: day, master: $steps.master.body.result.item.id}
+    expect: {values: {body.result.active_minutes: 60, body.result.items.0.status: canceled, body.result.items.2.end_time: '11:30'}, paths_absent: [body.result.items.3]}
+  - id: week
+    tool: schedule_list
+    arguments: {day: '2114-01-01', period: week, master: $steps.master.body.result.item.id}
+    expect: {values: {body.result.active_minutes: 60, body.result.items.2.end_time: '11:30'}, paths_absent: [body.result.items.3]}
+  - id: other-day
+    tool: schedule_list
+    arguments: {day: '2114-01-02', period: day, master: $steps.master.body.result.item.id}
+    expect: {values: {body.result.active_minutes: 0, body.result.items: []}}
+  - id: history-protects-directory
+    tool: schedule_delete_entity
+    arguments: {kind: clients, id: $steps.client.body.result.item.id, revision: 1}
+    expect: {values: {body.result.ok: false, body.result.error: record_in_use}}
+  - id: cancel-second
+    tool: schedule_cancel
+    arguments: {id: $steps.adjacent.body.result.item.id, revision: 2, values: {note: '${case_instance_id}-cleanup'}}
+    expect: {values: {body.result.ok: true}}
+  - id: cancel-race-winner
+    tool: schedule_cancel
+    arguments: {id: $steps.day.body.result.items.2.id, revision: 1, values: {note: '${case_instance_id}-cleanup'}}
+    expect: {values: {body.result.ok: true}}
+  - id: final-free
+    tool: schedule_slots
+    arguments: *slots
+    expect: {values: {body.result.items.0.start_time: '09:00', body.result.items.0.latest_start: '16:30'}, paths_absent: [body.result.items.1]}

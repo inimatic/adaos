@@ -105,7 +105,7 @@ try {
           case 'enabled': await expect(command(step)).toBeEnabled(); break
           case 'dismiss': {
             const modal = page.locator('ion-modal').last()
-            await modal.getByRole('button', { name: /^(Close|Закрыть)$/ }).click()
+            await modal.getByRole('button', { name: /^(Close|Закрыть)$/i }).click()
             await expect(modal).not.toBeVisible()
             break
           }
@@ -126,7 +126,7 @@ try {
           }
           case 'drag': await locator(step).dragTo(page.locator(step.target)); break
           case 'reload': await page.reload({ waitUntil: 'domcontentloaded' }); await ready(); break
-          case 'screenshot': await page.screenshot({ path: path.join(output, `${layout}-${step.id}.png`), fullPage: true }); break
+          case 'screenshot': await page.screenshot({ path: path.join(output, `${layout}-${step.id}.png`), fullPage: true, animations: 'disabled' }); break
           default: throw new Error(`Unknown journey action: ${step.type}`)
         }
         sample.checks.push({ id: step.id, status: 'passed', durationMs: Date.now() - start })
@@ -139,7 +139,7 @@ try {
     }
     await Promise.all(responses)
     sample.text = await page.locator('body').innerText()
-    await page.screenshot({ path: path.join(output, `${layout}-final.png`), fullPage: true })
+    await page.screenshot({ path: path.join(output, `${layout}-final.png`), fullPage: true, animations: 'disabled' })
     await fs.writeFile(path.join(output, 'journey.json'), JSON.stringify(report, null, 2) + '\n', 'utf8')
     await context.close()
   }

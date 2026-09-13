@@ -2819,8 +2819,24 @@ Inspections Automation against one frozen existing Prototype.
   multi-column lists/tables need deliberate wrapping and compact presentation.
   Treat these observed UX findings separately from functional Automation gates;
   do not regenerate the accepted prototypes or silently add stricter layout rules.
-- [ ] `[must]` Service Appointments: real availability, interval conflicts,
+- [x] `[must]` Service Appointments: real availability, interval conflicts,
   rescheduling/cancellation, parent choices, persistence and browser flow.
+  `automation-cohort-20260913-service-appointments-ru`: task
+  `task.01M2DNHEKZ3GMWGDJHEBY8PXVX` completed after one worker repair of an
+  overbroad generated test (the year appeared in a skill identifier, not fixture
+  data). Package checks pass 20 skill and 4 scenario tests, including persistence
+  in a fresh process. Independent `http-01.json` passes 28 steps, including
+  concurrent overlapping bookings with exactly one winner. `journey-01` passes
+  60 steps per wide/compact viewport: directory creation, booking, failed-draft
+  retention, move, cancellation, reload and booking from a real free interval.
+  `review-02` confirms widget identity/type/area/source parity; the preceding
+  stand failure incorrectly compared global DOM order across layout areas.
+  Submission/wait took 20.3 minutes; provider totals are 116,189 fresh input,
+  1,330,560 cached input and 33,114 output tokens. This is DEV functional
+  qualification, not installed delegation or unconditional visual approval.
+- [ ] `[should]` Recheck the compact Service editor screenshot with animation
+  disabled: background text shows through the modal in `journey-01`. Distinguish
+  a transition capture from a shared Client surface defect before changing code.
 - [ ] `[must]` Inventory/Procurement: atomic stock movements, computed deficit,
   quote comparison, request/line relationships and submit without fake approval.
 - [ ] `[must]` Volunteer Roster: availability, overlap/capacity guards,
@@ -2842,6 +2858,8 @@ Inspections Automation against one frozen existing Prototype.
   recovery compatibility. This prevents successful repairs from erasing evidence
   of the original failure. Historical overwritten responses cannot be recovered
   by this change; qualify the archive on the next actual worker repair.
+- [ ] `[must]` Verify retained model-attempt archives on an actual worker repair,
+  beyond the passing unit tests. Preserve exact input/output attribution.
 
 ## Could And Deferred Work
 
