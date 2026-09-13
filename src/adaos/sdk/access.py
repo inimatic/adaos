@@ -49,6 +49,7 @@ def require(capability: str) -> dict[str, Any]:
         action=capability,
         scope=ScopeRef("skill", skill.name),
         resource=f"skill:{skill.name}",
+        audit_success=capability != "workspace.read",
     )
     if decision.decision != "allow":
         raise CallerAccessDenied(f"caller_access_denied:{decision.reason_code}")

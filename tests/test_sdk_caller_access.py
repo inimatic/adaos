@@ -81,6 +81,24 @@ def test_revocation_is_read_again_on_next_check(caller_access):
             access.require("workspace.read")
 
 
+def test_successful_reads_do_not_rewrite_facts_but_denials_and_writes_remain_audited(caller_access):
+    _, path = caller_access
+    original = path.read_bytes()
+    with verified_caller(READER):
+        assert access.require("workspace.read")["decision"] == "allow"
+    assert path.read_bytes() == original
+    with verified_caller(OWNER):
+        access.require("workspace.write")
+    after_write = path.read_bytes()
+    assert after_write != original
+    with verified_caller(SubjectRef("user", "unknown")):
+        with pytest.raises(PermissionError):
+            access.require("workspace.read")
+    assert path.read_bytes() != after_write
+    audit = PersonalizationAccessStore(path).list_audit()
+    assert any(item["event_type"] == "policy.deny" for item in audit)
+
+
 @pytest.mark.parametrize("status,expires", [("revoked", 60), ("active", -60)])
 def test_stale_sessions_fail_closed(caller_access, status, expires):
     _, path = caller_access

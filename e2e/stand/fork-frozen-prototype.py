@@ -169,8 +169,10 @@ def main():
         shutil.copyfile(confined(args.review.parent.parent, ref), dest)
     _write_json(output / "reviews/accepted-prototype.json", inherited)
     _write_json(output / "plan.json", _load_document(args.plan))
+    draft_id = _load_document(projects.resolve_root("scenario", new) / "builder.draft.json")["draft_id"]
     checkpoint = {"context": {"bundle_dir": str(output), "run_id": output.name, "case_id": "frozen-repeat",
-        "owned_artifacts": [{"project_id": new, "primary_ref": f"scenario:{new}"}]}, "cleanup": {"test": True}}
+        "retain_test_projects": True, "case_instance_id": new, "locale": "ru",
+        "owned_artifacts": [{"project_id": new, "primary_ref": f"scenario:{new}", "draft_id": draft_id}]}, "cleanup": {"test": True}}
     _write_json(output / "checkpoint.json", checkpoint)
     if hashlib.sha256(original_source.read_bytes()).hexdigest() != original_digest:
         raise ValueError("Protected successful Automation changed during fixture import")

@@ -1335,6 +1335,13 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
         projected_facets[str(facet_name)] = common
     if str(projected_change.get("intent") or "").strip() == str(implementation_brief or "").strip():
         projected_change.pop("intent", None)
+    previous_run = dict(packet.get("previous_run") or {})
+    # Orchestrator topology/rate metrics are evaluation evidence, not app requirements.
+    metrics = previous_run.pop("workflow_metrics", None)
+    if isinstance(metrics, Mapping):
+        previous_run["workflow_metrics_ref"] = {
+            key: metrics[key] for key in ("report_id", "evidence_digest") if metrics.get(key)
+        }
     return {
         "schema": packet.get("schema"),
         "digest": packet.get("digest"),
@@ -1345,7 +1352,7 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
         "dependencies": list(packet.get("dependencies") or [])[:200],
         "allowed_paths": list(packet.get("allowed_paths") or [])[:200],
         "instruction_refs": list(packet.get("instruction_refs") or [])[:100],
-        "previous_run": dict(packet.get("previous_run") or {}),
+        "previous_run": previous_run,
         "run": dict(packet.get("run") or {}),
         "facets": projected_facets,
         "coverage": dict(packet.get("coverage") or {}),

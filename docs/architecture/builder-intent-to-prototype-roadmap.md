@@ -2589,6 +2589,12 @@ Inspections Automation against one frozen existing Prototype.
   tool calls, p95 about 3.17/2.87s; direct sequential HTTP calls take 0.42-0.79s.
   Live readiness after open/reload takes about 6.6-12s. Avoid duplicate reads
   during cached-to-live materialization while preserving real source changes.
+  Profiling now identifies the dominant read-tool cost in `sdk.access.require`:
+  successful read checks serialize the full access/audit JSON on every call.
+  Reuse the existing successful-read audit suppression policy (with diagnostic
+  counters), without caching grants or suppressing denials/writes. Isolated
+  profiles 02/03 reduce warm calls from 1.26-1.77s to 0.21-0.32s under cProfile;
+  live HTTP/browser comparison remains required after the batched node restart.
 - [x] `[must]` Protect dirty record forms from background refresh without
   silently advancing their edit revision. Latest server locks remain effective;
   missing-record recovery and successful repeated saves have regression tests.
@@ -2609,6 +2615,9 @@ Inspections Automation against one frozen existing Prototype.
   a correct but expensive narrow repair. Preserve exact authority, full brief
   availability and stable cached contracts; measure smaller repair projections
   rather than truncating model output or hiding requirements.
+  First safe reduction: keep prior run status/error/evidence, but reference its
+  orchestrator topology/rate metrics instead of injecting those into app context.
+  Full immutable input evidence and the approved brief remain available.
 - [x] `[must]` Run the separate Automation-only declarative brief, inspect its
   actual input and result, and preserve comparison of existing interactions.
   Add equipment editing and a visible selected parent/dropdown for creation.

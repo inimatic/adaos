@@ -1798,7 +1798,8 @@ async def _authorize_scoped_tool_call(body: ToolCall, ctx: AgentContext) -> None
     action = "workspace.read" if _declared_side_effects_are_read_only(effects) else "workspace.write"
     actor = current_caller()
     def evaluate():
-        return personalization_access_service(ctx).evaluate(actor=actor, action=action, scope=scope, resource=f"skill:{skill}")
+        return personalization_access_service(ctx).evaluate(actor=actor, action=action, scope=scope,
+            resource=f"skill:{skill}", audit_success=action != "workspace.read")
     decision = await asyncio.to_thread(evaluate)
     if decision.decision != "allow":
         raise HTTPException(status_code=403, detail={"error": "caller_access_denied", "reason": decision.reason_code})

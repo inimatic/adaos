@@ -70,3 +70,14 @@ def test_frozen_fixture_remaps_only_identifiers_and_confines_paths(tmp_path):
     for relative in (".", "../escape.json", str(tmp_path.parent / "outside.json")):
         with pytest.raises(ValueError, match="escapes"):
             fork.confined(tmp_path, relative)
+
+
+def test_generation_context_keeps_prior_failure_but_not_orchestrator_metrics():
+    from adaos.services.skill_factory_worker import context_packet_prompt_projection
+    metrics = {"report_id": "report:1", "evidence_digest": "sha256:abc", "definition_complexity": {"state_count": 60}}
+    original = {"previous_run": {"run_id": "run:1", "status": "failed", "error": "Missing handler",
+        "output_refs": ["evidence:failure"], "workflow_metrics": metrics}}
+    value = context_packet_prompt_projection(original)
+    assert value["previous_run"] == {"run_id": "run:1", "status": "failed", "error": "Missing handler",
+        "output_refs": ["evidence:failure"], "workflow_metrics_ref": {"report_id": "report:1", "evidence_digest": "sha256:abc"}}
+    assert original["previous_run"]["workflow_metrics"] == metrics
