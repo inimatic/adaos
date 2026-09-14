@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 from typing import Any, Mapping
 
 
@@ -24,6 +25,40 @@ def _optional_int(value: Any) -> int | None:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _cost_projection(value: Any) -> dict[str, Any]:
+    source = _mapping(value)
+    status = source.get("status")
+    if status not in {"estimated", "partial", "unpriced", "not_applicable"}:
+        return {"status": "unavailable", "estimated_usd": None}
+    result = {"status": status, "currency": "USD", "estimated_usd": None}
+    for key in ("estimated_usd", "known_estimated_usd"):
+        amount = source.get(key)
+        if (source.get("currency") == "USD" and isinstance(amount, (int, float))
+                and not isinstance(amount, bool) and math.isfinite(amount) and amount >= 0):
+            if key != "estimated_usd" or status in {"estimated", "not_applicable"}:
+                result[key] = amount
+    for key in ("priced_runs", "unpriced_runs"):
+        result[key] = _optional_int(source.get(key))
+    return result
+
+
+def project_codex_usage_window(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Sanitize a Root usage window for model/cost UI without another refresh."""
+    window = _mapping(value)
+    rows = window.get("by_model")
+    return {
+        "last_model": _text(window.get("last_model"))[:200] or None,
+        "by_model": [
+            {"model": _text(row.get("model"))[:200] or None,
+             "cost": _cost_projection(row.get("cost")),
+             **{key: _optional_int(row.get(key)) for key in (
+                 "runs", "fresh_input_tokens", "cached_input_tokens", "output_tokens", "billable_tokens")}}
+            for row in rows[:100] if isinstance(row, Mapping)
+        ] if isinstance(rows, list) else [],
+        "cost": _cost_projection(window.get("cost")),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +83,7 @@ class CodexUsageSnapshot:
     reason: str | None = None
     last_model: str | None = None
     by_model: list[dict[str, Any]] = field(default_factory=list)
+    cost: dict[str, Any] = field(default_factory=lambda: {"status": "unavailable", "estimated_usd": None})
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -131,14 +167,7 @@ def get_codex_usage_model(
         updated_at=updated_at,
         webspace_id=_text(webspace_id) or "desktop",
         reason=reason or None,
-        last_model=_text(window.get("last_model")) or None,
-        by_model=[
-            {"model": _text(row.get("model"))[:200] or None,
-             **{key: _optional_int(row.get(key)) for key in (
-                 "runs", "fresh_input_tokens", "cached_input_tokens", "output_tokens", "billable_tokens")}}
-            for row in (window.get("by_model") or [])[:100]
-            if isinstance(row, Mapping)
-        ] if isinstance(window.get("by_model"), list) else [],
+        **project_codex_usage_window(window),
     )
 
 
@@ -161,4 +190,5 @@ __all__ = [
     "CodexUsageSnapshot",
     "get_codex_usage_model",
     "get_codex_usage_snapshot",
+    "project_codex_usage_window",
 ]

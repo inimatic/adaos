@@ -72,6 +72,15 @@ has a separate zero-model receipt. Reasoning tokens are included in provider
 output and must not be charged twice. UI, live Root configuration and end-to-end
 accounting qualification remain in the BIP-02 replacement gate.
 
+Cost rollups aggregate the tariff receipt retained with each event, not today's
+price. A mixed priced/unpriced window exposes a known subtotal and coverage, with
+the total estimate left unknown. API USD estimates are not ChatGPT subscription
+credits or an invoice. Operator tariffs must specify their applicability (model,
+service tier and context range); unsupported pricing tiers remain unpriced.
+The current bounded Root event log is operational metering, not a financial ledger;
+atomic event deduplication/counter reconciliation and long-term receipt retention
+must be qualified before using it for invoice settlement.
+
 ## Delivery And Recovery
 
 Every persisted session update emits `builder.automation.changed`. Builder UI

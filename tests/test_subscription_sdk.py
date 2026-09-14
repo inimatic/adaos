@@ -53,6 +53,7 @@ def test_codex_usage_snapshot_projects_bounded_24h_usage(monkeypatch) -> None:
         "reason": None,
         "last_model": None,
         "by_model": [],
+        "cost": {"status": "unavailable", "estimated_usd": None},
     }
 
 
@@ -110,6 +111,19 @@ def test_codex_usage_snapshot_is_unavailable_without_metering(monkeypatch) -> No
     assert snapshot.remaining_tokens is None
     assert snapshot.webspace_id == "living-room"
     assert snapshot.reason == "codex_usage_not_metered"
+
+
+def test_cost_projection_keeps_partial_and_unavailable_cost_unknown():
+    result = subscriptions.project_codex_usage_window({"cost": {
+        "status": "partial", "currency": "USD", "estimated_usd": 8,
+        "known_estimated_usd": 3.5, "priced_runs": 2, "unpriced_runs": 1,
+        "private": "never-expose"}, "by_model": [{"model": "a", "cost": {
+            "status": "estimated", "currency": "USD", "estimated_usd": float("inf")}}]})
+    assert result["cost"]["estimated_usd"] is None
+    assert result["cost"]["known_estimated_usd"] == 3.5
+    assert "private" not in result["cost"]
+    assert result["by_model"][0]["cost"]["estimated_usd"] is None
+    assert subscriptions.project_codex_usage_window({})["cost"]["status"] == "unavailable"
 
 
 def test_sdk_export_discovers_subscription_usage_contract() -> None:

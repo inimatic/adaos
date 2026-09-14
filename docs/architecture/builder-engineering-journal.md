@@ -505,3 +505,26 @@ tests and six focused Automation usage tests passed. Backend TypeScript build
 and seven usage/cost tests passed locally. These are not end-to-end results.
 No model execution, Trial, publication, Git push or API restart occurred in
 this increment. Concurrent Core Yjs and Client page-data changes stay excluded.
+
+## 2026-09-14: Live Automation Admission And Model Cost Projections
+
+Admitted `task.01M2G9QQPVHZHA1ETXRGB6BWSX` through the Automation SDK for
+`project:builder`, accepted design 071, on host `desktop-dev`. The execution
+profile explicitly pins `gpt-5.5` / `medium`; Root read-only MCP discovery is
+disabled for this task, which has an admitted local SDK reference. The complete
+stage-specific implementation brief is retained in
+`e2e/stand/fixtures/builder-workbench-automation-20260914.md`; start/context
+receipts are under `e2e/artifacts/builder/workbench-automation-20260914`.
+Input inspection confirms the full brief, immutable design identity and owned
+scenario/skills envelope. The source packet also contains historical design-only
+requirements and an old not-started Automation source revision; the brief explicitly
+separates these from current implementation authority. The Run is not acceptance:
+live bindings and independent browser/lifecycle parity remain to be verified.
+
+Root model buckets and cost windows now distinguish fully priced, partly priced,
+unpriced and zero-model work, using retained event tariffs. The SDK sanitizes these
+projections and the DEV Subscription status skill has a per-model 24h usage table.
+No production subscription skill was replaced. Backend build and eight metering
+tests passed; 20 SDK/skill tests passed before the additional model-table regression.
+Root deployment, policy population, model-selector behavior and actual Run receipt
+verification remain open. No invented default prices are configured.
