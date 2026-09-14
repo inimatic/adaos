@@ -50,13 +50,17 @@ def inspect(
     contract: dict[str, Any],
     *,
     include_forward: bool = True,
+    profile: str | None = None,
 ) -> dict[str, list[str]]:
+    if profile:
+        contract = {**contract, **contract["profiles"][profile]}
     application = webui["ui"]["application"]
     page = application["desktop"]["pageSchema"]
-    widget_ids = {str(item.get("id")) for item in page.get("widgets", [])}
+    widgets = list(_objects(application)) if profile else page.get("widgets", [])
+    widget_ids = {str(item.get("id")) for item in widgets}
     modal_ids = set(application.get("modals", {}))
     bindings = _bindings(webui)
-    lifecycle = _widget(page, "project-tree")
+    lifecycle = next((item for item in widgets if item.get("id") == "project-tree"), {})
     lifecycle_buttons = {
         str(item.get("id"))
         for item in lifecycle.get("inputs", {}).get("buttons", [])
@@ -98,6 +102,10 @@ def inspect(
             set(contract["required_project_kinds"]) - project_kinds
         ),
         "forbidden_bindings": sorted(forbidden_bindings & bindings),
+        "wrong_widget_types": sorted(
+            identifier for identifier, expected in contract.get("required_widget_types", {}).items()
+            if not any(item.get("id") == identifier and item.get("type") == expected for item in widgets)
+        ),
     }
 
 
@@ -107,14 +115,15 @@ def main() -> None:
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument(
         "--profile",
-        choices=("reference", "recovered"),
+        choices=("reference", "recovered", "workbench"),
         default="recovered",
     )
     args = parser.parse_args()
     report = inspect(
         _read(args.webui),
         _read(args.contract),
-        include_forward=args.profile == "recovered",
+        include_forward=args.profile != "reference",
+        profile="workbench" if args.profile == "workbench" else None,
     )
     failures = {key: value for key, value in report.items() if value}
     print(json.dumps(report, ensure_ascii=False, indent=2))

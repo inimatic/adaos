@@ -567,3 +567,33 @@ budget. Each test still constructs a fresh module; only immutable bytecode is
 shared. No test was skipped. The broader Core suite had one obsolete prompt-text
 assertion; it was migrated to assert the stronger accepted-layout boundary, and
 the focused five-test regression rerun passes.
+
+## 2026-09-14: Direct Workbench Integration And Legacy Capability Reuse
+
+The accepted design 071 remains immutable. A Builder-owned migration now uses
+its presentation with the operational Workspace picker, template creation,
+component file tree, Preview/QR, metadata, review/start and delivery controls.
+New bindings expose canonical Change/Issue/Run state, separate saved model
+profiles, a digest-checked README and explicit specification deltas. This is
+direct implementation, not an LLM-generated Builder candidate or a generic
+application template. Workspace was not promoted or rewritten.
+
+Action review found an aggregate/primary mismatch in Prototype model preferences:
+the editor saved to Project while execution read the primary component. Both
+Prototype and Codex settings now use the same resolved execution identity; a
+regression protects that boundary. Root RU exposes the separate Codex catalogue.
+
+The first browser report was structurally green but its screenshots included old
+design chat fixtures. A generic Client defect retained the previous subscription
+after a widget source replacement. Clearing/rebinding the source fixes it without
+a Builder-specific renderer. All 19 chat tests pass. Fresh wide/compact review
+`browser-live-03` has 18 navigation checks and 20 screenshots with no page errors
+or document overflow; it is not write-path or lifecycle qualification.
+
+The combined DEV scenario, SDK control and Core capability suite has 121 passing
+tests. The accepted shell is still marked qualification pending. Browser creation,
+effective model execution, durable clarification, informal promotion, reference
+intake and independent Automation review remain open. The mutation stand may
+create only an explicitly named `workbench_test_*` application and records the
+exact creation response. Core/Client commits remain local during qualification;
+unrelated Yjs/page-data work is excluded.

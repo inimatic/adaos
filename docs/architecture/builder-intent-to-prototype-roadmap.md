@@ -94,6 +94,22 @@ Owner/dependencies: Builder workflow + Client.
 
 Implementation boundary: Conversation and governed status projections exist; a worker's completed state is not independent Automation acceptance. A human-authored DEV Builder design specimen covers current work, separate decisions, history, context and existing Dev Tickets. Its local state transitions are not live workflow implementation or model-generation evidence.
 
+The DEV candidate now binds the accepted design shell to canonical SDK state.
+The legacy application picker (table, TEST/non-test, archive, search, sort,
+refresh), creation/template flow, component file tree, Preview/QR and operational
+review/start/delivery forms are reused. Capability parity is checked across page
+and modal surfaces, not by restoring the obsolete layout. This is partial live
+integration, not closure of the remaining interaction/continuation obligations.
+
+- [x] `[must]` Retain a capability-based migration contract against Workspace
+  Builder, including the operational picker and creation flow. Keep file editing
+  deliberately read-only except README; do not claim old unrestricted editing
+  parity. Contract/schema tests do not substitute for action-level browser tests.
+- [x] `[must]` Rebind replaced Client chat data sources and clear previous-source
+  messages; ignore emissions from the unsubscribed source. Preserve the draft
+  on a descriptor refresh. Nineteen generic chat tests pass; per-project draft
+  ownership and asynchronous history/source races remain separate obligations.
+
 - [x] `[must]` Preserve the operational Workspace Builder before developing its
   DEV replacement; retain a fresh source baseline with honest provenance.
 - [x] `[should]` Present a native declarative design specimen for human review,

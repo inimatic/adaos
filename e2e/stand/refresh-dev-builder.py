@@ -1,6 +1,7 @@
 """Prepare tested DEV Builder runtimes and notify the local API before a cohort."""
 
 import json
+import argparse
 import os
 from time import monotonic
 
@@ -13,12 +14,15 @@ from adaos.services.developer_project_validation import _manager
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--skill", action="append", choices=("builder_skill", "builder_sdk_control_skill"))
+    args = parser.parse_args()
     load_dotenv()
     if os.getenv("ENV_TYPE") != "dev":
         raise SystemExit("Requires ENV_TYPE=dev")
     init_ctx(Settings.from_sources())
     manager = _manager(get_ctx())
-    for name in ("builder_skill", "builder_sdk_control_skill"):
+    for name in args.skill or ("builder_skill", "builder_sdk_control_skill"):
         started = monotonic()
         prepared = manager.prepare_dev_runtime(name, run_tests=True)
         tests = {key: value.status for key, value in (prepared.tests or {}).items()}

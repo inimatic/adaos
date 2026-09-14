@@ -119,6 +119,31 @@ def test_parity_inspector_reports_schema_valid_control_plane_loss() -> None:
     assert "scenario" in report["missing_project_kinds"]
 
 
+def test_workbench_parity_preserves_capabilities_across_modal_placement() -> None:
+    profile = CONTRACT["profiles"]["workbench"]
+    widgets = [{"id": identifier, "type": profile.get("required_widget_types", {}).get(identifier)}
+               for identifier in profile["required_widget_ids"]]
+    bindings = set(CONTRACT["required_bindings"]) | set(profile["forward_required_bindings"])
+    for previous, current in profile["forward_binding_replacements"].items():
+        bindings.discard(previous)
+        bindings.add(current)
+    widgets.append({"id": "project-tree", "inputs": {"buttons": [{"id": identifier} for identifier in CONTRACT["required_lifecycle_buttons"]]},
+        "actions": [{"kind": "stream", "receiver": target.removeprefix("stream:")} if target.startswith("stream:")
+                    else {"type": "callSkill", "target": target} for target in bindings]})
+    create = next(row for row in widgets if row["id"] == "new-project-form")
+    create["inputs"] = {"fields": [{"id": "object_type", "options": [{"value": kind} for kind in CONTRACT["required_project_kinds"]]}]}
+    modals = {identifier: {"schema": {"widgets": []}} for identifier in [*CONTRACT["required_modal_ids"], *profile["forward_required_modal_ids"]]}
+    modals["new-project"]["schema"]["widgets"].append(create)
+    modals["design-settings"]["schema"]["widgets"] = widgets
+    webui = {"ui": {"application": {"desktop": {"pageSchema": {"widgets": []}}, "modals": modals}}}
+    assert not any(inspect(webui, CONTRACT, profile="workbench").values())
+    assert "builder_sdk_control_skill.save_project_file" not in bindings
+    assert "builder_sdk_control_skill.save_readme" in bindings
+    picker = next(row for row in widgets if row["id"] == "project-picker-table")
+    picker["type"] = "ui.list"
+    assert inspect(webui, CONTRACT, profile="workbench")["wrong_widget_types"] == ["project-picker-table"]
+
+
 def test_functional_recovery_forward_ports_only_bounded_project_controls() -> None:
     baseline = {
         "ui": {
