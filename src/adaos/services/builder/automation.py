@@ -7319,7 +7319,7 @@ class BuilderAutomationService:
                 session = self._find_session_by_id(session_id)
                 if session:
                     session = self.refresh_session(session)
-                    if session.get("status") == "failed":
+                    if session.get("status") in {"failed", "cancelled", "expired"}:
                         pending_transition = str(session.get("pending_workflow_transition") or "").strip()
                         session.pop("pending_workflow_transition", None)
                         self._save_session(session)
@@ -7336,6 +7336,7 @@ class BuilderAutomationService:
                                 metadata={
                                     "task_id": session.get("current_task_id"),
                                     "change_id": session.get("change_id"),
+                                    "terminal_status": session.get("status"),
                                     "error": (
                                         session.get("last_failure", {}).get("message")
                                         if isinstance(session.get("last_failure"), Mapping)
@@ -7365,9 +7366,10 @@ class BuilderAutomationService:
                         self._save_session(session)
                         finalizing_projection = self.project_session(session)
             if failed_session is not None:
-                failed_session = self._capture_worker_publication_gate_failure(
-                    failed_session
-                )
+                if failed_session.get("status") == "failed":
+                    failed_session = self._capture_worker_publication_gate_failure(
+                        failed_session
+                    )
                 failed_session = self._sync_linked_development_ticket_tasks(failed_session)
                 if self.event_sink:
                     self.event_sink(self.project_session(failed_session))

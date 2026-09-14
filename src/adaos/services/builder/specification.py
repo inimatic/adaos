@@ -61,6 +61,9 @@ def specification_projection(change: Mapping[str, Any] | None) -> dict[str, Any]
         issues.append(
             {
                 "issue_id": str(issue.get("issue_id") or ""),
+                "source_message_ids": list(issue.get("source_message_ids") or []),
+                "status": str(issue.get("status") or "open"),
+                "lane": str(issue.get("lane") or "prototype"),
                 "title": title,
                 "acceptance_criteria": criteria,
             }
@@ -71,6 +74,8 @@ def specification_projection(change: Mapping[str, Any] | None) -> dict[str, Any]
         "request": request,
         "request_addenda": addenda,
         "issues": issues,
+        "source_message_ids": list(source.get("source_message_ids") or []),
+        "delta": copy.deepcopy(source.get("specification_delta")),
         "integrity": "transport_corrupted" if corrupted_paths else "preserved",
         "corrupted_paths": corrupted_paths,
         "repair_policy": (

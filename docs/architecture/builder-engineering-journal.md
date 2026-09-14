@@ -528,3 +528,42 @@ No production subscription skill was replaced. Backend build and eight metering
 tests passed; 20 SDK/skill tests passed before the additional model-table regression.
 Root deployment, policy population, model-selector behavior and actual Run receipt
 verification remain open. No invented default prices are configured.
+
+## 2026-09-14: Accepted Design Is Not The Publication Baseline
+
+Cancelled the Builder self-automation Run before activation. Its first result
+implemented only a subset of the brief. Repair then restored the legacy layout:
+the input called the old publication an implementation baseline, package tests
+asserted obsolete widget identities, and validation inspected immutable retained
+publication files against the current ABI. These are admission/test-boundary
+defects, not evidence that design 071 should be changed. Builder implementation
+is now performed directly; LLM/Codex qualification belongs to an isolated TEST
+application, as clarified by the user.
+
+The worker now treats publication as a behavior reference, excludes retained
+baselines from candidate validation/package projection, and protects the accepted
+revision and previous Automation evidence. Cancellation/expiry releases the
+workflow instead of leaving a working projection. Capability parity must replace
+obsolete layout assertions before the live Builder is qualified.
+
+Canonical workflow now admits bounded, stage-scoped specification deltas with
+Issue/message references and base digests. Prototype evidence and an Automation
+checkpoint merge only their own specification layer; stale bases fail closed.
+UI/editing and full lifecycle qualification remain open.
+
+Backend model/cost code is deployed. Root policy was updated through the audited
+operator API to advertise separate GPT-5.4/GPT-5.5 Codex profiles, preserving
+Prototype choices and access policy. RU relay returns the EU catalogue. Tariffs
+remain unset; unpriced usage must not be displayed as free execution.
+
+Packaged Builder tests reproduced a 60-second timeout, then all 306 passed in a
+diagnostic run of 171 seconds without one stalled test. Investigating repeated
+handler compilation under disabled bytecode writes; the production timeout is
+unchanged. Diagnostic reports remain in the workbench Automation artifact folder.
+
+The compiled-code reuse test-harness change reduced the exact packaged suite
+from 171 to 25 seconds: all 306 tests pass under the unchanged 60-second worker
+budget. Each test still constructs a fresh module; only immutable bytecode is
+shared. No test was skipped. The broader Core suite had one obsolete prompt-text
+assertion; it was migrated to assert the stronger accepted-layout boundary, and
+the focused five-test regression rerun passes.

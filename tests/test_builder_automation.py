@@ -4059,7 +4059,9 @@ def test_scenario_automation_keeps_published_companions_outside_project_envelope
         / "input"
         / "task.md"
     ).read_text(encoding="utf-8")
-    assert "immutable currently installed functional edition" in task_prompt
+    assert "immutable reference for established capabilities and bindings" in task_prompt
+    assert "accepted Prototype, not that older publication" in task_prompt
+    assert "without restoring the older UI" in task_prompt
     assert not (
         service.dev_scenarios_root / "recipes" / ".builder_current_publication"
     ).exists()
@@ -7291,6 +7293,37 @@ def test_failed_worker_synchronizes_linked_dev_ticket(
         "gate": "validation",
     }
     assert gate_reports[0]["gate"] == "validation"
+
+
+@pytest.mark.parametrize("status", ["cancelled", "expired"])
+def test_terminal_worker_releases_workflow_without_publication_failure(tmp_path, monkeypatch, status):
+    service = _service(tmp_path)
+    session = {"session_id": "automation.skill.demo_metrics_skill", "object_type": "skill",
+               "object_id": "demo_metrics_skill", "status": status, "current_task_id": "task.stopped"}
+    transitions, synced = [], []
+
+    class Worker:
+        def run_once(self, **kwargs):
+            return {"ok": False, "status": status}
+
+    class Workflow:
+        def transition(self, *args, **kwargs):
+            transitions.append((args, kwargs))
+
+    service.worker_factory = Worker
+    monkeypatch.setattr(BuilderAutomationService, "_find_session_by_id", lambda *a: dict(session))
+    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda *a: dict(session))
+    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda *a: None)
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda *a: Workflow())
+    monkeypatch.setattr(BuilderAutomationService, "_capture_worker_publication_gate_failure",
+                        lambda *a: pytest.fail("Cancellation is not a publication defect"))
+    monkeypatch.setattr(BuilderAutomationService, "_sync_linked_development_ticket_tasks",
+                        lambda self, value: synced.append(value) or value)
+    service._run_worker(session["session_id"])
+    assert len(transitions) == 1
+    assert transitions[0][0][-1] == "automation_failed"
+    assert transitions[0][1]["metadata"]["terminal_status"] == status
+    assert synced[0]["status"] == status
 
 
 def test_worker_crash_fails_factory_task_and_synchronizes_ticket(

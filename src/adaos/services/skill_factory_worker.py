@@ -6158,7 +6158,7 @@ When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as th
 
 ## Current Publication
 
-When `scenarios/{target_id}/.builder_current_publication` exists, treat it as the immutable currently installed functional edition. Use it as the implementation baseline when the current Prototype or previous Automation is non-functional or omits established bindings. Merge the approved Prototype requirements into that baseline; never edit the retained publication directory itself.
+When `scenarios/{target_id}/.builder_current_publication` exists, treat it as immutable reference for established capabilities and bindings. The accepted Prototype, not that older publication, owns the current information architecture and layout. Reuse applicable behavior in the editable candidate without restoring the older UI. Never edit the retained publication directory itself. Tests that require obsolete widget identities must be migrated to preserve behavioral coverage under the accepted layout, not used to revert that layout.
 """ if target_type == "scenario" else ""
         dev_ticket_repair_requirements = """
 ## Dev Ticket repair constraints
@@ -6809,7 +6809,23 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 "Automation may not modify the current Publication baseline: "
                 f"{immutable_publication}"
             )
+        immutable_automation = [path for path in changed_paths if "/.builder_previous_automation/" in f"/{path}"]
+        if immutable_automation:
+            raise ValueError(f"Automation may not modify the previous Automation baseline: {immutable_automation}")
+        acceptance = artifacts.get("prototype_acceptance") or {}
+        revision = acceptance.get("revision") if isinstance(acceptance, Mapping) else None
+        target = assignment.get("target") or {}
+        if revision and target.get("type") == "scenario":
+            accepted_path = f"scenarios/{target.get('id')}/ui_revisions/{revision}.json"
+            if accepted_path in changed_paths:
+                raise ValueError(f"Automation may not modify accepted Prototype evidence: {accepted_path}")
         self._validate_manifest_rewrite_bounds(assignment, changed_paths, workspace=workspace)
+
+    @staticmethod
+    def _candidate_file(path: Path, workspace: Path) -> bool:
+        return not any(part in {".git", ".pytest_cache", "__pycache__",
+                               ".builder_current_publication", ".builder_previous_automation", "ui_revisions"}
+                       for part in path.relative_to(workspace).parts)
 
     def _validate_workspace(
         self,
@@ -6847,7 +6863,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             errors,
         )
         for path in sorted(workspace.rglob("*.json")):
-            if ".git" in path.parts:
+            if not self._candidate_file(path, workspace):
                 continue
             try:
                 _loads_strict_json(path.read_text(encoding="utf-8"))
@@ -6855,14 +6871,14 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             except Exception as exc:
                 errors.append(f"{path.relative_to(workspace)}: {type(exc).__name__}: {exc}")
         for path in sorted([*workspace.rglob("*.yaml"), *workspace.rglob("*.yml")]):
-            if ".git" in path.parts:
+            if not self._candidate_file(path, workspace):
                 continue
             try:
                 yaml.safe_load(path.read_text(encoding="utf-8"))
                 checks.append({"kind": "yaml", "path": path.relative_to(workspace).as_posix(), "ok": True})
             except Exception as exc:
                 errors.append(f"{path.relative_to(workspace)}: {type(exc).__name__}: {exc}")
-        python_files = [path for path in workspace.rglob("*.py") if ".git" not in path.parts]
+        python_files = [path for path in workspace.rglob("*.py") if self._candidate_file(path, workspace)]
         for path in python_files:
             try:
                 compile(path.read_text(encoding="utf-8"), str(path), "exec")
@@ -6918,6 +6934,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
 
                 validator = Draft202012Validator(_read_json(webui_schema_path))
                 for path in sorted(workspace.rglob("webui.json")):
+                    if not self._candidate_file(path, workspace):
+                        continue
                     payload = _read_json(path)
                     validation_errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.path))
                     if validation_errors:
@@ -7852,6 +7870,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 ignore=shutil.ignore_patterns(
                     ".runtime",
                     ".adaos_context",
+                    ".builder_current_publication",
+                    ".builder_previous_automation",
                     "__pycache__",
                     ".pytest_cache",
                     "*.pyc",

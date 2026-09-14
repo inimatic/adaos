@@ -76,6 +76,9 @@ from adaos.services.builder.surface import (
     normalize_builder_locale,
 )
 from adaos.services.builder.specification import specification_projection
+from adaos.services.builder.specification_delta import (
+    apply_delta, normalize_specification, prepare_delta,
+)
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.workflow_artifacts import (
     WorkflowArtifactError,
@@ -720,6 +723,8 @@ def _normalize_change(value: Any) -> dict[str, Any] | None:
         )[:500],
         "runs": runs[-_MAX_CHANGE_RUNS:],
         "acceptance_constraints": constraints,
+        "specification_delta": copy.deepcopy(dict(value["specification_delta"]))
+        if isinstance(value.get("specification_delta"), Mapping) else None,
         "context_packet_digest": str(value.get("context_packet_digest") or "").strip() or None,
         "teacher_candidate_refs": [
             copy.deepcopy(dict(item))
@@ -2269,6 +2274,7 @@ class BuilderWorkflowService:
             "change": change,
             "change_set": change_set,
             "context_packet": _mapping(raw.get("context_packet")) or None,
+            "application_specification": normalize_specification(raw.get("application_specification")),
             "reviews": [
                 copy.deepcopy(dict(item))
                 for item in raw.get("reviews") or []
@@ -2895,6 +2901,53 @@ class BuilderWorkflowService:
             state["updated_at"] = workflow["updated_at"]
             self._write_state(kind, project_id, state)
         return {"ok": True, "workflow": self.describe(kind, project_id)}
+
+    def save_specification_delta(
+        self, object_type: str, object_id: str, value: Mapping[str, Any], *,
+        change_id: str, expected_generation: int, actor: str,
+    ) -> dict[str, Any]:
+        """Update the active editable Change's requirement delta without accepting it."""
+        kind, project_id = _kind(object_type), _project_id(object_id)
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            if state.get("archived"):
+                raise BuilderWorkflowError("archived projects cannot edit specification")
+            if int(workflow["generation"]) != int(expected_generation):
+                raise BuilderWorkflowError("stale Builder workflow generation")
+            change = _normalize_change(workflow.get("change"))
+            if not change or change["change_id"] != change_id:
+                raise BuilderWorkflowError("Specification delta belongs to another Change")
+            if (workflow["active_phase"] != "prototype" or workflow["prototype"].get("stable")
+                    or change["status"] in _CHANGE_SET_TERMINAL_STATES):
+                raise BuilderWorkflowError("Return to editable Prototype scope before changing requirements")
+            try:
+                delta = prepare_delta(value, change=change, specification=workflow["application_specification"])
+            except ValueError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
+            previous = _mapping(change.get("specification_delta"))
+            if previous.get("digest") == delta["digest"]:
+                return {"ok": True, "duplicate": True, "delta": previous}
+            change["specification_delta"] = delta
+            change["updated_at"] = _now()
+            workflow["change"] = change
+            workflow["change_set"] = _change_set_compatibility(change)
+            workflow["context_packet"] = None
+            workflow["prototype"]["acceptance"] = None
+            workflow["generation"] += 1
+            workflow["updated_at"] = change["updated_at"]
+            workflow["history"] = [*workflow["history"], {
+                "generation": workflow["generation"], "action": "specification_delta_saved",
+                "actor": actor, "at": change["updated_at"], "change_id": change_id,
+                "metadata": {"delta_digest": delta["digest"]},
+            }][-_MAX_HISTORY:]
+            state["workflow"] = workflow
+            state["updated_at"] = workflow["updated_at"]
+            self._write_state(kind, project_id, state)
+        projection = self.describe(kind, project_id)
+        if callable(self.event_sink):
+            self.event_sink(projection)
+        return {"ok": True, "duplicate": False, "delta": delta, "workflow": projection}
 
     def record_project_placement(
         self,
@@ -4090,6 +4143,20 @@ class BuilderWorkflowService:
                 except BuilderProjectError as exc:
                     raise BuilderWorkflowError(str(exc)) from exc
                 mutation_started = True
+            specification_merge = None
+            specification_change = _normalize_change(workflow.get("change")) or {}
+            delta = _mapping(specification_change.get("specification_delta"))
+            accepted_stage = {"stabilize_prototype": "prototype", "checkpoint_recorded": "automation"}.get(action_token)
+            if delta and accepted_stage:
+                acceptance_ref = str(_mapping(details.get("acceptance")).get("acceptance_id") or "")
+                if accepted_stage == "automation" and details.get("package_digest"):
+                    acceptance_ref = f"checkpoint:{details.get('change_id')}:{details['package_digest']}"
+                if acceptance_ref:
+                    try:
+                        specification_merge = apply_delta(workflow["application_specification"], delta,
+                                                          stage=accepted_stage, evidence_ref=acceptance_ref)
+                    except ValueError as exc:
+                        raise BuilderWorkflowError(str(exc)) from exc
             before = {
                 "active_phase": workflow["active_phase"],
                 "prototype_status": workflow["prototype"].get("status"),
@@ -4158,6 +4225,10 @@ class BuilderWorkflowService:
                 changed_at=changed_at,
                 project_ref=f"{kind}:{project_id}",
             )
+            if specification_merge:
+                workflow["application_specification"], merged_delta = specification_merge
+                workflow["change"]["specification_delta"] = merged_delta
+                workflow["change_set"] = _change_set_compatibility(workflow["change"])
             portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
             workflow["change_portfolio"] = portfolio
             previous_project = _mapping(workflow.get("project"))
@@ -5147,6 +5218,7 @@ class BuilderWorkflowService:
                     "gate": change.get("gate"),
                     "status": change.get("status"),
                     "issues": scoped_issues,
+                    "specification_delta": copy.deepcopy(change.get("specification_delta")),
                     "acceptance_constraints": copy.deepcopy(change.get("acceptance_constraints") or []),
                     "reviews": active_reviews,
                     "source_message_ids": (
@@ -5158,6 +5230,7 @@ class BuilderWorkflowService:
                     "promotion_privacy_scope": change.get("promotion_privacy_scope"),
                 },
                 "base": {
+                    "application_specification": copy.deepcopy(workflow["application_specification"]),
                     "source": copy.deepcopy(change.get("base_ref")),
                     "release": copy.deepcopy(_mapping(workflow.get("delivery")).get("base_release")),
                     "release_digest": _mapping(workflow.get("delivery")).get("base_release_digest"),

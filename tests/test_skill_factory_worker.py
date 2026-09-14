@@ -1873,6 +1873,46 @@ def test_automation_cannot_modify_current_publication_baseline(tmp_path: Path) -
         )
 
 
+@pytest.mark.parametrize("path,reason", [
+    ("scenarios/recipe_book/.builder_previous_automation/webui.json", "previous Automation baseline"),
+    ("scenarios/recipe_book/ui_revisions/071.json", "accepted Prototype evidence"),
+])
+def test_automation_cannot_rewrite_retained_evidence(tmp_path, path, reason):
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state", repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios",
+        runs_root=tmp_path / "runs")
+    assignment = {"target": {"type": "scenario", "id": "recipe_book"},
+                  "forge": {"sparse_paths": ["scenarios/recipe_book/"]},
+                  "realize_request": {"artifacts": {"prototype_acceptance": {"revision": "071"}}}}
+    with pytest.raises(ValueError, match=reason):
+        worker._validate_changed_paths(assignment, [path])
+
+
+def test_validation_uses_candidate_not_historical_baseline(tmp_path):
+    repo = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "workspace"
+    _core_created_skill_fixture(repo, workspace / "skills", "demo")
+    for folder in (".builder_current_publication", ".builder_previous_automation", "ui_revisions"):
+        archived = workspace / "scenarios" / "demo" / folder
+        archived.mkdir(parents=True)
+        (archived / "webui.json").write_text('{"invalid_old_abi": true}', encoding="utf-8")
+        (archived / "legacy.py").write_text('invalid old python !!', encoding="utf-8")
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state", repo_root=repo,
+        dev_skills_root=workspace / "skills", dev_scenarios_root=workspace / "scenarios",
+        runs_root=tmp_path / "runs")
+    assignment = {"target": {"type": "skill", "id": "demo"},
+                  "forge": {"sparse_paths": ["skills/demo/"]}}
+    report = worker._validate_workspace(assignment, workspace)
+    assert report["ok"], report["errors"]
+    current = workspace / "skills" / "demo" / "handlers" / "broken.py"
+    current.write_text('invalid candidate python !!', encoding="utf-8")
+    rejected = worker._validate_workspace(assignment, workspace)
+    assert not rejected["ok"]
+    assert any("broken.py" in error for error in rejected["errors"])
+
+
 def test_surgical_repair_enforces_exact_files_and_file_count(tmp_path: Path) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",

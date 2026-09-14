@@ -714,6 +714,38 @@ def test_change_set_routes_interface_work_through_prototype_first(
     assert approved["change_set"]["issues"][1]["status"] == "open"
 
 
+def test_specification_delta_is_canonical_scoped_and_not_implicitly_accepted(workflow_project):
+    service, root = workflow_project
+    planned = service.transition("scenario", "recipes", "plan_change_set", metadata={
+        "change_set_id": "CS-spec", "request": "Create an editor", "source_message_ids": ["m1"],
+        "issues": [{"issue_id": "i1", "title": "Editor", "lane": "prototype", "acceptance_criteria": ["Editor visible"]}],
+    })["workflow"]
+    delta = {"operations": [{"requirement_id": "editor", "operation": "add", "stage": "prototype",
+                             "text": "Open editor", "acceptance_criteria": ["Editor visible"],
+                             "issue_ids": ["i1"], "source_message_ids": ["m1"]}]}
+    saved = service.save_specification_delta("scenario", "recipes", delta, change_id="CS-spec",
+                                              expected_generation=planned["generation"], actor="user:owner")
+    current = service.describe("scenario", "recipes")
+    assert current["change"]["specification_delta"] == saved["delta"]
+    assert current["specification"]["delta"]["digest"] == saved["delta"]["digest"]
+    assert current["application_specification"]["prototype"]["requirements"] == {}
+    packet = service.build_context_packet("scenario", "recipes", persist=False)
+    assert packet["change"]["specification_delta"]["digest"] == saved["delta"]["digest"]
+    with pytest.raises(BuilderWorkflowError, match="stale"):
+        service.save_specification_delta("scenario", "recipes", delta, change_id="CS-spec",
+                                         expected_generation=planned["generation"], actor="user:owner")
+    with pytest.raises(BuilderWorkflowError, match="another Change"):
+        service.save_specification_delta("scenario", "recipes", delta, change_id="other",
+                                         expected_generation=current["generation"], actor="user:owner")
+    approved = service.transition("scenario", "recipes", "stabilize_prototype",
+                                  metadata=_confirmed({"revision": "001"}))["workflow"]
+    # A compatibility stabilization without an exact acceptance receipt is not spec acceptance.
+    assert approved["application_specification"]["prototype"]["requirements"] == {}
+    with pytest.raises(BuilderWorkflowError, match="editable Prototype"):
+        service.save_specification_delta("scenario", "recipes", delta, change_id="CS-spec",
+                                         expected_generation=approved["generation"], actor="user:owner")
+
+
 def test_strict_prototype_acceptance_requires_current_behavior_and_visual_evidence(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
@@ -763,6 +795,13 @@ def test_strict_prototype_acceptance_requires_current_behavior_and_visual_eviden
             metadata=_confirmed({"revision": "001"}),
         )
 
+    saved = service.save_specification_delta("scenario", "recipes", {"operations": [{
+        "stage": "prototype", "operation": "add", "requirement_id": "workspace.visible",
+        "text": "The workspace is visible", "acceptance_criteria": ["The workspace is visible"],
+        "issue_ids": ["prototype-layout"],
+    }]}, change_id="CH-strict-prototype", expected_generation=planned["generation"], actor="user:owner")
+    planned = saved["workflow"]
+
     accepted = service.accept_prototype(
         "scenario",
         "recipes",
@@ -794,6 +833,10 @@ def test_strict_prototype_acceptance_requires_current_behavior_and_visual_eviden
     workflow = accepted["workflow"]
     assert workflow["prototype"]["acceptance"]["revision"] == "001"
     assert workflow["change_set"]["gate"] == "automation"
+
+    requirement = workflow["application_specification"]["prototype"]["requirements"]["workspace.visible"]
+    assert requirement["evidence_ref"] == accepted["acceptance"]["acceptance_id"]
+    assert workflow["application_specification"]["automation"]["requirements"] == {}
 
     started = service.transition(
         "scenario",

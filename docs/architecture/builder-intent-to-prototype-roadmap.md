@@ -162,6 +162,14 @@ Implementation boundary: Conversation and governed status projections exist; a w
 - [ ] `[must]` Qualify OpenSpec-aligned application specification and Change
   deltas with version/digest preconditions, explicit acceptance and preserved
   historical inputs. Do not introduce an independently mutable second tracker.
+- [x] `[must]` Implement the canonical specification-delta SDK prerequisite:
+  stage-isolated merges, immutable input digests, stale-base refusal, source/Issue
+  links and idempotent evidence-backed acceptance. UI and end-to-end qualification
+  stay open under the parent acceptance item.
+- [x] `[must]` Deploy Root's separate Codex model catalogue and preserve per-model
+  usage/cost coverage. Populate the operator policy without changing access rules;
+  absent tariffs remain explicitly unpriced. Live Subscriptions/UI qualification
+  stays open.
 - [ ] `[must]` Exercise the accepted live Builder on one isolated TEST
   application from conversational creation through Prototype, Automation,
   independent verification and local delivery; record actual limits separately

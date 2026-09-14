@@ -16,6 +16,14 @@ def get_state(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().describe(object_type, object_id))
 
 
+def save_specification_delta(object_type: str, object_id: str, delta: Mapping[str, Any], *,
+                             change_id: str, expected_generation: int, actor: str) -> dict[str, Any]:
+    """Save explicit add/modify/remove requirements for review, never accept them."""
+    return dict(_service().save_specification_delta(
+        object_type, object_id, delta, change_id=change_id,
+        expected_generation=expected_generation, actor=actor))
+
+
 def get_interaction_frame(
     object_type: str,
     object_id: str,
@@ -288,6 +296,7 @@ def update_interaction_context(
 
 
 __all__ = [
+    "save_specification_delta",
     "accept_prototype",
     "build_context_packet",
     "create_conversation_interaction",

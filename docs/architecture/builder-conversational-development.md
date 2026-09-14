@@ -993,8 +993,10 @@ claims Automation behavior is implemented. Conflicting/stale bases require
 review; retry/duplicate acceptance must not apply the delta twice. Historical
 Run input snapshots and earlier accepted bases are immutable.
 
-Canonical requirements retain the existing Issue identity and execution tasks
-retain journal identity; Markdown is a readable projection/export, not another
+Long-lived requirement IDs identify entries in the accepted application
+specification; Change operations link them to existing Issue and source-message
+identities. Issues remain the work/decision tracker, not duplicated requirement
+statuses. Execution tasks retain journal identity; Markdown is a readable projection/export, not another
 independently mutable requirements database. Small corrections need no mandatory
 four-document ceremony. Basic presents purpose and scope; Detailed exposes the
 delta, decisions, tasks and evidence. Unsupported or unimplemented bindings are
@@ -1008,8 +1010,8 @@ and [artifact schema](https://openspec.dev/docs/schemas/spec-driven).
 **Scope / Состав изменения** presents the requested outcome and independently
 understandable requirements/concerns, not the raw prompt or execution plan.
 One message can introduce several Issues; several messages can clarify the same
-Issue. The requirement view is the existing Issue model, not a parallel mutable
-requirements tracker. Each row shows its source messages, authority, current
+Issue. The Change scope view projects existing Issues and their specification
+operations, not a parallel mutable requirements tracker. Each row shows its source messages, authority, current
 version, intended stage, disposition and linked result/evidence when available.
 
 **Process** presents execution tasks and their attempts. A task answers how a
