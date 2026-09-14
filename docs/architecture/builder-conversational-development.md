@@ -790,16 +790,21 @@ limited-channel clients do not synthesize DEV suffixes or choose preview hosts.
 
 ## Builder Workbench Projection
 
-The default Web Workbench is conversation-first:
+The Web Workbench is task-centered and conversation-capable. Chat-first means
+that a user can initiate and refine work conversationally; it does not require
+the result, review decision or recovery action to be buried in the chat stream:
 
 - the header reserves its title line for the complete Project title; a separate
   compact Preview indicator carries the exact Preview identity without
   truncating that title;
-- the left control/process area shows focused Change, working activity,
-  blockers, and the available process commands without consuming title width;
-- the central surface is the canonical Builder conversation and dynamic action
-  row;
-- Preview may occupy a persistent adjacent area when useful;
+- a compact current-work area shows the focused Change, scope, meaningful last
+  event/freshness, blockers and the next available command;
+- the central surface can focus Result, Task brief, Checks, Process or
+  Conversation; focused work is not replaced by incidental inspection;
+- Result review places the exact candidate beside its scoped conversation on
+  a wide screen; compact screens offer the same conversation as a focused view;
+- the paired Preview remains an explicit, independently selected destination;
+  an embedded result must name the exact revision it actually renders;
 - Process, Project Overview, Specification, Artifacts, Run detail, and Release
   evidence are requested as contextual views or drawers;
 - compact layouts render the same view sequentially or in a modal/drawer.
@@ -824,6 +829,56 @@ Three selections remain independent:
 Selecting a Process item changes focus/inspection only. `Open in Preview` is an
 explicit command. The Preview indicator shows `proto:`, `active:`, or
 `public:` and the exact revision/version.
+
+### Human Decision And Feedback Surface
+
+The current task projection distinguishes understanding, generation, required
+input, candidate review, accepted Prototype, independent Automation checking,
+Automation review, accepted implementation, partial result, failed checking,
+unknown freshness and acknowledged stop. These are meaningful user states,
+not a fixed sequence of prompt phases. A stopped worker, finished worker,
+passing checker and human acceptance are distinct facts.
+
+Acceptance presents the exact candidate/base, requested scope, preservation
+obligations, available evidence and unresolved limitations. It does not ask
+ordinary users to type screenshot or test artifact references. Evidence is
+attached automatically when available; missing evidence is shown honestly.
+Accepting a Prototype does not start Automation. Accepting Automation does not
+publish a Trial, release, Workspace update or source repository. Historical
+inspection cannot silently approve a different, current candidate.
+
+Conversation distinguishes discussion without mutation, a correction to the
+current result and an added requirement. During active work, a new requirement
+is queued as a visible addendum/next Change, not injected into a running
+executor invisibly. Input-required questions explain why an answer is needed,
+what work is waiting and what continuation the answer admits. Stop requests
+remain pending until acknowledged; disconnection is not acknowledgement.
+
+Feedback reuses **Dev Tickets**, its screenshot capture and Required actions
+element selection. Builder must not introduce a second screenshot store or
+parallel review inbox. The invocation carries the real Project/component,
+source space, exact design/result revision, selected element/modal when known,
+and originating Change/Run when present. Missing identity remains unknown.
+The real reviewed component identity must be separate from synthetic data or
+application identities displayed inside a design specimen. A submitted ticket
+is durable feedback; promoting it to an execution request or reusable UX rule
+requires an explicit scoped decision.
+
+Input/context inspection is secondary: expose source attribution, accepted
+base, included/excluded material, route reason and normalized usage/cost, but
+not hidden reasoning. Display observed timestamps and durations; stale data
+must never be presented as a live heartbeat. A design specimen labels all
+simulated states/evidence and cannot grant real workflow authority.
+
+These choices adapt self-contained work/history from
+[VS Code agent sessions](https://code.visualstudio.com/docs/agents/concepts/sessions),
+explicit review/checkpoints from
+[VS Code change review](https://code.visualstudio.com/docs/agents/run/review-code-edits),
+and separation of discussion/planning from execution in
+[Lovable Plan mode](https://docs.lovable.dev/features/plan-mode).
+They do not mandate an exhaustive plan or approval ceremony for every small
+request. Builder's governed state and cross-channel authority remain stronger
+requirements than copying any vendor's screen layout.
 
 ## Semantic UI Change IR
 

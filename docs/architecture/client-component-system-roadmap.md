@@ -2,7 +2,7 @@
 
 Status: active prerequisite and growth roadmap for the universal AdaOS Client.
 
-Last reviewed: 2026-09-12.
+Last reviewed: 2026-09-14.
 
 Architecture owner: [Web UI Architecture](web-ui-architecture.md).
 Builder dependency: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
@@ -332,6 +332,20 @@ machine-checked impact set.
   locale formatting, and long-content layout for all admitted components.
 - [ ] `[must]` Enforce stable dimensions and no incoherent overlap in declared
   representative states.
+- [ ] `[must]` Correct cross-widget stacking for an open adaptive-toolbar menu;
+  later toolbars must not cover its options or intercept pointer events. Retain
+  a long-menu browser regression. The Builder design specimen exposed this in
+  revision 063; using a modal selector in that specimen does not fix the generic
+  component.
+- [ ] `[should]` Qualify dense Workbench composition without product-specific
+  CSS: long primary-command labels, compact view navigation, hidden-widget gaps
+  and two-column tables. Review the table's fixed 520px minimum as a declared
+  responsive policy, rather than silently making all narrow tables scroll.
+- [ ] `[must]` Verify Dev Tickets target identity through both explicit
+  declarative invocation and the global shell entry: derive the source space
+  from trusted materialization, retain the exact revision and optional selected
+  element, and test screenshot cancellation/upload failure. An explicit DEV
+  scope in one Builder button does not qualify the global fallback.
 - [ ] `[should]` Retain a viewport-change regression for an already-open
   localized modal: locale, theme, filters, selection and focus must remain
   consistent. The 2026-09-11 Builder picker review exposed mixed EN/RU labels

@@ -200,6 +200,11 @@ Implementation boundary: state-derived commands, scoped conversations,
 Interaction/Response handling, workflow activities and recovery projections
 exist. Cross-channel human acceptance and complete durable continuation are
 not established by those mechanism tests.
+The DEV Workbench design specimen is tracked in BIP-02. It preserves the
+operational Workspace surface and uses simulated process commands; its review
+does not close BC-11.1 or BC-11.2. The target surface and existing Dev Tickets
+feedback contract are specified in the conversational architecture's
+[Workbench projection](builder-conversational-development.md#builder-workbench-projection).
 
 - [ ] `[must]` **BC-11.1** Derive the dependent Prototype -> Automation ->
   verification -> Trial -> Publication bridge from one governed snapshot.

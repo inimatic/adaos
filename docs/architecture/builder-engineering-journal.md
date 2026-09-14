@@ -197,3 +197,64 @@ Decisions: keep target contracts and implementation boundaries in architecture/
 roadmaps, one incremental journal for observations, no parallel dated plans.
 Durable human, SDK, cold-context and installed-delivery gates remain visible.
 No completion percentage or new autonomy claim follows from consolidation.
+
+## 2026-09-14: Builder Workbench Design Specimen
+
+Scope: preserve the operational Workspace Builder, then author a native DEV
+interface for human design review. This is not a fresh Builder generation
+benchmark and not implementation of the new process controller.
+
+Before editing, DEV/Workspace owned handlers, tests and UI content matched;
+differences were version/updated metadata and DEV-only prompt state. Workspace
+Builder skills were ready; active-slot handler hashes matched DEV. The retained
+UI baseline is a **fresh observation** at revision 060, not a reconstruction of
+the absent older revision files. Workspace UI remains equivalent to it except
+for UI version (Workspace 0.2.89, observed DEV 0.2.90).
+
+Design iterations 061-064 were recorded locally without replacing revision
+files. Revision 064 is materialized in existing `desktop-dev`; no Webspace was
+created. The actual Change is `builder-workbench-design-20260914`, registered
+through the workflow SDK, with Prototype acceptance required and absent,
+Automation not started. Twelve local specimen states distinguish decisions,
+checking, required input, partial results, failure, disconnection and stop.
+Equipment records and their 002/003 revisions are explicitly synthetic; the
+real feedback target is `dev:scenario:builder`, design revision 064.
+
+Validation: 42 Python tests passed (nine design-contract tests and 33 existing
+Workbench tests). Browser probes at 1440x1000 and 390x844 passed 18 checks and
+retained 40 screenshots. They exercise distinct acceptance/start transitions,
+clarification, stop, all specimen states/views, explicit revision navigation,
+selected-record edit/save/reopen, diagnostics settings and opening the existing
+Dev Tickets screenshot entry with the exact DEV design target. No tickets were
+created by the probe; screen-share permission, screenshot upload persistence
+and the shell's implicit target inference are **not** qualified by this run.
+Two additional read-only wide/compact browser checks confirmed the operational
+Workspace surface remains present; the design controls are absent there.
+
+Design corrections exposed by execution: modal actions require `params.modalId`;
+form record hydration uses a data source plus selected record, not `$state`
+strings in `defaultValue`; edits must update both the table and reopened form;
+historical inspection must hide current-candidate editing/acceptance. Client's
+long adaptive-toolbar menu can be occluded by a later toolbar's stacking
+context. The specimen now uses a modal selector; the generic defect, narrow
+table minimum width, compact command density and global feedback scope remain
+explicit C3 tasks. EN/RU control resources exist, but Russian specimen prose
+and complete locale/long-content qualification remain outside this RU probe.
+
+An attempted local source snapshot at existing version 0.2.127 was correctly
+rejected as a different immutable release digest. Retrying with a patch version
+retained local ProjectRelease `builder@0.2.128` using
+`adaos dev project push builder --local-only --bump patch`.
+Release digest: `sha256:5c3afd5f20fea59dd2786519231f85dbfe4ef58b5314c28aad925e0eecde58ac`.
+Source revision: `sha256:75824976dbabf06c40fa552e984256f28491e3fb6230c290bb5cf2f0ac0792c1`.
+This is an unapproved design checkpoint, not a stable/Trial promotion or
+remote publication. UI-revision observations remain local development evidence.
+
+Evidence root: `e2e/artifacts/builder/workbench-design-20260914/`, especially
+`workspace-preservation.json`, `design-receipt.json` and
+`browser-064/report.json`. Authoring source:
+`scripts/build_builder_workbench_prototype.py`; browser reproduction:
+`e2e/stand/browser/builder-design-review.mjs` with local DEV hub credentials in
+the environment. Current implementation gates remain BIP-02 and BC-11;
+human review is pending. Core runtime and Client implementation were not changed
+or restarted. No Git push was performed.

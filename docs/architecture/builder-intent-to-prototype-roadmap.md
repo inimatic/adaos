@@ -88,7 +88,21 @@ Exit/remaining work: Complete the reachable-path/ownership inventory and immutab
 
 Owner/dependencies: Builder workflow + Client.
 
-Implementation boundary: Conversation and governed status projections exist; a worker's completed state is not independent Automation acceptance. Historical documents still used broad completion labels.
+Implementation boundary: Conversation and governed status projections exist; a worker's completed state is not independent Automation acceptance. A human-authored DEV Builder design specimen covers current work, separate decisions, history, context and existing Dev Tickets. Its local state transitions are not live workflow implementation or model-generation evidence.
+
+- [x] `[must]` Preserve the operational Workspace Builder before developing its
+  DEV replacement; retain a fresh source baseline with honest provenance.
+- [x] `[should]` Present a native declarative design specimen for human review,
+  with distinct review, input-required, checking, partial, failed, offline and
+  stopped examples; reuse Dev Tickets rather than another feedback mechanism.
+- [ ] `[must]` Obtain human acceptance of the wide/compact design and its
+  interaction semantics. Automated interaction checks do not grant this.
+- [ ] `[must]` Bind accepted surfaces to governed state/commands, durable
+  conversations and continuations. Verify state-dependent evidence, freshness,
+  exact revision identity and scoped screenshot/element feedback end to end.
+- [ ] `[should]` Review Client command/status density, conditional-widget gaps,
+  compact view switching and full locale coverage against the accepted design;
+  evolve generic ABI/components together without Builder-specific renderer logic.
 
 Exit/remaining work: Project generated, structurally qualified, browser qualified, user accepted, Automation ready and blocked/partial outcomes separately. Show material assumptions and useful recovery without exposing internal prompt phases.
 
