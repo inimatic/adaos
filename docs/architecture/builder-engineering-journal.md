@@ -258,3 +258,62 @@ Evidence root: `e2e/artifacts/builder/workbench-design-20260914/`, especially
 the environment. Current implementation gates remain BIP-02 and BC-11;
 human review is pending. Core runtime and Client implementation were not changed
 or restarted. No Git push was performed.
+
+## 2026-09-14: Workbench Resources And Decision Revision
+
+User review requested a clearer menu, revision scope, resource hierarchy,
+multiple clarification questions and the delivery path after Automation.
+Design revisions 065 and 066 retain immutable observations; 066 is materialized
+in the existing `desktop-dev`. Workspace files and both owned handler hashes
+still match the earlier preservation receipt. No new Webspace, real Trial,
+model request, acceptance or publication was created.
+
+Decisions are incorporated in the Workbench target architecture and BIP-02,
+not owned by this journal. The specimen separates equipment business records
+(previously ambiguously titled `Assets`), reference Inputs and the generated
+File tree. Files are abbreviated revision-scoped examples, not an actual host
+filesystem. A real retained screenshot demonstrates resource-image inspection.
+Local file selection stores metadata only; it explicitly does not upload bytes
+or include them in an LLM request. Generated-file changes route to a scoped
+conversation draft. Two required clarification answers and one optional answer
+can be saved/reopened without continuation; incomplete submission stays blocked.
+
+Seventeen fixture states include task/actor/milestone cues and explicit Beta
+preparation, installation, acceptance, local Stable release and public Stable
+publication decisions. Alpha remains DEV, not an extra acceptance stage. These
+are design simulations, not evidence that delivery implementation passed.
+
+Generic Client corrections: adaptive-toolbar menus use Ionic root overlays,
+bounded wrapping option labels, keyboard opening and focus return; a short
+authored trigger may remain unchanged by selection. `ui.actions` ABI/types/
+catalog now describe this and the existing selection payload. Hidden widget
+hosts leave layout entirely instead of accumulating empty gaps. Media previews
+resolve `resource:<id>` images/posters through the page registry. No component
+contains Builder/equipment workflow logic. Client inventory and boundary checks
+pass; the inventory generation produced no content change.
+
+Verification: 141 distinct Python tests passed across Workbench, design, WebUI
+schema and capability contracts; 32 focused Client tests passed. Final browser
+probes pass 30 checks across 1440x1000 and 390x844 with 74 screenshots, no page
+errors and no document-width overflow. File-view spacing is 8px on both
+viewports after hidden-host removal. Two additional read-only checks preserve
+Workspace Builder. Retained report: `browser-066/report.json` under
+`e2e/artifacts/builder/workbench-design-20260914/`.
+
+The probes found two real defects before passing: overlay dismissal initially
+lost trigger focus, and default form commit policy did not retain a partial
+answer. Later, the spacing probe incorrectly counted explicitly enabled
+Diagnostics as empty space; it now disables Diagnostics before measuring gaps.
+The probe also awaits the selected process title before subsequent actions,
+so feedback cannot race a requested fixture switch. No screenshot tickets are
+automatically created; the existing screenshot entry is exercised, not its
+permission/upload lifecycle. Full EN/RU prose, light theme, keyboard/APG audit,
+outer compact collapsible wrappers and dense navigation remain review debt.
+
+Checkpoint: Client commit `3398fc0`; local ProjectRelease `builder@0.2.129` via
+`adaos dev project push builder --local-only --bump patch`.
+Release digest: `sha256:b224725b97ea778956a9b34c51bcef00f938959d5f638642bb078dfb02be4c30`.
+Source revision: `sha256:e63b1d86617d054589b44b31b0fa75ba211665a36d0ec4676946827727d4c48c`.
+The source snapshot includes deployable assets; local UI-revision history is
+separate development evidence. Core Client gitlink and `.sha` are aligned.
+Human acceptance and real bindings remain open. No Git push or API restart.

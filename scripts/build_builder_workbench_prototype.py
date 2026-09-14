@@ -11,6 +11,7 @@ import argparse
 import copy
 import hashlib
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,14 +21,18 @@ ROOT = Path(__file__).resolve().parents[1]
 SCENARIO = ROOT / ".adaos/dev/sn_6acf0c01/scenarios/builder"
 OUTPUT = ROOT / "e2e/artifacts/builder/workbench-design-20260914"
 LOCALES: dict[str, dict[str, str]] = {"ru": {}, "en": {}}
-REVISION = "064"
+REVISION = "066"
 REQUEST = (
     "Design a new DEV Builder prototype for human review, based on the target "
     "Builder workflow and SOTA interaction patterns. Preserve the operational "
     "Workspace Builder. Model current work, clarification, exact-revision "
     "review, partial results, failure, recovery, context inspection and history. "
     "Do not implement Automation, create Trials, publish, or invoke an LLM from "
-    "the design specimen. Do not accept the new design on behalf of the user."
+    "the design specimen. Do not accept the new design on behalf of the user. "
+    "Revision 066: compact process menu; visible revision identity; task actors "
+    "and milestones; separate reference inputs from generated file trees; batch "
+    "clarification with retained drafts; explicit local Alpha, Beta and Stable "
+    "delivery decisions. All delivery records and transitions remain fixtures."
 )
 
 
@@ -161,9 +166,31 @@ def specimens():
          "Остановка подтверждена", "Stop acknowledged"),
     ]
     result = {}
+    definitions.extend([
+        ("beta_ready", "Beta подготовлена", "Beta prepared", "Нужно решение", "Decision needed",
+         "Кандидат 1.4.0-beta.1 готов к локальной апробации. Установка и публикация еще не разрешены.", "Candidate 1.4.0-beta.1 is ready for local testing. Installation and publication are not authorized.",
+         "Ожидание человека", "Waiting for you"),
+        ("beta_active", "Апробация Beta", "Beta testing", "Beta локально", "Local Beta",
+         "1.4.0-beta.1 активна в Trials. Stable 1.3.0 сохранена; внешнего доступа к Beta нет.", "1.4.0-beta.1 is active in Trials. Stable 1.3.0 is retained; Beta has no external access.",
+         "Ожидание результатов апробации", "Awaiting testing results"),
+        ("stable_ready", "Выпуск Stable", "Stable release", "Beta принята", "Beta accepted",
+         "Проверки Beta приняты. Переход на Stable 1.4.0 требует отдельного решения и резервной копии данных.", "Beta checks are accepted. Moving to Stable 1.4.0 requires a separate decision and a data backup.",
+         "Ожидание выпуска", "Awaiting release"),
+        ("stable_local", "Stable установлена", "Stable installed", "Stable локально", "Local Stable",
+         "1.4.0 установлена в Workspace. Beta завершена; публикация в Marketplace не выполнена.", "1.4.0 is installed in Workspace. Beta is retired; no Marketplace publication has occurred.",
+         "Ожидание разрешения публикации", "Awaiting publication permission"),
+        ("stable_published", "Stable опубликована", "Stable published", "Опубликовано", "Published",
+         "Publisher разрешил публикацию 1.4.0. История Beta сохранена, активный пакет Beta выведен из обращения.", "Publisher authorized publication of 1.4.0. Beta history is retained; its active package is retired.",
+         "Веха завершена", "Milestone complete"),
+    ])
     for id, ru, en, status_ru, status_en, summary_ru, summary_en, time_ru, time_en in definitions:
-        item = {"id": id, "revision": "003", "run": "DEMO-R17", "synthetic": True,
-                **text_field("target_label", "Осмотр оборудования · Change 12 · ДЕМО", "Equipment inspections · Change 12 · DEMO")}
+        actor = ("ИИ · задача", "AI · task", "construct-outline") if id == "working" else (
+            ("Система · проверка", "System · check", "shield-checkmark-outline") if id == "verifying" else (
+            ("Веха · зафиксировано", "Milestone · recorded", "checkmark-outline") if id in {"accepted", "completed", "stable_published"} else
+            ("Человек · решение", "Human · decision", "person-outline")))
+        item = {"id": id, "revision": "003", "run": "SPECIMEN-R17", "synthetic": True, "icon": actor[2],
+                **text_field("actor", actor[0], actor[1]),
+                **text_field("target_label", "Осмотр оборудования · Change 12", "Equipment inspections · Change 12")}
         for key, a, b in (("label", ru, en), ("title", ru, en), ("state", status_ru, status_en),
                           ("summary", summary_ru, summary_en), ("timing", time_ru, time_en)):
             item.update(text_field(key, a, b))
@@ -194,17 +221,23 @@ def build_document():
     samples = specimens()
     header = toolbar("design-workbench-header", [
         button("applications", "Осмотр оборудования", "Equipment inspections", "folder-open-outline"),
-        button("specimens", "ДЕМО", "DEMO", "options-outline"),
         button("history", "Редакции", "Revisions", "git-branch-outline"),
-        button("settings", "Настройки", "Settings", "settings-outline"),
+        button("specimens", "Состояние процесса", "Process state", "options-outline",
+               displaySelectedLabel=False, selectedStateKey="current.id", optionMetaPaths=["actor"],
+               options=[{k: v[k] for k in ("id", "label", "label_i18n", "icon", "actor", "actor_i18n")} for v in samples.values()]),
+        button("deliveries", "Поставки", "Deliveries", "cube-outline"),
         button("feedback", "Dev Tickets", "Dev Tickets", "ticket-outline"),
+        button("settings", "Настройки", "Settings", "settings-outline"),
     ], [modal_action("click:applications", "design-applications"),
-        modal_action("click:specimens", "design-specimens"),
+        update("select:specimens", current="$state.samples.$event.id", previewRevision="003", inspectedRevision="003"),
+        update("click:deliveries", workbenchView="deliveries"),
         modal_action("click:history", "design-history"), modal_action("click:settings", "design-settings"),
         feedback("click:feedback")],
-        statusDataSource=source("$state.current"))
+        statusDataSource=source({"title": "$state.current.title", "title_i18n": "$state.current.title_i18n",
+            "state": "$state.current.state", "state_i18n": "$state.current.state_i18n",
+            **text_field("target_label", f"Прототип $state.previewRevision · текущий 003 · Change 12 · макет {REVISION}", f"Prototype $state.previewRevision · head 003 · Change 12 · design {REVISION}")}))
     status = details("design-current-work", "", "", "$state.current", [
-        field("summary", "Сейчас", "Now"), field("timing", "Активность · образец", "Activity · specimen")])
+        field("actor", "Ответственность", "Responsibility"), field("summary", "Сейчас", "Now"), field("timing", "Активность · образец", "Activity · specimen")])
     actions = []
     for id, condition, buttons, commands in [
         ("planning", "$state.current.id === 'planning'", [button("generate", "Создать прототип", "Create prototype", "construct-outline")], [update("click:generate", current="$state.samples.working")]),
@@ -217,6 +250,13 @@ def build_document():
         ("failed", "$state.current.id === 'failed'", [button("repair", "Запросить исправление", "Request a fix", "construct-outline"), button("checks", "Посмотреть проверки", "Inspect checks", "shield-checkmark-outline")], [update("click:repair", workbenchView="conversation"), update("click:checks", workbenchView="checks")]),
         ("offline", "$state.current.id === 'offline'", [button("reconnect", "Проверить связь", "Check connection", "refresh-outline")], [update("click:reconnect", current="$state.samples.review")]),
         ("cancelled", "$state.current.id === 'cancelled'", [button("inspect", "Посмотреть сохраненное", "Inspect retained result", "eye-outline")], [update("click:inspect", workbenchView="result")]),
+        *[(key, f"$state.current.id === '{key}'", [button(command, ru, en, "cube-outline")], [modal_action("click:" + command, "design-" + command)])
+          for key, command, ru, en in (
+              ("completed", "prepare-beta", "Подготовить Beta", "Prepare Beta"),
+              ("beta_ready", "install-beta", "Установить Beta", "Install Beta"),
+              ("beta_active", "accept-beta", "Принять Beta", "Accept Beta"),
+              ("stable_ready", "release-stable", "Выпустить Stable", "Release Stable"),
+              ("stable_local", "publish-stable", "Опубликовать Stable", "Publish Stable"))],
     ]:
         actions.append(toolbar("design-action-" + id, buttons, commands, visible=condition))
     actions = [toolbar("design-primary-actions", [dict(b, visibleIf=w["visibleIf"]) for w in actions for b in w["inputs"]["buttons"]],
@@ -225,6 +265,8 @@ def build_document():
         button("result", "Результат", "Result", "eye-outline"), button("brief", "Задача", "Task", "document-text-outline"),
         button("checks", "Проверки", "Checks", "shield-checkmark-outline"), button("process", "Процесс", "Process", "git-branch-outline"),
         button("conversation", "Обсуждение", "Conversation", "chatbubbles-outline"),
+        button("inputs", "Материалы", "Inputs", "attach-outline"),
+        button("files", "Файлы", "Files", "folder-outline"),
     ], [update("click", workbenchView="$event.id")], variant="segmented", selectedStateKey="workbenchView")
     result_widgets = [
         details("design-revision-identity", "Прототип $state.previewRevision", "Prototype $state.previewRevision", {
@@ -233,7 +275,7 @@ def build_document():
         toolbar("design-preview-commands", [button("inspect", "К редакции 003", "Revision 003", "eye-outline"),
                                              button("annotate", "Замечание", "Feedback", "create-outline")],
                 [update("click:inspect", previewRevision="003", inspectedRevision="003"), feedback("click:annotate")], visible="$state.workbenchView === 'result'"),
-        {"id": "design-assets", "type": "ui.table", "area": "main", **text_field("title", "Объекты", "Assets"),
+        {"id": "design-assets", "type": "ui.table", "area": "main", **text_field("title", "Оборудование", "Equipment"),
          "visibleIf": "$state.workbenchView === 'result'", "dataSource": source(choose(equals("$state.previewRevision", "002"), "$state.baselineAssets", ["$state.assetPump", "$state.assetFan"])),
          "inputs": {"columns": [field("name", "Название", "Name"), field("location", "Локация", "Location")],
                     "selectable": True, "rowKey": "id", "selectedStateKey": "selectedAssetId", "search": False,
@@ -297,11 +339,6 @@ def build_document():
                                  "live_commands": False, "specimen_states": list(samples)}}, "widgets": widgets}
     close = {"on": "submit", "type": "closeModal"}
     modals = {
-        "design-specimens": modal("design-specimens", "Состояние процесса · ДЕМО", "Process state · DEMO", [
-            form("design-specimen-form", [label("Состояние", "State", id="id", type="dropdown", options=[
-                {"value": k, "label": v["label"], "label_i18n": v["label_i18n"]} for k, v in samples.items()
-            ])], "Показать", "Show", [update("submit", current="$state.samples.$event.values.id", inspectedRevision="003", previewRevision="003", pendingNote="", answer="", reviewNote=""), close]),
-        ]),
         "design-accept": modal("design-accept", "Принять прототип 003", "Accept prototype 003", [
             details("design-accept-summary", "Результат для согласования", "Result for acceptance", {
                 "revision": "003 · основа 002 · Change 12", "change": "Модалка редактирования объекта. Выбор осмотров сохранен.",
@@ -311,8 +348,14 @@ def build_document():
             form("design-accept-form", [label("Комментарий, необязательно", "Comment, optional", id="note", type="longText")], "Принять 003 в макете", "Accept 003 in specimen", [update("submit", current="$state.samples.accepted", reviewNote="$event.values.note"), close]),
         ]),
         "design-answer": modal("design-answer", "Нужно уточнение", "Clarification needed", [
-            details("design-question", "Кому отправлять уведомления?", "Who should receive notifications?", {"reason": "Требование сохранено, но канал и получатель неизвестны. Интерфейс не выдает локальное сохранение за доставку."}, [field("reason", "Почему спрашиваем", "Why this is needed")]),
-            form("design-answer-form", [label("Канал и получатель", "Channel and recipient", id="answer", type="longText", required=True)], "Ответить и продолжить в макете", "Answer and continue in specimen", [update("submit", answer="$event.values.answer", current="$state.samples.verifying"), close]),
+            details("design-question", "Уведомления: два обязательных решения", "Notifications: two required decisions", {
+                **text_field("reason", "Канал и получатель нужны для доставки. Черновик ответов не возобновляет исполнение; дополнительное пожелание необязательно.", "Delivery needs a channel and a recipient. Saving a draft does not resume execution; extra preferences are optional.")}, [field("reason", "Почему спрашиваем", "Why this is needed")]),
+            form("design-answer-form", [
+                label("1. Канал доставки", "1. Delivery channel", id="channel", type="dropdown", required=True, stateKey="answerChannel", options=[label("Telegram", "Telegram", value="telegram"), label("Электронная почта", "Email", value="email")]),
+                label("2. Получатель", "2. Recipient", id="recipient", type="shortText", required=True, stateKey="answerRecipient"),
+                label("3. Дополнительное пожелание", "3. Extra preference", id="preference", type="longText", stateKey="answerPreference"),
+            ], "Ответить и продолжить в макете", "Answer and continue in specimen", [update("submit", answers="$event.values", current="$state.samples.verifying"), close]),
+            toolbar("design-answer-draft", [button("save-draft", "Сохранить черновик", "Save draft", "save-outline")], [{"on": "click:save-draft", "type": "closeModal"}]),
         ]),
         "design-stop": modal("design-stop", "Остановить текущую работу?", "Stop current work?", [
             details("design-stop-effect", "Сохраненное останется доступным", "Saved work remains available", {"effect": "Новые действия прекратятся после подтверждения исполнителя. Уже совершенные изменения не откатываются. Workspace не затронут."}, [field("effect", "Последствия", "Consequences")]),
@@ -364,13 +407,102 @@ def build_document():
     settings = modals["design-settings"]["schema"]["widgets"][0]
     settings["dataSource"] = source({"id": "settings", "diagnostics": "$state.designSettings.diagnostics"})
     settings["inputs"]["selectedStateKey"] = "settingsId"
-    specimen_form = modals["design-specimens"]["schema"]["widgets"][0]
-    specimen_form["dataSource"] = source("$state.current")
-    specimen_form["inputs"]["selectedStateKey"] = "current.id"
+    modals["design-answer"]["schema"]["widgets"][1]["inputs"]["autoCommit"] = True
+    add_material_views(page, modals)
+    add_delivery_views(page, modals)
     resources = {f"builder.design.i18n.{locale}": {"kind": "data", "role": "i18n", "locale": locale, "path": f"assets/i18n/design-{REVISION}-{locale}.json", "mime": "application/json", "delivery": "core"} for locale in LOCALES}
+    resources["builder.design.reference"] = {"kind": "image", "scope": "scenario", "path": f"assets/design-{REVISION}-reference.png", "mime": "image/png", "delivery": "core"}
     return {"schema": "adaos.webui.v1", "generated_by": "human-authored-builder-design",
             "ui": {"version": REVISION, "application": {"desktop": {"pageSchema": page}, "modals": modals, "resources": resources},
                    "user_summary": {"assumptions": ["Design specimen only; every workflow command is simulated in local UI state."], "expected_behavior": ["Human approval is pending; no Automation, Trial, publication, or LLM calls are admitted."]}}, "resources": resources}
+
+
+def add_material_views(page, modals):
+    files = {"id": "application", "title": "equipment-inspections", "children": [
+        {"id": "scenario", "title": "scenarios / equipment", "children": [
+            {"id": "webui", "title": "webui.json", "path": "scenarios/equipment/webui.json", "kind": "JSON",
+             "content": '```json\n{"revision": "003", "layout": "split", "interaction": "select + edit modal"}\n```'},
+            {"id": "assets", "title": "assets", "children": [
+                {"id": "fixtures", "title": "equipment.json", "path": "scenarios/equipment/assets/equipment.json", "kind": "JSON",
+                 "content": '```json\n[{"id": "pump", "name": "Насос К-1", "location": "Цех 1"}]\n```'},
+                {"id": "locales", "title": "i18n", "children": [
+                    {"id": "ru", "title": "ru.json", "path": "scenarios/equipment/assets/i18n/ru.json", "kind": "JSON",
+                     "content": '```json\n{"equipment.edit": "Редактировать объект"}\n```'}]}]}]},
+        {"id": "skill", "title": "skills / equipment", "children": [
+            {"id": "handler", "title": "handlers/main.py", "path": "skills/equipment/handlers/main.py", "kind": "Python",
+             **text_field("content", "Код реализации появляется на этапе автоматизации. В прототипе 003 его еще нет.", "Implementation code is added during Automation. Prototype 003 has no implementation yet.")}]}]}
+    baseline = copy.deepcopy(files)
+    baseline["children"][0]["children"][0]["content"] = '```json\n{"revision": "002", "layout": "split", "interaction": "select"}\n```'
+    page["initialState"].update(fileTree=files, baselineFileTree=baseline, selectedFile={}, selectedFileId="",
+        attachmentDraft=[], includeReference=False, referenceId="reference", inputRecordId="input-record")
+    visible = "$state.workbenchView === 'files'"
+    page["widgets"].extend([
+        details("design-files-scope", "Файлы приложения · прототип $state.previewRevision", "Application files · prototype $state.previewRevision",
+                {**text_field("scope", "Снимок редакции. Содержимое файлов в этом макете сокращено; это не проводник рабочего компьютера.", "Revision snapshot. File contents in this specimen are abbreviated; this is not a filesystem browser.")},
+                [field("scope", "Область", "Scope")], visible=visible),
+        {"id": "design-file-tree", "type": "visual.taigaTree", "area": "main", "visibleIf": visible,
+         "dataSource": source(choose(equals("$state.previewRevision", "002"), "$state.baselineFileTree", "$state.fileTree")),
+         "inputs": {"hideRoot": True, "expanded": True, "wrapTitles": True, "selectionMode": "leaf", "selectedStateKey": "selectedFileId"},
+         "actions": [update("select", selectedFile="$event", selectedFileId="$event.id"), modal_action("select", "design-file-viewer")]},
+        details("design-inputs-scope", "Материалы для Builder", "Materials for Builder", {
+            **text_field("scope", "Change 12 · исходные материалы, не файлы поставки. Подключение к контексту требует выбора пользователя.", "Change 12 · input references, not release files. Context inclusion requires an explicit choice.")},
+            [field("scope", "Область", "Scope")], visible="$state.workbenchView === 'inputs'"),
+        {"id": "design-reference-table", "type": "ui.table", "area": "main", "visibleIf": "$state.workbenchView === 'inputs'",
+         "dataSource": source([
+             {"id": "code", "name": "editing-example.py", **text_field("role", "Пример исходного кода", "Code reference"),
+              "content": '```python\ndef select_equipment(equipment_id):\n    return {"selected": equipment_id}\n```'},
+             {"id": "screen", "name": "builder-reference.png", "media": "resource:builder.design.reference", "mediaKind": "image", **text_field("role", "Визуальный ориентир", "Visual reference"),
+              **text_field("content", "Пример экрана прикладывается как ориентир, не как инструкция и не как часть поставки.", "A screenshot is a reference, not an instruction or a release asset.")}]),
+         "inputs": {"columns": [field("name", "Материал", "Material"), field("role", "Назначение", "Role")], "pagination": {"enabled": False}},
+         "actions": [update("select", selectedInput="$event"), modal_action("select", "design-input-viewer")]},
+    ])
+    attach = form("design-attach-form", [
+        label("Исходные материалы", "Reference files", id="files", type="fileUpload", multiple=True, maxFiles=5, stateKey="attachmentDraft"),
+        label("Включить пример кода в следующий контекст", "Include code example in next context", id="include", type="toggle", stateKey="includeReference", defaultValue=False),
+    ], "Сохранить выбор в макете", "Keep selection in specimen", [update("submit", pendingAttachments="$event.values.files", referenceIncluded="$event.values.include")])
+    attach["visibleIf"] = "$state.workbenchView === 'inputs'"
+    attach["inputs"]["autoCommit"] = True
+    page["widgets"].extend([attach, details("design-input-delivery", "Состояние материалов", "Material status", {
+        **text_field("delivery", "Выбранные файлы: только имена и метаданные в памяти браузера. Байты не загружены; модель ничего не получила.", "Selected files: names and metadata in browser memory only. Bytes are not uploaded; nothing was sent to the model."),
+        "included": "$state.includeReference", "files": "$state.attachmentDraft",
+    }, [field("delivery", "Доставка", "Delivery"), field("included", "Пример кода выбран", "Code reference selected"), field("files", "Локальный выбор", "Local selection")], visible="$state.workbenchView === 'inputs'")])
+    modals["design-file-viewer"] = modal("design-file-viewer", "Файл · прототип $state.previewRevision", "File · prototype $state.previewRevision", [
+        details("design-file-content", "$state.selectedFile.title", "$state.selectedFile.title", "$state.selectedFile", [field("path", "Путь", "Path"), field("kind", "Формат", "Format"), field("content", "Содержимое", "Content", kind="markdown")]),
+        toolbar("design-file-request", [button("request-file-change", "Предложить изменение", "Request a change", "chatbox-outline", enabledIf="$state.previewRevision === '003'")],
+                [update("click:request-file-change", workbenchView="conversation", requestedFile="$state.selectedFile.path", requestRevision="$state.previewRevision"), {"on": "click:request-file-change", "type": "closeModal"}]),
+    ])
+    modals["design-input-viewer"] = modal("design-input-viewer", "Исходный материал", "Input reference", [
+        details("design-input-content", "$state.selectedInput.name", "$state.selectedInput.name", "$state.selectedInput", [field("role", "Назначение", "Role"), field("content", "Содержимое", "Content", kind="markdown")]),
+        details("design-reference-image", "Скриншот-ориентир", "Reference screenshot", "$state.selectedInput", [], mediaKey="media", mediaKindKey="mediaKind", visible="$state.selectedInput.id === 'screen'"),
+    ])
+    page["widgets"].append(details("design-file-request-scope", "Предложение к файлу", "File change request", {"file": "$state.requestedFile", "revision": "$state.requestRevision"},
+        [field("file", "Файл", "File"), field("revision", "Основа сообщения", "Message base")], visible="$state.workbenchView === 'conversation' && $state.requestedFile"))
+
+
+def add_delivery_views(page, modals):
+    page["widgets"].extend([
+        details("design-delivery-summary", "Каналы поставки · образец", "Delivery channels · specimen", {
+            **text_field("alpha", "DEV · прототип 003 / реализация A17. Персональный preview, не отдельная веха приемки.", "DEV · prototype 003 / implementation A17. Personal preview, not another acceptance milestone."),
+            **text_field("beta", "Trials · кандидат 1.4.0-beta.1 на основе A17. Установка отдельно от разрешения внешнего доступа.", "Trials · candidate 1.4.0-beta.1 from A17. Installation is separate from permission for external access."),
+            **text_field("stable", "Workspace · 1.3.0 до выпуска 1.4.0. Установка отдельно от публикации в Marketplace.", "Workspace · 1.3.0 until 1.4.0 is released. Installation is separate from Marketplace publication."),
+            "status": "$state.current.summary", "status_i18n": "$state.current.summary_i18n",
+        }, [field("alpha", "Alpha / DEV", "Alpha / DEV"), field("beta", "Beta / Trials", "Beta / Trials"), field("stable", "Stable / Workspace", "Stable / Workspace"), field("status", "Текущее состояние", "Current state")], visible="$state.workbenchView === 'deliveries'"),
+    ])
+    for command, target, ru, en, effect_ru, effect_en in [
+        ("prepare-beta", "beta_ready", "Подготовить Beta", "Prepare Beta", "Создать неизменяемый пакет из принятой реализации A17. Ничего не устанавливать и не публиковать.", "Create an immutable package from accepted implementation A17. No installation or publication."),
+        ("install-beta", "beta_active", "Установить Beta", "Install Beta", "Проверить пакет и создать резервную копию перед активацией 1.4.0-beta.1 в Trials. Stable сохраняется.", "Verify the package and back up data before activating 1.4.0-beta.1 in Trials. Stable is retained."),
+        ("accept-beta", "stable_ready", "Принять Beta", "Accept Beta", "Зафиксировать приемку кандидата 1.4.0-beta.1. Не выпускать Stable автоматически.", "Record acceptance of candidate 1.4.0-beta.1. Do not release Stable automatically."),
+        ("release-stable", "stable_local", "Выпустить Stable", "Release Stable", "Резервная копия, проверка перехода, активация 1.4.0 в Workspace. Завершить Beta; история и Dev Tickets остаются.", "Back up data, verify the transition, activate 1.4.0 in Workspace. Retire Beta; retain history and Dev Tickets."),
+        ("publish-stable", "stable_published", "Опубликовать Stable", "Publish Stable", "Только publisher: разрешить публичное распространение 1.4.0 в Marketplace. Это отдельное согласие.", "Publisher only: authorize public distribution of 1.4.0 in Marketplace. This is a separate permission."),
+    ]:
+        modals["design-" + command] = modal("design-" + command, ru, en, [
+            details("design-effect-" + command, "Последствия решения", "Decision effects", {
+                **text_field("effect", effect_ru, effect_en),
+                **text_field("simulation", "Макет: изменится только изображаемое состояние. Реальные пакеты, данные и публикации не затрагиваются.", "Specimen: only the displayed state changes. Real packages, data and publications are untouched.")},
+                [field("effect", "Действие", "Action"), field("simulation", "Исполнение", "Execution")]),
+            toolbar("design-confirm-" + command, [button("confirm-" + command, "Подтвердить в макете", "Confirm in specimen", "checkmark-outline")],
+                    [update("click:confirm-" + command, current="$state.samples." + target, workbenchView="deliveries"), {"on": "click:confirm-" + command, "type": "closeModal"}]),
+        ])
 
 
 def audit_safety(value):
@@ -420,6 +552,7 @@ def main():
         write(revision_dir / f"{revision}.json", payload)
     for locale, data in LOCALES.items():
         write(SCENARIO / f"assets/i18n/design-{REVISION}-{locale}.json", data)
+    shutil.copyfile(ROOT / "scripts/fixtures/builder-workbench-reference.png", SCENARIO / f"assets/design-{REVISION}-reference.png")
     write(SCENARIO / "webui.json", after)
     scenario = read(SCENARIO / "scenario.json")
     scenario["ui"] = copy.deepcopy(after["ui"])

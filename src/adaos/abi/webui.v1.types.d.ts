@@ -419,6 +419,9 @@ export interface WebUiActionButton {
   enabledIf?: string
   value?: unknown
   stateKey?: string
+  /** Keep the menu trigger's authored label/icon when false. Defaults to true. */
+  displaySelectedLabel?: boolean
+  optionMetaPaths?: readonly string[]
   selected?: boolean
   connected?: boolean
   node_status?: string

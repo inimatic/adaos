@@ -1863,6 +1863,15 @@
           "minLength": 1,
           "description": "Page-state key containing the selected option value for a menu-style action."
         },
+        "optionMetaPaths": {
+          "type": "array", "items": { "type": "string" },
+          "description": "Ordered option fields displayed as secondary menu text."
+        },
+        "displaySelectedLabel": {
+          "type": "boolean",
+          "default": true,
+          "description": "When false, retain the trigger's label/icon instead of the selected option's. Selection remains visible in the menu. Useful for bounded command bars with long option labels."
+        },
         "options": {
           "type": "array",
           "items": { "type": "object", "additionalProperties": true },

@@ -332,11 +332,18 @@ machine-checked impact set.
   locale formatting, and long-content layout for all admitted components.
 - [ ] `[must]` Enforce stable dimensions and no incoherent overlap in declared
   representative states.
-- [ ] `[must]` Correct cross-widget stacking for an open adaptive-toolbar menu;
+- [x] `[must]` Correct cross-widget stacking for an open adaptive-toolbar menu;
   later toolbars must not cover its options or intercept pointer events. Retain
-  a long-menu browser regression. The Builder design specimen exposed this in
-  revision 063; using a modal selector in that specimen does not fix the generic
-  component.
+  a long-menu browser regression. Generic Ionic root overlays replace the inline
+  stacking context; bounded long labels, Arrow opening and Escape focus return
+  are exercised in Builder design probes. `displaySelectedLabel=false` keeps
+  an authored short trigger. This is not a claim of complete APG conformance.
+- [x] `[must]` Remove a widget host from layout when its `visibleIf` is false;
+  hidden renderers must not retain flex/grid gaps. Qualification covers plain
+  hosts; compact outer collapsible wrappers still need the C3 composition review.
+- [x] `[should]` Resolve declared `resource:<id>` images/posters in the generic
+  media preview through the page resource registry; preserve missing/loading/
+  error states and existing media safety checks. No Builder-specific resolver.
 - [ ] `[should]` Qualify dense Workbench composition without product-specific
   CSS: long primary-command labels, compact view navigation, hidden-widget gaps
   and two-column tables. Review the table's fixed 520px minimum as a declared

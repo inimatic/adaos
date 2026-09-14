@@ -797,6 +797,10 @@ the result, review decision or recovery action to be buried in the chat stream:
 - the header reserves its title line for the complete Project title; a separate
   compact Preview indicator carries the exact Preview identity without
   truncating that title;
+- the inspected artifact's kind and revision, current head and originating
+  Change remain visible across views. A historical artifact does not freeze
+  live conversation or process status; Implementation identity and its accepted
+  Prototype base are separate refs, not interchangeable revision numbers;
 - a compact current-work area shows the focused Change, scope, meaningful last
   event/freshness, blockers and the next available command;
 - the central surface can focus Result, Task brief, Checks, Process or
@@ -830,6 +834,66 @@ Selecting a Process item changes focus/inspection only. `Open in Preview` is an
 explicit command. The Preview indicator shows `proto:`, `active:`, or
 `public:` and the exact revision/version.
 
+### Navigation, Materials And Delivery Axes
+
+Navigation narrows scope from Application to Revision and its Result, Files,
+Checks or Task. Process and Deliveries are related projections, not nested
+release-channel labels. Use a compact, stable menu trigger; long option labels
+wrap inside a viewport-bounded overlay above other widgets. Menus preserve
+keyboard focus and distinguish selection from execution. A design-only process
+state picker may switch fixtures; a production Process picker cannot assign
+workflow state or approve work.
+
+Process entries distinguish a task, independent check and recorded milestone.
+Actor/awaited party is an independent field (AI, system, human or unknown),
+shown as text with optional redundant icons. A milestone has evidence and an
+owner, but is not itself a worker. Loss of connectivity never implies a human
+decision or a stopped worker.
+
+Two resource surfaces have different authority and lifetime:
+
+- **Inputs / Materials** are user-provided references: source-code examples,
+  screenshots, images and documents. Each has a stable identity, immutable
+  content digest/version, origin, MIME/size, role, Project/Change scope and
+  explicit inclusion/exclusion in a future context. Selected, uploading,
+  stored, included in a particular request and failed are different states.
+  Selection is not delivery; references are untrusted data, never instructions
+  or executable package files merely because they were attached. Credentials
+  and unrelated materials must not be admitted implicitly. Removing inclusion
+  affects future contexts, not the immutable receipt of a completed request.
+- **Application Files** are the generated artifact's hierarchical source and
+  content tree. Paths, selection and displayed bytes belong to the inspected
+  revision. They are not business records named `assets` by an application.
+  MVP provides directory expansion, read-only text/data/image inspection and
+  a scoped request to Builder to change a file in a new candidate. Historical
+  inspection cannot mutate the current head. Package source, runtime data and
+  reference inputs are not mixed in one editable filesystem.
+
+MVP input intake uses reviewed stored references and observable upload/error/
+removal states, not a desktop file picker that pretends bytes reached the LLM.
+The design specimen may exercise only local metadata selection, provided it
+states that limitation and does not mark inputs delivered. Multimodal model
+admission must obey the stage-specific context contract; arbitrary legacy
+code/screenshot reverse engineering remains deferred. A full file IDE, binary
+editing/diffs, bulk asset transformations and collaborative editing are deferred;
+the initial tree/ref model must not preclude them.
+
+Accepted Automation remains in **Alpha / DEV**; Alpha is not a further required
+approval after implementation acceptance. **Beta / Trials** is an immutable
+candidate for testing. Preparing, installing/activating and allowing external
+distribution are separate decisions. **Stable / Workspace** release and public
+Marketplace publication are also separate decisions, limited by publisher
+authority and existing distribution rules. Stable retirement of superseded
+Beta retains provenance and Dev Tickets; backup and transition checks precede
+activation. Do not add `Demo` as a channel or infer publication from acceptance.
+The existing source/package/activation contract remains authoritative.
+
+The reusable interaction basis is the
+[WAI-ARIA menu button](https://www.w3.org/WAI/ARIA/apg/patterns/menu-button/)
+and [tree view](https://www.w3.org/WAI/ARIA/apg/patterns/treeview/): focus and
+selection are different, and hierarchy should be navigable rather than flattened.
+These patterns do not require Builder-specific Client components.
+
 ### Human Decision And Feedback Surface
 
 The current task projection distinguishes understanding, generation, required
@@ -853,6 +917,14 @@ is queued as a visible addendum/next Change, not injected into a running
 executor invisibly. Input-required questions explain why an answer is needed,
 what work is waiting and what continuation the answer admits. Stop requests
 remain pending until acknowledged; disconnection is not acknowledgement.
+
+Clarification is a collection of identified questions, each carrying reason,
+scope, blocking/optional status and an answer revision. The surface supports
+partial drafts and returning later. Saving a draft does not resume execution;
+explicit continuation validates the required answers against the still-current
+question set and candidate. An obsolete answer is not silently applied to a
+new Change. Optional preferences cannot block continuation. This does not
+mandate questionnaires for already-clear small requests.
 
 Feedback reuses **Dev Tickets**, its screenshot capture and Required actions
 element selection. Builder must not introduce a second screenshot store or

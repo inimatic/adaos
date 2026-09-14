@@ -220,7 +220,8 @@
       "aliases": { "en": ["actions", "toolbar", "buttons", "segmented", "tabs", "tab bar"], "ru": ["действия", "панель", "кнопки", "переключатель", "вкладки"] },
       "manifest": { "widget_type": "ui.actions" },
       "data_shape": { "kind": "none" },
-      "events": ["click", "click:<buttonId>"],
+      "events": ["click", "click:<buttonId>", "select:<buttonId>"],
+      "interactions": { "menu": "adaptiveToolbar buttons with options use a viewport-bounded overlay. Selection emits select:<buttonId> with the option as $event (id/value/menu_id), not $event.option. displaySelectedLabel=false keeps a short authored trigger label; optionMetaPaths chooses secondary option fields. Selection does not execute another command implicitly." },
       "responsive": { "desktop": "bounded command group", "compact": "wraps without overlapping" },
       "postconditions": ["Every declared button has an executable or explicitly disabled action contract."]
     },

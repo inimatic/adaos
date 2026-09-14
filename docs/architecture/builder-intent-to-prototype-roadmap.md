@@ -95,6 +95,18 @@ Implementation boundary: Conversation and governed status projections exist; a w
 - [x] `[should]` Present a native declarative design specimen for human review,
   with distinct review, input-required, checking, partial, failed, offline and
   stopped examples; reuse Dev Tickets rather than another feedback mechanism.
+- [x] `[should]` Extend the design with a stable process menu, revision header,
+  actor/milestone cues, separate reference materials and a generated-file tree,
+  batch clarification and explicit simulated Beta/Stable decisions. This is
+  interaction design, not live input ingestion, delivery or acceptance proof.
+- [ ] `[must]` Bind input intake to immutable stored references: observable
+  upload/error/removal, role/scope and reviewed context inclusion; distinguish
+  local selection from bytes stored and bytes actually admitted to a request.
+- [ ] `[must]` Bind read-only file inspection to the selected artifact ref and
+  content digest; carry file/revision scope into a new conversational change.
+- [ ] `[must]` Persist clarification drafts per Project/Change/question set;
+  reject stale continuation and resume only after required answers and explicit
+  consent. Batch rendering alone does not implement durable continuations.
 - [ ] `[must]` Obtain human acceptance of the wide/compact design and its
   interaction semantics. Automated interaction checks do not grant this.
 - [ ] `[must]` Bind accepted surfaces to governed state/commands, durable
@@ -103,6 +115,9 @@ Implementation boundary: Conversation and governed status projections exist; a w
 - [ ] `[should]` Review Client command/status density, conditional-widget gaps,
   compact view switching and full locale coverage against the accepted design;
   evolve generic ABI/components together without Builder-specific renderer logic.
+- [ ] `[deferred]` Expand read-only artifact inspection into a full file IDE,
+  binary/diff editors, bulk asset transformations and collaborative editing.
+  This is a BIP-02 sub-scope, not another independent top-level package.
 
 Exit/remaining work: Project generated, structurally qualified, browser qualified, user accepted, Automation ready and blocked/partial outcomes separately. Show material assumptions and useful recovery without exposing internal prompt phases.
 

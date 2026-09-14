@@ -21,7 +21,7 @@ def test_specimen_uses_native_schema_without_live_execution():
     page = doc["ui"]["application"]["desktop"]["pageSchema"]
     assert page["meta"]["builder"]["human_acceptance"] == "pending"
     assert page["meta"]["builder"]["live_commands"] is False
-    assert len(page["initialState"]["samples"]) == 12
+    assert len(page["initialState"]["samples"]) == 17
     assert set(design.LOCALES["ru"]) == set(design.LOCALES["en"])
 
 
@@ -65,9 +65,42 @@ def test_acceptance_never_starts_implementation_or_publication():
 
 def test_editors_use_selected_record_hydration_and_versioned_locale_assets():
     application = design.build_document()["ui"]["application"]
-    for name in ("design-edit-asset", "design-settings", "design-specimens"):
+    for name in ("design-edit-asset", "design-settings"):
         editor = application["modals"][name]["schema"]["widgets"][0]
         assert editor["dataSource"]["kind"] == "static"
         assert editor["inputs"]["selectedStateKey"]
         assert not any(str(field.get("defaultValue", "")).startswith("$state") for field in editor["inputs"]["fields"])
     assert all(f"design-{design.REVISION}-" in resource["path"] for resource in application["resources"].values())
+
+
+def test_files_inputs_and_process_are_separate_scoped_views():
+    application = design.build_document()["ui"]["application"]
+    page = application["desktop"]["pageSchema"]
+    widgets = {w["id"]: w for w in page["widgets"]}
+    assert widgets["design-file-tree"]["type"] == "visual.taigaTree"
+    assert widgets["design-file-tree"]["inputs"]["selectionMode"] == "leaf"
+    assert page["initialState"]["fileTree"] != page["initialState"]["baselineFileTree"]
+    assert page["initialState"]["includeReference"] is False
+    viewer = application["modals"]["design-file-viewer"]["schema"]["widgets"]
+    assert all(w["type"] != "ui.form" for w in viewer)
+    assert viewer[1]["actions"][0]["params"]["requestRevision"] == "$state.previewRevision"
+    menu = next(b for b in widgets["design-workbench-header"]["inputs"]["buttons"] if b["id"] == "specimens")
+    assert menu["displaySelectedLabel"] is False
+    assert menu["optionMetaPaths"] == ["actor"]
+
+
+def test_clarification_drafts_do_not_resume_execution():
+    widgets = design.build_document()["ui"]["application"]["modals"]["design-answer"]["schema"]["widgets"]
+    answer = widgets[1]
+    assert answer["inputs"]["autoCommit"] is True
+    assert len([f for f in answer["inputs"]["fields"] if f.get("required")]) == 2
+    assert answer["actions"][0]["params"]["current"] == "$state.samples.verifying"
+    assert widgets[2]["actions"] == [{"on": "click:save-draft", "type": "closeModal"}]
+
+
+def test_delivery_steps_are_explicit_local_simulations():
+    modals = design.build_document()["ui"]["application"]["modals"]
+    for command, target in [("prepare-beta", "beta_ready"), ("install-beta", "beta_active"), ("accept-beta", "stable_ready"), ("release-stable", "stable_local"), ("publish-stable", "stable_published")]:
+        actions = modals["design-" + command]["schema"]["widgets"][-1]["actions"]
+        assert actions[0]["params"]["current"] == "$state.samples." + target
+        assert actions[1]["type"] == "closeModal"
