@@ -74,7 +74,8 @@ export async function exerciseCreation({ page, widget, command, capture, closeMo
   const prototypeSaved = responseFor('set_llm_profile')
   await widget('chat-side-settings').getByRole('button', { name: /^применить$/i }).click()
   await success(prototypeSaved)
-  await choose('design-codex-settings', 'model', 'GPT-5.4')
+  const codexModel = process.env.ADAOS_E2E_CODEX_MODEL || 'gpt-5.5'
+  await choose('design-codex-settings', 'model', codexModel.toUpperCase())
   await choose('design-codex-settings', 'reasoning_effort', 'medium')
   const codexSaved = responseFor('set_codex_profile')
   await widget('design-codex-settings').getByRole('button', { name: /^сохранить codex$/i }).click()
@@ -85,11 +86,48 @@ export async function exerciseCreation({ page, widget, command, capture, closeMo
   const settings = await success(reread)
   assert.equal(settings.execution_ref, `scenario:${id}`)
   assert.equal(settings.prototype_model, 'gpt-5')
-  assert.equal(settings.codex_model, 'gpt-5.4')
+  assert.equal(settings.codex_model, codexModel)
   assert.equal(settings.codex_effort, 'medium')
   record('stage_models_persist_at_execution_identity', { settings })
   await capture('saved-models')
   await closeModal()
+  const automationBrief = process.env.ADAOS_E2E_AUTOMATION_BRIEF
+  if (automationBrief) {
+    const followup = process.env.ADAOS_E2E_AUTOMATION_FOLLOWUP === '1'
+    assert.ok(resumed, 'Automation may only target a previously created TEST application')
+    const state = await widget('design-conversation-side-task').locator('ada-chat-widget')
+      .evaluate(el => window.ng.getComponent(el).pageState.getSnapshot())
+    assert.equal(state.selectedProjectId, id)
+    assert.equal(state.workbench.prototype_revision, '002')
+    const intent = { id, brief: automationBrief, followup, requested_model: settings.codex_model,
+      requested_effort: settings.codex_effort, created_at: new Date().toISOString() }
+    await fs.writeFile(path.join(process.env.ADAOS_E2E_OUTPUT, 'automation-intent.json'), JSON.stringify(intent, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' })
+    await command('implement').click()
+    const form = followup ? 'automation-followup' : 'automation-start'
+    await field(form, followup ? 'text' : 'implementation_brief').locator('textarea').fill(automationBrief)
+    await capture('automation-ready')
+    const tool = followup ? 'submit_automation' : 'start_automation'
+    const pending = page.waitForResponse(response => response.request().postData()?.includes(`builder_sdk_control_skill:${tool}`), { timeout: 180000 })
+    void pending.catch(() => {})
+    await widget(form).getByRole('button', { name: followup ? /^отправить новую итерацию$/i : /^запустить$/i }).click()
+    const response = await pending
+    const value = await response.json()
+    await fs.writeFile(path.join(process.env.ADAOS_E2E_OUTPUT, 'automation-start.json'), JSON.stringify(value, null, 2) + '\n', 'utf8')
+    assert.equal(value.ok, true, JSON.stringify(value))
+    assert.notEqual(value.result?.ok, false, JSON.stringify(value))
+    const session = value.result?.session
+    assert.equal(session?.object_id, id)
+    assert.ok(session.current_task_id)
+    assert.equal(session.agent_profile?.model, codexModel)
+    assert.equal(session.agent_profile?.reasoning_effort, settings.codex_effort)
+    if (followup) {
+      assert.ok(session.iteration > 0)
+      assert.ok((session.agent_profile_history || []).every(previous => previous.task_id !== session.current_task_id))
+    }
+    record('automation_started_from_native_form', { result: value.result })
+    await capture('automation-started')
+    return
+  }
   const prompt = process.env.ADAOS_E2E_PROTOTYPE_PROMPT
   if (prompt) {
     const chat = widget('design-conversation-side-task')

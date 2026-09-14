@@ -3005,11 +3005,15 @@ def test_retry_failed_stops_before_codex_when_prototype_acceptance_is_stale(
         service.retry_failed(object_type="scenario", object_id="recipes")
 
 
+@pytest.mark.parametrize("replace_profile", [False, True])
 def test_retry_after_reaccepting_same_change_reenters_automation(
     tmp_path: Path,
     monkeypatch,
+    replace_profile: bool,
 ) -> None:
     service = _service(tmp_path)
+    old_profile = {"model": "gpt-5.4", "reasoning_effort": "medium"}
+    new_profile = {"model": "gpt-5.5", "reasoning_effort": "medium"}
     service._save_session(
         {
             "schema": "adaos.builder.automation_session.v1",
@@ -3020,6 +3024,8 @@ def test_retry_after_reaccepting_same_change_reenters_automation(
             "iteration": 1,
             "change_set_id": "change.recipes",
             "change_id": "automation.failed",
+            "current_task_id": "task.failed",
+            "agent_profile": old_profile,
             "updated_at": "2026-09-04T00:00:00+00:00",
         }
     )
@@ -3068,10 +3074,22 @@ def test_retry_after_reaccepting_same_change_reenters_automation(
         text="Retry the unchanged accepted implementation.",
         object_type="scenario",
         object_id="recipes",
+        agent_profile=new_profile if replace_profile else None,
     )
 
     assert result["status"] == "automation_queued"
     assert transitions == ["automation_started"]
+    retained = service.get_session("scenario", "recipes")
+    assert retained["iteration"] == 2
+    expected_profile = {**new_profile, "provider": "openai-codex-cli"} if replace_profile else old_profile
+    assert retained["agent_profile"] == expected_profile
+    history = retained.get("agent_profile_history") or []
+    assert len(history) == int(replace_profile)
+    if replace_profile:
+        assert history[0]["iteration"] == 1
+        assert history[0]["task_id"] == "task.failed"
+        assert history[0]["profile"] == old_profile
+        assert history[0]["replaced_at"]
 
 
 def test_retry_replays_its_queued_task_without_creating_a_duplicate(

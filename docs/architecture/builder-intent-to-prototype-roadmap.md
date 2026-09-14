@@ -210,6 +210,10 @@ integration, not closure of the remaining interaction/continuation obligations.
   application selection, admitted immutable execution profile, effective CLI
   model and usage receipts must agree. Root and Subscriptions preserve per-model
   fresh/cached/output usage and distinguish quota units from monetary cost.
+- [x] `[must]` Intersect Root's allowed models with local Codex `model/list`,
+  validate the selected reasoning effort and refresh availability at admission.
+  Preserve explicit profile changes between terminal iterations in history;
+  never silently substitute another model after an executor rejection.
 - [ ] `[must]` Qualify OpenSpec-aligned application specification and Change
   deltas with version/digest preconditions, explicit acceptance and preserved
   historical inputs. Do not introduce an independently mutable second tracker.

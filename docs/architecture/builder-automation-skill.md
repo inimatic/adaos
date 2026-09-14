@@ -52,10 +52,15 @@ not copied into the Web UI document.
 Prototype and Automation have separate model preferences. Codex selection is
 an application-owned `builder_codex_profile`, not the Prototype's
 `builder_llm_model` or a browser-only choice. The public
-`builder.model_settings` facade reads Root's `automation` catalog and accepts
-only a model advertised as available. An unavailable/older Root must not create
-a fabricated fallback catalog. The CLI account may still reject a Root-listed
-model; that is an execution failure, not permission to switch models silently.
+`builder.model_settings` facade intersects Root's `automation` catalog with
+the executing Codex identity's public `model/list` response. Root controls
+operator permission; the local catalogue controls executor availability and
+supported reasoning efforts. Discovery starts no model turn, reads no account
+credentials into application state, and is bounded separately from generation.
+An unavailable Root or local catalogue must not create a fabricated fallback.
+Admission refreshes local availability before starting a selected model. A
+later provider rejection remains an execution failure, not permission to switch
+models silently.
 
 The Automation SDK passes the stored profile unless the caller explicitly
 supplies an execution profile. The admitted session/task retains that profile;
@@ -63,6 +68,9 @@ later settings changes cannot rewrite past runs. The worker separately records
 the explicit CLI model/reasoning configuration without credential-bearing
 arguments. Usage reports use this execution evidence; missing historical model
 identity remains unresolved rather than inferred from today's preference.
+An explicit follow-up may adopt a newly selected profile only after the current
+iteration terminates. Its predecessor profile, task and iteration remain in
+bounded session history; immutable task inputs remain the full execution record.
 
 Root retains per-model fresh input, cached input and output tokens. Subscription
 token quotas and provider monetary cost are separate quantities. A monetary

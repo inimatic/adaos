@@ -78,6 +78,10 @@ def start(
         from adaos.sdk.developer import prompt_context
 
         agent_profile = prompt_context.get(object_type, object_id).get("builder_codex_profile")
+    if agent_profile and agent_profile.get("model"):
+        from adaos.sdk.builder.model_settings import require_local_profile
+
+        require_local_profile(agent_profile)
     service = _service()
     result = service.start_from_execute(
         object_type=object_type,
@@ -113,9 +117,14 @@ def submit(
     development_session_id: str | None = None,
     expected_session_id: str | None = None,
     expected_iteration: int | None = None,
+    agent_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Submit one follow-up instruction and include the current projection."""
 
+    if agent_profile and agent_profile.get("model"):
+        from adaos.sdk.builder.model_settings import require_local_profile
+
+        require_local_profile(agent_profile)
     service = _service()
     result = dict(
         service.submit_turn(
@@ -127,6 +136,7 @@ def submit(
             development_session_id=development_session_id,
             expected_session_id=expected_session_id,
             expected_iteration=expected_iteration,
+            agent_profile=agent_profile,
         )
         or {}
     )

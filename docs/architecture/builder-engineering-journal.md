@@ -693,3 +693,28 @@ and explicit cancellation described in the
 This is a design reference, not a claim that Root's job wrapper uses provider
 background mode. Provider-event latency, first visible text and total execution
 must remain distinct metrics.
+
+## 2026-09-14: Executor Availability Before Automation
+
+TEST revision 002 received delegated agent Prototype acceptance backed by the
+retained desktop/mobile visual and CRUD reports. Native Builder then submitted
+its first Automation request. The task failed before generation: Root allowed
+`gpt-5.4`, but the local ChatGPT-authenticated Codex rejected that model. Increasing
+the execution timeout cannot fix this failure. Full input, profile and failure
+evidence remain in `workbench-automation-20260914`; no worker result was accepted.
+
+Public app-server `model/list` discovery completed locally in under 200 ms and
+starts no model turn. The SDK now intersects this executor catalogue with Root's
+operator permissions, checks reasoning support, and refreshes at admission.
+Explicitly selecting an available profile for a follow-up retains the previous
+profile/task/iteration instead of rewriting failed execution evidence. Combined
+Core model/SDK/Automation regression checks pass (205 tests before the additional
+profile-history case). The next TEST iteration explicitly selects `gpt-5.5`;
+Prototype remains `gpt-5`. Root tariffs remain unpriced, not zero cost.
+
+The actual failed-task context retained the complete Russian Automation brief,
+accepted revision/digests, scoped files and empty production seeds. Required
+context was not truncated. A historic Prototype-only instruction also remains
+as traceable source text; its stage must not override the current Automation
+brief. This is a context-review concern, not evidence that the model executed
+or misunderstood the task. Workspace Builder is still unchanged.

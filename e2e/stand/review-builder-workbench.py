@@ -18,6 +18,9 @@ def main():
     parser.add_argument("--prototype-prompt", type=Path, help="Submit one explicit prompt through the created TEST application's chat")
     parser.add_argument("--base-revision", help="Expected current revision for one deliberate follow-up")
     parser.add_argument("--open-preview", action="store_true", help="Open the selected owned TEST preview through Builder")
+    parser.add_argument("--automation-brief", type=Path, help="Start one explicitly accepted owned TEST through the native form")
+    parser.add_argument("--automation-followup", action="store_true", help="Use the existing Automation iteration form")
+    parser.add_argument("--codex-model", default="gpt-5.5")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     load_dotenv()
@@ -27,6 +30,11 @@ def main():
     env = {**os.environ, "ADAOS_E2E_HUB_URL": hub,
            "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub),
            "ADAOS_E2E_OUTPUT": str(args.output.resolve())}
+    env["ADAOS_E2E_CODEX_MODEL"] = args.codex_model
+    if args.automation_followup:
+        if not args.automation_brief:
+            parser.error("An explicit follow-up brief is required")
+        env["ADAOS_E2E_AUTOMATION_FOLLOWUP"] = "1"
     if args.resume_created:
         import json
         receipt = json.loads(args.resume_created.read_text(encoding="utf-8"))["created_test"]
@@ -45,6 +53,10 @@ def main():
         if not args.exercise_test:
             parser.error("Preview review requires the owned TEST exercise")
         env["ADAOS_E2E_OPEN_PREVIEW"] = "1"
+    if args.automation_brief:
+        if not args.resume_created or args.prototype_prompt or args.open_preview:
+            parser.error("Automation requires prior creation and no competing Prototype/preview operation")
+        env["ADAOS_E2E_AUTOMATION_BRIEF"] = args.automation_brief.read_text(encoding="utf-8").strip()
     command = ["node", str(Path(__file__).with_name("browser") / "builder-workbench-live.mjs")]
     if args.inspect:
         command.append("--inspect")

@@ -3332,6 +3332,7 @@ class BuilderAutomationService:
         execution_budget: Mapping[str, Any] | None = None,
         expected_session_id: str | None = None,
         expected_iteration: int | None = None,
+        agent_profile: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         instruction = str(text or "").strip()
         if not instruction:
@@ -3519,6 +3520,18 @@ class BuilderAutomationService:
                     session["change_set_id"] = active_change_set_id
                     session["canonical_change_id"] = active_change_set_id
                     session.pop("context_packet_digest", None)
+            if agent_profile is not None:
+                from adaos.services.codex_profiles import normalize_codex_profile
+
+                next_profile = normalize_codex_profile(agent_profile)
+                if next_profile != session.get("agent_profile"):
+                    history = list(session.get("agent_profile_history") or [])
+                    history.append({"iteration": int(session.get("iteration") or 0),
+                                    "task_id": session.get("current_task_id"),
+                                    "profile": copy.deepcopy(session.get("agent_profile")),
+                                    "replaced_at": _now_iso()})
+                    session["agent_profile_history"] = history[-50:]
+                    session["agent_profile"] = next_profile
             session["iteration"] = int(session.get("iteration") or 0) + 1
             changed_at = _now_iso()
             previous_change_id = str(session.get("change_id") or "").strip()

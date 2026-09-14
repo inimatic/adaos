@@ -117,7 +117,7 @@ try {
         await command('settings').click()
         await widget('node-overview').waitFor()
         await widget('design-codex-settings').waitFor()
-        await widget('design-codex-settings').locator('option').filter({ hasText: 'GPT-5.4' }).waitFor({ state: 'attached', timeout: 30000 })
+        await widget('design-codex-settings').locator('option').filter({ hasText: 'GPT-5.5' }).waitFor({ state: 'attached', timeout: 30000 })
         await loaded('get_model_settings', 'design-effective-models')
         await capture('settings')
         await closeModal()
