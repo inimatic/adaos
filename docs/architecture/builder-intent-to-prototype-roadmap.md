@@ -114,6 +114,20 @@ integration, not closure of the remaining interaction/continuation obligations.
 - [ ] `[must]` Qualify asynchronous state refresh and failed-job recovery through
   the live screen without manual reload. Chat invalidation has generic unit
   coverage; the prior run needed rematerialization to update its header.
+- [x] `[must]` Separate asynchronous wait exhaustion from provider failure;
+  retain remote progress and transport-error counts, preserve the same Root job,
+  and verify original semantic context before replay. Unit and retained-response
+  validation cover this boundary, not end-to-end recovery acceptance.
+- [ ] `[must]` Complete browser recovery/repair qualification without bypassing
+  rejected semantic state proofs or confusing original usage with incremental
+  repair cost. Required-field rejection needs an invalid-form interaction, not
+  a deliberately invalid stored sample. Retained request inventory duplication
+  and state/field classification still need context-quality review.
+- [x] `[must]` Independently exercise the repaired native TEST Prototype on wide
+  and compact viewports: separate create/edit/delete surfaces, required-field
+  rejection, optional inputs, cancellation, search and filters. Generic Client
+  fixes cover pre-creation focus capture and nullable choice serialization.
+  This is one retained candidate, not repeated generation or Automation evidence.
 
 - [x] `[must]` Retain a capability-based migration contract against Workspace
   Builder, including the operational picker and creation flow. Keep file editing

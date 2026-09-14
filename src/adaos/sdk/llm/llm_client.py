@@ -18,6 +18,19 @@ _LOG = logging.getLogger("adaos.sdk.llm")
 _ROOT_LLM_HEALTH_CACHE: dict[str, tuple[float, bool, str]] = {}
 
 
+class LlmJobWaitTimeout(TimeoutError):
+    """The observer stopped waiting; the durable Root job was not cancelled."""
+
+    def __init__(self, observation: Mapping[str, Any]):
+        self.observation = dict(observation)
+        super().__init__(
+            f"Root LLM job wait budget exhausted: {observation['job_id']} "
+            f"status={observation['root_status']} reason={observation['reason']} "
+            f"elapsed_ms={observation['elapsed_ms']} "
+            f"last_poll_error={observation['last_poll_error'] or 'none'}"
+        )
+
+
 def _env_csv(value: str | None) -> tuple[str, ...]:
     if not value:
         return ()
@@ -1125,7 +1138,29 @@ def _wait_response_job_loop(
     last_poll_error = ""
     next_log_at = started
     poll_count = 0
+    poll_error_count = 0
+    consecutive_poll_errors = 0
     last_progress_seq = -1
+
+    def observation(now: float) -> dict[str, Any]:
+        progress = last.get("progress") if isinstance(last.get("progress"), Mapping) else {}
+        return {
+            "schema": "adaos.llm.job_wait_observation.v1",
+            "job_id": job_id,
+            "root_status": str(last.get("status") or "unknown"),
+            "reason": "connection_unavailable" if consecutive_poll_errors else "wait_budget_exhausted",
+            "elapsed_ms": round((now - started) * 1000),
+            "budget_s": float(timeout_s),
+            "poll_count": poll_count,
+            "poll_error_count": poll_error_count,
+            "consecutive_poll_errors": consecutive_poll_errors,
+            "last_poll_error": last_poll_error or None,
+            "progress": {key: progress[key] for key in (
+                "seq", "current_phase", "first_provider_event_at", "last_provider_event_at",
+                "provider_event_count", "output_chars",
+            ) if key in progress},
+            "remote_cancelled": False,
+        }
     _LOG.debug(
         "root LLM job wait start job_id=%s base_url=%s timeout_s=%.1f poll_interval_s=%.1f request_timeout_s=%.1f",
         job_id,
@@ -1157,12 +1192,11 @@ def _wait_response_job_loop(
                 )
                 raise
             now = time.monotonic()
+            poll_error_count += 1
+            consecutive_poll_errors += 1
             last_poll_error = f"{_root_llm_poll_error_label(exc)}: {exc}"
             if now >= deadline:
-                raise TimeoutError(
-                    f"Root LLM job timed out: {job_id} status={last_status or 'unknown'} "
-                    f"last_poll_error={last_poll_error}"
-                ) from exc
+                raise LlmJobWaitTimeout(observation(now)) from exc
             _LOG.warning(
                 "root LLM job poll transient failure job_id=%s base_url=%s polls=%d elapsed_ms=%.1f remaining_ms=%.1f error=%s detail=%s",
                 job_id,
@@ -1176,6 +1210,7 @@ def _wait_response_job_loop(
             time.sleep(min(interval, max(0.0, deadline - now)))
             continue
         now = time.monotonic()
+        consecutive_poll_errors = 0
         status = str(last.get("status") or "").lower()
         progress = last.get("progress") if isinstance(last.get("progress"), Mapping) else {}
         try:
@@ -1193,7 +1228,7 @@ def _wait_response_job_loop(
                     exc_info=True,
                 )
             last_progress_seq = progress_seq
-        if status in {"succeeded", "failed"}:
+        if status in {"succeeded", "failed", "cancelled", "canceled"}:
             _LOG.debug(
                 "root LLM job wait completed job_id=%s base_url=%s status=%s polls=%d elapsed_ms=%.1f",
                 job_id,
@@ -1202,6 +1237,10 @@ def _wait_response_job_loop(
                 poll_count,
                 (now - started) * 1000.0,
             )
+            last.setdefault("_client", {})["wait_observation"] = {
+                **observation(now), "reason": "terminal_status",
+                "remote_cancelled": status in {"cancelled", "canceled"},
+            }
             return last
         if status != last_status or now >= next_log_at:
             _LOG.debug(
@@ -1216,11 +1255,8 @@ def _wait_response_job_loop(
             next_log_at = now + log_interval
             last_status = status
         if time.monotonic() >= deadline:
-            raise TimeoutError(
-                f"Root LLM job timed out: {job_id} status={status or 'unknown'}"
-                + (f" last_poll_error={last_poll_error}" if last_poll_error else "")
-            )
-        time.sleep(interval)
+            raise LlmJobWaitTimeout(observation(time.monotonic()))
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
 
 def wait_response_job(

@@ -2,6 +2,7 @@ import { chromium, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
+import { reviewSeparateCrud } from './prototype-crud-review.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Interaction review requires ENV_TYPE=dev')
 const checkpointPath = path.resolve(process.env.ADAOS_E2E_CHECKPOINT || '')
@@ -89,6 +90,36 @@ try {
         const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
         return sync?.materializationReady && sync.materialization.currentScenario === expected
       }, scenario, { timeout: 60_000 })
+      await page.evaluate(() => {
+        const component = window.ng?.getComponent(document.querySelector('ada-details-widget'))
+        const service = component?.actions?.modals?.focusRuntime
+        window.__E2E_FOCUS_TRACE__ = []
+        if (!service) return
+        window.__E2E_FOCUS_IMPL__ = {
+          present: service.presentOverlay.toString(),
+          create: component.actions.modals.openTransientSchemaModal.toString(),
+        }
+        const describe = element => ({ tag: element?.tagName, command: element?.getAttribute('data-command-id'),
+          host: element?.getRootNode()?.host?.tagName, connected: element?.isConnected })
+        for (const method of ['captureActiveElement', 'releaseForOverlay', 'restoreFocus']) {
+          const original = service[method].bind(service)
+          service[method] = (...args) => {
+            const before = describe(document.activeElement)
+            const result = original(...args)
+            window.__E2E_FOCUS_TRACE__.push({ method, before, origin: describe(args[0]?.element || result?.element),
+              after: describe(document.activeElement), time: performance.now() })
+            return result
+          }
+        }
+        for (const method of ['openModalById', 'openTransientSchemaModal']) {
+          const modals = component.actions.modals
+          const original = modals[method].bind(modals)
+          modals[method] = (...args) => {
+            window.__E2E_FOCUS_TRACE__.push({ method, before: describe(document.activeElement), time: performance.now() })
+            return original(...args)
+          }
+        }
+      })
       for (const { widget, modalId } of forms) {
         const update = widget.actions?.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'update')
         const editableField = field => update?.params?.payload?.[field.id] === `$event.values.${field.id}` && !field.visibleIf && !field.readOnly
@@ -362,6 +393,15 @@ try {
         await expect.poll(createdRowIndex).toBe(-1)
         sample.checks.push({ editor: widget.id, status: 'passed', task: 'create/read/delete', surface: modalId ? 'overlay' : 'inline' })
       }
+      if (process.env.ADAOS_E2E_SEPARATE_CRUD === '1') {
+        // API-only fixture restoration does not invalidate an already cached UI query.
+        await page.reload({ waitUntil: 'domcontentloaded' })
+        await page.waitForFunction(expected => {
+          const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
+          return sync?.materializationReady && sync.materialization.currentScenario === expected
+        }, scenario, { timeout: 60_000 })
+        await reviewSeparateCrud({ page, application, source, sample, output, layout })
+      }
       if (!sample.checks.some(check => check.status === 'passed')) throw new Error('No mutation exercised; this is not a task pass')
       await page.screenshot({ path: path.join(output, `${layout}-complete.png`), fullPage: true })
     } catch (error) {
@@ -370,6 +410,8 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}-failure.png`), fullPage: true, timeout: 5000 })
         .catch(error => { sample.diagnosticFailure = error.message })
     } finally {
+      sample.focusTrace = await page.evaluate(() => window.__E2E_FOCUS_TRACE__).catch(() => null)
+      sample.focusImplementation = await page.evaluate(() => window.__E2E_FOCUS_IMPL__).catch(() => null)
       sample.completed = true
       await fs.writeFile(path.join(output, 'review.json'), JSON.stringify(report, null, 2) + '\n', 'utf8')
       await context.close()

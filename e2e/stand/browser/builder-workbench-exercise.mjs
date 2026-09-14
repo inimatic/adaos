@@ -126,7 +126,7 @@ export async function exerciseCreation({ page, widget, command, capture, closeMo
       })
       await fs.writeFile(path.join(process.env.ADAOS_E2E_OUTPUT, 'prototype-observation.json'), JSON.stringify(current, null, 2) + '\n', 'utf8')
       const failure = current.messages?.find(message =>
-        message.progress_status === 'failed' && Number(message.ts) * 1000 >= Date.parse(intent.created_at))
+        ['failed', 'interrupted'].includes(message.progress_status) && Number(message.ts) * 1000 >= Date.parse(intent.created_at))
       if (failure) {
         report.prototype_failure = { id: failure.id, job_id: failure.progress_group_id, text: failure.text }
         await capture('prototype-failed')

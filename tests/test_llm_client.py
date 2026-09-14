@@ -698,6 +698,49 @@ def test_wait_response_job_reports_each_progress_sequence_once(monkeypatch: pyte
     assert [item["seq"] for item in progress] == [1, 2, 3]
 
 
+@pytest.mark.parametrize("disconnect", [False, True])
+def test_wait_budget_preserves_remote_progress_and_distinguishes_transport(monkeypatch, disconnect):
+    from adaos.sdk.llm import llm_client as llm
+
+    clock = [0.0]
+    calls = []
+    monkeypatch.setattr(llm.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(llm.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+
+    def poll(job_id, **kwargs):
+        calls.append((job_id, kwargs))
+        if disconnect and len(calls) > 1:
+            raise llm.RootHttpError("Temporary gateway failure", status_code=502)
+        return {"status": "running", "progress": {
+            "seq": 7, "current_phase": "generating", "output_chars": 1200,
+            "last_provider_event_at": "2026-09-14T18:25:00Z",
+        }}
+
+    monkeypatch.setattr(llm, "get_response_job", poll)
+    with pytest.raises(llm.LlmJobWaitTimeout) as caught:
+        llm._wait_response_job_loop("slow-job", timeout_s=3, poll_interval_s=1, request_timeout=0.25)
+    observed = caught.value.observation
+    assert observed["root_status"] == "running"
+    assert observed["remote_cancelled"] is False
+    assert observed["elapsed_ms"] == 3000
+    assert observed["progress"]["output_chars"] == 1200
+    assert observed["poll_count"] == 4
+    assert observed["poll_error_count"] == (3 if disconnect else 0)
+    assert observed["reason"] == ("connection_unavailable" if disconnect else "wait_budget_exhausted")
+    assert all(options["timeout"] == 0.25 for _, options in calls)
+
+
+@pytest.mark.parametrize("status", ["succeeded", "failed", "cancelled", "canceled"])
+def test_wait_observes_terminal_status_without_polling_again(monkeypatch, status):
+    from adaos.sdk.llm import llm_client as llm
+
+    monkeypatch.setattr(llm, "get_response_job", lambda *a, **kw: {"status": status})
+    result = llm._wait_response_job_loop("terminal-job", timeout_s=0.01)
+    assert result["status"] == status
+    assert result["_client"]["wait_observation"]["reason"] == "terminal_status"
+    assert result["_client"]["wait_observation"]["poll_count"] == 1
+
+
 def test_response_job_submit_skips_unhealthy_primary_root(monkeypatch: pytest.MonkeyPatch) -> None:
     from adaos.sdk.llm import llm_client as llm
 

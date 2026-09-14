@@ -690,6 +690,19 @@ and queueing, provider time-to-first-token, provider execution, output volume,
 and repair. A timeout may enforce a measured SLO after diagnosis; lowering it
 must never be reported as a performance improvement.
 
+Asynchronous provider execution has its own configurable wait budget, independent
+of submission acknowledgment and individual status requests. Builder defaults to
+600 seconds for a primary/repair observation, with an explicit override up to
+1,800 seconds. This is not a performance target. Exhaustion stops the observer,
+not the durable Root job: retain an `interrupted` outcome, job/request identity,
+last remote status, provider progress and transport-error counters. A disconnected
+observer and a responding Root with a slow provider are distinct diagnostics.
+Do not automatically resubmit. Explicit recovery first reads the same job,
+checks the original input digest, semantic Brief and source revision, then runs
+normal validation. A paid bounded repair is distinct from a zero-token replay;
+retain original and incremental usage separately. A stale source cannot be
+silently rebound to the latest Brief.
+
 Provider-native schema-constrained output or typed tool calls are preferred.
 Text JSON extraction and bracket repair remain compatibility behavior and are
 not a success path for the target architecture.

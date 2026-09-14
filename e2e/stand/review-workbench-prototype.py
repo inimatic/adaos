@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--creation", required=True, type=Path)
     parser.add_argument("--preview", required=True, type=Path)
     parser.add_argument("--probe", choices=("review", "interactions"), default="review")
+    parser.add_argument("--separate-crud", action="store_true")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     load_dotenv()
@@ -37,6 +38,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     checkpoint = args.output / "ui-creation-checkpoint.json"
     checkpoint.write_text(json.dumps({
+        "run_id": args.output.name,
         "provenance": {"creation_receipt": str(args.creation), "preview_receipt": str(args.preview),
                        "source_sha256": hashlib.sha256((source / "webui.json").read_bytes()).hexdigest()},
         "context": {"locale": "ru"},
@@ -52,6 +54,8 @@ def main():
                    "ADAOS_E2E_SUBNET_ID": "sn_6acf0c01", "ADAOS_E2E_LOCALE": "ru",
                    "ADAOS_E2E_CHECKPOINT": str(checkpoint.resolve()), "ADAOS_E2E_SELECT_WIDGET": collection.get("id", ""),
                    "ADAOS_E2E_OUTPUT": str(args.output.resolve())}
+    if args.separate_crud:
+        environment["ADAOS_E2E_SEPARATE_CRUD"] = "1"
     script = Path(__file__).with_name("browser") / f"prototype-{args.probe}.mjs"
     raise SystemExit(subprocess.run(["node", str(script)], env=environment).returncode)
 

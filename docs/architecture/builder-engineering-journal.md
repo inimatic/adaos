@@ -629,3 +629,67 @@ No new Prototype acceptance, Automation success, Trial, release or replacement
 of Workspace Builder is claimed. Mutation observers retain terminal failures
 and never automatically resend paid requests. Cohort browser probes are reused
 through a provenance adapter for actual UI creation/preview receipts.
+
+## 2026-09-14: Async Wait Diagnosis And Same-Job Recovery
+
+The next TEST follow-up was marked failed locally after 150 seconds while Root
+still reported running. Read-only retrieval of that exact job found a completed
+response after 260.678 seconds, 13,789 input and 6,761 output tokens (3,072
+reasoning). RU returned the complete 13,354-character output without fallback;
+no new generation was submitted for this diagnosis. Root's reported 1.8-second
+TTFT is its first provider event, not proof that visible text began that early.
+
+Builder's default async wait is now 600 seconds, separately configurable up to
+1,800; submission remains 15 seconds and ordinary polls remain short. The SDK
+retains observation progress and transport errors. Exhausted observers become
+interrupted, not proof of provider failure. Replay now restores the original
+semantic mode/Brief from digest-checked input and retains original usage separately
+from incremental cost. Twelve focused Builder and 23 SDK tests pass. The Core
+semantic/context suite also passes (184 tests).
+
+`root-recovery-01` retains the full request/response and read-only replay result.
+Normal validation rejects an invalid-form requirement modeled as a stored sample
+and an Automation disclosure bound only to a resource. This is not an accepted
+Prototype. Generic field-validation guidance now distinguishes required inputs
+from conditional guards and stored-state fixtures. Replaying the paid response
+must not silently weaken these findings.
+
+Browser interaction reruns still stop at editor focus restoration on both widths.
+The earlier pending-button change was insufficient; focus tracing is retained
+before another Client correction. No Automation, Trial, stable or Workspace
+replacement has been accepted in this increment.
+
+## 2026-09-14: Recovered Candidate And Independent CRUD Review
+
+An explicit bounded repair reused the retained rejected candidate and its exact
+Brief. It produced TEST revision 002: 63.574 seconds, 15,533 input and 7,271 output
+tokens (3,648 reasoning); 60 successful polls, no transport errors. The original
+20,550 tokens are recorded as reused-source usage, not charged again as repair.
+The context now explains required-field validation independently of stored state
+fixtures. A misleading state identifier remains a context-quality finding; it
+does not substitute for an invalid-form interaction.
+
+Browser tracing identified focus capture after Ionic overlay creation as the
+remaining cancellation defect. Capturing before creation restores the opener on
+both widths. An AOT access error also left the development server serving the
+previous successful bundle; verification now retains actual loaded method bodies.
+The focus/modal/chat/details suite has 86 passing tests. A separate CRUD review
+found optional choices submitted as empty strings rather than nullable values.
+The generic form fix preserves explicit empty choices and read-only context;
+all 39 form tests pass. No generated application code was hand-edited.
+
+`prototype-002-crud-03` covers wide and compact create/read/edit/delete, search
+by either text field, choice filtering, empty results, mandatory-title rejection,
+empty optional inputs, cancelled create, cancelled deletion and collection
+refresh. Cleanup-only provider writes are distinguished from user interactions.
+The visual report has no document overflow; the compact table remains internally
+scrollable. The scaffold header name and untranslated empty-details fallback are
+retained UX debt, not missing CRUD. No independent Automation or delivery pass is
+claimed. The complete DEV skill suite has 340 passing tests; SDK/context has 34.
+
+The timeout policy follows the separation between background execution, polling
+and explicit cancellation described in the
+[OpenAI background-mode documentation](https://developers.openai.com/api/docs/guides/background).
+This is a design reference, not a claim that Root's job wrapper uses provider
+background mode. Provider-event latency, first visible text and total execution
+must remain distinct metrics.
