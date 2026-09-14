@@ -2,7 +2,7 @@
 
 Status: target architecture for reproducible Builder evaluation.
 
-Last reviewed: 2026-09-11.
+Last reviewed: 2026-09-14.
 
 Architecture owner: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
 Sequencing owner: [Builder Intent-to-Prototype Roadmap](builder-intent-to-prototype-roadmap.md).
@@ -49,14 +49,17 @@ The CLI is a thin adapter over the same evaluation service used by local
 development and CI. It must not reimplement Builder workflow transitions or
 invoke private skill helpers.
 
-The bootstrap implementation may use the typed
-`legacy_dev_chat.v1` compatibility adapter until the R3 public Builder SDK
-operations exist. Every resolved run records that adapter and its input
-attribution. The same unchanged case digests must then be run through
-`sdk.v1`; adapter and implementation revisions are reference metadata, not
-cohort equality dimensions. Results produced through the compatibility
-adapter can characterize and protect legacy behavior, but cannot establish a
-clean generic or prompt-autonomy baseline.
+The public execution entry is `sdk.v1`. The explicit `legacy_dev_chat.v1`
+adapter remains a characterization/control profile, not the default generic
+baseline. Every run records its entry adapter, actual execution backend,
+implementation/profile digests and input attribution. The SDK currently uses
+a legacy skill execution port internally: the entry label alone proves neither
+decontamination nor Core ownership. Clean-profile admission requires the
+boundary and evidence gates below; ownership migration is independently tracked
+in [BIP-07](builder-intent-to-prototype-roadmap.md#bip-07).
+Compare unchanged case digests, declare any intentionally varied adapter/code
+dimension and reject unexplained environment differences. Never hide a legacy
+recipe-guided result inside a generic cohort.
 
 Visible suite and grader sources live under `e2e/builder/`; accepted baseline
 manifests live under `e2e/builder/baselines/` and reference immutable result
@@ -102,7 +105,7 @@ Prototype markers.
 
 These adapters are a qualification slice, not a completed release pipeline:
 real browser review, consumer install/update assertions and source-registry
-publication remain required by R10 of the Prototype roadmap.
+publication remain required by [BIP-28](builder-intent-to-prototype-roadmap.md#bip-28).
 
 For diagnosis after a terminal lifecycle failure,
 `e2e/stand/continue-builder-lifecycle.py CHECKPOINT CASE OUTPUT` executes only
@@ -369,404 +372,68 @@ New cross-domain Client primitives are deliberately not an admission gate.
 They are justified by the clean baseline's capability gaps and evaluated by a
 matched rerun.
 
-## Implementation Status
+## Stage-Specific Evaluation
 
-As of 2026-09-10, the bootstrap runner includes validated suite, case, run,
-case-result, report, and baseline ABIs; deterministic case/tag selection;
-repetition accounting; required-step failure handling; redacted evidence
-bundles; token and latency aggregation; matched baseline comparison; cleanup
-hooks; and one `adaos builder e2e` entry point. Model-free self-tests cover
-these foundations. Cleanup now binds each owned draft to the exact Project
-manifest digest and primary component ref, removes both component and Project,
-and makes a cleanup refusal render the case inconclusive. Large redacted step
-outputs are gzip-compressed behind a digest-bearing evidence ref while the
-case result remains compact; in-memory full outputs still drive typed step
-references and usage accounting.
+Supported disposable CRUD and navigation require executable Prototype proof.
+Installed persistence, cross-record business rules and external effects require
+Automation evidence; a visible demonstration and a disclosed pending obligation
+may qualify the Prototype only when the stage contract permits it.
+`automation_requirements` binds an existing explicit requirement, not an excuse
+for absent UI or an opportunity to invent additional scope. Preserve provenance
+and the exact accepted Brief through the handoff.
 
-Suites that claim the generic Client profile must declare
-`defaults.require_client_profile=true`. The runner then records the exact
-Client commit and content-addressed capability inventory and verifies that
-every component admitted by the Core catalog has a generic/shell runtime
-registration before provisioning or model execution. Missing or invalid
-inventory evidence and catalog/runtime drift are configuration failures, not
-lower prototype scores. Unsupported semantic lowering kinds remain recorded
-in the run environment for later C1/C2 gating.
+Evaluate explicit user outcomes and platform invariants as hard gates.
+Unrequested richness, screen count, modal preference or customary confirmations
+are quality recommendations, not hidden mandatory criteria. Calibrate both
+false positives and false negatives with independent human-labelled examples.
+Version rubric/grader changes; a regrade never rewrites the original verdict.
 
-The bootstrap adapter is explicitly `legacy_dev_chat.v1`. Case/repetition
-artifacts are isolated within one selected Builder; checkpoints and run identity support interruption and
-resume; retry attempts remain explicit; and actual input receipts are checked
-before cleanup. Isolated filesystem/state provisioning, internal
-Core/provider/runtime stage spans, browser task assertions, calibrated
-multi-grading, sealed datasets, and the target `sdk.v1` adapter remain open.
-Therefore this
-implementation is an evaluation bootstrap, not the R2 clean-baseline exit
-proof.
+E2E writers emit readable UTF-8, including compressed step evidence. Exact raw
+provider strings and content-addressed old artifacts remain unchanged even
+when their representation contains escaped characters. Missing evidence and
+usage are explicit, not zero cost or a reconstructed historical success.
 
-Suite version 2 adds the post-generation `prototype.grade` step. The runner
-injects the case jobs, representative states, prohibited assumptions, and
-actual user turns only after the candidate is immutable, records the exact
-grader request by digest, requires valid RFC 6901 evidence pointers, and keeps
-grader latency/tokens separate from generation metrics. The resolved run and
-accepted baseline cohort include the grader model and rubric version. The
-visible suite fails to load when its outcome-grade gate is enabled but a case
-omits this step. This follows the composite-grader direction supported by the
-[OpenAI grader API](https://developers.openai.com/api/reference/resources/graders),
-but local deterministic and browser graders remain authoritative for
-executable behavior; a model judgment alone cannot establish a clean pass.
+## Implementation Boundary
 
-Grader protocol v9 separates stable grammar from dynamic evidence. Its
-provider Structured Output schema contains only the bounded result grammar;
-the immutable artifact, explicit rubric criteria, and exact RFC 6901 evidence
-catalog are supplied in the dynamic user payload. Criteria support
-`statement`, `acceptance`, and `exclusions`, while legacy string criteria are
-normalized into the same representation. Candidate-specific pointers are not
-embedded in the schema, preserving schema/prompt-cache identity, and every
-returned pointer is still resolved deterministically against the original
-artifact. Invalid or missing positive evidence downgrades the verdict to
-`unclear`.
+The CLI, schema-validated suite/run/result contracts, SDK submission, input
+attribution, comparison and standalone browser/HTTP probes exist.
+Prototype SDK execution still uses a legacy skill adapter; `sdk.v1` is not
+proof of Core ownership. Separate stand journeys must be brought under the same
+resolved lifecycle contract before claiming one complete E2E rail.
 
-The rubric is an oracle and remains post-generation. It may define what counts
-as sufficient evidence and keep independent concerns separate, but it cannot
-enter Builder generation, capability retrieval, repair, or routing. This
-allows precise evaluation without teaching the candidate the held-out answer.
+Current gaps: full-stage billing/latency reconciliation, interruption/re-entry
+qualification, calibrated human labels, full browser/a11y/authority coverage,
+sealed evaluation and installed lifecycle. Owners are BIP-03 through BIP-06,
+BIP-15 through BIP-18 and BIP-28 in the
+[corrective register](builder-intent-to-prototype-roadmap.md#current-task-register).
+Dated measurements belong only in the [engineering journal](builder-engineering-journal.md).
 
-The minimum-working policy in grader v11 makes unspecified detail a design
-choice, not a missing requirement. Mandatory rubric items must be attributable
-to the user request or separately declared platform invariants. For example,
-an unsolicited confirmation dialog is UX guidance, whereas explicitly requested
-confirmation is a requirement. Simple and richer working interpretations may
-both pass. Design richness and polish belong to separate human quality review,
-not a hidden score threshold. The eight visible rubrics are corrected without
-changing their user prompts; comparison to older rubric versions is diagnostic,
-not a matched baseline comparison.
+## Diagnostic Tooling
 
-Calibration must include valid simple/richer alternatives and broken-control
-negative probes. Agent-authored probes are engineering regression evidence,
-not user-labeled gold data or proof of grader accuracy. User review remains
-necessary for ambiguous interpretations. This follows the recommendation to
-calibrate automated evaluation with human feedback in
-[OpenAI evaluation best practices](https://developers.openai.com/api/docs/guides/evaluation-best-practices).
+Read-only review and interaction helpers are implementation aids for the public
+E2E contract, not alternative user-facing CLIs.
 
-The visible development suite now contains eight ordinary EN/RU archetype
-cases. They contain no component IDs, recipe names, AdaOS paths, or internal
-implementation phases. A `builder.wait` step binds to the case webspace and,
-when the Builder returns an artifact root, waits for the exact durable
-`adaos.builder.llm_job_result.v1` journal instead of treating a reconciled
-session revision as provider completion. This closes the observed race where
-cleanup could remove a scenario while its worker was still validating or
-writing telemetry. Compact Project creation receipts also retain the primary
-component ref required for fail-closed cleanup.
+- `e2e/stand/browser/prototype-review.mjs` captures the exact prepared
+  scenario at wide/compact viewports, including errors and inner scroll surfaces.
+- `e2e/stand/browser/prototype-interactions.mjs` derives interactions from
+  an explicit retained checkpoint. Exercise owned records; report unsupported
+  combinations as `not_exercised`, never success.
+- `e2e/stand/browser/application-journey.mjs` runs independent Automation
+  tasks against exact owned source/runtime identity, including real errors
+  and preservation. Fake response data is not server-behavior evidence.
+- `e2e/stand/replay-builder-state-repair.py` binds replay to an exact
+  checkpoint into a new output directory; offline response validation makes
+  no additional model call.
+- `e2e/stand/compare-builder-effort.py` compares retained inputs, schemas,
+  model options, results, timing and usage without regenerating applications.
 
-The first live visible case produced three distinct diagnostic runs on
-2026-09-10. The first exposed incorrect webspace propagation and a 420-second
-poll timeout. The second completed functionally in 33.5 seconds but exposed
-the session-reconciliation/cleanup race. After adding the durable terminal
-barrier, the third reached a genuine Builder validation failure in 42.9
-seconds: the model selected a useful work-queue board, repaired malformed
-action structure, but left a static data source attached to a mutating move
-action. Input attribution proved a generic profile with no domain packs and
-three actual model requests. Provider usage was 24,320 input tokens, of which
-14,976 were cached, and 2,001 output tokens. The validator now returns the
-inconsistent source/action values and the exact expected contract, but this
-case remains intentionally red until a generic architecture change passes a
-fresh run.
+Require explicit scope/token, `ENV_TYPE=dev`, TEST ownership and the existing
+Builder preview relation. A dedicated `adaos_tests` desktop is deferred;
+the existing project picker exposes retained TEST/date/unique application names.
+Source visibility is not user approval or permission to publish.
 
-This evidence also exposes a pre-R4 limitation: deterministic qualification
-returned an unspecified surface and no structured requirements, while lexical
-capability ranking selected board patterns. The model therefore received
-strict component constraints without a typed statement of the user's jobs,
-data, operations, or authority. Improving a repair prompt alone would be
-case-level tuning; the required correction is the typed intent/Prototype Brief
-and deterministic capability filtering defined by R4 and R5.
-
-A fourth retained run, `operations-typed-20260910`, exercised the first typed
-Prototype Brief. It selected the resource-board, master-detail, and data-entry
-contracts from explicit inspect/create/assign/transition operations and passed
-input attribution with no domain packs. The primary JSONL response was
-syntactically malformed; one repair produced the intended query-backed board,
-details, create/edit forms, six representative records, and all required
-operations, but omitted the required `areas` property from two single-area
-modal layouts. Total duration was 63.9 seconds with two model calls, 11,630
-fresh input tokens, 4,480 cached input tokens, and 3,594 output tokens. Offline
-validation proved that four unambiguous structural normalizations, adding the
-single `main` area and binding each modal form to it, make that exact retained
-candidate pass every generic request postcondition. The generic flow-layout
-contract now exposes this exact shape and the parser records this bounded
-normalization instead of spending another model call. The run remains failed
-evidence; only a fresh run may establish the correction.
-
-The fresh `operations-typed-normalized-20260910` run then passed creation,
-generation, durable completion, schema validation, every request postcondition,
-and input attribution with one model call. It took 46.4 seconds, used 7,146
-fresh input tokens and 2,289 output tokens, and required no model repair. The
-case was correctly reported as inconclusive rather than passed because the
-compact Builder creation receipt omitted the Project primary component ref and
-fail-closed cleanup refused to guess ownership. The DEV Builder receipt now
-derives that ref from the Project aggregate's owned primary component.
-
-The next retained run, `operations-typed-cleanup-20260910`, exposed two more
-representational aliases in an otherwise relevant board candidate: the model
-placed `resourceType` inside the resource query object and used `ghost` as a
-button kind. One repair corrected only the first issue and the run failed in
-43.8 seconds after two model calls (7,858 fresh, 9,088 cached input tokens and
-2,144 output tokens). Catalog version 2.0.2 now gives the selected board
-contract the exact resource-query and button shapes. The compatibility parser
-also deterministically canonicalizes these unambiguous aliases and records the
-normalization; this remains a bridge to the typed compiler, not permission to
-silently approximate unsupported semantics.
-
-The subsequent `operations-typed-contract-20260910` run again produced a
-relevant resource-backed board but grouped two field descriptors under
-`inputs.i18n`; WebUI requires the descriptors beside their scalar fallbacks as
-`<field>_i18n`. The repair retained the invalid grouping, so the run failed in
-52.3 seconds after two model calls (10,736 fresh, 6,400 cached input tokens and
-2,508 output tokens). This happened despite the stable prompt already stating
-the sibling-key rule, which makes further prose repetition a poor remedy.
-Catalog 2.0.3 now enumerates the board's localizable input pairs, and the
-compatibility parser moves a grouped descriptor only when its scalar sibling
-exists and the canonical target is free; conflicts remain validation errors.
-
-`operations-typed-i18n-20260910` is the first fresh end-to-end pass for this
-visible case: all four required steps, input attribution, validation, and exact
-draft/component/Project cleanup passed, and no DEV object remained. The run
-took 78.7 seconds and used three model calls, 11,334 fresh input tokens, 4,608
-cached input tokens, and 2,831 output tokens. A first repair addressed a
-candidate defect but emitted a JSON Pointer to a non-existent stable id; the
-legacy parser then made a second repair call. This pass proves functional and
-cleanup correctness, but it fails the intended one-repair cost discipline and
-must not be treated as a clean performance baseline. The typed plan/compiler
-route must remove structural patch authorship from the design model, and the
-legacy route needs an explicit repair-attempt budget in the interim.
-
-The same live traces showed that the SDK opened a new TCP/TLS connection for
-every Root job poll. `wait_response_job` now owns one bounded keep-alive session
-for the exact Root that accepted the job and closes it when waiting ends; retry
-classification, identity headers, request timeout, and Root ownership remain
-unchanged. This removes local transport overhead and connection churn, while
-provider `queue_ms` and `execution_ms` remain separately reported so the
-optimization cannot be mistaken for reduced model inference time.
-
-A subsequent RU equipment-inspection candidate exposed a false-positive
-structural pass. It validated as WebUI and used one generation call in 43.1
-seconds, but manual artifact inspection found only a draft form and static
-check table: there was no row editing, photo input, completion transition,
-conditional comment guard, or requested empty state. Running the immutable
-artifact through `prototype.grade` rejected it. The first inexpensive
-`gpt-4o-mini` judge scored `0.4375` but over-credited two static affordances;
-the versioned `gpt-4.1` judge with stricter generic evidence rules scored
-`0.425`, correctly rejected check editing and treated completion as partial.
-That cold grader call took 13.7 seconds and reported 1,694 fresh input and 938
-output tokens. These results validate the harness failure signal, not grader
-calibration. Human labels, deterministic interaction proof, and compact/wide
-browser tasks are still required before baseline admission.
-
-The next fresh generation run failed before grading after three candidate and
-repair calls: the final repair was invalid JSON. It took 61.8 seconds and
-confirms that the legacy design-model-owned patch path is both unstable and
-too expensive. The failure remains retained for the typed compiler work; it
-must not be hidden by raising retry or output budgets.
-
-The following diagnostic run proved that `complete.prototype_records` was an
-ambiguous output instruction rather than a missing transport feature: the
-model patched that literal path into WebUI and emitted envelope-shaped fixture
-data. The compatibility protocol now says that JSONL patch paths modify only
-the WebUI document and that direct representative records are a separate
-member of the terminal `complete` line. Repairs preserve candidate sidecars,
-and a bounded parser migration extracts the old unambiguous path while
-recording normalization.
-
-Fresh run `generic-equipment-terminal-sidecar-20260910-01` then passed Project
-creation, terminal synchronization, schema validation, request postconditions,
-resource materialization with four direct records, locale materialization, and
-independent grading. Its score was `0.89375`, above the weighted `0.85`
-threshold, but the result remained failed because hard task dimensions are not
-averaged away: checklist entries were only displayed, not editable per item,
-and a defect was represented by file upload rather than an explicit state or
-field. The Builder used four model calls (15,772 fresh input, 5,632 cached
-input, and 4,467 output tokens); generation took 77.3 seconds and the separate
-grader 9.2 seconds. Provider execution, not Root connection or disk pressure,
-dominated the observed calls. One qualification repair emitted an invalid
-prefixed JSON Pointer, and a later repair request approached 96 KB. The result
-therefore validates the failure taxonomy and sidecar boundary, while exposing
-an unresolved repeated-collection granularity decision and the need for
-stage-specific compact repair context plus provider-native structured output.
-It does not by itself prove that the Client needs a nested repeatable-field
-primitive: the admitted generic list/form composition could represent each
-check as a separate record if the semantic plan selected that item boundary.
-
-Two later diagnostic runs isolated both measurement and architecture defects.
-The first report over-counted generation calls and tokens because terminal
-telemetry was copied into later retained records and aggregated again. The
-collector now deduplicates request/job identity. The first trustworthy run
-after that correction, `sdk-equipment-20260910-10`, used two Builder model
-calls: 4,327 fresh input, 7,808 cached input, and 4,551 output tokens. It still
-scored `0.89375` and failed the hard outcome gate because a typed
-`repeated_collection/capture_each` brief requirement did not prevent the model
-from emitting one `longText` checklist field. The local validator took 93 ms,
-Root queueing took 6-8 ms, primary provider execution took 36.3 seconds, and
-one repair took 4.8 seconds. This is evidence for explicit semantic entity/item
-granularity, requirement bindings, and deterministic source-map validation.
-It is not evidence for a shorter validator timeout; timeouts remain outer
-safety controls and may be tuned only after stage-specific SLO diagnosis.
-
-The 2026-09-11 operations follow-up made the timeout distinction executable.
-After replacing repeated multi-megabyte Builder state rewrites with
-owner-scoped relational state and reusing the workflow admission report, a
-fresh run recorded 109 ms local scenario validation and 4 ms Root queueing,
-while provider generation still took 29.0 seconds and emitted 4,517 tokens.
-The separate grader took 10.3 seconds. The runner must preserve these phase
-boundaries in every result. A timeout is an outer circuit breaker only: it is
-reported against the phase it interrupted, cannot be credited as a performance
-gain, and cannot substitute for root-cause work on context, output size,
-provider execution, persistence, or repeated validation.
-
-Fresh run `sdk-semantic-operations-20260911-07`, after the generic semantic
-confirmation contract landed, passed every required stage and the independent
-outcome gate at `1.0`. It used one generation call and no repair. The 52.6
-second case duration separated into 33.7 seconds provider execution, 6.0
-seconds grading, 107 ms local scenario validation, and 5 ms Root queueing. The
-first request after the stable schema digest changed had no cached input; it is
-therefore a cold-contract cohort and must not be compared as a warm-cache
-regression. The retained runtime evidence contains localized confirmation on
-all transition actions.
-
-Runs `sdk-semantic-operations-20260911-08` through `-11` exposed two evaluator
-defects and one generation-input defect without changing the user task. The
-first typed Brief stopped at the explicit workflow and omitted the later
-`empty` and `overdue` requirements. Core now aggregates all explicit workflow
-and representative-state clauses and excludes continuity constraints such as
-"open without losing the queue" from the state set. The resulting dynamic
-Brief contains five atomic jobs and the six states `New`, `In progress`,
-`Blocked`, `Done`, `empty`, and `overdue states`.
-
-Grader v4 incorrectly used an owner-assignment action as evidence about status
-mutations. Grader v5 corrected evidence scope, then Run 09 exposed a verdict
-polarity error: it described four explicit status confirmations but labelled
-the prohibited behavior as present. Grader v6 changed the model-facing verdicts
-to `violated/not_violated`, while preserving `present/absent` in the report ABI.
-Run 10 then treated missing public visibility as uncertainty. The evaluation
-artifact had discarded the create step's typed application governance. It now
-retains project-scoped application id, publisher, visibility, and revision;
-grader v7 treats the complete executable artifact as closed-world for
-prohibited behavior and requires positive evidence for a violation.
-
-Fresh run `sdk-semantic-operations-20260911-11` passed all stages and the hard
-outcome gate at `1.0` with one generation call and no repair. Its 43.2 seconds
-separated into 25.3 seconds provider execution, 8.1 seconds grader execution,
-110 ms local validation, and 6 ms Root queueing. The stable generation prefix
-reused 2,816 of 2,880 input tokens, but the model still emitted 4,616 output
-tokens; the grader consumed 7,355 fresh input and 796 output tokens. This is a
-warm-cache functional pass, not a latency SLO. It confirms that cache is a cost
-control for the stable prefix while output volume and the full-artifact model
-grader remain the principal latency/cost targets. A hard timeout would only
-truncate those phases and is not accepted as remediation.
-
-The volunteer semantic-v2 series provides a second retained calibration. Run
-`-10` failed after two generation calls because repair received only the first
-of two pre-existing semantic defects. The compiler now aggregates independent
-model-correctable findings. Run `-11` then generated and validated in one call,
-but grader v8 had no evidence catalog after the dynamic schema enum was
-removed; it invented widget indexes and conflated the separate fill-shift and
-overlap criteria. Grader v9 corrected both protocol defects.
-
-Fresh run `sdk-semantic-v2-20260911-13` completed generation with one call in
-24.3 seconds, using 607 fresh, 2,304 cached, and 3,192 output tokens. Grading
-took 6.25 seconds with 7,497 fresh input and 724 output tokens. All cited
-pointers existed; all four jobs and all three representative states passed.
-The historical score was 0.925 and the v9 hard gate failed on overlap
-enforcement. Subsequent stage review found this gate demanded Automation
-evidence at Prototype time. Grader v10 requires a visible demonstration plus
-a structured, disclosed and preserved Automation obligation for such business
-rules; it still rejects missing supported interactions and true platform gaps.
-The old artifacts and verdict remain unchanged; they do not contain the new
-obligation contract and cannot silently become a passing baseline.
-
-### Stage-Aware Review (2026-09-11)
-
-Semantic-v2 generation now has an explicit Prototype acceptance contract.
-`automation_requirements` annotates an existing job/residual binding, rather
-than excusing missing UI contracts. Core preserves the original statement,
-pending status and evidence references through Prototype acceptance into
-Automation request checks. The grader version is part of cohort compatibility.
-
-E2E writers store non-ASCII text directly in UTF-8, including compressed step
-evidence. Existing mutable checkpoints were reformatted without changing JSON
-values. Historical hashed model I/O, reports and evidence remain unchanged;
-provider output strings remain exact, even if the provider itself escaped text.
-
-`e2e/stand/browser/prototype-review.mjs` captures the actual Client at wide and
-compact viewports with scenario identity and browser errors. It requires
-explicit local scope/token and `ENV_TYPE=dev`; prepare the dev webspace through
-the owning runtime before opening it. Its screenshots are evidence, not an
-automatic verdict or a Trial promotion. The dedicated latest-run-only
-`adaos_tests` scenario is deferred in R8 of the Builder roadmap. The immediate
-review surface is the existing Builder project selector: opt-in dev-only retained
-test applications with searchable test/date/unique names and exact dev previews.
-The existing Builder selector uses `ui.table` with pagination, test/non-test
-filtering and an archive toggle. SDK search precedes the catalog limit rather
-than filtering only the first 50 displayed records. The browser probe
-`e2e/stand/browser/builder-project-review.mjs` checks selection and new-window
-preview against the requested scenario. A retained artifact is not approval;
-run outcomes and human acceptance remain separate.
-
-The eight-case GPT-5 evidence, known grader defects, CRUD runtime findings and
-correction progress are owned by R8 of the
-[Builder roadmap](builder-intent-to-prototype-roadmap.md#r8-evaluation-browser-review-and-user-experience).
-Browser capture includes the bottom
-of inner scroll surfaces: a full-page screenshot alone can miss an Ionic page's
-lower controls. Capture success is not a visual-quality or interaction pass.
-
-`e2e/stand/browser/prototype-interactions.mjs` accepts an explicit
-`ADAOS_E2E_CHECKPOINT` for a retained, unapproved, dev-only test artifact. It
-derives forms and collections from the actual compiled WebUI and exercises text
-update, persisted reopen and fixture restoration through the Client. Modal
-editors also exercise dismissal, focus restoration and cancellation of enabled
-confirmation commands. Supported same-editor create/delete pairs additionally
-create a new record through the form, locate and reopen it through the collection,
-then delete only that probe-owned record. Run with
-the same explicit local scope/token and a fresh `ADAOS_E2E_OUTPUT`. Unsupported
-editors are reported as `not_exercised`, never a task pass. This initial probe
-does not qualify all create/delete combinations, required-field validation,
-upload, locale or application-specific
-tasks; the roadmap retains those gates. Do not promote its test resources.
-
-For a controlled GPT-5 profile experiment, the dev runner forwards
-`ADAOS_BUILDER_LLM_REASONING_EFFORT` (`minimal`, `low`, `medium`, `high`) as explicit
-request metadata and records the override in the run environment. This does
-not change Builder's default. Actual primary/repair request artifacts remain
-the authority for effective options. Keep cases and output budgets unchanged.
-For a separate capacity experiment, `ADAOS_BUILDER_LLM_MAX_TOKENS` explicitly
-forwards a total output ceiling between 1,000 and 128,000 tokens. Record this
-changed variable; never combine such a run into a matched-effort comparison.
-To remove the application-imposed ceiling for GPT-5 evaluation, explicitly use
-128,000, its documented model output maximum. Omitting the setting does not
-remove Builder's default or Root's fallback budget. This is an opt-in diagnostic
-setting, not a production default and not an unlimited provider allowance.
-Compare `low` and `high` with this same ceiling, cases, compiler, context and
-grader. Retain primary and repair usage separately, including reasoning and
-cached input, and distinguish model execution from whole-pipeline duration.
-Compact generation diagnostics distinguish provider incompleteness and observed
-usage. Missing usage is not zero cost; retain original provider evidence.
-GPT-5 supports these effort levels in the [official model contract](https://developers.openai.com/api/docs/models/gpt-5).
-The diagnostic helper `e2e/stand/replay-builder-state-repair.py` replays one
-retained request with an explicit matching `--checkpoint` and `--effort` into
-a fresh output directory; `--response` validates a retained response without
-another model call. Neither route edits the test application or its old verdict.
-
-`e2e/stand/compare-builder-effort.py LOW_RUN HIGH_RUN NEW_OUTPUT` builds a
-UTF-8 JSON/Markdown comparison from retained evidence without new model calls.
-It checks matching case digests, grader, primary schema and stable messages,
-and actual model/effort/capacity on primary and repair requests. Optional
-`--subnet-id` and `--client-url` add local links to admitted retained previews.
-Pipeline times include validation/materialization/grading; model execution
-includes repairs. Input includes cached tokens, and output includes reasoning.
-Grader consumption is reported separately. One repetition and one ordered
-low/high pair are diagnostic, not a statistical qualification.
-
-The read-only browser review accepts `ADAOS_E2E_LOCALE=en|ru` and optional
-`ADAOS_E2E_SELECT_WIDGET` to inspect a selected collection item and its details.
-It records actual image/media elements rather than inferring rendering from
-attachment fields. A successful screenshot probe still does not establish
-media task success; inspect loaded assets and the requested user interaction.
-The interaction probe supports text/date update fields; other combinations
-remain `not_exercised` rather than model failures.
+Record effective model/effort/output settings on primary and repair requests,
+not only requested environment variables. Keep output-budget experiments
+separate from matched reasoning/context comparisons. Missing usage is not free;
+response length limits must follow observed input/output analysis. Inspect real
+media decoding/playback and in-viewport geometry, not merely DOM presence.

@@ -1,8 +1,12 @@
 # Builder Preview Runtime
 
-Status: implemented scenario-preview architecture contract with the Project
-presentation and generic skill-preview extension specified but not yet locally
-accepted.
+Status: paired scenario-preview contract with locally qualified slices.
+Project presentation, deletion/reconnect recovery and end-to-end readiness
+must retain their specific acceptance limits; this is not a blanket runtime
+health claim. Current remaining work is tracked in
+[BIP-03](builder-intent-to-prototype-roadmap.md#bip-03),
+[BIP-22](builder-intent-to-prototype-roadmap.md#bip-22) and the parent
+[Phase 12](builder-roadmap.md#phase-12-project-composition-and-scoped-development).
 
 This document defines project selection, Builder preview ownership, and
 webspace materialization. It replaces the former convention where a preview
@@ -138,12 +142,10 @@ actually need a fresh isolated document. Two execution classes are supported:
   `adaos.services.scenario.materialization_worker` and additionally return an
   encoded snapshot update and state vector.
 
-The old path started a complete second AdaOS runtime for every scenario switch.
-On the measured Windows host this spent about 1.9 seconds importing bootstrap
-and scenario modules and another 1.2-1.8 seconds rediscovering unchanged skill
-UI declarations before resolving the scenario. Process exit was not an
-ownership requirement after the patched Yrs release, so ordinary switches no
-longer cross that duplicate boundary.
+Ordinary switching must not launch a second full AdaOS runtime or rediscover
+unchanged skill UI declarations. Use the bounded resolver/catalog path under
+explicit YDoc ownership; require process isolation only for the declared
+fresh-document/materialization boundary, not as a default reload mechanism.
 
 The process-owned skill declaration catalog is built during API startup and is
 invalidated by skill source changes. An isolated worker receives that bounded
@@ -309,91 +311,5 @@ A project-selection regression test or smoke run must demonstrate:
 9. Open Preview and QR resolve to the same canonical destination, including
    development webspace and bindings.
 
-## Local Verification Evidence
-
-The implementation smoke on 2026-07-21 used the real `dev1-dev` preview with
-`prototype_app_c6b08e41` in five separate `payload_only` worker processes:
-
-- wall time: 4.06-4.33 seconds per operation;
-- resolver/materialization time: 3.04-3.17 seconds;
-- child interpreter RSS: 99.4-101.0 MiB;
-- serialized result: 0.599 MiB;
-- parent RSS reached 61.9 MiB by the third operation and remained there;
-- total parent RSS increase over the series: 5.75 MiB.
-
-A supervisor smoke measured 115.3 MiB peak RSS for the complete launcher plus
-interpreter process tree. Cancelling an active materialization terminated both
-PIDs; no descendant remained alive after cancellation.
-
-This historical run established that process isolation bounded memory, but the
-new phase timings subsequently showed 1.8-2.7 seconds outside the measured
-resolver: interpreter/module startup plus repeated declaration discovery. Native
-YDoc heap release is owned by the patched Yrs store model documented in
-[Yjs Runtime Ownership](yjs-runtime-ownership.md), not by process churn. The
-acceptance suite also covers 100 identical selections
-(one generation/apply), 100 distinct sequential selections (one bounded state
-file), and a superseded in-flight generation converging to the latest target.
-
-The 2026-07-22 browser acceptance used the real `dev1` Builder surface and its
-paired `dev1-dev` preview:
-
-- **Choose project** rendered all 21 projects in 879 ms without a loading state
-  or spinner;
-- selecting `Prototype App E5` kept `dev1` on `builder/ready` for every poll;
-- only `dev1-dev` entered pending materialization and converged to
-  `prototype_app_4d5758e5/ready` in 6.49 seconds;
-- the Builder page remained mounted and displayed the selected project while
-  the preview rebuilt;
-- a 52-switch live soak reached a bounded private-memory plateau; the final
-  40-switch window was 304.1-318.5 MiB with a -0.019 MiB/switch slope over its
-  last 20 samples.
-
-This verifies that project selection is a Builder data/context change. It does
-not switch or reload the Builder host scenario. Scenario materialization is
-owned only by the explicitly related preview webspace.
-
-The 2026-07-28 local runtime acceptance used the real DEV Builder scenario
-`0.2.23` and control skill `0.1.32`. Explicit selection of the retained nodes
-materialized and persisted matching labels for all target kinds:
-
-- Prototype `042`: `proto: builder · UI 042`;
-- current Automation task: `active: builder · 0.2.20`;
-- current Publication: `public: builder · 0.2.20`.
-
-The same live projection confirmed one Lifecycle root with dependent stages,
-Automation `0.2.20` nested under its source Prototype `041`, and older
-provenance-free publications represented as non-previewable inferred lineage.
-
-The 2026-07-23 root-cause benchmark cleared resolved/materialized caches after
-building the process-owned declaration catalog, then materialized the real
-`prototype_app_c6b08e41` scenario. The final API acceptance run on a new DEV
-webspace measured:
-
-- pointer/rebuild acceptance: 54 ms internally and 84 ms over local HTTP;
-- complete cold rebuild: 0.692 seconds, including 0.264 seconds resolver and
-  0.271 seconds cold YRoom creation plus payload apply;
-- second DEV webspace in the isolated resolver benchmark: 0.436 seconds total
-  with a shared-core hit;
-- skill declaration lookup in both operations: below 0.4 ms;
-- the same payload through the retained one-shot worker: 3.269 seconds even
-  with declarations supplied, proving that duplicate runtime startup rather
-  than generated scenario complexity caused the former 4-6 second switch.
-
-The final cold trace contained no `scenario_projection_sync` for the selected
-scenario and no materialization worker. Its full snapshot exposed
-`pageSchema.id=prototype_app_c6b08e41`, proving that the previous scenario's
-structural overlay was not retained. A 40-switch alternating run stabilized at
-0.17-0.24 seconds per hot rebuild; process private bytes moved from 341.2 MiB
-to 342.1 MiB and reached a plateau after the first cache allocations.
-
-Overlay isolation and access-scope separation are regression-tested. A shared
-core hit cannot carry installed/layout state across webspaces, and a different
-user/roles/policy identity forces a different core entry.
-
-Cold live-room creation is part of the same ownership contract. When the
-switch already has a materialized payload, room bootstrap loads persisted Yjs
-state without scenario seeding and applies the payload exactly once. It does
-not emit `scenarios.synced` or invoke the in-room semantic materializer. The
-pre-fix live trace spent 1.139 seconds creating the room and ran an additional
-0.649-second `scenario_projection_sync`; the same stage after the fix took
-0.183 seconds with no duplicate rebuild.
+Implementation and acceptance limits are tracked in the Builder roadmaps;
+measurements are retained only in the [engineering journal](builder-engineering-journal.md).

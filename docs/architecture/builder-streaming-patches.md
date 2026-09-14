@@ -1,8 +1,8 @@
 # Builder Streaming Patch Architecture
 
-Status: transport and atomic-application architecture with a
-backward-compatible first implementation slice validated end to end in July
-2026.
+Status: target transport/journaling/atomic-application contract with an
+implemented compatibility slice. Readiness belongs to the Builder roadmap;
+dated results belong only in the engineering journal.
 
 This page owns transport, journaling, and atomic application of streamed
 renderer-artifact patches. It no longer owns the target product-understanding
@@ -33,8 +33,10 @@ The implementation must keep these protocols distinct:
 2. **Root job progress**: a bounded, replayable journal owned by Root. It
    reports accepted, provider-started, output-progress, validating, completed,
    and failed phases with monotonic sequence numbers.
-3. **Builder semantic output**: either a logical patch batch or a legacy full
-   `adaos.webui.v1` document. Builder validates and commits this output.
+3. **Builder output**: the target route returns a typed semantic candidate or
+   scoped semantic repair, compiled by Core. Only the explicit compatibility
+   route returns a renderer patch batch or full `adaos.webui.v1` document.
+   Both require complete validation and atomic promotion.
 
 Root owns the upstream connection. A Hub, browser, or Builder polling
 disconnect must not cancel provider execution. Consumers recover from the
@@ -42,13 +44,17 @@ bounded Root journal and terminal job snapshot.
 
 ## Target Semantic Contract
 
-The preferred model output is newline-delimited JSON. Every physical line is a
-complete object, and patch lines use the generic RFC 6902 operation vocabulary:
+For new managed generation, the target is the typed semantic contract in
+[Intent-to-Prototype](builder-intent-to-prototype.md), with source authority
+and migration tracked in [BIP-11](builder-intent-to-prototype-roadmap.md#bip-11).
+The following renderer JSONL contract applies **only to the explicit
+compatibility profile**. It is not the preferred target model output.
+Each physical line is a complete object using the RFC 6902 vocabulary:
 
 ```jsonl
 {"schema":"adaos.builder.webui_patch_stream.v1","type":"meta","base_hash":"sha256:..."}
-{"type":"patch","seq":1,"op":"replace","path":"/ui/application/desktop/pageSchema/widgets/@recipe-list/inputs/title","value":"Recipes"}
-{"type":"complete","comment":"Updated the recipe section title.","unable_reason":""}
+{"type":"patch","seq":1,"op":"replace","path":"/ui/application/desktop/pageSchema/widgets/@record-list/inputs/title","value":"Records"}
+{"type":"complete","comment":"Updated the section title.","unable_reason":""}
 ```
 
 The allowed operations are `add`, `remove`, `replace`, `move`, `copy`, and
@@ -161,46 +167,6 @@ silently normalizes a malformed stream, and one repair request receives the
 exact missing-parent diagnostic. Component contracts remain ABI-driven; for
 example every `pageSchema.autoActions` item wraps the executable action in its
 required `action` member.
-
-## July 2026 Evaluation
-
-The reference run created `streaming_recipe_book_eval` from the generic Builder
-scaffold and produced a responsive recipe catalog with deterministic Picsum
-cards, category controls, search, selected-recipe details, and a local favorite
-action. The final follow-up used stable widget paths, declared
-`ui.application.modals.recipe_detail_modal`, attached selection/open actions to
-the recipe cards, preserved the modal while adding two catalog rows, passed the
-complete ABI/component/action validator, promoted revision `009`, and refreshed
-`desktop-dev`.
-
-Measured evidence from the run:
-
-- provider TTFT: 0.74-1.25 seconds for the measured `gpt-5` jobs
-- cold full-prototype generation: 12.8 seconds at Root
-- small warm generation: 3.8 seconds at Root with 8,832 of 11,593 input tokens
-  served from the provider prompt cache
-- final post-profile-change correction: 4.6 seconds at Root before one bounded
-  repair pass
-- local context construction: 0.05-0.14 seconds; Root submit: 1.2-1.9 seconds
-- validated apply plus dev-webspace materialization: approximately 3.1 seconds,
-  of which semantic runtime rebuild was approximately 2.1-2.7 seconds
-- modal conversion after the missing-parent contract fix: 15.1 seconds at Root,
-  16.9 seconds through validated local apply, without a repair pass
-- warm two-row catalog update: 7.5 seconds at Root and 8.2 seconds through apply,
-  with 9,344 of 11,991 input tokens served from the provider cache
-
-`gpt-4o-mini` produced syntactically recoverable output but materially weaker
-layout and interaction choices for the same broad prototype request. The model
-profile remains selectable; the reference quality run used `gpt-5`.
-
-A second clean-room run created `e2e_16_89cb7724` from the generic scaffold with
-an ordinary Russian-language request. `gpt-5` produced a responsive four-item
-home recipe catalog with stable Picsum images, search, category filters,
-selected-recipe details, add/edit modals, and typed forms. A follow-up exposed a
-flattened form-property error; the component validator rejected it and the
-full-document repair path returned a valid `adaos.webui.v1` revision. Browser
-checks covered desktop and 390 px mobile layouts, card-to-detail selection,
-search, add/edit/cancel actions, and editable Review comments.
 
 ## Observability
 

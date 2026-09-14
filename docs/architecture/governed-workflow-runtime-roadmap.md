@@ -10,8 +10,8 @@ This roadmap implements the
 [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md).
 The current local implementation ledger is
 [Governed Workflow Runtime Verification 2026-08-04](governed-workflow-runtime-verification-2026-08-04.md).
-Earlier live-channel evidence remains in
-[Builder Governed Workflow Verification 2026-08-01](builder-workflow-verification-2026-08-01.md).
+Selected Builder live-channel evidence is consolidated in the
+[Builder Engineering Journal](builder-engineering-journal.md#2026-07-18-through-2026-08-05-control-and-transport).
 It owns sequencing and acceptance inside this domain. It does not replace the
 [Governed Evolution Roadmap](governed-evolution-roadmap.md), Builder roadmap,
 conversation architecture, Conversational Control Interface, NLU roadmap, or

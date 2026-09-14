@@ -1,10 +1,12 @@
 # Builder Intent-to-Prototype Architecture
 
-Status: corrective target architecture. The current implementation is a
-transitional, recipe-guided prototype path and does not yet satisfy this
-contract.
+Status: corrective target architecture with a supported generic semantic
+subset. Current SDK execution still uses a compatibility skill adapter;
+residual Brief interpretation, total component contracts and clean held-out
+reliability are not complete. Historical Applications recipe-guided results
+must not be conflated with the newer pack-free development cohorts.
 
-Last reviewed: 2026-09-12.
+Last reviewed: 2026-09-14.
 
 This page owns how Builder turns an ordinary user request into an executable
 Prototype. [AdaOS Builder](builder.md) continues to own the complete governed
@@ -17,72 +19,36 @@ reproducible evaluation contracts and the single technological CLI entry. The
 [Client Component System Roadmap](client-component-system-roadmap.md) owns
 Client decontamination and component-system growth.
 
-## Correction Summary
+## Architecture Decision
 
-The intended architecture and the implemented path diverged in two related
-ways:
+Builder must compile ordinary user intent through reviewable typed
+representations, not compensate for missing product understanding with finished
+application recipes or cumulative renderer prompts.
 
-1. The architecture correctly required compact, general, purpose-scoped
-   context, semantic composition, and deterministic validation.
-2. It did not define a typed product-understanding boundary between user text
-   and renderer-level `webui.json`.
-3. The implementation filled that gap with prompt rules, lexical domain
-   classifiers, detailed recipes, cumulative phases, complete WebUI context,
-   and output-repair code.
-4. The roadmap then accepted recipe-guided Applications evidence as evidence
-   of generic Builder composition. That interpretation is no longer valid.
+- Keep source intent, accepted Brief, semantic document, compiled runtime and
+  evidence distinct and content-addressed.
+- Explicit compatibility domain packs may preserve existing applications, but
+  cannot enter generic generation implicitly or prove prompt autonomy.
+- Builder skills own conversation/projection; Core owns state, execution,
+  validation and transactional artifact mutation behind the public SDK.
+- A capability inventory is not a single component contract. Admission,
+  renderer, compiler, retrieval and tests must derive from the same contract.
+- Minimum working behavior is a hard gate; unrequested UX richness is quality,
+  not a reason to reject an otherwise working Prototype.
+- Prototype local interactions and disclosed Automation obligations are
+  stage-specific; generic UI approval does not silently approve new external
+  scope.
+- Context includes only authoritative stage-relevant information. Inspect both
+  model input and output before changing budgets or requesting repair.
+- Qualification separates first result, repairs, runtime behavior, human
+  acceptance and installed delivery. One weighted score cannot hide a hard
+  authority/task failure.
 
-The Applications Prototype remains useful product and renderer evidence. It
-proves that Builder can materialize and revise a detailed, validated recipe. It
-does not prove that Builder can understand an unseen application request and
-autonomously derive a relevant design.
-
-`recipe.application_manager`, Applications-specific qualification, and its
-postconditions are compatibility and evaluation fixtures until migrated. They
-must not remain in generic Core request interpretation, and they cannot close
-prompt-autonomy gates.
-
-## Current Baseline Audit
-
-The 2026-09-10 source audit found the following concrete gaps. Counts describe
-the audited revision and are diagnostic, not permanent architecture limits.
-
-| Concern | Current evidence | Architectural interpretation |
-| --- | --- | --- |
-| Missing understanding contract | No Prototype Brief or adaptive Prototype Plan ABI exists. The request compiler proceeds from instruction and project memory to selected UI capabilities and a WebUI patch contract. | Product interpretation is implicit and cannot be reviewed, evaluated, or repaired independently. |
-| Renderer-level generation | `builder_skill/handlers/main.py` sends complete `current_webui_json` and asks for RFC 6902/extended JSON Pointer output. | The model must simultaneously understand the product and program the renderer artifact. |
-| Domain behavior in generic Core | `services/ui_capabilities.py` recognizes Applications and board vocabulary, selects named recipes, and implements Applications-specific lifecycle, fixture, and UI postconditions. | Core qualification and validation are coupled to current dogfood subjects. |
-| Detailed solution leakage | `abi/ui.capability_catalog.v1.json` supplies the Applications layout, commands, tools, states, phases, vocabulary, and postconditions. | This is a detailed domain pack, not a generic component capability description. |
-| Retrieval declared but unavailable | The bounded context index says `mcp_context_search`, while the examined Prototype model requests exposed no retrieval tool and recorded no tool use. | The model cannot follow the stated progressive-disclosure contract; the orchestrator compensates by embedding more context. |
-| Text repair as a normal rail | The Builder handler contains balanced-object extraction and JSON/JSONL repair around provider text. | Output syntax recovery obscures model/contract failures and adds retries that schema-constrained output should prevent. |
-| Split ownership without a seam | The DEV Builder handler is 22,472 lines; Core `builder/workflow.py` is 6,384 lines and `ui_capabilities.py` is 3,504 lines. Product rules, workflow state, provider handling, persistence, validation, and lifecycle coordination cross these files. | Physical size is a symptom. The primary defect is duplicated or misplaced authority. |
-| Semantic IR is not the generation boundary | `webui.semantic.v0` is an additive draft and is not used by the active Builder generation path. Existing semantic operations cover bounded edits only. | AdaOS has useful semantic primitives but not a complete intent-to-runtime compiler. |
-
-The retained phased Applications journal is intentionally noisy because it
-includes repair and performance experiments. It is not a production success
-rate. It nevertheless demonstrates the current cost shape: 20 recorded model
-results consumed about 726k input tokens, median input was about 36k, maximum
-input about 70k, and only about 25% of input tokens were cached. A narrow exact
-move still received about 22k input tokens. These measurements justify a
-contract and context redesign rather than another timeout or prompt-size
-increase.
-
-The documentation drift was therefore bidirectional. Implementation departed
-from the compact/general context rule, while architecture and roadmap text did
-not provide the missing brief/semantic-compiler contract and accepted local
-mechanism tests as broader autonomy evidence. Both documentation and code need
-correction; neither can be treated as the sole source of the defect.
-
-The corrective implementation on 2026-09-11 establishes the first clean
-semantic-v2 vertical slice: schema-constrained multi-resource candidates,
-typed relationships, structural representative-state proof, requirement
-bindings, explicit capability gaps, deterministic compilation to WebUI, and
-exact model-input attribution. This is a supported subset, not completion of
-the target architecture. A retained volunteer run still left actors, entities,
-outcome, information hierarchy, and disclosure semantics unknown in the
-Prototype Brief. The design model reconstructed much of that meaning from the
-raw user turn, but such recovery is stochastic and cannot replace the R4
-understanding contract.
+Implementation boundaries and remaining work are owned by the
+[current register](builder-intent-to-prototype-roadmap.md#current-task-register).
+Dated measurements belong only in the [engineering journal](builder-engineering-journal.md).
+The existence of a generic semantic subset does not establish complete target
+ownership or clean held-out reliability.
 
 ## Product Objective
 

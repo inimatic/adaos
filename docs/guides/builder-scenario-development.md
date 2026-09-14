@@ -1,6 +1,7 @@
 # Builder-Safe Scenario Development Guide
 
-Status: current guidance and target contract.
+Status: stage-aware authoring guidance, reviewed against the Builder contracts
+on 2026-09-14; not a completion checklist.
 
 This guide is written for Builder workflows that create or update AdaOS
 scenarios. Read it together with:
@@ -22,6 +23,13 @@ long-running work, heavy state, or new permissions, create or update a skill
 draft and make the scenario depend on it.
 
 ## Scenario Plan
+
+These are Builder's internal authoring/validation facts, not a questionnaire
+that the user must fill in or a demand that the Prototype model invent final
+integrations. Use the [Prototype/Automation boundary](../architecture/builder-intent-to-prototype.md#stage-specific-acceptance):
+local disposable CRUD may be executable during Prototype; installed persistence,
+external effects and server-side rules require Automation evidence. Record
+material unknowns instead of silently promoting suggestions to obligations.
 
 Before editing a Builder-authored scenario, record:
 
@@ -102,5 +110,9 @@ show:
 - UI preview summary for pages, modals, widgets, and data bindings
 - risk summary and human-review reasons
 
-The preview is not an apply. It must not install dependencies, mutate the active
-webspace, emit NLU dispatch events, or activate skill runtimes.
+Preview review is not stable apply or publication. It must not silently
+install dependencies, mutate the production host or emit NLU dispatch events.
+An explicit Preview request may materialize the exact accepted/generated
+candidate and its admitted DEV runtime bindings in the owned paired preview,
+under the [Preview Runtime contract](../architecture/builder-preview-runtime.md).
+Read-only inspection must not create topology or change lifecycle acceptance.

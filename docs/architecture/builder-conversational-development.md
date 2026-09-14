@@ -17,9 +17,13 @@ The word Project and its separation from a mutable Builder Development Session
 are governed by
 [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
 
-Delivery status and priority are tracked only in the
-[Builder Roadmap](builder-roadmap.md). This page owns the target concepts and
-invariants.
+Delivery status is owned by the
+[Builder Roadmap](builder-roadmap.md#document-ownership-audit) and its linked
+specialized checklists, especially the
+[current corrective register](builder-intent-to-prototype-roadmap.md#current-task-register).
+This page owns target concepts and invariants, not implementation completion.
+The current small-application work permits frozen DEV Automation; it does not
+resume paused Trial/publication or authorize broad multi-user work.
 
 ## Decision Summary
 
@@ -302,7 +306,7 @@ its UI and view projections and must not carry a duplicate Change workflow.
 activated, and rolled back as one immutable package; Builder instances pin the
 exact definition, package, and resolved adapter-binding digests.
 
-The 2026-08-04 strict cutover path is controlled by
+Strict active-package cutover is controlled by
 `ADAOS_BUILDER_REQUIRE_ACTIVE_PACKAGE`. When enabled, Builder requires the
 active `skill:builder_skill` PackageRef from WorkspaceLock, loads only its
 materialized `workflow.json`, verifies definition/validation/adapter-binding
@@ -738,11 +742,10 @@ The first limited-channel slice uses one dialog contract for Web and Telegram:
   a renderer may not recreate controls from localized prose or silently drop
   them.
 
-Live acceptance on 2026-08-01 proved the current-project frame in Web and the
-real Telegram bot with five actions. It also proved the activation invariant:
-publishing changed skill files is insufficient while an older runtime process
-is still loaded; one explicit activation/reload and a health/behavior probe are
-part of the publication acceptance.
+Publication acceptance must prove loaded runtime identity, not only changed
+skill files. Require explicit activation/reload plus health and behavior
+checks on the intended Web/Telegram authority. Human/channel qualification
+remains in the parent roadmap; historical measurements belong in the journal.
 
 Telegram pairing may additionally bind a trusted `webspace_id`. The binding is
 persisted with the bot/chat-to-hub route and is copied into every normalized

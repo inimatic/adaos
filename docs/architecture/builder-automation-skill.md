@@ -1,7 +1,9 @@
 # Builder Automation Skill
 
 Status: local SDK-backed runtime slice with chat follow-ups, atomic
-finalization, and Forge checkpoint gating.
+finalization, and Forge checkpoint gating. Current qualification is tracked in
+[BIP-26 through BIP-28](builder-intent-to-prototype-roadmap.md#bip-26);
+worker completion is not independent application or delivery acceptance.
 
 `builder_automation_skill` is the system adapter between the Builder product
 surface and the implementation executor. It owns the Automation-stage tool
@@ -69,7 +71,10 @@ Worker completion is not the terminal Automation state. The session remains
 3. prepares and activates the DEV skill;
 4. rematerializes the paired DEV scenario.
 
-Only then does it become `completed`. Any unconfirmed checkpoint becomes a
+Only then does it become `completed` as an implementation/finalization result.
+This does not certify user outcomes, installed authorization or Trial/release
+acceptance. The frozen Prototype, declared implementation scope and independent
+HTTP/browser evidence remain separate gates. Any unconfirmed checkpoint becomes a
 terminal `forge_checkpoint` failure before activation. A follow-up turn moves
 the preceding readiness into bounded history and clears summary, failure,
 task, and progress fields so navigation/reconnect cannot resurrect the old
@@ -89,11 +94,10 @@ singular compatibility alias.
   intentionally not invented in the skill before their core contracts exist;
 - the projection is a backend contract; the final Builder Automation screen
   may compose it with chat, artifacts, tests, and dev-preview status.
-- the Root scenario-draft endpoint still needs a durable asynchronous or
-  idempotent commit acknowledgement: the archive may update while nginx returns
-  `504` and Redis commit metadata remains stale. The client retries one
-  transient failure, but Automation correctly remains failed if the current
-  commit cannot be confirmed.
+- durable scenario checkpoint acknowledgement is mandatory after any
+  transient error. Verify exact commit/task/source metadata, not changed
+  archive bytes. The [SDK checklist](builder-sdk-boundary.md#roadmap-and-checklist)
+  owns fault/retry qualification; an unconfirmed commit fails finalization.
 
 Primary references:
 

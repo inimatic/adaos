@@ -4,7 +4,13 @@ Status: operational verification guide for the current governed Builder
 workflow. Architecture and roadmap pages remain authoritative for contracts and
 completion status.
 
-Last reviewed: 2026-08-07.
+Last reviewed: 2026-09-14 (scope and authority; historical checks are not rerun).
+
+Current execution scope: frozen small-application DEV Automation is authorized;
+Trial and publication are paused. The delivery steps below are procedures for
+a later explicit resumption, not permission to execute them. Readiness belongs
+to the [current register](../architecture/builder-intent-to-prototype-roadmap.md#current-task-register),
+not to this guide or a successful worker completion message.
 
 ## Purpose
 
@@ -13,9 +19,8 @@ does not replace automated tests. Expected states, links, controls, and outcomes
 must be checked against the canonical workflow rather than accepted from reply
 text alone.
 
-The guide was promoted from a useful Russian-only verification document when
-English became the documentation authority. Dated local results are not copied
-here; they remain in the English evidence records linked at the end.
+Dated results belong only in the Builder engineering journal and raw evidence
+bundles. This guide defines verification, not a separate completion record.
 
 ## Deterministic Builder Commands
 
@@ -242,9 +247,7 @@ development creates a new Change over the stable version.
 
 Use these records for dated verification results and open gates:
 
-- [Builder Governed Workflow Verification — 2026-08-01](../architecture/builder-workflow-verification-2026-08-01.md)
-- [Builder Context Routing Evidence — 2026-08-03](../architecture/builder-context-routing-evidence-2026-08-03.md)
-- [Builder Phase 11 Verification — 2026-08-05](../architecture/builder-phase-11-verification-2026-08-05.md)
+- [Builder Engineering Journal](../architecture/builder-engineering-journal.md)
 - [Builder Roadmap](../architecture/builder-roadmap.md)
 - [Governed Workflow Runtime Roadmap](../architecture/governed-workflow-runtime-roadmap.md)
 

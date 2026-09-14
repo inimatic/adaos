@@ -1,3017 +1,523 @@
 # Builder Intent-to-Prototype Roadmap
 
-Status: active corrective roadmap. It blocks new claims of generic Builder
-Prototype autonomy.
-
-Last reviewed: 2026-09-11.
-
-Architecture: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
-Parent lifecycle roadmap: [Builder Roadmap](builder-roadmap.md).
-Evaluation contract: [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md).
-Client dependency: [Client Component System Roadmap](client-component-system-roadmap.md).
-
-This roadmap replaces incremental expansion of the current prompt/recipe path
-with a typed intent-to-Prototype compiler. Historical Builder lifecycle,
-publication, and renderer evidence remains valid in its stated scope. It does
-not close the gates below.
-
-## Priority Rules
-
-- `must`: required before generic prompt-autonomy or further subject-specific
-  Builder dogfood claims;
-- `should`: required for a maintainable and cost-effective supported path;
-- `could`: useful only after must metrics are established;
-- `deferred`: explicitly outside this correction.
-
-No task is complete because a schema or test exists. Completion requires the
-declared behavior through the public SDK and a retained evaluation result.
-
-## Stop Conditions
-
-Active scope (2026-09-11): reliable small prototypes, then their complete Builder
-lifecycle including Automation. Large-prototype orchestration is deferred, not a
-prerequisite for the small-application gate. Current work is limited to acceptance,
-contract consistency, generation context and minimal visibility in existing Builder.
-
-### Current Iteration Checklist
-
-- [x] `[must]` Separate minimum-working acceptance from non-blocking design
-  quality. Unspecified richness, screen count and domain conventions must not
-  become mandatory criteria; preserve explicit outcomes and runtime invariants.
-- [x] `[must]` Calibrate the eight development archetypes' outcome/state/exclusion
-  criteria against exact user requests; retain positive and negative grader probes.
-- [x] `[must]` Align candidate/canonical capacity, attachment, relationship and
-  representative-state contracts with cross-domain executable regression tests.
-- [x] `[must]` Supply an exact required-reference inventory, contextual operations
-  and an executable-contract-derived invariant catalog to generation and repair.
-- [x] `[must]` Retain dev-only test applications in Builder with searchable
-  `[TEST]` and date/unique suffix; prepare the exact revision's owner-managed preview.
-  Keep generated, failed and accepted states distinct. Do not publish beta/stable.
-- [x] `[must]` Run the full eight-case GPT-5 cohort after local replay tests;
-  inspect complete inputs/outputs and actual browser previews, record unresolved debt.
-- [x] `[must]` Consolidate the standalone stage review into architecture and roadmap
-  ownership; keep measurements in this checklist's evidence, not a parallel report.
-- [ ] `[should]` Follow with targeted semantic repair and preservation checks only
-  after the current acceptance/context/contract iteration is measured.
-
-Until R8 is complete:
-
-- do not add another subject-specific recipe, lexical domain branch, prompt
-  phase, or postcondition block to generic Core or `builder_skill`;
-- do not use Applications or another recipe-guided result as evidence of
-  prompt autonomy;
-- do not start Automation for the corrective reference application;
-- do not delete the current path before shadow replay and rollback evidence;
-- continue only defect fixes required to keep the current Builder operable and
-  observable.
-
-## R0. Forensic Snapshot
-
-Progress note (2026-09-10): the reproducible
-[legacy forensic snapshot](builder-forensic-snapshot-2026-09-10.md) freezes
-selected Core, DEV Builder, Client, and Applications trees plus canonical
-revision usage and repair evidence. It also records ownership/disposition and
-correct evidence labels. End-to-end stage spans, immutable compact/wide Client
-traces, dynamic reachability, and the executable legacy characterization suite
-remain open, so R0 is not yet complete.
-
-- [ ] `[must]` Freeze an exact forensic snapshot of the contaminated current
-  path: code revisions, prompt profiles, component catalog, model profiles,
-  Applications inputs/outputs, token usage, latency, repairs, and validation
-  results. Label it `legacy_recipe_guided`; it is not an autonomy baseline.
-- [ ] `[must]` Inventory every subject-specific classifier, recipe, example,
-  default, postcondition, repair rule, and test fixture reachable from the
-  generic Prototype route. Record its owner and migration disposition.
-- [ ] `[must]` Label retained evidence as `renderer-qualified`,
-  `recipe-guided`, `brief-compiled`, or `prompt-autonomous`. Correct status
-  projections that currently collapse these claims.
-- [ ] `[must]` Record current ownership and duplication across Builder skill,
-  Core workflow, capability selection, LLM adapter, SDK, and Client registries.
-- [ ] `[should]` Add a reproducible trace report that separates orchestration,
-  context compilation, provider queue/inference, validation, checkpoint,
-  runtime refresh, and browser render time.
-- [ ] `[must]` Freeze the current Client registry, semantic adapter, generic
-  runtime branches, component coverage, build digest, and compact/wide
-  compatibility traces as required by Client roadmap C0.
-
-Exit gate: existing behavior is reproducible and all known contamination is
-classified. This is the minimum evidence needed to clean safely, not an
-autonomy baseline.
-
-## R1. Domain Decontamination And Compatibility Seam
-
-Progress note (2026-09-10): generic UI capability selection and prompt-rule
-selection now start with no domain packs. Applications and research policy was
-extracted into versioned compatibility packs; the Applications evaluator is
-retained behind an explicit adapter. DEV Projects may bind packs through
-`development.domain_packs`, and historical recipe receipts resolve through the
-pack registry. Product wording and IDs no longer activate a pack. The
-Applications DEV experiments were migrated explicitly. Generic boundary tests
-and the retained legacy characterization suite pass. Every current DEV Builder
-provider route now writes the exact local request journal plus a compact
-`adaos.builder.llm_input_attribution.v1` receipt before network submission.
-The receipt content-addresses every message, stable and dynamic segments,
-selected contracts/patterns/examples, domain packs, and sanitized generation
-options. A new provider route without this receipt reopens R1.
-
-- [x] `[must]` Add characterization tests around the legacy Applications and
-  other subject-guided paths before moving them.
-- [x] `[must]` Classify catalog entries as atomic component contracts, generic
-  composition patterns, or subject domain packs. A board, form, or
-  master-detail pattern may remain generic; a finished application's
-  information architecture, vocabulary, operations, fixtures, or grading
-  rules may not.
-- [x] `[must]` Move `recipe.application_manager`, Applications-specific
-  vocabulary, lifecycle defaults, phases, and postconditions out of generic
-  Core into a versioned compatibility/evaluation domain pack.
-- [x] `[must]` Remove shopping-list, todo, recipe-book, and other product-title
-  heuristics and examples from the generic Builder execution path. Retain them
-  only in explicitly selected development fixtures or domain packs.
-- [x] `[must]` Add a generic-profile policy that supplies no domain packs and
-  rejects hidden selection by subject ID, project name, prompt wording, or
-  postcondition prefix.
-- [x] `[must]` Persist an input-attribution receipt proving which component
-  contracts, generic patterns, examples, and domain packs were available to
-  every model run.
-- [x] `[must]` Preserve current user-visible behavior behind one explicit
-  legacy adapter and project-scoped profile switch. New generic code must not
-  call its private helpers.
-- [x] `[should]` Add a static boundary test and allowlist that reject subject
-  identifiers and localized product vocabulary in generic Core prompt,
-  qualification, catalog, and validation modules.
-
-Exit gate: generic mode cannot retrieve or execute subject-specific recipes,
-heuristics, examples, or evaluators, while the explicit legacy profile remains
-available for regression and rollback.
-
-The clean baseline also requires Client roadmap C1 and the truthful C2
-contract subset for every component reachable by baseline cases. The broader
-component-growth phases do not block it.
-
-Client prerequisite progress (2026-09-10): the Client now emits a
-content-addressed capability inventory and has extracted the first Builder,
-Infrastate, and NLU action branches into explicit multi-provider extensions.
-This narrows contamination but does not satisfy the prerequisite: modal/data
-recovery and generic-widget domain branches remain, and the inventory exposes
-six advertised semantic kinds without a lowering implementation.
-
-## R2. Clean Generic Baseline
-
-Implementation note (2026-09-10): the first ABI/runner slice and model-free
-self-tests exist. It deliberately uses a recorded `legacy_dev_chat.v1`
-compatibility adapter because the R3 public SDK seam does not yet exist. This
-resolves the sequencing dependency without weakening the clean-baseline gate:
-legacy-adapter runs are characterization evidence only, and the unchanged
-cases must later execute through `sdk.v1`.
-
-The first live generic creation case now validates a scenario and proves
-bounded cleanup of the exact Builder draft, DEV component, and Project
-aggregate. Cleanup is fail-closed: a negative receipt makes an otherwise
-successful case inconclusive. Large redacted step outputs are retained as
-compressed digest-bearing evidence instead of being embedded in the case
-result. The measured run remained compatibility evidence: it made no model
-call and took about 14 seconds, dominated by Builder chat and session reads.
-This identifies process/tool startup and missing internal stage spans as
-development measurements, not as acceptable target latency.
-
-The hardened runner now uses case/repetition-specific webspaces, pre-step and
-post-step checkpoints bound to the immutable run manifest, validated resume,
-explicit bounded retry policy and attempt history, actual model-input receipt
-checks before scoring, and per-step-type latency. A completed resumed run
-returns its existing report byte-for-byte. A second local Notes run passed in
-19.3 seconds with zero model calls and exact cleanup; 15.6 seconds was the
-legacy chat adapter and 2.55 seconds a second runtime session read. These are
-compatibility-adapter overhead, not target SDK latency.
-
-The visible development suite now has eight EN/RU archetype cases expressed as
-ordinary user turns. Its first live operations-queue case was deliberately
-inspected and is development evidence, not a holdout. Successive runs exposed
-and fixed case-webspace propagation, terminal-job synchronization, compact
-Project ownership receipts, and usage double counting. The hardened run then
-failed for a substantive reason: a generated board combined a static source
-with a mutating move action. The exact three model inputs were attributed to a
-generic profile with no domain packs. The failure is retained as evidence for
-R4/R5 rather than hidden by a fixture-specific rule.
-
-The suite now requires an independent post-generation `prototype.grade` step.
-Its oracle data cannot enter Builder generation context, exact evidence
-pointers and request digests are retained, and grader usage has separate
-metrics. A frozen RU equipment candidate that passed structural validation was
-correctly rejected at `0.425` because its checklist was static and photo,
-completion guard, and requested states were absent. This closes the immediate
-false-green path but is not the R2 outcome gate: the model grader is not yet
-calibrated against human labels and deterministic compact/wide browser jobs
-remain open.
-
-The public CLI smoke `cli-model-free-20260910-01` executed the declared
-`runner-observation` case through `adaos builder e2e`, retained a schema-valid
-bundle, and passed both required steps in 18.4 ms with zero model calls. The
-focused runner, grader, evaluation, and governed-flow suite passes 33 tests,
-including selection, isolation, resume identity, bounded retry accounting,
-cleanup failure handling, evidence compaction, attribution, and baseline
-comparison. The CLI item remains open only because the current live adapter is
-`legacy_dev_chat.v1`; public SDK transitions are an R3 dependency.
-
-Clean-profile suites now set `require_client_profile=true`. Before provisioning
-or any model call, the runner compares every Core catalog component type with
-the content-addressed Client capability inventory and rejects a missing
-generic/shell runtime registration. `cli-client-profile-20260910-01` passed
-this gate locally in 16.0 ms. Its run manifest records the Client commit,
-inventory digest, Core catalog version/digest, complete generic runtime type
-set, and unsupported semantic kinds. This is a reproducibility and fail-closed
-compatibility gate; it does not replace the C2 single-source contract.
-
-The first retained clean-profile outcome probe,
-`baseline-generic-equipment-ru-20260910-01`, failed its independent grade at
-`0.45625` after passing creation, generation, job synchronization, and schema
-validation. Its single Builder model call used 5,713 fresh input and 823 output
-tokens; no cached tokens were reported. Inspection of the exact request found
-unconditional Application CAS instructions, board-only acceptance rules for a
-non-board selection, an incorrectly reusable variable "stable" segment, and a
-brief that omitted explicit states and capability gaps. The failed candidate
-is retained unchanged and these are architecture inputs, not case-specific
-prompt tuning.
-
-Later equipment-inspection runs removed those contaminating inputs and exposed
-two distinct contract defects. First, the phrase `complete.prototype_records`
-was interpreted as a WebUI JSON Pointer, so representative records entered the
-renderer patch and one response wrapped them in a transport envelope. The
-compatibility contract now states that patches address only WebUI and direct
-records belong to a terminal JSONL sidecar; validation rejects envelope-shaped
-records, and repair preserves already valid sidecars independently of the
-candidate document. The fresh
-`generic-equipment-terminal-sidecar-20260910-01` run then reached schema and
-postcondition validation, materialized four direct records and EN/RU assets,
-and received an independent score of `0.89375`. It still failed the hard task
-gate: checklist rows were read-only and no explicit per-inspection defect state
-could be edited. The run took 77.3 seconds and four Builder model calls (15,772
-fresh input, 5,632 cached input, and 4,467 output tokens), plus one 9.2-second
-grader call. This is valid capability-gap evidence, not a pass. It also shows
-that repeated repair context can grow to about 96 KB and that malformed JSON
-Pointer repair remains a material legacy-path cost.
-
-- [x] `[must]` Publish and validate the declarative E2E suite, case, resolved
-  run, case-result, report, and immutable baseline contracts defined by the
-  [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md). Reuse
-  existing Builder evaluation evidence and workflow metrics as referenced
-  sources rather than duplicating them.
-- [x] `[must]` Implement one technological CLI entry, `adaos builder e2e`, for
-  complete suites or selected cases/tags. It must validate, provision isolated
-  DEV state, execute public SDK transitions, collect evidence, compare an
-  optional baseline, report, and clean up without exposing low-level eval CRUD
-  commands to normal Builder users.
-- [x] `[must]` Prove runner isolation, deterministic case selection,
-  interruption/resume, retry accounting, cleanup, artifact retention, and
-  matched-run comparability with model-free self-tests.
-- [x] `[must]` Build a visible development suite from the application
-  archetypes already used for Client/component analysis. Use it to debug the
-  harness and metric collectors; never call it held-out.
-- [ ] `[must]` Define and seal an evaluation set of at least 40 ordinary EN/RU
-  prompts across at least eight different held-out application archetypes.
-  Keep prompts free of component IDs, AdaOS paths, recipe names, and
-  implementation phases. Do not expose or tune generation, retrieval,
-  components, prompts, or repair rules against the sealed prompts.
-- [ ] `[must]` Add mutation cases for ambiguous operations, missing authority,
-  conflicting requirements, long content, unsupported capabilities, and
-  preservation of unrelated behavior.
-- [ ] `[must]` Run the sealed 40-prompt EN/RU set through the decontaminated
-  generic profile with fixed model/profile settings and domain packs disabled.
-- [ ] `[must]` Verify input-attribution receipts automatically before scoring;
-  any subject-pack, held-out example, or product-specific postcondition makes
-  the run invalid rather than merely lowering its score.
-- [ ] `[must]` Record intent coverage, clarification behavior, structural and
-  runtime validity, browser task success, preservation, capability-gap
-  accuracy, model calls, fresh/cached/output tokens, repairs, and latency.
-- [ ] `[must]` Record actual billed and normalized uncached-equivalent cost,
-  per-stage latency, browser/Client readiness, reliability across repetitions,
-  and exact environment/component/profile digests. Keep warm/cold cache and
-  connected/degraded network runs in separate cohorts.
-- [ ] `[must]` Keep failures unchanged during the baseline run. Convert them
-  into a taxonomy and prioritized architecture requirements only after the
-  complete run finishes.
-- [ ] `[must]` When sample-level prompts or results are inspected for
-  remediation, reclassify that immutable set from sealed holdout to regression
-  and seal a different successor cohort for later prompt-autonomy claims.
-- [ ] `[should]` Run the explicit legacy recipe-guided profile as a separately
-  labelled control under matched model settings. Do not rank it as generic
-  autonomy.
-
-Exit gate: AdaOS has the first uncontaminated measurement of what the current
-generic component vocabulary and configured model can achieve. Later stages
-must demonstrate measured improvement against this baseline.
-
-## R3. Ownership And Public SDK Seams
-
-Progress note (2026-09-10): `adaos.sdk.builder.intent` is the first target
-SDK slice. It exposes exact intent admission and deterministic Prototype Brief
-compilation while keeping schema validation and interpretation in Core. The
-generation, candidate, evaluation, and artifact-write operations still use the
-legacy skill path, so the R3 gate remains open.
-
-- [ ] `[must]` Define public SDK operations for Prototype request admission,
-  brief inspection/confirmation, plan execution, candidate status, and
-  evaluation. Builder skill calls only these operations.
-- [ ] `[must]` Extract provider request/response, structured-output, retry, and
-  usage handling into a provider-neutral LLM adapter owned below the SDK.
-- [ ] `[must]` Move artifact writes, locale writes, revision creation,
-  validation, checkpoint, and runtime refresh out of `builder_skill` into Core
-  services with explicit transaction boundaries.
-- [ ] `[must]` Move request interpretation orchestration out of
-  `services/ui_capabilities.py`; keep that service limited to generic contract
-  indexing, selection, validation, and compilation support.
-- [ ] `[should]` Reduce `builder_skill` to a thin conversation/projection
-  adapter after ownership moves; set and enforce a module dependency rule.
-- [ ] `[should]` Split Core services by contracts and authority, not merely by
-  file length. Remove duplicate state transformations after parity evidence.
-
-Exit gate: a dependency test proves
-`Builder skill -> public SDK -> Core ports/services -> adapters`, with no
-domain-specific generic-Core branches.
-
-## R4. Intent And Prototype Brief
-
-Evidence note (2026-09-10): the first visible cross-domain case showed that
-the current generic qualifier can return `surface_kind=unspecified` and an
-empty requirement set even when the prompt explicitly names primary jobs,
-fields, operations, and workflow states. Lexical capability selection then
-admits patterns whose data/action invariants are not grounded in a typed
-brief. This is a compiler-boundary defect, not evidence that the prompt needs
-component terminology.
-
-Implementation note (2026-09-10): Core now validates content-addressed
-`adaos.builder.intent.v1` and `adaos.builder.prototype_brief.v1` records. The
-deterministic compiler preserves the exact statement, source/scope/authority,
-locale, explicit refs, unknown fields, evidence spans, recognized generic
-operations, principal job clauses, and explicit workflow states. It excludes
-Builder authoring commands such as "create an application" from the
-application's own operation set. Generic capability selection consumes these
-facts before lexical fallback. Residual model interpretation, accepted-field
-persistence, ambiguity policy, and user confirmation remain open.
-
-Progress note (2026-09-11): operation clauses are now split into ordered atomic
-principal jobs with exact character evidence. Representative-state compilation
-aggregates workflow and later visual/exception states instead of returning on
-the first match, and it distinguishes state absence from interaction-continuity
-phrases such as "without losing the queue". The visible operations case now
-gives the model five atomic jobs and six explicit states and passes from one
-generation with no repair. This improves explicit-clause coverage only;
-schema-constrained residual interpretation, accepted Brief persistence, and
-clarification policy remain open.
-
-RU/EN parity note (2026-09-10): authoring exclusion is now span-aware rather
-than clause-wide. A single ordinary turn may say "create an application" and
-then name its actual operations in the same sentence; only the Builder command
-span is excluded, while later operation evidence keeps its exact source
-offsets. The generic lifecycle vocabulary covers common close/complete,
-submit/approve/reject/cancel, and status-change forms in both locales. Tests
-also prohibit lexical prefix leakage such as interpreting `marketplace` as a
-`mark` operation. All four visible RU development archetypes now compile a
-non-empty operation set without introducing subject entities into Core.
-
-Atomicity follow-up (2026-09-11): deterministic operation anchors now split a
-compound clause into separately addressable principal jobs with exact source
-character ranges. Adjacent aliases for the same operation without a linguistic
-separator remain one job, while comma/conjunction-separated actions remain
-distinct. Representative-state extraction reuses those job statements when
-possible. For the visible operations prompt this changes one broad job into
-five explicit jobs: scan, inspect one item, create, assign, and transition.
-This removes the contract ambiguity in which one requirement could be partly
-bound and partly missing. It does not infer actors, entities, targets, or
-authority; those remain inputs to schema-constrained residual interpretation.
-
-Cross-entity evidence (2026-09-11): retained run
-`sdk-retained-context-20260911-01` shows the remaining Brief defect without
-attributing it to the design model. The exact input kept entities and
-information requirements unknown, split one clause into the incomplete job
-`assign or`, and packed four materially different visual states into one
-requirement. The original user turn was still present, so the model recovered
-most intent, but requirement binding and architecture selection were not
-grounded in a reviewable contract. Residual schema-constrained interpretation
-must identify independent record types, relations, outcomes, and state
-requirements before semantic generation; lexical clauses alone are not the
-target Brief compiler.
-
-Disclosure evidence (2026-09-11): runs `sdk-semantic-v2-20260911-11` through
-`-13` show that the deterministic Brief still sends `actors`, `entities`, and
-`outcome` as unknown and has no typed disclosure/visibility requirement for
-"open contact details only when needed". A general semantic-design rule and a
-freshly activated DEV runtime moved contact fields from the collection into a
-details view, but one candidate still invented a persisted reveal field. R4
-must therefore add a versioned residual-interpretation result for entity,
-relationship, information-hierarchy, disclosure, and authority facts with
-source spans. It is invoked only for material unresolved fields; low-ambiguity
-requests retain the deterministic/one-call route. Its stable contract precedes
-the dynamic evidence suffix for cache reuse, and its output is independently
-validated before semantic design.
-
-- [x] `[must]` Publish `adaos.builder.intent.v1` and
-  `adaos.builder.prototype_brief.v1` schemas with provenance and `unknown`
-  semantics.
-- [x] `[must]` Implement deterministic extraction for explicit refs, locale,
-  source Project/Change, accepted requirements, authority, and recognized
-  operation verbs before model interpretation.
-- [ ] `[must]` Implement schema-constrained brief compilation for the residual
-  user language. The model cannot emit Client components or JSON paths at this
-  stage.
-- [ ] `[must]` Add an ambiguity/risk policy that asks only questions capable of
-  changing primary UX, authority, data ownership, or architecture. Cap each
-  clarification turn at three focused questions.
-- [ ] `[must]` Persist accepted brief fields and assumptions by semantic ID;
-  later user changes produce a delta and do not replay the raw conversation.
-- [ ] `[must]` Expose a short localized user confirmation for material
-  assumptions without presenting internal schemas or stages.
-- [ ] `[should]` Support incremental brief repair when validation identifies a
-  missing requirement; do not regenerate accepted fields.
-
-Exit gate: development prompts produce reviewable briefs with measured coverage,
-clarification precision, and no renderer vocabulary in the model output.
-
-## R5. Component Contract And Capability Resolution
-
-Progress note (2026-09-10): retained live runs proved that summaries and broad
-recipes are insufficient for small but fatal ABI details. Catalog 2.0.2 now
-exposes the exact `collection.board` resource-query and button shapes, while
-the legacy parser records bounded canonicalization of common representational
-aliases. This is evidence for the single-source component contract below, not
-its completion: the same facts still exist separately in schema, Client,
-catalog, parser, and tests.
-
-The clean RU equipment development case does not yet establish a Client
-capability gap. The generated design chose an inspection as its collection
-item and collapsed the requested checklist into one `longText` field, even
-though the existing generic list/form composition could instead model each
-check as a resource record. A nested repeatable form group remains a C2/C4
-candidate only if a flat generic composition cannot meet the accepted brief
-or a second unrelated archetype demonstrates the same nested semantic need.
-The immediate blocker is explicit data granularity and requirement bindings in
-the brief/semantic compiler, not admission of a case-shaped component.
-
-- [ ] `[must]` Publish the next component-contract/catalog schema as one source
-  for semantic role, properties, events, actions, state, i18n, accessibility,
-  responsive behavior, loading class, compiler mapping, compatibility, and
-  tests.
-- [ ] `[must]` Generate Client registration, Core validation index, Builder
-  retrieval units, and documentation indexes from component contracts. Reject
-  conflicting handwritten declarations.
-- [ ] `[must]` Implement deterministic filtering by brief data shapes,
-  operations, authority, view roles, and constraints before optional semantic
-  ranking.
-- [ ] `[must]` Expose an actual bounded read-only retrieval operation for exact
-  selected component contracts and examples. Remove textual drill-down claims
-  when no tool is supplied.
-- [ ] `[must]` Return a typed capability gap when no admitted composition can
-  satisfy a required brief field.
-- [ ] `[must]` Add an ABI impact gate that names affected compiler mappings,
-  scenarios, Builder evals, migrations, and Client tests for every component
-  contract change.
-- [ ] `[must]` Complete Client roadmap C2/C3 for admitted components and derive
-  the first cross-domain component tranche from clean-baseline gaps rather
-  than from the current sealed release holdout.
-- [ ] `[should]` Add held-out retrieval evaluation and compare deterministic,
-  lexical, and model-assisted ranking under equal token budgets.
-
-Exit gate: a new component can be registered once and becomes retrievable,
-validatable, compilable, documented, tested, and loadable without parallel
-manual tables.
-
-## R6. Semantic Prototype Compiler
-
-Progress note (2026-09-11): semantic commands can now carry localized
-confirmation text through compilation into the Client action runtime. For
-backward-compatible semantic-v1 documents, transition and delete commands
-receive a generic fail-closed confirmation default. This fixes the observed
-direct-transition omission without teaching Core an application domain. It is
-an interim safety policy: R4/R5 must make authority, reversibility, and risk
-explicit so the compiler can derive confirmation from accepted semantics
-rather than command kind alone.
-
-Semantic-v2 progress (2026-09-11): the provider-native candidate contract now
-supports up to four independent resources, globally unique typed fields,
-typed relationships, collection presentations, commands, structural state
-proof, exact requirement bindings, and capability gaps. The deterministic
-compiler canonicalizes IDs, resolves record-id foreign keys, maps
-relationships to typed Client selectors, compiles boolean filters without
-string coercion, preserves source metadata, and rejects fixture/type/reference
-defects. Model-correctable resource, relationship, record, state, and command
-ownership findings are aggregated before one bounded repair. This is a real
-vertical slice, but the complete semantic ABI, authority model, incremental
-semantic edits, and adaptive plan remain open.
-
-Semantic presentation evidence (2026-09-11): the bootstrap candidate now
-declares `list`, `table`, or `cards` for collection views. The deterministic
-compiler maps dense comparison to the existing `ui.table` contract and maps
-every declared collection field into a visible column or list/card metadata;
-it no longer drops all fields except the first title. Fresh operations run
-`sdk-visible-fields-20260911-02` passed all four primary jobs and all four
-states from one generation call in 32.7 seconds total. Generation used 2,890
-fresh input and 2,314 output tokens, took 14.5 seconds at the provider, and did
-not require repair.
-
-The same change did not make the single-resource semantic subset generally
-complete. In `sdk-retained-context-20260911-01`, a volunteer assignment record
-could show existing assignments but could not truthfully represent independent
-volunteers, shift capacity, an unfilled shift, or overlap prevention. Local
-validation accepted a state named `unfilled shift` whose predicates actually
-matched existing assignments; the outcome grader rejected the missing visible
-coverage/conflict semantics. State labels and fixture counts are therefore not
-proof of state meaning.
-
-- [ ] `[must]` Replace or promote `webui.semantic.v0` with a complete versioned
-  semantic document for the currently supported Prototype component set.
-- [ ] `[must]` Represent entity and collection-item granularity explicitly;
-  prohibit the design stage from collapsing an accepted repeated collection
-  into an opaque scalar unless the brief says it is read-only text.
-- [ ] `[must]` Represent multiple independently inspectable resources and their
-  typed relationships when the accepted Brief requires them. Keep the
-  single-resource candidate as a bounded fast path, not a universal contract.
-- [ ] `[must]` Make representative-state proof structural. A visible state
-  must bind to observable fields, predicates, aggregate/relationship facts, or
-  an explicit capability gap; a model-authored label and matching fixture
-  count are never sufficient evidence.
-- [ ] `[must]` Bind every accepted brief requirement to semantic data, view,
-  command, state, or typed capability-gap refs and reject unresolved bindings.
-- [ ] `[deferred]` Publish `adaos.builder.prototype_plan.v1` as an adaptive DAG with
-  typed inputs, outputs, dependencies, validation, budget, and route class.
-- [ ] `[must]` Implement `D0` deterministic routing for supported rename, move,
-  visibility, declared option, and other typed semantic edits with zero model
-  calls.
-- [ ] `[must]` Implement a deterministic semantic-document to `webui.v1`
-  compiler, including locales, fixture declarations, responsive mappings,
-  stable refs, and source maps from requirements through semantic nodes to
-  emitted runtime nodes.
-- [ ] `[must]` Define one-way authority: new managed Projects edit semantic
-  source and compile runtime WebUI; legacy WebUI remains authoritative behind
-  the compatibility adapter until an explicit reviewed conversion.
-- [ ] `[must]` Reject lossy or unsupported mappings as capability gaps; do not
-  approximate with arbitrary low-level widgets.
-- [ ] `[must]` Make existing semantic UI changes target semantic refs and
-  recompile the smallest affected unit while retaining atomic full-artifact
-  promotion.
-- [ ] `[must]` Validate preservation of accepted and unrelated semantics across
-  incremental compilation.
-- [ ] `[should]` Retain direct full-WebUI generation only as an isolated
-  comparison profile until the semantic path wins quality and cost gates.
-
-Exit gate: at least four development application archetypes compile from brief to
-valid executable Prototype without a subject-specific recipe.
-
-## R7. Context And Model Execution
-
-Progress note (2026-09-10): DEV Builder now removes request-specific
-qualification from the stable capability bundle and puts the typed brief in
-the dynamic suffix. A characterization test proves that two different prompts
-which resolve to the same capability bundle produce byte-identical stable
-prompts. Root LLM job polling now reuses one explicitly scoped HTTP connection
-pool and still reports provider execution separately from orchestration time.
-The terminal-sidecar experiment reported 5,632 cached input tokens, proving
-partial reuse of that prefix, but repair requests still accumulated roughly
-96 KB of dynamic context. Repairs now retain candidate sidecars explicitly;
-the complete-WebUI/project-memory reductions, stage-specific repair packets,
-provider-native typed output, and content-addressed retrieval path remain open.
-
-Measurement correction (2026-09-10): the usage collector previously counted
-the same generation telemetry again when retained diagnostic copies carried it
-through later steps. The collector now deduplicates request/job identity before
-aggregation. The first trustworthy retained RU equipment run after this fix
-used two Builder model calls, 4,327 fresh input, 7,808 cached input, and 4,551
-output tokens. Its local validator took 93 ms; primary provider execution took
-36.3 seconds and one repair 4.8 seconds. A validator timeout would therefore
-mask no measured bottleneck. Root queueing was 6-8 ms, while the draft
-checkpoint upload was about 3.4 seconds and remains a separate orchestration
-optimization target.
-
-Performance follow-up (2026-09-11): phase-level evidence, rather than an
-arbitrary validator timeout, isolated two local defects. Builder session state
-was rewriting a roughly 3.9 MB compatibility JSON file on every mutation, and
-workflow inspection repeated admission validation of the same 220 KB
-definition. Owner-scoped relational state with lazy compatibility migration
-reduced the measured session writes from roughly 0.6 seconds to 7-8 ms. The
-workflow service now reuses the exact validation report retained with the
-admitted definition; warm state inspection fell to roughly 0.16 seconds.
-Copied runtime context is propagated into Builder background workers so those
-workers retain the relational-storage authority of the activating skill.
-
-Fresh run `sdk-semantic-operations-20260911-06` then took 49.0 seconds. Local
-scenario validation was 109 ms, Root queueing was 4 ms, and provider execution
-was 29.0 seconds; the independent grader took 10.3 seconds. Generation reused
-2,688 cached input tokens out of 2,786 and emitted 4,517 output tokens. The
-candidate covered all four primary jobs and representative states, but the old
-grader rejected it at `0.925` because status mutations had no confirmation.
-The minimum-working calibration subsequently classified that unrequested UX
-convention as non-blocking; this historical rejection is not an acceptance rule.
-This separates semantic failure from transport and validator latency. No
-validator timeout was added. A timeout may exist only as an outer circuit
-breaker after a measured per-route SLO, must name the interrupted phase, and
-must not count as a latency improvement or turn an incomplete result into a
-pass. The remaining cost target is fewer and smaller model outputs and
-stage-specific context, not a shorter local deadline.
-
-Context-retention follow-up (2026-09-11): E2E previously retained compact
-message digests and candidate paths, then deleted the temporary Project that
-owned the referenced files. That was insufficient for context engineering.
-The runner now copies the complete sanitized request, terminal journal, raw
-provider candidate, and normalized candidate into content-addressed run
-evidence before cleanup. The first retained volunteer request was about 2,853
-input tokens, reused 1,792 cached tokens, emitted 3,314 output tokens, and took
-22.3 seconds at the provider. Its full trace identified a Brief/data-model
-defect that a shorter output limit or validator timeout would only conceal.
-
-Semantic-v2 context evidence (2026-09-11): run `-10` retained the complete
-primary and repair outputs and showed that fail-fast diagnostics disclosed a
-state-fixture defect first and a pre-existing command-owner defect only after
-repair. Aggregated diagnostics now report both. Run `-11` used one generation
-call with 577 fresh and 2,304 cached input tokens and 3,567 output tokens;
-provider execution remained 26.8 seconds while local create/design work was
-about 7.3 seconds. A source edit initially had no effect because the active
-runtime still used the old stable-prefix digest. Explicit DEV activation
-changed the digest in run `-12`, establishing runtime materialization as part
-of experiment identity.
-
-Run `-13` again used one generation call, 607 fresh plus 2,304 cached input
-tokens, and 3,192 output tokens. The 39.2 second case separated into 24.3
-seconds generation wait, 6.5 seconds grading, 156 ms validation, and 7.6
-seconds Builder chat. Queueing remained negligible. These measurements keep
-the optimization order explicit: improve semantic/context sufficiency and
-output volume first; retain timeout only as an outer phase-labelled circuit
-breaker.
-
-Smaller-model probe (2026-09-11): one unchanged volunteer E2E repetition on
-`gpt-5-mini` took 88.6 seconds, including 39.3 seconds primary generation and
-38.0 seconds automatic repair. The candidate failed semantic validation after
-repair; grading was not reached. The reference GPT-5 run `-13` took 39.2 seconds
-and passed semantic validation before failing the outcome hard gate. The
-system prefix and provider schema are identical, but cache conditions differ.
-See [complete comparison and context review](builder-gpt5-mini-evaluation-2026-09-11.md).
-This observation does not admit mini as the default or justify smaller output
-limits. It exposes missing first-call compiler invariants and repair regressions
-in previously satisfied requirement bindings.
-
-- [ ] `[must]` Replace complete WebUI/project-memory/history inclusion with
-  brief deltas, semantic slices, accepted constraints, findings, and retrievable
-  content-addressed refs.
-- [ ] `[must]` Make policy/output/tool contracts and selected capability
-  bundles byte-stable by digest; keep Project and user-specific state in the
-  dynamic suffix.
-- [ ] `[must]` Use provider-native schema-constrained output or typed tool calls
-  where supported. Treat text JSON extraction/bracket repair as a compatibility
-  failure metric.
-- [ ] `[must]` Define separate fresh-input, cached-input, output, wall-time,
-  model-attempt, and repair-attempt budgets for `D1`, `D2`, and recovery.
-- [ ] `[must]` Add deterministic stop/fallback behavior when a budget is
-  exceeded; do not silently widen context, repeat the whole job, or escalate
-  model cost.
-- [ ] `[must]` Add route selection among zero-model, efficient model, full
-  design model, and optional visual model. Promote a route only through matched
-  evaluation.
-- [ ] `[must]` Include compiler-required cross-object invariants in the selected
-  first-call contract bundle, including each resource's required collection
-  surface. Verify request sufficiency against actual validator rules.
-- [ ] `[must]` Make repair preserve unaffected accepted requirement bindings and
-  states through deterministic before/after checks and scoped edits; retain
-  the mini run's dropped-state-binding failure as regression evidence.
-- [ ] `[should]` Add semantic-delta candidate reuse and exact candidate replay
-  before another model request.
-- [ ] `[should]` Target at least 60% cached input for repeated profile and
-  capability bundles where the configured provider supports caching.
-
-Initial performance targets:
-
-- `D0`: no model, local `p95 < 1 s` excluding runtime refresh;
-- `D1`: median fresh input at most 8k tokens, `p95` at most 16k;
-- `D2`: median fresh input at most 20k tokens, `p95` at most 35k;
-- warm orchestration excluding provider inference: `p95 < 2 s`;
-- no more than one automatic structured repair for `p90` successful runs.
-
-Targets may change only from retained matched evaluation, not timeout tuning.
-
-## R8. Evaluation, Browser Review, And User Experience
-
-### Executable-Interface Correction
-
-Critical review of the retained eight-archetype cohort found a compiler/Client
-contract mismatch: generated `ui.form.inputs.buttons` were ignored, all submit
-actions shared one trigger, and `resourceQuery` did not hydrate the selected
-record. Structural acceptance and nonblank screenshots therefore do not prove
-working CRUD. Historical generation scores remain unchanged, but must not be
-reported as user-task success or readiness for autonomous prototyping.
-
-- [ ] `[must]` Execute separately selected form commands, hydrate the selected
-  record, reject stale selection responses, validate required fields and keep
-  edits after errors. Verify create/update/delete and no unintended mutations.
-- [ ] `[must]` Test the compiler/renderer boundary with the actual compiled
-  artifact, including wide/compact browser interactions and EN/RU rendering.
-- [ ] `[must]` Repeat the eight-archetype GPT-5 cohort after correcting the
-  boundary. Inspect complete model inputs/outputs and distinguish generation,
-  compiler, renderer, task and UX findings. No guaranteed reliability claim
-  from a single successful generation per archetype.
-- [x] `[must]` Show canonical project/component development timestamps in the
-  Builder catalog, newest first, with sortable Application and Updated columns.
-  Do not infer freshness from GUIDs, preview visits or source checkout mtimes.
-- [x] `[should]` Expose inline/modal/side-sheet editor choice and provide a small
-  generic progressive-disclosure recommendation. The compiler owns openers,
-  selection, save/error/dismissal and source-map relocation. Surface preference
-  is qualitative unless the user explicitly requests it.
-- [x] `[must]` Make state operands mutually exclusive in the provider schema;
-  explicitly teach query binding in initial and repair contexts.
-
-Correction evidence: `executable-surfaces-gpt5-20260911-01/evidence/picker`
-passes Updated/Application sorting, pagination, test filtering and exact preview
-selection. `evidence/previous-media-interactions-04` in that run exercises two
-retained media editors on wide/compact screens: select, edit, save, reopen and
-restore. This exposed and corrected a late-record-load draft overwrite and
-missing resource-query unwrapping in details. A third editor was not exercised;
-this is not full CRUD or eight-archetype qualification.
-
-The fresh `-01` cohort stopped at a compiler-owned localized opener defect after
-three failed cases; no aggregate pass rate is inferred. Operations repair also
-rewrote a valid fixture and broke another state. A digest-bound state-only repair
-now preserves unrelated data and receives an explicit patch context/schema.
-Compiler defects are classified separately and do not trigger model repair.
-The complete raw input/output evidence is retained; a fresh run is required.
-
-Run `executable-surfaces-gpt5-20260911-02` then stopped at the first modal
-contract blocker: the compiler emitted `pageSchema` instead of the established
-modal `schema`. This is a platform defect, not model failure. The ABI now rejects
-that misspelling, modal query validation inherits desktop selection defaults,
-and offline replay through the actual Builder parser passes. The scoped repair
-also over-emphasized empty-proof examples; its context now starts from the
-requested state's meaning and forbids substituting emptiness for a populated
-condition. These fixes require another fresh cohort, not relabelling `-02`.
-
-Run `executable-surfaces-gpt5-20260911-03` completed all eight cases: 2 passed
-(appointments, media), 6 failed. There were 14 generation/repair calls, 39,109
-output tokens, 66,456 fresh and 28,800 cached input tokens, with zero reasoning
-tokens under the hard-coded GPT-5 `minimal` profile. Case p50 was 59.0 seconds,
-p90 83.1 seconds. Five cases failed state/fixture repair; budget compiled but
-lacked requested visible totals and limit indications. This does not meet R8.
-
-The appointments browser proof now covers side-sheet dismissal, focus restore,
-update/save/reopen/restore and cancelling both destructive confirmations on wide
-and compact layouts (`evidence/appointments-confirmations-03`). It exposed
-read-only record fields missing from form guards and numeric `.length > 0`
-conditions unsupported by the Client evaluator. Both were fixed without adding
-hidden fields to mutation payloads; focused Client tests now total 127.
-
-- [x] `[must]` Compare explicit GPT-5 reasoning profiles on the same eight
-  prompts before fixing a cost/latency default. Record requested and actual
-  options; never attribute a profile change to context engineering alone.
-- [ ] `[must]` Complete all independent state-proof findings before repair;
-  query reachability failures must not remain hidden behind fixture mismatches.
-  Proof rules, hidden predicates, unreachable queries and missing empty views
-  now share the validation/diagnostic implementation. Patch schemas include only
-  reachable definitions; regression tests cover digest and unrelated-view edits.
-  Reopened after the model-capacity high inventory run: two malformed choice
-  operands existed in the original response, but only the populated-state
-  mismatch reached repair. Its correct scoped patch then hit an unreported
-  empty-state choice error. Aggregate canonicalization, type and proof findings
-  together before fixing the permitted repair scope.
-- [ ] `[must]` Reduce state-repair input to affected evidence, typed fields,
-  readable fixture values and affected Brief requirements; retain full original
-  input/output for audit. Qualify preservation and meaning, not only patch size.
-
-One retained operations repair replay at `low` compiled successfully with the
-same messages/schema that failed at `minimal` (16.1 seconds provider execution).
-Artifacts: `state-repair-effort-low-20260911-01` and its `-validated` offline
-receipt. The initial replay helper omitted the authoritative Brief; validation
-was rerun with the captured checkpoint, without a second model call. This is
-single-case diagnostic evidence, not a changed historical verdict or a baseline.
-
-The complete matched `executable-surfaces-gpt5-low-20260911-01` run passed 4/8
-(operations, appointments, budget, media), versus 2/8 at `minimal`. Both used the
-same 8,000 total-output-token ceiling. Case p50/p90 increased to 95.0/132.1
-seconds. Equipment and knowledge failed repair; volunteer and inventory were
-provider-incomplete (`max_output_tokens`), not semantic rejections. No default
-profile change or reliability claim follows from this single comparison.
-
-Audit also found that E2E ignored Root's flat `reasoning_tokens` usage field.
-The collector now supports flat and nested usage without counting both; the
-retained successful-response records contain 22,656 reasoning tokens, not zero.
-Usage for the two incomplete responses is absent from compact Root telemetry,
-so the reported token totals are a lower bound, not complete billing evidence.
-Historical artifacts are not overwritten. Diagnostics now expose provider
-incompleteness and missing usage explicitly. An opt-in run-specific output
-budget allows a measured 12,000-token follow-up without changing user defaults.
-
-`executable-surfaces-gpt5-20260911-03/evidence/appointments-crud-02` additionally
-passes create/read/delete using only a new probe-owned record on both viewports,
-alongside update/restore and cancelled confirmations. This proves local CRUD for
-one compiled editor, not every requested operation in all eight archetypes.
-The first create probe incorrectly treated radio choices as select elements;
-its failed evidence remains retained. Required-field, upload, localized browser
-rendering and complete eight-case interaction coverage remain open.
-
-- [ ] `[must]` Preserve structured partial output and usage for provider
-  incompleteness, separating generated JSON and reasoning token budgets before
-  choosing capacity defaults. Never shorten the response to disguise failures.
-- [ ] `[must]` Qualify the same eight cases under the selected profile with
-  repeated fresh generations and complete user-task probes. A diagnostic subset
-  or a union of best results across runs is not an eight-case baseline.
-
-Capacity follow-up `executable-surfaces-gpt5-low-12k-20260911-01` completed four
-previously failing cases: equipment passed; knowledge, volunteer and inventory
-failed. All provider responses completed, so increasing the measured ceiling
-removed truncation, not semantic failures. Knowledge again emitted stringified
-attachment arrays, then its whole-candidate repair lost a search binding.
-Volunteer and inventory exposed misleading lowering diagnostics: an ineligible
-Automation reference became an empty compiler-owned statement. Validation now
-reports the exact reference and eligible job/residual refs before that error,
-and initial context explicitly states the same boundary. Offline regressions
-pass; the corrected diagnostic has not yet qualified a fresh cohort.
-
-Input review also found a deeper acceptance risk in lexical Brief extraction:
-`open an article without losing their search` was split before the noun `search`,
-creating another mandatory search operation. `avoid overlapping assignments`
-was classified as assignment from a noun stem. These are not missing user
-instructions and must not be repaired by application-specific prompt rules.
-
-- [ ] `[must]` Replace promotion of ambiguous lexical mentions into mandatory
-  atomic jobs with provenance-preserving interpretation. Keep complete source
-  clauses, distinguish operation hypotheses from explicit required outcomes,
-  and validate polarity, noun/verb use and dependent clauses. Include ordinary
-  EN/RU paraphrases and ambiguous noun mentions in negative controls. Qualify the
-  interpretation and its acceptance effects before retuning generation.
-- [ ] `[must]` Extend bounded repairs to typed fixture-value and binding defects
-  with preservation checks, rather than rewriting the full valid candidate.
-  Prefer a schema constrained by the chosen data model; do not silently coerce
-  arbitrary strings into attachment arrays or invent an omitted operation.
-- [ ] `[must]` Derive executable postconditions from outcome bindings and the
-  chosen resource model, not a fixed mapping from verbs to CRUD names. The
-  model-capacity `low` volunteer case compiled assignment as link-record
-  creation, then failed a generic `assign -> update` postcondition. Preserve
-  this failed verdict, add an equivalent-create/update regression, and still
-  test actual editable inputs and record effects before declaring task success.
-- [ ] `[should]` Evaluate a smaller authoritative requirement representation
-  and deduplicated stable instructions against the retained full context.
-  Repeated job/operation/state bindings must not become a substitute for user
-  outcomes. Measure token savings, omissions and repair preservation before
-  removing context or reducing generation capacity.
-- [ ] `[must]` Calibrate the grader against browser-proven false positives.
-  `effort-low-provider-max-20260911-01/browser-selected-ru/media-review-ru`
-  renders only filenames after selection, with no image/video surface, yet
-  grader v11 awards the viewing outcome `supported` from `item.details`.
-  Preserve the score as historical evidence, require real media/display
-  evidence for that outcome, and add negative controls for property-only views.
-- [ ] `[must]` Accept scoped view-only repairs when they resolve every reported
-  state defect without changing unrelated content. The model-capacity `high`
-  media repair made the missing predicate field visible, but failed because
-  `apply_state_repair` also requires an unchanged state echo that the provider
-  schema does not require. Offline replay with only that echo added compiles
-  against the original Brief (`evidence/media-view-only-repair-audit.json` in
-  the high run). Keep both the failed run and this diagnostic; do not relabel
-  it as a fresh success or as proof of media playback.
-
-Local correction verification: 407 focused Core/Builder tests passed before the
-final diagnostic change; its focused suite adds 374 passing checks and the E2E
-diagnostic suite has 41 passing checks (overlapping suites, not an additive total).
-Client has 127 focused command/form/table/guard tests and an additional overlapping
-99-test modal/form/action run. `appointments-crud-settled-06` retains the wide/
-compact interaction and final-opacity screenshot proof. Builder source is
-checkpointed as `builder@0.2.113`, ProjectRelease
-`sha256:e245fff69078098198cb9863d852c4f32d948ea125ac6a8c4614087d81ca754e`.
-No test prototype or unqualified Builder revision is promoted to Workspace.
-
-### Model-Capacity Effort Comparison
-
-- [x] `[must]` Repeat all eight visible cases with GPT-5 `low` and `high` at
-  the same explicit 128,000-token provider maximum. Inspect actual primary and
-  repair requests and keep the normal user's defaults unchanged.
-- [x] `[should]` Retain a reproducible comparison of per-case model/pipeline
-  times, fresh/cached input, total/reasoning output, repairs and verdicts, with
-  links to admitted DEV previews and separate qualitative findings.
-
-Runs `effort-low-provider-max-20260911-01` and
-`effort-high-provider-max-20260911-01` completed without provider truncation or
-timeouts. Cases, primary schema, stable context and grader match; the comparison
-helper checks those inputs. Low passed 6/8, high 5/8. First candidates compiled
-4/8 and 5/8 respectively; these are not task-success rates. Model calls total
-12/11, output 79,508/193,965, reasoning 32,576/152,384 and non-reasoning output
-46,932/41,581. Median full-case time is 138.09/250.72 seconds; total model
-execution is 925.20/1,992.91 seconds. Largest individual response is
-8,605/29,627 output tokens, well below the experiment ceiling.
-
-Evidence and per-application interpretation:
-`e2e/artifacts/builder/effort-comparison-20260911-01/comparison.md` and
-`qualitative-review.md`. All eleven admitted prototypes have wide/compact
-captures. Matched queue, appointments and budget probes pass selected edit,
-save, reopen, restore and overlay dismissal on both layouts; unsupported
-create/delete combinations remain explicitly untested. The high queue initially
-exceeded the text-only probe's coverage; an added date-field probe passes,
-without changing the prototype or counting an unsupported probe as model failure.
-
-Do not select high as the universal default from this run. It improves some
-first candidates and business-rule disclosure, but shared acceptance/repair
-defects dominate several failures and grader v11 has a browser-proven media
-false positive. Neither cohort qualifies autonomous prototyping. This is one
-development-sample comparison, not a sealed baseline or repeated reliability proof.
-
-Handoff: DEV `builder@0.2.114` is published to the personal source repository
-as ProjectRelease `sha256:43ab1f602b1141feadde179c416718aa5f02013c2d406efae48f91b3552f13a4`.
-All sixteen experiment projects are also checkpointed via `adaos dev project
-push`, including failed candidates' source scaffolds; they remain unapproved
-tests. `dev-push-receipts.json` in the comparison bundle records all seventeen
-successful publications. No Workspace/stable Builder replacement is implied.
-
-
-Current correction evidence (2026-09-11): the eight visible rubrics now trace
-mandatory outcomes to their original user turns. Unrequested status confirmation,
-role systems, automatic slot optimization and production aggregation were removed
-from the Prototype gate; requested cancellation confirmation, read-only state and
-conditional comment checks remain required. User prompts are unchanged.
-
-Grader v11 live calibration at
-`e2e/artifacts/builder/grader-minimum-v11-20260911-02` agreed with all four
-engineering labels: minimal and richer browse passed, executable update passed,
-missing update failed. Both full requests and grades are retained. This checks a
-narrow acceptance boundary, not general accuracy or user satisfaction. An earlier
-`-01` attempt used pytest's temporary node identity and was denied before model
-execution; live probes now require an explicitly configured enrolled dev node.
-Reproduce with `ADAOS_E2E_LIVE_GRADER=1`, `ADAOS_E2E_LIVE_BASE_DIR=<node base>`,
-and a fresh `ADAOS_E2E_CALIBRATION_OUTPUT`, then run
-`pytest tests/test_builder_e2e_grader_calibration.py`. Offline, four fixture checks
-run and the live probes are skipped.
-
-Local verification before the GPT-5 cohort: 128 context/compiler/runner/grader
-tests and 278 DEV Builder tests pass. Candidate capacity follows the existing
-canonical limits (8 resources, 16 relationships/views, 24 commands); generation
-guidance is derived from that ABI, not separate prompt constants. Exact record
-identity and attachment value forms are explained; missing relationship refs
-produce typed findings. A `query_empty` proof requires zero matching fixtures
-and an exposed matching filter. Repeated operations retain their object-bearing
-source clause instead of collapsing into one bare verb. All of these mechanisms
-are measured by the live model and browser checks below.
-
-#### Minimum-Working Cohort
-
-Runs `minimum-working-gpt5-20260911-02` (operations) and `-03` (remaining seven)
-retain one complete eight-case cohort on GPT-5, with unchanged user prompts.
-Run `-01` was rejected before generation because the provider schema contained
-an annotated `$ref`; the projection fix has regression coverage and that run
-does not count as model-quality evidence.
-
-| Case | Seconds | Outcome within one generation and at most one repair |
-| --- | ---: | --- |
-| Operations queue EN | 73.90 | Failed; repair regressed the previously valid overdue fixture |
-| Service appointments RU | 118.07 | Passed after repair; lexical interpretation had over-required text search |
-| Household budget EN | 133.68 | Passed after repair; business computation remains an Automation obligation |
-| Equipment inspections RU | 129.84 | Failed; missing collection, then unreachable empty-query proof |
-| Knowledge library EN | 90.07 | Failed; attachment/empty-query defects plus a compiler foreign-key normalization bug |
-| Media review RU | 86.43 | Passed first candidate |
-| Volunteer roster EN | 79.52 | Passed first candidate, with explicit pending overlap enforcement |
-| Inventory procurement RU | 138.95 | Failed; repair left an empty-state declaration missing |
-
-Result: 2/8 first candidates and 4/8 after the bounded repair path passed the
-configured non-browser gate. These are development observations, not an autonomy
-baseline or human acceptance. Four independent grader calls took 36.6 seconds;
-14 generation/repair calls consumed 59,252 fresh input, 35,328 cached input and
-58,386 output tokens. Full inputs and responses were inspected. Schema rejection,
-compiler defects and missing working controls are attributed separately from
-non-blocking visual quality. No output limit or timeout was reduced.
-
-Post-cohort corrections have cross-domain regressions: `find`/`найти` does not
-force a text-search widget, and record-ID normalization also updates foreign-key
-choices, fixed values, guards, conditional visibility and representative-state
-literals. The knowledge candidate used internally consistent raw foreign keys;
-Core had changed their fixture values without changing the choice options.
-This part of its failure belongs to the compiler, not the model. Previously
-recorded failed runs remain failed. Atomic UTF-8 checkpoint replacement also
-prevents readers from observing partially written JSON.
-
-Browser evidence under `-03/evidence/browser-picker-final` exercises the existing
-DEV Builder: page navigation, test filter, absent-result search, lookup beyond
-the former first-50 boundary, row selection and local new-window preview.
-`browser-appointments` retains wide/compact generated screens. The picker now
-uses generic `ui.table`, pagination, a test/non-test filter and archive toggle;
-SDK search runs before the result limit. Catalog errors are not empty results.
-Local combined verification: 603 passed, four opt-in live probes skipped.
-
-Focused follow-up `minimum-working-gpt5-20260911-04` after the compiler/context
-fixes is a separate two-case sample, not a replacement for that cohort.
-Appointments passed its first candidate in 110.66 seconds (one generation,
-4,943 input and 4,158 output tokens; cold cache, about 21 seconds grading).
-Knowledge failed in 83.08 seconds: its first state operand violated the
-value-versus-field contract, and repair lost a required search-control binding.
-The search control still existed in the repaired candidate, but the requirement
-pointed to an unrelated details view; do not describe this as an absent search
-UI. No foreign-key choice error recurred. This sample is 1/2, not evidence of
-uniform reliability or a latency improvement.
-
-DEV checkpoint: `adaos dev project push builder` retained Project `0.2.108`,
-scenario `0.2.84`, `builder_skill` `0.3.165` and control skill `0.1.109`.
-Release digest: `sha256:fbf73b0bc560ab6dac0029c1e0672bfd6266bc5236478abf51dedf1c2c09d471`.
-All 18 test Projects created by runs `-01` through `-04` were also checkpointed
-with that CLI into private DEV storage. These are source checkpoints, not
-Marketplace publication, Trial admission or user acceptance. Workspace Builder
-and published stable applications were not replaced.
-
-The Client checkout used by browser review is `203aeb9805f2695e7c5d5ebf1befef8383764100`;
-it differs from the pinned `20f0aca573941be1134b9b20203e86c30608fce0` only by
-package-version metadata. The Core gitlink and `.sha` remain equal. Neither
-Client nor Backend received source changes in this iteration.
-
-Remaining debt, not closed by these observations:
-
-- [ ] `[must]` Reach the fixed small-application reliability gate with repeated
-  matched runs; do not promote the experimental DEV Builder into Workspace yet.
-- [ ] `[must]` Preserve already valid fixtures, predicates and bindings during
-  repair; eliminate the observed unrelated date changes. Measure scoped repair
-  against full-candidate regeneration before expanding orchestration.
-- [ ] `[must]` Make empty-state evidence directly executable and reachable;
-  declaration text without a working filter/empty result is not a pass.
-- [ ] `[must]` Encode value-versus-field state operands as mutually exclusive
-  provider-contract variants, so schema-admitted output cannot violate the
-  compiler's `field_ref=null` requirement for a literal value. Keep typed
-  diagnostics and preservation checks for cases that still require repair.
-- [ ] `[should]` Revisit the current collection-per-resource compiler constraint.
-  A referenced lookup resource may need only an inspectable selector, not its own
-  list screen. Relax only with renderer and requirement-coverage regressions.
-- [ ] `[should]` Address display semantics for foreign keys, times, choice labels
-  and unit-bearing numbers through the Client contract roadmap, not domain widgets.
-- [ ] `[should]` Measure compact task completion, form-first vertical bulk and
-  EN/RU consistency across viewport changes. Nonblank screenshots alone do not
-  establish usability or successful CRUD.
-- [ ] `[could]` Add cursor-backed catalog paging when the bounded 5,000-match
-  catalog or measured response size warrants it; keep search/filter semantics
-  global when moving filtering from the current Client table to the server.
-- [ ] `[should]` Verify owner-side test-Webspace deletion by absence, not a
-  boolean receipt. A cleanup probe found that room prewarming could recreate
-  the just-deleted manifest; the one review-only manifest was removed explicitly.
-  Add a deletion/reconnect regression before automatic preview cleanup is enabled.
-
-Stage-boundary correction (2026-09-11):
-
-- [x] `[must]` Put Prototype versus Automation evidence expectations in the
-  generation context, semantic-v2 contract, and independent grader v10.
-- [x] `[must]` Preserve pending business-rule/integration requirements with
-  exact Brief references, visible prototype bindings, bilingual disclosure and
-  testable Automation acceptance. Carry them through Prototype acceptance into
-  Automation checks. Do not allow UI-operation deferral or silent omission.
-- [x] `[must]` Write persisted E2E JSON and compressed step evidence as readable
-  UTF-8 (`ensure_ascii=False`). Do not alter historical evidence hashes.
-- [ ] `[must]` Prove obligation closure using executable success/failure tests
-  at Automation/Trial gates; merely copying acceptance text is not enforcement.
-- [ ] `[deferred]` Measure large-prototype planning separately: dependency graph,
-  stable cross-slice identities, scoped context, resumability, unaffected-binding
-  preservation and integrated browser tasks. Do not infer scalability from one
-  small schema-constrained response.
-- [ ] `[must]` Cover the reusable local CRUD substrate and primitive automation
-  with browser probes: create/select/edit/delete, required fields, confirmation,
-  search/filter, local guard, state update and navigation; report unsupported
-  joins, computed values and cross-record rules separately.
-
-### AdaOS Tests Review Workbench
-
-Decision: use the existing Builder project selector first. Retain explicitly named
-test applications and their development previews on dev nodes, including successful
-cases, instead of deleting them automatically. The name includes `[TEST]` and
-`YYYYMMDD-uid` so search works in the existing Builder. Its picker now uses the
-generic table rather than a first-page-only list. No ordinary desktop or
-Marketplace beta promotion. Historical evidence stays immutable; manual removal of
-test applications remains separate from run evidence retention.
-
-The specialized latest-run-only workbench below is deferred. It must not be built
-as a prerequisite for the small-application Prototype/Automation cycle.
-
-- [ ] `[deferred]` Implement a dev-only `adaos_tests` scenario. Enforce
-  `ENV_TYPE=dev` on the node at creation, listing and opening, not only in Client.
-  No ordinary user desktop icons or marketplace entries.
-- [ ] `[deferred]` Project only the latest run into the workbench; retain immutable
-  historical run evidence outside that projection. Use a generation/run token
-  and atomic switch so late results from an older run cannot repopulate it.
-  Delete only projection-owned materialization, never a user's development.
-- [ ] `[deferred]` Show each case's explicit stage, model, run/revision, result,
-  preview, wide/compact screenshots, pending obligations and error diagnosis.
-  A failed or unavailable preview must not silently show a prior revision.
-- [ ] `[deferred]` Mark samples `test`; add `beta` only after a genuine Trial gate.
-  Capture human verdict and notes against exact source and renderer digests.
-- [ ] `[deferred]` Add run/baseline comparison, replay of one case, scenario
-  selector and EN/RU switch. Keep launch privileges and budgets node-controlled.
-- [ ] `[could]` Add a bounded screenshot reviewer after deterministic/browser
-  checks and translate renderer shortcomings into owning-layer Dev Tickets.
-
-### Earlier Stage-Aware Evaluation
-
-Before the minimum-working correction above, stage-aware review across eight
-development archetypes found 1/8 first candidates
-qualified structurally, 3/8 qualified within the local workflow, and 1/8 passed
-the configured non-browser gate. A late budget repair compiled successfully
-after its local timeout; it is retained separately, not retroactively passed.
-The browser review found and fixed a generic SDK filter-declaration defect and
-still rejected visual quality. Large-prototype granulation remains unproven.
-Retained evidence is summarized below; target decisions live in the architecture.
-
-| Development case | Seconds | Stage-aware result before this correction |
-| --- | ---: | --- |
-| Volunteer roster EN | 99.59 | First candidate valid; grade 0.925, coverage job partial |
-| Operations work queue EN | 110.48 | Repair fixed bindings but duplicated an editor field |
-| Service appointments RU | 141.85 | Relationship repair valid; grade 0.925, free-time job partial |
-| Household budget EN | 227.67 | Local repair wait expired; late candidate subsequently compiled |
-| Equipment inspections RU | 144.00 | Repair used editor instead of collection-state evidence |
-| Knowledge library EN | 130.96 | Attachment repair damaged empty-result evidence |
-| Media review RU | 223.26 | Attachment repair damaged empty-result evidence |
-| Inventory/procurement RU | 242.39 | Repaired candidate passed grade 1.0; no browser qualification |
-
-Evidence roots: `e2e/artifacts/builder/sdk-stage-aware-gpt5-20260911-01` and `-02`.
-Generation: GPT-5, minimal reasoning, generic semantic-v2, no domain packs, one
-full repair, 8,000-token cap. Grader: GPT-4.1 v10. These are eight development
-samples, not the held-out baseline. Complete requests expose isolated operation
-verbs, empty entity facts, ambiguous identity/display contracts and incomplete
-state/attachment instructions. Complete repairs show preservation failures.
-
-- [x] `[must]` Inspect full late budget output, not only timeout: Root job
-  `llm_job_921c0a60a4bf4f20bccf2b2c` completed in 244.898s (queue 4ms, TTFT 3.174s,
-  output 3,330 tokens). Original SDK receipts reconstruct its exact Brief; three
-  resources, six views and nine bindings compile. The run verdict is unchanged;
-  replay evidence is in `-02/evidence/late-results/`, not materialized/graded.
-- [x] `[must]` Inspect actual Client at 1440x1000 and 390x844. The same volunteer
-  candidate initially produced three resource API 400s and a stuck loader. After
-  the SDK filter fix it displays records with no resource errors or JS errors.
-  Evidence: `-01/evidence/browser-diagnostic` and `browser-sdk-final`, including
-  inner-scroll bottom screenshots. Node-status 401 and transient reliability 503
-  remain visible shell diagnostics, not hidden successful checks.
-- [ ] `[must]` Fix remaining visual/task defects at their owners: raw choice
-  values, clipped card labels, excessive flow layout, technical fixture wording,
-  compact table usability and untested CRUD interactions. Document-level width
-  alone does not establish readability or user-task success.
-- [ ] `[should]` Reconcile usage of late jobs: the two reports' 49,908 generation
-  output tokens omit the budget's 3,330 late tokens. Three grader calls add 33,030
-  fresh input tokens. No arbitrary shorter timeout is accepted as optimization.
-- [x] `[must]` Retain a DEV checkpoint for the stage correction: `builder@0.2.107`,
-  `builder_skill@0.3.164`, source `d26f48ce06f1cb487f82a1507d80cfe6d32b30cf5d685daab8353e3a02b935ba`,
-  release `471a0e91cbd1edd936ad0d6461007bd7c3285d4b44cdada28ac7c525146d59c5`.
-  Workspace remains 0.2.106. Local verification: 360 Core/SDK and 278 DEV skill
-  tests pass; this does not establish model autonomy.
-- [x] `[must]` Verify readable UTF-8 writers and mechanically reformat 121 mutable
-  checkpoints without changing values or historical hashes. Exact provider strings
-  remain exact, including provider-authored escapes.
-- [x] `[should]` Inspect `.env` without speculative edits: 104 CRLF, 11 LF-only,
-  no bare CR, final newline; ENV_TYPE, ADAOS_LANG and ADAOS_PROFILE parse separately.
-  LF/CRLF append/replace tests with/without final newline pass. Reported glued lines
-  were not reproduced; mixed endings alone do not establish their cause.
-
-- [x] `[must]` Derive resource filter admission from each projection's declared
-  fields; test the actual workbench with multiple resources and unknown filters.
-- [ ] `[must]` Expose one exact required-reference inventory and object-aware
-  operations in generation context; test omission and unrelated-binding cases.
-- [ ] `[must]` Align authoring/provider/canonical capacity constraints and
-  relationship identity/display contracts before capacity-based plan routing.
-- [ ] `[must]` Calibrate false-positive state proof and false-negative implicit
-  Automation requirements against human-labelled artifact/task pairs.
-- [ ] `[should]` Reconcile late Root completions idempotently without discarding
-  complete responses or reclassifying a timed-out case as a historical pass.
-
-Evaluation progress (2026-09-11): grader v9 keeps its Structured Output schema
-byte-stable and supplies candidate-specific evidence pointers in the dynamic
-payload instead of embedding them as a schema enum. Rubric entries may carry
-explicit `statement`, `acceptance`, and `exclusions`; the runner injects them
-only after candidate generation, so they cannot leak into Builder context.
-Run `sdk-semantic-v2-20260911-13` cited only existing pointers, supported all
-four primary jobs and all three states, and scored 0.925. The historical hard gate
-remained red because it required an executable overlap guard. Review found that
-this mixed Prototype and Automation acceptance. Grader v10 distinguishes a
-demonstrated, disclosed, preserved Automation obligation from a platform gap.
-The old run is not retroactively a pass: it lacks the new structured obligation.
-This is development evidence, not a clean baseline or a prompt-autonomy pass.
-
-- [ ] `[must]` Run R8 evidence through `adaos builder e2e` so local, CI, and
-  release evaluation use the same resolved run manifest, stages, graders, and
-  metric definitions.
-- [ ] `[must]` Run structural, behavior, i18n, accessibility, state-coverage,
-  and authority checks before browser or visual-model evaluation.
-- [ ] `[must]` Add browser task probes for compact and wide layouts using the
-  same primary jobs and representative states from the brief.
-- [ ] `[must]` Add a bounded screenshot/DOM/accessibility-tree review after
-  deterministic checks. Permit at most two targeted repair iterations.
-- [ ] `[must]` Feed typed deterministic and calibrated outcome findings into a
-  bounded semantic repair unit only after retaining the complete candidate.
-  The repair receives the smallest authoritative Brief/semantic slice that can
-  address the findings; it does not replay or truncate an unexamined response.
-- [ ] `[must]` Convert unresolved renderer, component-contract, compiler, or
-  Core failures into owning-layer Development Feedback/Dev Tickets instead of
-  broadening the application prompt.
-- [ ] `[must]` Show users outcome-oriented progress, material assumptions,
-  clarification, preview readiness, and recovery. Hide provider retries,
-  prompt phases, component IDs, and JSON patch terminology.
-- [ ] `[must]` Separate Prototype statuses: interpreted, planned, generated,
-  structurally qualified, visually qualified, user accepted, and Automation
-  ready. Never collapse them into `complete`.
-- [ ] `[must]` Compare matched candidates with immutable baselines using hard
-  truthfulness/authority/validity/task gates plus per-family distributions.
-  Report `improved`, `regressed`, `inconclusive`, or `uncomparable`; do not let
-  one weighted score hide a hard-gate failure.
-- [ ] `[should]` Capture sanitized failure patterns and accepted fixes as an
-  evaluation corpus; promotion into generic rules requires cross-domain proof.
-- [ ] `[should]` After the minimum-working gate, curate a small versioned set of
-  domain-neutral UX golden rules as recommendations with applicability,
-  rationale and alternatives. Keep explicit user requirements and enforced
-  platform safety policy separate from optional UX quality preferences.
-- [ ] `[should]` Evaluate rules on paired simple/richer prototypes and user
-  reviews; measure usefulness and interaction cost, not just detail counts.
-  An unsolicited convention must not become a hidden mandatory grader item.
-- [ ] `[could]` Add inspectable project-scoped feedback memory with provenance,
-  confirmation, supersession and forgetting. Require confirmation before reuse
-  across applications; isolate users/subnets and keep evaluation cohorts clean.
-- [ ] `[could]` Retrieve relevant confirmed preferences by stage and request,
-  with attribution and token accounting, instead of appending all feedback to
-  every generation prompt. Report conflicts with current explicit instructions.
-- [ ] `[could]` Compare two design candidates only for high-value ambiguous
-  layout decisions and within an explicit additional budget.
-
-Prompt-autonomy admission targets:
-
-- at least 80% of held-out prompts pass deterministic checks on first
-  candidate;
-- `p90` requires at most one targeted repair;
-- at least 80% of primary user tasks pass compact and wide browser probes;
-- no false claim of a real effect, binding, authority, or supported component;
-- requested-locale completeness, long-content, and accessibility gates pass for every admitted
-  Prototype.
-
-### Context Engineering Qualification (2026-09-11)
-
-The next development experiment holds GPT-5 `low` and its explicit output
-budget constant. Media review is the first diagnostic case: its previous
-property-only viewer passed grading without rendering media. Do not optimize
-the prompt against that false-positive gate or copy a domain solution into Core.
-
-- [ ] `[must]` Align model-visible capabilities with compiled behavior: layout
-  placement, collection selection/details/editor entry, and real media viewing.
-  Separate compiler defects from model errors before requesting a repair.
-- [x] `[must]` Use one authoritative requirement inventory, a stable cacheable
-  contract prefix, and stage-specific dynamic facts. Eliminate repeated prose
-  without hiding type, effect, relationship, or acceptance constraints.
-- [x] `[must]` Permit repairs to related views without echoing unchanged states;
-  collect independent predicate/type findings before defining repair scope.
-- [ ] `[must]` Generate the user's current locale by default, retaining stable
-  localization keys and scenario-owned assets. Explicit multilingual requests
-  and existing translations remain authoritative; never label copied text as
-  a translation. Verify both EN and RU single-locale paths and the bilingual path.
-- [x] `[must]` Compare the unchanged short media request with a moderately
-  elaborated request describing the same outcomes, without ABI vocabulary or
-  privileged solution hints. Preserve model I/O, timings and browser evidence.
-- [ ] `[must]` Repeat all eight development archetypes after the diagnostic
-  fixes; require executable browser tasks, not merely successful compilation.
-  A single 8/8 run is not a stability or held-out autonomy claim.
-- [x] `[must]` Remove pre-comparison owned test developments using provenance
-  and checked paths. Keep both low/high comparison cohorts, ordinary user
-  applications, source archives and historical evaluation evidence intact.
-- [x] `[must]` Preserve typed record schemas for empty/null-only resources and
-  resolve literal dotted fields consistently in Client and Prototype queries.
-  Treat zero/false as filled values and permit fixed-command read-only editors.
-- [x] `[must]` Close unambiguous ownership bindings before validation and collect
-  independent binding defects with state/type defects before choosing repair scope.
-- [ ] `[should]` Measure request-specific reference enums against their potential
-  schema-cache cost; keep the authoritative requirement inventory unchanged.
-- [x] `[should]` Review mandatory standalone collections for lookup resources.
-  Viewless resources now require a typed reachable selector, materialize validated
-  records and participate in final dependency checks; no collection is fabricated.
-- [x] `[must]` Qualify real attachment capture, not filename metadata: preserve
-  scalar/multiple value shape, store bytes in Preview-owned state, return a
-  durable scoped reference, reopen the content and reject failed uploads without
-  overwriting the previous value. Never put runtime attachments in Builder's
-  development SourceBundle or embed binary payloads in record JSON.
-- [x] `[must]` Expose simple command availability conditions in the semantic
-  contract, including archived read-only records. Pair local UI behavior with
-  truthful Automation debt for durable authorization; a status field alone is
-  not a prohibition on editing.
-- [x] `[must]` Preserve false/zero query operands and qualify numeric equality
-  filters. The second cohort found a false/zero-as-clear provider bug and an
-  unsupported numeric-filter failure appearing only after repair.
-- [x] `[must]` Remove redundant node.yaml writes and use the established atomic
-  replacement helper for real writes. A Windows sharing collision interrupted
-  creation in the second cohort; classify it as platform/stand, not model failure.
-- [x] `[must]` Replace full-view echoes in bounded state repair with mutable-only
-  view patches. Preserve immutable properties by construction and retain legacy
-  replay compatibility; qualify with fresh generation, not retrospective scores.
-- [ ] `[should]` Tie Prototype attachment reclamation to owned revision cleanup.
-  Per-resource storage is bounded; aggregate retention still needs lifecycle GC.
-- [ ] `[must]` Replace frozen relationship fixture enums with typed live lookup
-  options and runtime reference validation. Creating a related record must make
-  it selectable without regenerating the Prototype; reject dangling references.
-  Qualify create-related/select/save/reopen across unrelated archetypes.
-  Form lookup and atomic provider checks are implemented with component/Core
-  tests. Run 05 now proves create-related/select/save and visible child records
-  on both layouts. Viewless lookups also pass typed materialization tests. Live
-  collection filters/display labels and full related-record reopen remain open;
-  do not mark the whole task complete.
-
-Qualification progress: `context-media-paired-low-20260911-02` passed all four
-development attempts (short 2/2, detailed 2/2). Each prompt needed one repair
-across its two attempts. Pipeline ranges were 138-181 seconds (short) and
-128-183 seconds (detailed); this sample does not establish a speed or accuracy
-advantage from elaboration. The preceding paired run failed both detailed
-attempts because excluded functionality became mandatory and descriptive image
-text became an upload requirement. Exact original instructions remain in the
-revised context; exclusions are separately evidenced, not Automation obligations.
-
-The retained media browser evidence proves native video playback, loaded images
-and unavailable-file states on 1440px and 390px viewports. The command probe
-also exercised status transitions and persisted comments. Probe cleanup initially
-called an undeclared delete operation; that is a stand defect, not a generation
-failure. Generated test records are explicitly retained where deletion is not
-part of the application's declared operations. Full eight-archetype browser
-qualification remains open: the next cohort exposed dotted-field lookup defects
-in Client and incomplete collection-binding diagnostics in Core.
-
-`context-archetypes-low-20260911-01` completed 16 attempts: 9 passed, 7 failed.
-Operations, appointments, budget and media passed twice; volunteers passed once;
-inspections, library and procurement did not pass. Browser checks exposed a
-numeric `.length` guard and literal dotted-key display/submission defects despite
-formal passes. Client fixes made the unchanged appointments candidate pass edit,
-save, reopen and cancel checks on both viewports. Compiler replay is stored as
-separate evidence, never substituted for original outcomes or a fresh generation.
-
-Cleanup receipts under `e2e/artifacts/builder/cleanup-before-effort-low-provider-max-20260911-01*`
-record 174 archived local test developments removed, with all 16 last low/high
-comparison applications preserved. Ordinary applications and historical run
-evidence were not removed. Later diagnostic developments remain searchable.
-
-`context-archetypes-low-20260911-02` completed 16 attempts: 10 passed, 6 failed.
-Operations, budget, inspections and volunteers passed twice; appointments and
-media once; library and procurement did not pass. One library creation failed
-before inference on a Windows config replacement. The remaining failures exposed
-numeric filters, immutable-property echoes, a missing record-lock primitive,
-relationship identity references and unfiltered linked-record inspection.
-Browser tasks proved operations, budget and inspection edit/save/reopen paths on
-both viewports, but not file-byte capture. Native media inspection must allow a
-legitimate empty field; only the explicit media fixture probe requires image,
-video playback and unavailable-file evidence together.
-
-The next batch supplies record locks, true scoped file storage, attachment links,
-sanitized Markdown fields, numeric query inputs and mutable-only repairs.
-Candidate fixtures admit up to 12 records per resource (previously 6): both budget
-attempts spent a repair solely because useful 8/9-record examples crossed an
-internal cap. This bounded capacity change is recorded in the contract digest;
-it is not a reduction of required outcomes or a claim of better UX.
-Automated Core/Client tests are prerequisites, not proof of eight-archetype
-autonomy. Full fresh-generation and browser qualification remain open.
-
-`context-primitives-low-20260912-01` passed library and procurement formal grades;
-media failed after repair on a visible Automation binding not included in the
-initial findings. Library needed no repair but split real and sample collections:
-the generation guidance failed to explain an already implemented empty-response
-fixture. This is a context defect, not a need for a new resource type. Procurement
-passed the browser command probe on both layouts; the text-edit probe correctly
-reported no applicable task for its create/transition forms. Record this as a
-probe limitation, not as either a working edit path or a generation failure.
-- [x] `[must]` Explain empty states as variants of the same populated resource,
-  repair table empty-state evidence paths, and diagnose missing Automation
-  visibility bindings alongside the other first-pass findings.
-- [x] `[must]` Normalize only unambiguous typed JSON fixture scalars with retained
-  original evidence; reject unit/timecode interpretations and text-ID coercion.
-- [x] `[must]` Qualify empty render fixtures separately from real mutations and
-  repeat library/media generation under the corrected state context.
-- [x] `[must]` Permit field-predicate evidence in selected-record details/editors,
-  keeping collection-specific proof kinds strict. Decode exact typed JSON arrays
-  with original evidence rather than spending a repair on unambiguous quoting.
-
-`context-state-low-20260912-01` passed 3/4 attempts: library 1/2, media 2/2.
-The remaining library failure exposed a valid details-state rejected as if every
-proof required a collection. Its first response also encoded attachment arrays
-as JSON strings. These have separate compiler/normalization regressions; fresh
-eight-archetype qualification is still required. The passing library uses one
-populated collection rather than duplicate sample resources.
-
-Library browser tasks now prove modal cancel/focus restore, edit/save/reopen,
-and actual file upload/save/reopen/download with identical SHA-256 bytes on
-1440px and 390px viewports. The first captures hung when a Client file list
-recreated attachment components on each Angular render; stable item tracking
-fixed the unchanged generated artifact. Earlier captures remain failures, not
-rewritten passes. Procurement empty-response fixtures passed both viewports
-separately from its real create/status-transition command tests. These results
-qualify the named primitives, not every workflow or polished layout.
-
-- [x] `[must]` Reject an E2E reasoning override without an explicit model; pass
-  the model through SDK metadata and record model plus primary/repair wait
-  settings. Add a reproducible local experiment launcher and inspect actual
-  saved provider requests before accepting a model comparison.
-- [x] `[must]` Derive supported filter types from the validator constant and
-  report cross-resource guard references before repair. Clarify that deferred
-  computations need inspectable representative outputs, not only raw inputs.
-
-`context-archetypes-low-20260912-03` is invalidated, not a GPT-5 score. After a
-restart the invocation omitted an explicit model and inherited a 150-second
-wait; saved requests contain model=null/reasoning=null. The runner was stopped,
-with checkpoints and browser evidence retained. Its budget and guard observations
-motivate generic regressions, but cannot support a claim about GPT-5 low. The
-next controlled cohort must verify actual model/effort in the first request and
-retain all terminal response evidence. Previous explicit GPT-5 runs are unchanged.
-
-`context-archetypes-gpt5-low-20260912-04` verified GPT-5 low in actual requests,
-but was stopped at a deterministic integration blocker after four completed
-attempts, not treated as a completed eight-archetype score. The compiler emitted
-live dropdown sources while DEV Builder still required static options. One
-additional budget request had already been submitted; its terminal Root response
-is retained separately and was not applied or counted as a completed attempt.
-Operations attempt 2 compiled and passed create/visible-record browser tasks on
-both layouts, but grader v12 cited a nonexistent path and downgraded its own
-positive verdict. Original verdicts and response artifacts remain unchanged.
-
-- [x] `[must]` Align DEV Builder's component preflight with live resource dropdowns;
-  run retained candidates through the complete Builder payload boundary, not
-  only semantic compilation and resource schema derivation.
-- [x] `[must]` Permit viewless lookup resources only when a reachable editor
-  consumes their relationship selector. Preserve record validation and read-only
-  materialization; choose explicit safe label fields, with identity fallback,
-  rather than exposing arbitrary target fields or inventing a collection.
-- [x] `[must]` Collect misplaced query controls alongside missing collections
-  before repair; describe collection-only query controls in the shared context.
-- [x] `[must]` Remove the duplicate semantic-rule checklist from repair prompts.
-  Repairs use the same shared capability contract as generation, plus preservation
-  and scope instructions, so stale rules cannot contradict new primitives.
-- [x] `[must]` Constrain grader evidence to existing pointers. Grader v13 hashes
-  and retains its exact response schema, bounds its evidence index, and groups
-  enums within provider limits. It does not forgive invalid evidence in old runs.
-- [ ] `[must]` Qualify the combined lookup/compiler/Builder fixes with fresh
-  GPT-5 low generation and create-related/select/save/reopen browser tasks.
-  Replay is diagnostic evidence, not a replacement for fresh generation.
-
-`context-archetypes-gpt5-low-20260912-05` completed at 4/8: library, media,
-volunteer roster and procurement passed. Three first-pass candidates compiled
-but failed because a separate final postcondition scanner omitted lookup sources
-inside forms. Appointments failed on repeated field names across resources;
-replay after qualification still correctly rejects its unselectable client
-details. These are distinct causes, not a justification to relax acceptance.
-
-- [x] `[must]` Share executable query-slot discovery between resource
-  materialization and postcondition acceptance, including modal lookup fields.
-  Add public SDK regressions for missing and unconsumed resource sidecars.
-- [x] `[must]` Owner-qualify repeated resource-local candidate field names and
-  all typed references. Preserve fixture text and identities; reject ambiguous
-  evidence bindings and collisions. Honor complete explicit relationship labels.
-- [x] `[must]` Replay retained responses through semantic, resource, DEV Builder
-  payload and public postcondition checks before another paid cohort. Replays
-  are immutable diagnostics and do not replace the recorded fresh-run scores.
-- [x] `[must]` Browser-prove stored-record read-only policy independently of
-  mutable CRUD: disabled form/actions plus a provider-side rejection on both
-  layouts. The retained library state cohort passed; fresh library run 05 also
-  passed edit/cancel/focus and real file upload/download integrity checks.
-- [ ] `[must]` Repeat all eight fresh cases after this boundary-alignment batch;
-  qualify related-record creation/selection using live options, and retain any
-  browser-task coverage gaps explicitly.
-- [x] `[must]` Align owner-qualified field references with the model-facing
-  contract for both repeated and unique local names. Run 06 budget attempt 2
-  exposed qualified unique-field references rejected serially in primary and
-  repair responses; collect independent unresolved references in one preflight.
-- [x] `[must]` Classify the consumed quoted application name as authoring
-  metadata, not a residual implementation requirement. Run 06 retained a
-  `named "...<test-id>" for ...` residual, making otherwise matched response
-  schemas differ. Preserve the original request and audience/outcome context;
-  exclude only the recognized authoring/name span, with EN/RU regressions.
-- [x] `[must]` Count native details media source/poster fields as rendered state
-  evidence without accepting a hidden dispatch field as visible output.
-- [ ] `[must]` Make interrupted E2E resume reconcile the durable Builder operation
-  before polling its terminal journal. Run 06 resumed into a blind file wait
-  after its worker had ended during semantic repair; retain the Root response
-  and classify interruption separately, without automatically submitting again.
-- [ ] `[should]` Evaluate named fixture cells or a narrowly typed fixture repair
-  against positional value arrays. Run 06 inspections emitted six values for
-  seven fields; do not guess where a missing value belongs or regenerate all
-  unchanged application design solely for fixture alignment.
-
-Run 06 was interrupted during the final procurement repair: 13 completed passes,
-two completed validation failures, one interrupted attempt. It is not a complete
-13/16 generation score. Full-boundary replay after qualified-reference repair
-admits both previously rejected terminal candidates; original evidence remains
-unchanged. The batch has 276 passing focused Core tests and 121 Client tests.
-Fresh generation and browser qualification remain separate gates.
-
-- [x] `[must]` Keep explicit identity-field values consistent with normalized
-  record IDs and typed references. Run 07 library attempt 2 retained a matching
-  raw `record.id` and `values[id]`; Core normalized only the former, then asked
-  the model to fix each row. Preserve mismatches as errors, not guessed renames.
-- [x] `[must]` Derive the state-repair envelope name in Builder context from the
-  actual SDK output schema. The transport now declares v2 while the adapter's
-  stable/system text still names v1. Cover the real version contract in tests;
-  a stub without schema identity concealed the drift.
-- [x] `[must]` Do not present editable fields whose values are ignored by every
-  command of that editor. Run 07 queue creation presents an editable status but
-  always submits its fixed `New` value. Keep field editability scoped to the
-  editor's declared command inputs; preserve useful read-only context.
-- [x] `[must]` Close a filter binding over all controls of its one explicitly
-  bound collection. Retained library run 07 had all requested controls but was
-  rejected for omitting repeated control IDs. Ambiguous collections remain
-  unresolved; closure does not replace semantic grading of the controls.
-- [x] `[should]` Report fixture-arity failures across resources with ordered
-  expected field IDs in one diagnostic batch; preserve all raw cell values.
-
-Run 07 completed at 14/16, with grader v13 and actual GPT-5/low requests. The
-two failures were library identity normalization/binding closure and media
-metadata/command ownership. After the next batch, both retained library outputs
-pass the full replay boundary; media command ownership still correctly fails
-and needs a fresh model correction. The new batch has 283 focused Core tests
-and 285 DEV Builder tests passing. Browser tasks for the eight admitted first
-attempts cover creation, typed edits, assignment/status choices, numeric values,
-attachments, native media, and related records on 1440px/390px; each probe keeps
-unsupported tasks explicit. Generation acceptance is still not full UX approval.
-
-The matched operations requests now have identical stable context and output
-schema. Their provider generation times were 34.1/28.3 seconds; the second
-reused 4,352 of 5,426 input tokens. This proves cache reuse, not that the whole
-latency difference was caused by caching. Keep raw first-pass and repair costs
-separate when comparing future cohorts.
-
-Engineering basis: [OpenAI text-generation guidance](https://developers.openai.com/api/docs/guides/text),
-[prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), and
-[Anthropic context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).
-Apply their guidance as testable hypotheses: sufficient high-signal context,
-consistent contracts, representative evaluations and stable prefixes, not a
-promise that shorter prompts alone produce reliable software.
-
-Run 08 (`context-archetypes-gpt5-low-20260912-08`) is complete but not qualified:
-11 passed, three candidate-validation failures and two inconclusive grades.
-Thirteen of sixteen candidates reached generation admission. The failed grades
-are infrastructure/evaluator outcomes: library attempt 1 exhausted the grader's
-1800 output-token budget; procurement attempt 2 received Root
-`insufficient_quota / credit_balance_exhausted`. Failed grading calls are absent
-from this old report's usage totals. Preserve that limitation and the separate
-Root receipts rather than rewriting the report or counting either as model failure.
-
-- [x] `[must]` Orient scalar reference validation, identity normalization and
-  provider policies by cardinality; enforce one-to-one uniqueness atomically.
-  Preserve implicit identities on either end and require an explicit link
-  resource for many-to-many. Retained media replay now gets past inverse
-  identity checks, but still fails independent state visibility/label checks;
-  this is not a new successful generation.
-- [x] `[must]` Expose omitted nested authoring assertions from the ABI in the
-  portable generation context. The volunteer response exceeded a hidden
-  three-field label limit. The derived inventory adds 34 constraint entries
-  (2304 serialized characters); fresh token/repair impact remains to be measured.
-- [x] `[must]` Introduce additive state-repair v3 so adding a visible field
-  cannot erase existing queries or an empty presentation. Preserve old repair
-  semantics for replay and test Builder's v1/v2/v3 envelope agreement.
-- [x] `[must]` Retain grader inputs, responses and immutable pre-interaction
-  snapshots per attempt. Include output settings in request identity. Grader
-  v14 indexes executable read-only policies instead of nested schema-property
-  noise and uses the default GPT-4.1 output ceiling of 32768, not 1800.
-  Its complete-response quality still needs live qualification.
-- [ ] `[must]` Restore Root provider credits, then qualify the prepared schema
-  canary, grader v14 and fresh GPT-5/low generation separately. The first canary
-  also failed for quota; no provider schema-support conclusion is justified.
-  Do not send repeated paid requests while that failure remains unresolved.
-- [ ] `[must]` Regrade the retained library/procurement artifacts without
-  regenerating or modifying their source, retaining the new grader version.
-  All 13 admitted artifacts have snapshots taken before browser mutations.
-  The old grader's case-only input filename overwrote library attempt 1's
-  exact input; its retained Root response is not a replacement for that input.
-- [ ] `[must]` Aggregate failed grader usage into run totals as well as retaining
-  it in response evidence. Report unavailable usage explicitly; an inconclusive
-  call is not necessarily free and must not vanish from cost comparisons.
-- [ ] `[must]` Qualify mutable relationship-label workflows, including category
-  rename with existing transactions. Run 08 budget browser edits fail because
-  links use the mutable category name. Prefer immutable IDs in context, expose
-  incompatible editable-key designs before admission, and do not hide the
-  failure by weakening referential integrity or silently cascading data changes.
-- [ ] `[must]` Continue all-independent-defect diagnostics before choosing a
-  repair scope. Run 08 media and volunteer reveal further state/label failures
-  after their initial identity/bounds failures are removed.
-
-Offline verification of this batch: 249 focused Core tests and 286 DEV Builder
-tests pass. Review probes open all eight selected prototypes at 1440px/390px;
-library read-only UI/provider checks pass. This does not prove complete CRUD:
-budget rename fails, and unsupported scalar probes for media/volunteer are
-explicitly unexercised. Native media commands pass; the volunteer command probe
-exposed Client `readOnly`/`readonly` disagreement. Browser evidence and renderer
-fix qualification are tracked in the Client roadmap. The new Core changes have
-not yet been evaluated by a fresh live generation cohort or promoted to Workspace.
-
-Local recovery checkpoint: `adaos dev project push builder --local-only`
-retained ProjectRelease `builder@0.2.115`, digest
-`sha256:bd1810f24bfcf89b4caa8eb31add8e4fa2f169e9b4f706e7b6f6e4803873ddca`,
-with source revision
-`sha256:2a99bfce8ea17523e4c3ac1c121ce9d0f78e136af0aad076b22e1b4ee434e877`.
-This includes the DEV Builder repair-envelope regression test. It is a local
-content-addressed checkpoint, not a Root/GitHub publication or runtime promotion.
-
-The grader/bounds changes follow the supported-subset distinction in
-[Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
-and the documented [GPT-4.1 output ceiling](https://developers.openai.com/api/docs/models/gpt-4.1).
-Provider capability, context cost and task success remain measured gates, not
-assumptions inferred from a provider name or a valid JSON response.
-
-## R9. Cutover And Cleanup
-
-### Small-Prototype Capability Qualification (2026-09-12)
-
-This tranche extends small prototypes, not deferred large-project orchestration.
-Keep generation generic and use human behavioral prompts, never renderer IDs.
-Retain the existing eight-archetype cohort; extra capability cases form a separate
-cohort with their own request, schema, model settings and browser evidence.
-
-- [x] `[must]` Implement the foundation contracts: native date commit, typed query
-  toolbar, explicit related-context editing, text display policy, board/tree/chart/
-  accordion lowering and optional tab/settings sections. Offline compiler and
-  component tests are not browser or fresh-generation qualification.
-- [x] `[must]` Preserve SDK/E2E prompt provenance for Builder project Conversation;
-  exclude already-recorded browser ingress and retain idempotent message identity.
-- [x] `[must]` Verify the restored GPT-5 provider with a structured-output canary:
-  nested alternatives and array/string/number bounds passed through Root in
-  `structured-bounds-gpt5-20260912-02`. This does not qualify new UI generation.
-
-- [x] `[must]` Fix date filters for native calendar commits as well as keyboard
-  edits, without duplicate blur actions or changes to explicit manual commit.
-  Client component tests cover standalone calendar/manual-save behavior. Fresh
-  `capabilities-gpt5-low-20260912-01` daily-readings browser probes at 1440/390px
-  pass change-without-input/blur, filtered rows and reset to all five records.
-- [x] `[must]` Provide a compact, extensible collection query toolbar with
-  responsive disclosure, active-filter visibility and reset; reuse the same
-  primitive for lists, tables and other collection presentations.
-- [x] `[must]` Separate row selection, related-detail navigation and editing.
-  Declare explicit actions when selection has multiple useful consequences;
-  test the inspection/check-item example without domain-specific compiler rules.
-  Run 10 browser verifies both linked table levels and the separate inspection
-  editor on 1440/390px. Hidden Ionic modal hosts do not count as opened dialogs.
-- [x] `[must]` Expose per-view text wrapping/truncation and alignment, preserving
-  complete values and an accessible route to any deliberately truncated text.
-  Fresh capability run 07 passes primary generation and 1440/390px browser checks:
-  wrapped descriptions, truncated titles with complete title text, centered labels
-  and end-aligned numbers. Geometry compares border boxes with available content
-  width, not a badge's border-excluding clientWidth with its parent's full width.
-- [x] `[must]` Qualify tabs, modals, hierarchical navigation, accordion disclosure,
-  numeric charts and board drag/move through schema, lowering and browser tasks.
-  A rendered control alone does not qualify persistence or drag semantics.
-  Run 05 includes tree expand/collapse, selection-consumer links, accordion toggle,
-  scoped Favorites mutation/reload and actual settings changes on both viewports.
-  Desktop board dragging and compact Move menu are separate proofs; touch dragging,
-  within-lane ordering and arbitrary draggable canvases are not qualified.
-- [x] `[must]` Separate permanent typed collection scope from resettable filters.
-  `scope_filters` compiles to literal queries, participates in state evidence,
-  and rejects duplicate, invalid or conflicting fields (six regression tests).
-- [x] `[must]` Regenerate and browser-test fixed-subset tabs, including reset and
-  mutation: the first library passed the grader but its Favorites tab displayed
-  all records by default. A title and an optional filter do not satisfy this task.
-- [x] `[must]` Expose application settings through the existing host contract;
-  test their actual effect and persistence scope rather than a Settings heading.
-  Run 04 board browser checks edit/save/reload/verify/restore on 1440/390px.
-- [x] `[must]` Make Builder Conversation retain project-scoped user instructions
-  and generation results, including technological E2E entrypoints, without
-  inheriting another project's transcript or duplicating chat messages.
-  Run 04 original creation and design prompts each appear once in DEV Builder
-  Conversation on 1440/390px; event-only SDK ingress was replaced with scoped
-  durable storage. Browser inspection does not enter generation context.
-- [x] `[should]` Inspect existing prototype inheritance/revision isolation before
-  consolidating test applications. Reuse one project only if current source,
-  runtime data and evaluation identities already isolate revisions safely.
-  Experiment/base-revision metadata and adopt/discard exist, but E2E ownership,
-  cleanup, resource data and grading remain case/project-scoped. Consolidation is
-  deferred with large-project orchestration; it is not a configuration-only change.
-- [x] `[must]` Finish known relationship/lookup and grader-observability defects,
-  then run matched GPT-5/low repeats and compare short/moderate prompts on the
-  difficult cases. Record initial success, repair success, task success and cost.
-  Run 16 passes 16/16 fresh cases (two per archetype): 8 primary successes and
-  8 successes after one semantic repair, 24 model calls, no transport retries.
-  Run 17 compares a 803-character guided appointment prompt with the original
-  318-character prompt using the same outcome rubric. Both groups pass 2/2 and
-  both require one repair per case; elaboration alone did not remove repairs.
-- [ ] `[should]` Replace full-candidate regeneration for coverage-only omissions
-  with an immutable-candidate binding repair, or a structurally complete coverage
-  contract. Validate executable evidence, not merely the presence of a binding.
-  Run 16 queue attempt 1 omits state bindings; run 17 attempt 1 omits one visible
-  deferred-requirement binding. Preserve narrow state-repair invariants.
-- [x] `[must]` Audit generation inputs and Core/Client changes for subject-scoped
-  branches, fixture leakage and rubric leakage before accepting the tranche.
-  Run 13 retains ten actual requests: primary/full-candidate context and one
-  state-repair context differing only in their output contract, not by domain or
-  locale. Primary requests use five dynamic keys and GPT-5/low/128000.
-  Repair inputs additionally contain the current candidate and structured findings.
-  Generic semantic/Brief paths have no archetype-name branches; scenario creation
-  uses `scenario_default`. Client checks pass for 21 generic sources and inventory
-  consistency for 41 widgets. This is the tranche boundary, not a claim that all
-  historical application-specific Client code has been removed.
-- [x] `[must]` Separate collection/record presentation shapes in the
-  provider contract; preserve useful structured diagnostics for retained invalid
-  candidates. Run 11's budget repair repeats an accordion on a record-details view.
-  Nested alternatives now reject that combination before generation. Full
-  semantic validation remains mandatory; reference and task correctness cannot
-  be guaranteed by this structural constraint.
-- [x] `[should]` Extend typed selection links to reverse foreign-key lookup and
-  invalidate dependent selections when their ancestor changes. Test both query
-  identity and editor availability; highlighted stale descendants are not proof.
-  `source_field_ref` captures the selected record's field; omitted/null retains
-  identity semantics. Declared unique business keys reuse existing cardinality
-  checks; undeclared endpoints and cycles fail. Tests cover descendant reset and
-  preserving ancestor selection during reverse lookup. Run 15 attempt 2 browser
-  proves board-record FK -> client collection on 1440/390px, not just highlighting.
-- [x] `[should]` Complete browser qualification of descendant selection/editor
-  invalidation on a fresh multi-level linked collection, beyond compiler tests.
-  Run 16 inspection attempt 1 verifies asset -> inspection -> check-item queries
-  on 1440/390px and reads the actual Client state to prove descendant selection
-  reset after changing the asset. Run 10 separately proves modal editor access.
-- [x] `[should]` Profile local resource queries independently of LLM waits.
-  Browser run 05 observed roughly 0.5-3 seconds for local queries. Do not turn
-  a longer browser wait into a claim that query latency is acceptable.
-  `local-query-profile-20260912-01` identifies global definition enumeration and
-  whole-file rewriting of 1000 traces on each two-row query. Instrumented calls
-  took 1.23-1.38s; cProfile overhead prevents treating those as HTTP measurements.
-- [x] `[should]` Remove avoidable definition enumeration and trace serialization
-  from the query path; retain freshness, bounded retention and durable writes.
-  Compare uninstrumented wall time and browser behavior before accepting a gain.
-  Direct prototype lookup and one serialized atomic trace write pass 33 resource
-  tests, including fresh revisions, missing resources, UTF-8 and 1000-trace
-  retention. Profiles 02/04 use the same two-row resource: median uninstrumented
-  in-process latency 0.731s -> 0.565s. This is not an HTTP latency benchmark.
-- [ ] `[should]` Replace whole-registry reads and whole-journal rewrites with
-  bounded lookup/append storage under the existing resource contracts; the local
-  query path still scales with retained test resources and trace history.
-- [x] `[should]` Calibrate grader consistency on retained stage-boundary examples:
-  run 11 inspection attempt 2 describes the Prototype allowance as satisfied but
-  emits `partial`. Preserve the original result; any regrade is separate evidence.
-  Grader v17 explicitly applies executable criteria to primitives and paired
-  demonstration/obligation evidence to deferred rules within the same job.
-  The exact retained artifact and rubric regrade passed (score 1.0); the original
-  failure is unchanged. This single example is not broad judge calibration.
-- [ ] `[should]` Broaden live judge calibration with positive and negative
-  stage-boundary examples and repeat consistency checks.
-  Four live v17 primitive positive/negative probes pass in
-  `grader-v17-live-20260912`; broader mixed-stage calibration remains open.
-- [ ] `[should]` Resolve the effective Root model profile before applying model
-  output defaults. Explicit GPT-5 selection uses low/128000 in the qualified
-  pipeline; implicit server-selected models still use the legacy fallback.
-- [ ] `[should]` Improve generic relationship captions and renderer fallback
-  localization. Valid generated RU views may still show raw foreign keys or an
-  English built-in empty-details label; acceptance is not a claim of UX polish.
-- [x] `[should]` Discuss a finite vocabulary of composable layout strategies,
-  distinguishing user-selectable preferences from hard acceptance requirements.
-  See the canonical architecture's composable layout policy below its UX guidance.
-
-Design references: [Carbon data-table usage](https://carbondesignsystem.com/components/data-table/usage/)
-separates row, selection and toolbar actions; [PatternFly toolbar guidance](https://www.patternfly.org/components/toolbar/design-guidelines/)
-provides responsive grouping and filter disclosure. Adapt these generic patterns
-to AdaOS rather than introducing either system's component framework.
-
-Capability run 01 (2026-09-12) is retained unchanged: two cases passed generation,
-validation and grading; the board failed obsolete postconditions after semantic
-repair. Its primary context was 19,520 message characters plus the output schema
-(7,103 input tokens), not an application template. The repair fixed actual
-contract violations but collapsed the requested two tabs into one; this remains
-a task-quality failure, independent of the obsolete gate. The generic gate now
-recognizes query-toolbar state writes and guarded edit commands reached after
-selection; it still rejects unrelated state and unguarded entries.
-
-Run 02 was interrupted by PowerShell stderr redirection before generation and
-is excluded from model scores. Run 03 reached two passing cases and one compiler
-failure. Both retained library responses replay successfully after allowing the
-string-choice parent references produced by relationship lowering; the model's
-original short-text field was valid. Board primary and repair both put two
-explicitly requested views into one tab. Grader v15 and the clarified evaluation
-rubric require distinct targets and exclusive content; old scores are unchanged.
-Desktop browser evidence proves a persisted lane move after reload. Compact
-qualification uses the accessible move menu separately; it does not claim a
-touch-drag test. Browser probes must await populated rows before taking a reset
-baseline, not snapshot the transient empty response.
-
-- [x] `[must]` Fix technological transcript storage without a Router subscriber;
-  use opt-in durable scoped IO append, preserve thread context, avoid per-project
-  E2E message-ID reuse, and report scheduled versus persisted honestly. SDK and
-  Builder tests pass; subsequent run 04 closes the browser-visible check above.
-- [x] `[must]` Remove false operational obligations from descriptive empty-search
-  state clauses in the Brief compiler. Runs 01/03 required unnecessary full
-  semantic repairs for a second search binding. Preserve the state requirement
-  and genuine search operation; do not weaken binding validation to hide it.
-  Narrow EN/RU query-state noun exclusion is regression-tested; arbitrary natural
-  language admission still needs broader evaluation, not more domain heuristics.
-
-Browser evidence is distinct from grader success. Daily readings passes tabs,
-query disclosure, date filtering/reset and five numeric graph points (including
-zero) on both viewports. Earlier probe failures caught unrelated requests and
-remain retained alongside the corrected harness result. Library tree selection
-revealed missing selection-state display wiring; compiler lowering now emits
-the Client's actual `selectedStateKey` and `selectionMode` inputs. At that
-checkpoint, fresh tree, fixed-subset, settings and drag/persistence qualification
-was still pending; subsequent run 05 evidence is recorded below.
-
-Run 04 reached 3/3 generation/validation/grading passes (grader v15). The library
-passed on its primary answer; board/readings needed a full repair. Browser checks
-confirmed separate tabs, scoped Favorites, tree highlighting, accordions, charts,
-date reset, persisted board movement and actual settings edits. Independent review
-found that the library tree did NOT filter its materials list: the model wired a
-separate dropdown instead. This is not qualified hierarchical navigation. The
-new typed selection-link contract removes runtime-name guessing; grader v16 now
-requires evidence for both selection and consumption. Fresh verification remains
-open. Old run artifacts and grades are not rewritten.
-
-Eight-archetype run `context-archetypes-gpt5-low-20260912-09` reached 6 passed,
-2 failed, 0 inconclusive. Operations lost empty-state provenance when a list was
-lowered to a board; remapping now preserves state/field aliases and all four
-presentation regression tests. Volunteer assignment failed command ownership,
-then its repair chose a filter on an unsupported field type. These are distinct
-failures and do not justify weakening acceptance. The next matched run must use
-the new immutable code/schema/grader revision.
-
-DEV Builder durable IO was subsequently checkpointed locally as `builder@0.2.117`,
-source `sha256:e9aa4efaa991ad47611bd92c66455f92db0bf8d9502ec002b61c64c24b6230f1`.
-No remote publication or Workspace promotion is implied.
-
-Run 05 capability generation passed 3/3. Library needed one primary answer; board
-and readings used bounded `state_repair.v3`, not a full interface rewrite. Total
-case times were 61.84s, 77.67s and 70.53s respectively. These are observed runs,
-not a latency guarantee. Browser evidence at 1440/390px now proves tree-driven
-material selection, fixed-scope search/reset, favorite edit/reload/restoration,
-board desktop drag (compact move menu), settings mutation/reload and numeric
-chart/date behavior. Scope tests observe the actual consumer even when a previous
-query is cached. Text checks must await populated data; empty DOM is not a pass.
-
-Eight-archetype run 10 compiled all eight and graded 7/8. Its original result is
-retained. Inspection rubric v6 conflated a supported single-record field guard
-with checking every related record before completing a parent. Suite v7 explicitly
-permits the latter's demonstrated/disclosed Automation obligation, while still
-requiring executable single-record guards. It does not force a duplicate parent
-field or a new per-child completion workflow. This is a rubric treatment change,
-not a retroactive eighth pass; fresh generation and matched regrading must be
-reported separately. Cross-record enforcement remains an Automation gate.
-
-The new read-only comparison case (capability run 06) produced a valid primary
-candidate in 19.5s of Root execution, but the generic postcondition checker read
-"No editing ... are needed" as a required update. The shared intent scope
-partition now handles this exclusion and either side of a contrast. Board
-qualification uses that same positive scope rather than rediscovering excluded
-CRUD/search keywords. The retained answer replays successfully; that is compiler
-evidence, not a relabeled successful fresh run. Fresh text-policy verification
-remains open. Broad local Builder tests: 732 passed, four explicit live-grader
-probes skipped. Client: 71 focused tests; generic boundary/inventory checks pass.
-
-Matched run 11 completed 16 attempts: nine primary candidates compiled, five more
-compiled after repair, and 12 passed the task grader. The original 12/16 result
-is retained, not an eight-archetype reliability claim. Appointments failed once
-on a relationship/label repair and once on the requested client-detail task;
-budget failed on mixed record/collection presentation; inspection's second grade
-was inconsistent at the explicit Prototype/Automation boundary. The other five
-archetypes passed both attempts. Model calls: 23; fresh/cached input:
-65,672/126,464 tokens; output: 124,119 including 49,920 reasoning tokens.
-Median total case time: 77.83s; observed maximum: 128.37s. Grading is separate:
-14 calls, 196,401 fresh input and 16,622 output tokens.
-
-Follow-up evidence remains distinct: budget run 12 passed both primary answers
-without repair and both 1440/390px browser probes. Run 13 passed 7/8; appointments
-exposed the missing reverse selection contract. Run 14 reached no model answer:
-the new nullable provider field was missing from `required`. Strict-schema tests
-now cover both versions, including nested alternatives. Run 15 passed one of two;
-its other candidate used a declared business key already supported by the resource
-model but rejected by the selection adapter. The adapter now uses the same
-relationship/cardinality contract. These retained failures are not relabeled.
-Run 16 is the subsequent matched full repeat with grader v17: 16/16 passed,
-8/16 without repair and 8/16 after one semantic repair. All 24 requests share
-one stable generic context; primary inputs have five dynamic keys, while repair
-inputs add the candidate and findings. Retained input inspection found no rubric
-or application-template payload. This small sample is not a reliability guarantee.
-
-| Archetype | Primary success | Final task success |
+Status: active corrective roadmap. Small generic Prototype and DEV Automation
+slices work; target ownership, repeatable reliability and installed lifecycle
+acceptance remain incomplete.
+
+Last reviewed: 2026-09-14.
+
+Architecture: [Intent-to-Prototype](builder-intent-to-prototype.md).
+Cross-document owner: [Builder Roadmap](builder-roadmap.md).
+Evaluation: [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md).
+Client owner: [Client Component System Roadmap](client-component-system-roadmap.md).
+Measurements and audit increments: [Builder Engineering Journal](builder-engineering-journal.md).
+
+## Closure Rules
+
+This is the single corrective task register, not an experiment diary. Each
+BIP identifier is stable. Code/artifact details establish only the stated
+implementation boundary; new findings update the owning task rather than add
+another dated checklist. Exact measurements belong in the journal and raw
+evidence bundles, not parallel review reports.
+
+- `verified`: the narrow exit is evidenced; do not infer broader readiness.
+- `partial`: a mechanism exists, but work or acceptance remains.
+- `blocked`: a named prerequisite or explicit user pause prevents acceptance.
+- `conditional`: a could requires a measured trigger/benefit and explicit decision.
+- `deferred`: outside the agreed small-application correction.
+
+`must` gates autonomy/delivery claims; `should` is required for the maintainable
+supported path; `could` remains part of non-deferred review but is not an
+unconditional feature commitment. A blocked task is not deferred. A task is
+not done because a schema exists, an import guard passes, or one model/browser
+run succeeds. Historical missing evidence cannot be recreated retrospectively.
+
+This register contains 37 non-deferred packages (27 must, four should, six
+could) and eight deferred packages. Three narrow packages are verified.
+These are ownership/acceptance units, not effort estimates or a percentage.
+The parent roadmap and SDK migration retain their distinct obligations.
+
+## Implementation Boundary
+
+| Surface | What exists | What is not established |
 | --- | --- | --- |
-| Operations queue | 1/2 | 2/2 |
-| Service appointments | 0/2 | 2/2 |
-| Household budget | 2/2 | 2/2 |
-| Equipment inspections | 1/2 | 2/2 |
-| Knowledge library | 1/2 | 2/2 |
-| Media review | 1/2 | 2/2 |
-| Volunteer roster | 1/2 | 2/2 |
-| Inventory procurement | 1/2 | 2/2 |
+| Generic boundary | Explicit compatibility packs, no implicit subject selection, input-attribution receipts and boundary tests | Exhaustive dynamic reachability and a clean sealed baseline |
+| Public SDK | Request/status, semantic compilation, review, preview and Automation APIs | Prototype execution authority fully moved out of the skill |
+| Intent | Exact source/provenance, deterministic extraction and Brief merge | Residual interpretation, material clarification and accepted assumptions |
+| Semantic Prototype | Typed multi-resource candidates, relations, state proof, requirement bindings, deterministic WebUI/locale/fixture compilation | Total admitted-component coverage, general incremental preservation and reliable unseen tasks |
+| Local UI substrate | CRUD, live choices, filtering, editor surfaces, sections, board/tree/chart/accordion/settings and display policies in qualified subsets | Uniform action cancellation/error semantics and complete compact/a11y/i18n acceptance |
+| Preview | Explicit production/DEV self-host topology and one paired preview | All deletion/reconnect/idempotency and readiness paths qualified |
+| Automation | Frozen-Prototype implementation and independent local HTTP/browser plans, owned persistence and bounded attempt archives | Media external scope, repeated latency qualification, installed delegated roles |
+| Evaluation | Public CLI, immutable reports and model-input archives, component and browser probes | All stand paths under one lifecycle runner, calibrated holdout and complete cost accounting |
 
-Fresh/cached generation input: 100,297/114,304 tokens; output: 133,624 including
-57,920 reasoning tokens. Observed full-case range: 82.02-149.04s. The reporter's
-p50 is 106.11s. Grading is separate: 16 calls, 225,875 fresh input, 19,588 output.
-Cohorts 13 onward overlap source-publication work and the Client production build,
-so total case times are not an idle-machine benchmark or a causal speed comparison.
+## Current Sequence
 
-Run 17 uses a moderately elaborated appointment request and the unchanged task
-rubric. Both short and guided groups pass 2/2, with one full repair per attempt.
+1. Stabilize loaded runtime, Client action semantics and requirement provenance
+   on retained applications: BIP-03, BIP-10, BIP-16, BIP-27.
+2. Meet clean-baseline prerequisites and measure before further tuning:
+   BIP-01, BIP-04 through BIP-06; Client C0/C1 plus truthful C2 subset.
+3. Complete ownership, Brief, component, semantic and context contracts:
+   BIP-07 through BIP-18, with related should work.
+4. Qualify repeated tasks and bounded review, then compare/cut over and create
+   Applications from a generic scaffold: BIP-17, BIP-21, BIP-29.
+5. Resume installed delivery only after an explicit decision: BIP-28.
+6. Evaluate conditional could work against measured benefit.
 
-| Request | Attempt | Full case s | Model s | Input tokens | Output tokens |
-| --- | --- | --- | --- | --- | --- |
-| Short, 318 characters | 1 | 149.04 | 103.584 | 19,710 | 12,410 |
-| Short, 318 characters | 2 | 119.80 | 79.513 | 19,510 | 10,521 |
-| Guided, 803 characters | 1 | 137.33 | 92.780 | 22,586 | 13,130 |
-| Guided, 803 characters | 2 | 119.40 | 79.586 | 22,903 | 13,701 |
+Frozen small DEV Automation is authorized; Trial/publication are paused.
+Do not regenerate accepted prototypes or manually repair generated application
+code. Use the existing DEV Builder and its single owned preview. Do not feed
+rubrics, held-out cases or finished domain solutions into generation. Preserve
+legacy rollback until parity evidence permits removal. Human acceptance cannot
+be self-certified by the executor.
 
-The guided request clarifies availability versus optimization, editable record
-identity, confirmation and client contact details without component IDs. It did
-not eliminate contract errors: one answer omitted visible deferred-requirement
-evidence; another hid a state predicate field and used an invalid board lane type.
-Clarification is useful for intent, but not a substitute for structural contracts
-or bounded repair. Extra detail increased tokens in this sample. Do not infer a
-general prompt-length effect from two attempts or require this detail from users.
+## Current Task Register
 
-Run 17 attempt 1 browser capabilities pass at 1440/390px. Its first browser
-failure compared raw row text against asynchronously hydrated relationship labels;
-the corrected probe compares record IDs across native-calendar change/reset.
-Conversation contains both complete original prompts once on both viewports.
-The first compact assertion expired at 5s, but its captured DOM already contained
-the transcript. The rerun uses the stand's existing 20s interaction budget and
-records hydration separately (11/2556ms); no product timeout was changed.
+### BIP-01
 
-The separate DEV release checkpoint batch attempted 340 projects, excluding
-Builder for its explicit promotion check: 197 published; 143 legacy research
-projects failed dependency resolution (131 require `adaos_research_platform ^0.2`,
-12 require `^0.1`). Neither version exists in the local release repository.
-Do not silently rewrite these manifests or publish unsatisfied dependency graphs.
-Owned-source Forge checkpoints preserved 140 of these 143 projects (one canary
-plus 139 successful batch entries), independently of release dependencies. Three
-calibration sources fail validation: `tlp_cal_c0_a1_fd_9e95681ba678` has an
-unregistered `prepare_attempt` activity; `tlp_cal_c0_a2_fd_61f6c5d28bd3` has an
-unregistered `accepted_protocol_present` guard; `tlp_cal_c4_a1_fd_cc48be23727d`
-shadows the standard library with root `operator.py`. Keep these invalid fixtures
-and original failures; do not invent passing implementations to obtain a receipt.
-Owned-source Forge preservation is not a ProjectRelease or a guarantee that the
-aggregate project manifest was checkpointed. All 30 later-created DEV projects
-passed `adaos dev project push`; Builder's separate DEV checkpoint also passed.
+- [ ] `[must]` **Forensic And Boundary Evidence**. Status: `partial`.
 
-- [ ] `[should]` Provide quarantined, non-promotable source checkpoints for invalid
-  unfinished drafts, retaining validation findings without weakening release gates.
-- [ ] `[should]` Hydrate Git-tracked sparse component sources before a release
-  attempt; report missing source separately from missing dependency releases.
-  The final Workspace batch passes all 26 published projects after hydrating two
-  sparse scenarios and Flowboard's sparse skill. No deleted or untracked files
-  were restored. Builder's dirty promoted closure was first published with the
-  exact-candidate source command, then `adaos project push` completed normally.
+Owner/dependencies: Core/Client + evaluation.
 
-Input inspection confirmed the primary dynamic keys are instruction,
-output_locales, prototype_brief, scenario_id and title, without rubrics or prior
-application implementations. User design prompts in this cohort are about
-288-413 characters; capability prompts are 519-593 characters. This is not a
-matched short/moderate prompt experiment and cannot establish a length effect.
+Implementation boundary: The frozen legacy manifest, explicit domain packs, input attribution and generic boundary tests exist. The snapshot is deliberately bounded, not an exhaustive dynamic reachability or full-stage trace.
 
-The ordinary selected-GPT-5 semantic path previously defaulted to minimal/8000,
-unlike the explicit E2E low/128000 settings. Its default now matches the evaluated
-low/128000 regime; explicit metadata/environment limits remain authoritative.
-The legacy environment clamp must not silently turn an explicit semantic GPT-5
-limit of 32000 into 12000. This change does not resolve server-selected model
-identity when the local request leaves the model unspecified; effective-option
-telemetry and profile resolution remain required.
+Exit/remaining work: Complete the reachable-path/ownership inventory and immutable Client build/viewport evidence. Record missing historical bytes as unavailable; never regenerate old evidence under its original identity.
 
-Builder pre-promotion comparison found no Workspace-only handler functions or
-owned/dependency components. DEV adds context/repair contracts, locale selection,
-durable Conversation and a sortable/reloadable project table. Both source UIs
-already use evidence-bearing accept_prototype instead of direct stabilization.
-The parity contract now expresses that forward replacement and requires the
-review modal, while its reference profile retains the old binding. Both current
-sources pass; this comparison does not itself assert a completed promotion.
+### BIP-02
 
-The 2026-09-12 promotion check exposed a separate navigation defect: the picker
-selected a test application, but Open preview read an empty host binding and
-opened Builder. DEV now uses an identity-scoped `open_preview` command, preserving
-a matching pinned revision and materializing an unselected application before
-returning its URL. Both scenario descriptors bind the selected application to
-this command. SDK/scenario regression tests pass 106 cases; the DEV browser
-checks sorting, pagination, reload, persisted preferences and the actual selected
-scenario in the new window (`builder-preview-open-dev-20260912`).
+- [ ] `[must]` **Truthful Status And User Projection**. Status: `partial`.
 
-The final exact checkpoint is `builder@0.2.121`, release digest
-`sha256:06ff92fdb7455826ebd57d215f8d54c120107bdf60569ba1243fbad8930b4382`.
-Trial `builder-0-2-121-bad8930b4382` was accepted and promoted into WorkspaceLock
-47; all three runtime/source health checks match scenario `0.2.89`, SDK `0.1.114`
-and Builder skill `0.3.170`. The exact-candidate source publication is registry
-commit `4d722892eb1eaa50353d8574957f48d7be16c53c`. Workspace browser navigation,
-sorting, reload and persisted table preferences pass in
-`builder-preview-open-workspace-20260912`. Its screenshot precedes resource
-hydration and is not independent proof of populated application data.
-The follow-up `builder-preview-open-workspace-hydrated-20260912` passes an
-explicit fixture-text assertion before the screenshot (354ms after scenario
-materialization). This proves populated data, not completion of every asynchronous
-lookup. The capture also preserves UX debt: raw relationship/status values,
-English host fallback labels and narrow date columns need presentation review.
-Subsequent public DEV and Workspace project pushes succeeded (`0.2.122` and
-`0.2.123` respectively); these source checkpoints do not replace the exact
-installed `0.2.121` release. The shared `adaos_builder` aggregate was pushed too.
+Owner/dependencies: Builder workflow + Client.
 
-- [ ] `[must]` Add live scenario/modal projection identity to the automated
-  publication health gate. Initial Workspace browser attempts retained the old
-  picker despite correct source versions; retain these failed receipts rather
-  than equating manifest health with Client freshness. The current promotion
-  qualification includes a separate real-browser check.
+Implementation boundary: Conversation and governed status projections exist; a worker's completed state is not independent Automation acceptance. Historical documents still used broad completion labels.
 
-Final regression sweep selected 931 Builder tests: 925 passed, four skipped and
-two failed only because test expectations still named grader 16 instead of 17.
-After correcting those expectations, all 43 tests in `test_builder_e2e.py` passed;
-both reports are retained rather than relabeling the original sweep as green.
-The 33 resource/prototype workbench tests also pass. Client boundary checks cover
-21 generic sources and 41 inventory widgets; its production build completed in
-72.930s. Existing SCSS budget and CommonJS warnings remain visible, with no budget
-increase to suppress them.
+Exit/remaining work: Project generated, structurally qualified, browser qualified, user accepted, Automation ready and blocked/partial outcomes separately. Show material assumptions and useful recovery without exposing internal prompt phases.
 
-DEV Builder Conversation ingress changes were tested and locally checkpointed
-as `builder@0.2.116`, source
-`sha256:04a46de7d758b097cccad9047591f8f521037f507abb353d229debe32e055066`.
-This is a local checkpoint, not a remote push or Workspace promotion.
+### BIP-03
 
-Promotion evidence (2026-09-11): the pre-promotion comparison found no
-Workspace-only product capability that needed to be carried forward. The four
-Workspace-only helpers were shopping-list, todo-list, and Applications-specific
-localization heuristics; DEV replaces them with generic semantic and
-localization processing. Scenario and SDK differences outside Builder logic
-were version-only. DEV component tests and the functional-parity suite passed
-before checkpointing. The exact checkpoint produced scenario `builder@0.2.83`,
-`builder_skill@0.3.163`, and `builder_sdk_control_skill@0.1.107`; ProjectRelease
-`builder@0.2.106` has digest
-`sha256:d65a27b619ea3ef25a030f25e3fe308b5b7da2fbcfff7ad9b4359128e88d0358`.
-Trial `builder-0-2-106-9128e88d0358` materialized under `.adaos/trials`, was
-accepted against the retained test and E2E evidence, and promoted into
-WorkspaceLock revision 45. Reload and health receipts matched all three exact
-component versions. This proves the local DEV -> beta -> Workspace mechanism;
-it does not by itself satisfy the prompt-autonomy gate above.
+- [ ] `[must]` **Runtime Latency And Stage Accounting**. Status: `partial`.
 
-The three-component checkpoint took 41.7 seconds. Its largest phase was the
-Builder skill at about 24.0 seconds: 8.0 seconds local validation, 4.7 seconds
-package validation, 3.2 seconds Root upload, and 7.1 seconds local receipt
-write. The observed delay is therefore distributed work, not evidence for a
-shorter timeout. Preflight also reported declared `max_request_hz` and
-invalidation-tag policies that are not yet executed exactly by several
-Builder SDK reads and mutations. They remain visible follow-up defects rather
-than being suppressed for promotion.
+Owner/dependencies: Core runtime + Client + Root telemetry.
 
-- [ ] `[must]` Shadow-run the new route beside the legacy path on retained and
-  held-out prompts without changing the user-visible Prototype.
-- [ ] `[must]` Compare quality, user-task success, cost, latency, repairs,
-  preservation, and capability-gap accuracy under matched model settings.
-- [ ] `[must]` Enable the semantic route for new generic Projects, retain
-  per-Project rollback, and leave existing accepted revisions immutable.
-- [ ] `[must]` Recreate Applications from `scenario_default` using only an
-  ordinary user request and follow-up review. The application-manager domain
-  pack may grade the result after generation but cannot enter generation
-  context or routing.
-- [ ] `[must]` Complete human EN/RU compact/wide acceptance, then accept the
-  exact Prototype and proceed through Automation, Trial, Publication, and
-  Workspace only after this roadmap's gates pass.
-- [ ] `[must]` Remove generic-path calls to the legacy prompt compiler,
-  Applications qualification, cumulative recipe phases, and text JSON repair.
-- [ ] `[should]` Archive compatibility fixtures and migration telemetry after
-  the supported rollback window.
-- [ ] `[should]` Make every Builder SDK data route execute its declared request
-  frequency and invalidation-tag policy, then turn the current preflight
-  warnings into a promotion gate. Measure validation, Root transfer, and local
-  receipt persistence independently before optimizing checkpoint latency.
+Implementation boundary: Runtime lock profiling and the path-promotion fix are retained; browser fan-out/post-save stalls remain. Live qualification of the loaded fix remains required.
 
-Exit gate: an ordinary user can reach a relevant, executable, accepted
-Prototype without understanding AdaOS internals, and the evidence demonstrates
-that this result was not supplied by a subject-specific recipe.
+Exit/remaining work: Measure the loaded fix on cold/warm browser journeys; separate queueing, import lock, execution, invalidation, readiness and Root phases. Reconcile billed/normalized cost and exact environment digests; do not mask stalls with larger timeouts.
 
-## R10. Small Application Lifecycle Qualification
+### BIP-04
 
-The next tranche implements the agreed four-step plan. Prototype fixtures and
-the disposable Prototype CRUD engine are not Automation acceptance evidence.
-Keep generation and runtime mechanisms domain-neutral; application-specific
-requirements belong to the visible evaluation case and its implementation brief.
+- [ ] `[must]` **Clean Baseline And Sealed Evaluation**. Status: `blocked`.
 
-- [ ] `[must]` Close measured Core/Client defects: addressable resource reads and
-  append-oriented journals with legacy-data preservation, readable relationship
-  and status values, host localization, stable column sizing and live publication
-  projection verification. Record before/after timings, not larger timeouts.
-- [ ] `[must]` Add bounded coverage repairs without replacing valid candidate
-  content; retain original requests, findings, changes and preservation proofs.
-  Re-run the eight archetypes and existing-prototype changes with matched profiles.
-- [x] `[must]` Expand the equipment-inspection Automation brief beyond the
-  Prototype request: persistent installed data, referential integrity, draft
-  saving, server-side completion rules, stale-write rejection, role checks,
-  supported photo attachment/link storage and explicit failures. Example data
-  must not silently become production data or satisfy a live business rule.
-- [ ] `[must]` Exercise this small application through Builder: accepted exact
-  Prototype, Automation, Trial, stable publication, installation and a subsequent
-  version update with existing records preserved. No manual application-code
-  bypass or fabricated workflow acceptance to make the chain pass.
-- [ ] `[must]` Express the full lifecycle in the existing technological E2E
-  pipeline with scoped identities, resumable steps, negative behavior assertions,
-  browser evidence, stage timings, model inputs/outputs and intervention counts.
-  Extend other archetypes by differing risks after the first complete lifecycle.
-- [ ] `[should]` Separate read-only observation from validation and acceptance:
-  show pending automation requirements and distinguish disposable preview data
-  from installed data in retained evidence and Builder Conversation.
+Owner/dependencies: Evaluation; depends on BIP-01, BIP-05 and Client C0/C1 plus truthful C2 subset.
 
-Applications development and large-project orchestration are not part of this
-tranche. Progress and blockers remain in this roadmap, not a parallel review doc.
+Implementation boundary: Visible development suites and immutable run reports exist. No sealed 40-prompt result is established by this audit. Repeatedly inspected development archetypes are not held-out.
 
-Parallel-work publication requested on 2026-09-12: DEV/Workspace handler and UI
-comparison found identical behavior (UI byte differences were line endings).
-After 106 SDK/scenario tests, `builder@0.2.124` passed Trial and promotion into
-WorkspaceLock 48, retaining scenario `0.2.89`, SDK `0.1.114`, skill `0.3.170`.
-Its exact source publication is registry commit
-`dd6329dc1c0d5c742645c17f03176fa367b400f3`; no in-progress Client changes or user
-project selection were included. Core/Client Git pushes remain deferred to final
-qualification.
+Exit/remaining work: Seal at least 40 ordinary EN/RU prompts across eight different archetypes; freeze model/profile and complete the run before remediation. Keep legacy control separately labelled. On sample inspection, reclassify the set as regression and seal a successor.
 
-Parallel-work follow-up: `builder@0.2.125` is active in WorkspaceLock 49 after
-DEV checkpoint, isolated Trial and confirmed promotion. DEV/Workspace handler
-hashes match; the release adds bounded binding repair and canonical table-kind
-validation. Its registry source push remains pending final Core/Client
-qualification. Promotion also updates the Root stable release pointer; it must
-not be described as a purely local operation.
+### BIP-05
 
-The next parallel-work publication promotes `builder@0.2.127` into WorkspaceLock
-50 through exact candidate `builder-0-2-127-3a399b8ca20f`. DEV/Trial/Workspace
-handler hashes match; changes preserve scoped repair candidates and sequence
-distinct bounded repair families. 49 repair checks and 106 scenario/SDK checks
-pass. Desktop/mobile read-only rendering completes in an isolated Workspace;
-the retained browser receipt also records a node-status 401/Limited indicator,
-so it is not a claim of entirely healthy browser connectivity. Evidence:
-`builder-parallel-work-20260912-03`. No shared selected project was changed.
+- [ ] `[must]` **Unified E2E And Evidence Integrity**. Status: `partial`.
 
-R10 progress: keyed SQLite reads and append-oriented traces are committed, with
-44 resource tests and retained legacy data. The live in-process two-record query
-now takes 19-21ms versus 576-655ms; HTTP/browser latency is not inferred from it.
-Presentation ingress and bounded repair checks pass 183 Core and 75 Client tests,
-plus six DEV Builder repair transport/context tests. Binding repair replay
-`binding-repair-queue-gpt5-low-20260912-01` resolves the original six missing
-state bindings: 10.3s wall, 933 output tokens including 576 reasoning tokens,
-1,232 output characters. Full compilation passes and only requirement bindings
-change. This single retained replay is not a fresh cohort or semantic grader pass;
-the eight-archetype and live-browser gates remain open.
+Owner/dependencies: Evaluation runner + SDK.
 
-Run 18 stopped at a real platform blocker: the second queue candidate compiled,
-but DEV Builder's duplicate table validator rejected compiler-emitted `kind=date`.
-Its unchanged primary response passes the complete replay after reading allowed
-column kinds from the shared capability catalog. Sixteen boundary/context tests
-pass; image/datetime/number support is no longer contradicted by a stale local
-allowlist. The stopped run remains failed/incomplete, not relabeled as success.
+Implementation boundary: Public CLI/SDK execution, attribution checks, independent HTTP/browser plans and attempt archives exist. Several qualification journeys still use separate stand entrypoints; early overwritten outputs are unrecoverable.
 
-- [x] `[must]` Add owned-test-only SDK adapters for exact Prototype review,
-  Automation start/wait, Trial preparation/decision and stable promotion.
-  Require retained DEV scope, existing review evidence, immutable target identity
-  and explicit promotion confirmation; keep resumable Automation input receipts.
-- [ ] `[must]` Qualify these adapters on the real application lifecycle and add
-  registry source publication, consumer installation/update and data-preservation
-  assertions. Adapter unit tests are not proof of an automated application.
+Exit/remaining work: Run adversarial/mutation, accessibility, authority, preservation and task probes through one resolved E2E contract. Verify attribution before grading, unify metrics/comparison/resume, and retain first attempts plus missing-evidence flags. Historical incomplete cohorts cannot become pristine baselines.
 
-Lifecycle run `small-lifecycle-gpt5-low-20260912-01` reaches real browser review:
-selection/reset across two relationship levels, draft edit/save/reopen,
-confirmation/dismissal without mutation and an attachment upload/download hash
-roundtrip pass at wide and compact widths. It then fails before Automation:
-compiled resources use the aggregate `project:` owner while component workflow
-acceptance expected `scenario:`. The fix admits an aggregate resource owner only
-when its manifest owns the exact component; digest/change/revision checks remain
-strict. Eighty workflow/resource tests pass, including unrelated-owner and
-dependency-only rejection. The failed run remains unchanged; a fresh run must
-prove the corrected handoff. Layout balance, compact action labels, attachment
-cell presentation and overlay-shell localization remain explicit UX debt, not
-claims of production readiness.
+### BIP-06
 
-Lifecycle run `small-lifecycle-gpt5-low-20260912-02` passes generation, grading and
-all four browser probes, then exposes a second acceptance integration defect:
-locale evidence was counted as a queried record source. The corrected workflow
-keeps locale digests bound without including them in record-source evaluation.
-The retained real prototype passes a read-only acceptance build; 246 Core tests
-pass, including localized zero-resource and two-resource workflow acceptance
-through the real evaluator. Automation has not yet been qualified by this result.
+- [ ] `[must]` **Independent Grader Calibration**. Status: `partial`.
 
-Matched run `context-archetypes-gpt5-low-20260912-19` finishes at 14/16, with at
-least one passing result per archetype. Media-review repetition 2 has an invalid
-relationship field reference; its whole-candidate repair damages valid fixtures.
-Volunteer repetition 1 instead reaches the EU Root immediately (5ms queue) and
-hits the Root upstream deadline at 300s without response evidence. This is a
-Root-generated 504, not proof of an HTTP 504 returned by OpenAI. Keep transport
-failure separate from candidate correctness; do not raise the timeout as a fix.
+Owner/dependencies: Evaluation.
 
-- [x] `[must]` Add digest-bound repair of only reported relationship field
-  references; preserve resources, fixtures, endpoints and other decisions.
-  Clarify that an implicit record identity is the literal reference `id`, not an
-  empty field. Core preservation tests and six DEV context/transport tests pass.
-- [ ] `[must]` Qualify sequential validation/repair on fresh runs without
-  rewriting valid candidates. Retained reference replay
-  `reference-repair-media-gpt5-low-20260912-01` fixes the reported field in 6.33s,
-  but full compilation then finds unresolved query bindings. It is a partial
-  repair, not a passing prototype; no old failure is relabeled.
-- [ ] `[should]` Resolve the measured English noun/verb ambiguity: the request
-  `List records and edit a selected record` spuriously adds a create obligation.
-  Preserve the user's explicit operations without manufacturing acceptance work.
-- [ ] `[should]` Add Root upstream phase evidence sufficient to distinguish
-  connection/header/first-token waits when an asynchronous provider job times out.
+Implementation boundary: Stage-aware grader rules, negative probes and selected live regrades exist. Agent-authored controls are not a human-labelled calibration set; selected live regrades do not establish general judge reliability.
 
-Client presentation regression now verifies readable board hover contrast on
-dark and light themes, actual wide drag/compact move-menu persistence across
-reload, and restoration of the pre-probe lane. Single-action toolbars use their
-available width instead of an artificial narrow cap. Evidence:
-run 18 `browser/operations-work-queue-en-1/presentation-restore-regression/attempt-01`;
-lifecycle run 02 records the action-label check. These checks do not close the
-remaining live relationship-caption, shell-localization or full lifecycle gates.
+Exit/remaining work: Broaden human-labelled false-positive/negative and mixed-stage calibration; version any retained-candidate regrade independently without source mutation. Keep grading uncertainty distinct from application failure.
 
-Lifecycle run 03 again passes generation, grading and all browser probes. The
-acceptance schema then exposes a stale mandatory EN+RU disclosure requirement.
-It now admits either requested language and preserves nonempty disclosures;
-its evidence capacity includes eight record resources plus one locale snapshot.
-The retained prototype passes the real SDK acceptance in 1.85s using diagnostic
-continuation `small-lifecycle-gpt5-low-20260912-03/continuations/acceptance-contract-fix-01`.
-The original failed report is unchanged. Automation starts, but its worker fails
-in workspace preparation before any model attempt: the legacy provider predicate
-misses the semantic-v2 resource requirements and creates no companion skill.
+### BIP-07
 
-- [x] `[must]` Align acceptance with single-locale Prototype output and test the
-  maximum resource-plus-locale evidence boundary without allowing a ninth record
-  source. Keep locale digests binding on later Automation admission.
-- [x] `[should]` Provide a diagnostic continuation stand for the unchanged
-  declared lifecycle tail, preserving parent digest, original verdict, owned
-  targets, explicit review, per-step results and redacted UTF-8 evidence.
-  This is not a fresh cohort or a general replacement for runner resume.
-- [x] `[must]` Resolve provider scaffolding from the actual accepted record
-  resources, excluding locale evidence. Share aggregate-owner verification with
-  the worker instead of reintroducing the component/aggregate mismatch there.
-- [ ] `[must]` Remove implicit Prototype-fixture seeding from production
-  handoff. Test empty installation and separately authorized initial data.
-- [ ] `[must]` Make Automation routing and context stage-aware: an explicit
-  implementation brief and pending rules cannot pass through resource-type
-  rewriting alone. Permit supported policy implementations instead of requiring
-  immutable CRUD-only bundles; filter completed visual Prototype criteria out
-  of implementation acceptance. The observed request also acquired an invented
-  offline/camera obligation from an actor description; do not promote model
-  speculation into required production scope.
+- [ ] `[must]` **SDK And Core Ownership**. Status: `partial`.
 
-Handoff regression verification: 355 workflow/Automation/worker tests pass in
-360.14s, with additional focused negative checks for production seeds,
-disposable bindings, pending rules and follow-up instructions. Scaffolding now
-uses accepted record evidence, excludes locale snapshots and shares manifest-bound
-aggregate ownership with review. The retained run 03 retry creates its companion
-and reaches real model execution; no new Prototype or rewritten baseline is used.
-Generated resource bundles start empty. Explicit implementation briefs, pending
-business rules and follow-up instructions select implementation, not a zero-model
-resource rewrite. The blueprint gate checks detachment only, not business-rule
-correctness. Empty-install browser verification and provenance of speculative
-requirements remain open, so the broader items above are not yet complete.
+Owner/dependencies: Core services + SDK + Builder skill.
 
-Continuation `resource-handoff-fix-02` reaches the executor but stops in 118.60s.
-The actual input supplied only a handoff basename although the file lived in
-the sibling input directory. The model's SDK search selected a catalog header;
-its drill-down incorrectly searched for the literal `sdk_metadata` as a method
-and returned no methods. The full-implementation prompt also inherited a
-single-discovery limit and referenced an escalation envelope unavailable to
-this stage. The resulting malformed feedback was mislabeled workspace preparation.
-These are context/runtime contract defects, not proof that the user brief was
-too short or that larger model reasoning/timeout budgets are needed.
+Implementation boundary: prototype.submit_request currently selects LegacyDevSkillPrototypeExecution. The DEV handler still owns provider request/repair orchestration and source/revision writes; ui_capabilities still calls intent interpretation. A public facade and SDK-only imports do not prove target ownership.
 
-- [x] `[must]` Index admitted read-only inputs with exact paths/digests separately
-  from editable source; cover the resource handoff file in prompt tests.
-- [x] `[must]` Publish existing resource and persistent skill-data SDK facades;
-  distinguish catalog navigation from exact method disclosure and rank exact
-  symbol matches above container vocabulary.
-- [x] `[must]` Separate full implementation discovery from surgical repair limits.
-  Keep per-response bounds and prohibit broad repository/SDK dumps.
-- [x] `[must]` Describe blocking feedback for normal Automation, retain it without
-  source activation, and preserve that boundary during candidate recovery.
-- [ ] `[must]` Re-run these context fixes through the live task MCP route and
-  actual implementation; passing prompt/worker unit tests is not lifecycle
-  qualification. Measure input usability and every retained model/tool response.
+Exit/remaining work: Move interpretation/execution, provider lifecycle and transactional artifact writes behind owned Core ports; make Builder a conversation/projection adapter. Enforce dependency direction and parity before removing duplicate transformations. Unrelated large-module decomposition stays deferred.
 
-Context regression: 182 worker/exporter/MCP tests pass in 167.70s; the independent
-51-test discovery subset passes in 28.16s. Continuation
-`implementation-context-fix-03` reads the exact handoff and discovers
-`skill_data_root` and resource operations through live MCP. It makes no source
-changes and reports missing trusted caller authorization and server policy
-registration. This confirms input usability improved, not successful Automation.
-Its observer separately encounters Windows read/replace contention, and feedback
-parsing rejects impact values whose enum was absent from the model context.
+### BIP-08
 
-- [x] `[must]` Share the feedback parser's category/impact vocabulary with the
-  model prompt. Do not ask the model to infer hidden enum values.
-- [x] `[must]` Read Automation session snapshots under the existing writer's
-  process lock; do not retry the entire lifecycle operation or mistake transient
-  file replacement for a missing session.
-- [ ] `[must]` Close the real implementation contract gap before another full
-  Automation model attempt: trusted caller identity/capability propagation and
-  an admitted way for a skill to enforce atomic cross-record business rules.
-  API payload `actor.role` and prototype `role_fixtures` are not trustworthy
-  authorization. Existing per-resource CRUD and a mutable data directory alone
-  do not prove these requirements. Keep policies application-owned; do not put
-  inspection-specific rules in Core or hand-author this evaluation application's
-  implementation outside Builder.
+- [ ] `[must]` **Single Component Contract**. Status: `partial`.
 
-Local Client production build passes in 70.13s with existing stylesheet-budget
-and dependency warnings; 29 focused renderer tests pass. Core/Client commits
-remain local. DEV Builder's additional tested source is checkpointed as
-`0.2.126` (Root release digest
-`sha256:88374262daff28c4a74117139f4bdeee09d282390012391a61be219feb98ab31`);
-the parallel-work Workspace publication remains `0.2.125`.
+Owner/dependencies: Client component roadmap C2/C3 + Core ABI.
 
-Additional local progress (2026-09-12): 171 Automation tests pass after the
-session-reader lock fix. DEV Builder `0.2.127` retains scoped repair candidates
-and can make successive, distinct reference/binding/state repairs when a full
-compile exposes another typed finding. Each family is attempted at most once;
-no-progress or repeated findings stop the chain without a full-candidate retry.
-Nine focused DEV tests and its full runtime test/activation pass. Fresh paired
-archetype run 20 completed at 15/16 (93.75%); this is a small paired cohort, not
-a reliability guarantee. All eight archetypes have a successful attempt.
+Implementation boundary: The AST-generated capability inventory detects drift, but reads handwritten registries/models; it does not generate them from one component contract.
 
-Inspection of the actual retained executor inputs found another context defect:
-`artifacts.prototype_acceptance` retained two obligations, but its compact
-`context_projection` dropped them, so the handoff contained an empty list.
-- [x] `[must]` Preserve accepted Automation obligations and provenance through
-  compact context projection. For older projections, recover only from the
-  identity-matched acceptance; mismatching identity or obligations must fail.
-  Regression coverage includes both complete and retained compact assignments.
-  Read-only reconstruction of retained task `task.01M2BE8HNT4PP7CGH1SNQWTY2K`
-  with `e2e/stand/inspect-builder-automation-context.py` restores both refs and
-  preserves empty seeds for all three production resources without a model call.
-- [ ] `[must]` Requalify this fix through actual Automation; unchanged acceptance
-  obligations are still pending, not satisfied by their presence in the prompt.
+Exit/remaining work: Publish the authoritative contract and derive Client registration/types, compiler/validator indexes, retrieval and docs. Require ABI impact reports, conformance fixtures and matched browser evidence for admitted components, not every future widget.
 
-- [x] `[must]` Distinguish application-owned transactional implementation from
-  missing Core contracts in Automation context. Standard-library transactions
-  under the admitted data root are allowed; identity/authorization bypasses are not.
-- [x] `[must]` Add a discoverable caller-access SDK backed by the existing
-  identity/access kernel. The owner-token HTTP ingress supplies verified owner
-  context; absent callers deny. Local tests cover scoped read/write, cross-skill
-  denial, revocation, session expiry, argument spoofing and thread propagation.
-- [ ] `[must]` Finish and qualify non-owner ingress before claiming that the
-  lifecycle reader/writer requirement works over HTTP. Use the linked
-  [identity/access roadmap](personalization-identity-access-roadmap.md#phase-9---skill-tool-and-sdk-enforcement),
-  including concurrent access-fact persistence, cache isolation and forwarding.
-  Do not silently remove this requirement from the retained lifecycle case.
-- [x] `[must]` Fix the stale access-fact persistence prerequisite: process/thread
-  serialization, fresh outer snapshots, transactional policy/audit reads and
-  writes, rollback and fail-closed malformed-state handling. The linked identity
-  roadmap records 59 passing local tests; credential admission remains open.
-- [x] `[must]` Implement bounded local session tool admission without new user or
-  grant identities. Current session/grant state and resolved tool effects are
-  checked before cache replay; DEV/remote escalation is denied. Broad HTTP/policy
-  regression: 157 tests pass in 19.03s; subsequent nested-store and scoped SDK
-  checks pass in the 46-test focused subset. Live node qualification subsequently
-  passes all nine checks in `session-tool-ingress-live-20260912-02` on `0e855bc9e`.
-  Generated-application authorization remains open.
+### BIP-09
 
-Local regression: 395 Automation/worker/caller/exporter/HTTP tests pass in
-347.70s. These checks do not complete the live non-owner or full lifecycle gates.
+- [ ] `[must]` **Capability Discovery And Gaps**. Status: `partial`.
 
-- [x] `[must]` Remove eager fallback-network discovery when the configured local
-  hub already passes the active-runtime probe. Keep the existing candidate and
-  administrative-admission checks; do not reduce timeouts or add stale caches.
-  Three local resolver measurements change from 1265.22/1172.94/1345.61ms to
-  121.91/58.68/54.78ms. This measures endpoint resolution, not total model or
-  build latency. Control/preview/runtime regression: 91 tests pass in 7.76s.
+Owner/dependencies: Core capability service + SDK/MCP.
 
-Run 20 (`context-archetypes-gpt5-low-20260912-20`) used 23 model calls for 16
-attempts, with 116901 fresh / 84736 cached input tokens, 122019 output tokens
-(51520 reasoning). Case p50 was 109.32s, p95 225.83s. The 15 independent grades
-add 221906 fresh input and 18970 output tokens; report them separately from
-generation. Inventory attempt 1 failed: its pending-state proof had no matching
-fixture, while state repair v3 forbade all fixture additions. The model reduced
-min_items to zero and was correctly rejected. This is an infeasible repair
-scope, not evidence for higher reasoning effort or weakened acceptance.
+Implementation boundary: Bounded search/get and typed gaps exist in slices. Discovery can return low-relevance results and metadata-only drill-down; not every Prototype request supplies the advertised retrieval tool.
 
-- [x] `[must]` Admit bounded append-only fixture repair for missing populated
-  state evidence. Preserve existing records, intended predicates/counts and all
-  unrelated resources; reject replacement IDs, scope expansion, excessive
-  additions and incomplete field vectors. Legacy repair envelopes keep their
-  meaning. Full semantic regression: 172 tests pass.
-- [x] `[must]` Replay the actual failing model input without altering its run
-  verdict or application source. `state-fixture-scope-gpt5-low-20260912-01`
-  changes the repair scope/schema at the same GPT-5 low effort. The model adds
-  one pending fixture, leaves states/views unchanged and passes full compilation:
-  12.33s observed, 9.20s provider execution. This is a repair replay, not a fresh
-  whole-task pass.
-- [ ] `[must]` Requalify the fixture scope in fresh live Builder attempts after
-  loading the tested Core revision; preserve the failed run 20 receipt.
-  Fresh inventory run 21 passes twice in 116.01/125.44s, with its first attempt
-  also passing desktop/mobile render review. These attempts used other repair
-  families, so they do not claim fresh v4 path coverage. Full archetype run 22
-  passes 8/8 with API revision `520d4d343`: 10 generation/repair calls,
-  62,147 fresh + 18,944 cached input tokens, 48,593 output tokens (including
-  20,992 reasoning), case p50 99.95s/p95 185.56s. Independent grading adds
-  8 calls, 114,856 fresh input and 9,938 output tokens. Separate browser render
-  and capability probes pass 8/8 on desktop/mobile. Command probes pass 6/8;
-  the remaining probes assumed reversible archive and a single unfiltered
-  collection. Keep those receipts, correct the harness and requalify rather than
-  weakening application policies. Caller-ingress edits were not loaded into
-  that generation runtime and do not change the comparison.
-- [x] `[must]` Requalify those two command probes without changing app source:
-  use newly created records for lifecycle transitions and locate created identity
-  across declared collections. Knowledge and appointments now pass on both
-  viewports; the read-only transition is retained, not undone by bypassing policy.
-  Together with the six original passes this covers commands on all eight run 22
-  archetypes, not every possible command or production persistence.
-- [x] `[must]` Extend generic command/interaction browser probes to kanban
-  collections using the renderer's card/record identity contract, without
-  application-specific selectors. Queue editing and creation pass on both
-  viewport sizes after this probe correction.
-- [x] `[must]` Retain desktop/mobile render reviews for all eight run 20
-  archetypes (inventory uses attempt 2). Scalar edit probes pass for queue,
-  appointments, equipment and knowledge; creation probes pass for budget,
-  media and volunteer cases. Unsupported scalar edits remain not-exercised,
-  not silently successful. These checks do not constitute complete UX or
-  business-rule coverage.
-- [ ] `[should]` Review remaining presentation quality: uneven equipment column
-  use, raw boolean display, mobile table word-breaking and oversized detail
-  headings. Keep visual-quality findings separate from executable acceptance.
-- [x] `[must]` Base live relationship/filter browser checks on an unfiltered,
-  owned-resource snapshot captured before interaction, not immutable authoring
-  seeds. Create-only applications can retain newly created review records, so
-  using seeds produced a false media-filter failure after successful creation.
-  The retained failure remains visible; the corrected media probe passes on
-  both viewports without deleting records or changing application source.
-  Fresh snapshot retrieval is bounded and incomplete snapshots fail explicitly.
+Exit/remaining work: Admit contracts by shape/operation/authority before optional ranking; expose callable bounded read-only retrieval and distinguish unsupported capability, absent index and irrelevant matches. Evaluate retrieval on independent queries without subject rewrites.
 
-- [x] `[must]` Supply a generic, stage-specific Automation binding capsule with
-  source receipts and ABI-validated examples. Owned tool reads, record selection,
-  revisions, command failures, invalidation, caller rights and upload limits must
-  be available before broad discovery, without leaking application solutions.
-  Retained lifecycle continuation 04 spent 320.03s on discovery and stopped with
-  typed insufficient-context feedback; it changed no application files. It saw
-  current caller SDK descriptors, so this was not a stale Root catalog failure.
-- [x] `[must]` Align Client forms with the declared skill-command contract:
-  loaded record/revision on submit, success result projection, explicit Enter
-  action, validation, duplicate-submit suppression and no premature success for
-  background/denied/pending-approval commands. Focused Client regression: 147
-  tests pass; runtime browser qualification remains distinct.
-  Core worker/ABI suite: 137 checks pass; one invalid generic example was found
-  and fixed. The corrected example and exact/blueprint context paths pass all
-  four focused checks (`automation-binding-regression-20260912-02.xml`).
-- [ ] `[must]` Requalify the binding capsule through retained Automation, then
-  real UI/server behavior and the complete install/update lifecycle. Do not count
-  copied documentation, deterministic resource rewrites or fixture tests as
-  application implementation. Production binary uploads and dirty-editor refresh
-  conflicts require explicit evidence if the implementation uses those branches.
-- [x] `[must]` Admit skill-backed form choices through the same causal loader,
-  retry and invalidation path as resource queries. Preserve the draft and block
-  submission on unavailable/malformed choice collections. Client regression:
-  145 tests pass; eight ABI/binding checks pass. This does not claim live coverage
-  of skill-backed captions or every collection filter.
-- [x] `[must]` Correct worker/native package-test parity: skill tests must not see
-  sibling scenario/project source. Record skill-package versus application-closure
-  scope. Four focused isolation/budget checks pass, including an actual subprocess
-  that fails for a sibling-scenario dependency before installation.
-  The full worker/ABI regression passes 140 tests in 135.45s:
-  `automation-package-binding-regression-20260913-02.xml`.
-- [ ] `[must]` Continue the retained lifecycle past its installation gate.
-  Continuation 05 produced owned SQLite operations and 15 passing worker tests
-  after one model repair, but DEV activation correctly rejected a skill test
-  reading a sibling scenario. Keep both receipts: 773.28s wait, two model attempts,
-  1,667,128 input tokens (1,576,576 cached) and 20,557 output tokens. This is not
-  a completed Automation or Trial. Publication-gate ticket:
-  `dticket.01M2BPTBAA8V1Z4X2640RGHFR6`.
-- [ ] `[must]` Make post-application recovery distinguish the frozen accepted
-  Prototype from the applied Automation revision. Unchanged retry currently
-  compares the functional UI against the Prototype digest after activation
-  failure. Do not reapprove Automation as Prototype or remove the approval gate;
-  use a recorded Automation correction while qualifying provenance-aware retry.
-- [x] `[must]` Add an explicit diagnostic `automation.submit` continuation over
-  the existing SDK, retaining its instruction and intervention count. Require an
-  owned terminal session and expected iteration; refuse ambiguous replay. Keep
-  the initial case verdict and Prototype acceptance unchanged.
-  Automation/SDK/E2E regression: 192 tests pass in 188.04s
-  (`automation-correction-regression-20260913-01.xml`). Live qualification remains
-  part of the retained lifecycle, not a fresh first-pass result.
-- [x] `[must]` Qualify the governed correction against retained lifecycle session
-  `automation.scenario.test_-20260912-e2eed5df95b6ac7_146586eb`.
-  Continuation `package-isolation-06` completed Automation iteration 5 and
-  prepared Trial `test_-20260912-e2eed5df95b6ac7_146586eb-0-1-1-f62ac8acca49`.
-  Builder moved the cross-component assertion to the owning scenario without
-  dropping checks or reapproving the Prototype. Submit/wait/prepare: 7.69s /
-  130.62s / 2.84s; 178,476 input tokens (152,576 cached), 2,005 output tokens.
-  This is a recorded intervention, not a fresh first-pass success.
-- [x] `[must]` Resolve selected Trial candidates by exact candidate ID as well as
-  legacy release version; carry stage/label through owner-side materialization.
-  Add a fail-closed tool ingress guard before idempotent replay while isolated
-  Trial execution is unavailable. Focused Core regression: 209 checks pass
-  (`trial-source-boundary-regression-20260913-03.xml`). This is boundary protection,
-  not execution qualification.
-- [ ] `[must]` Admit an isolated Trial executor against the selected release lock,
-  with candidate-owned source/data, caller authorization and no DEV/stable or
-  cross-node fallback. Current activation health verifies package materialization
-  only and explicitly skips runtime reload. Do not accept/promote the candidate
-  on that evidence. Include module/environment, SDK service and cache boundaries.
-- [ ] `[must]` Qualify live owner-materialized Trial UI and HTTP behavior, then
-  stable installation and a compatible update preserving real records. Retained
-  `trial-browser-06` opened the Builder host, not its paired preview; corrected
-  `trial-browser-07` rendered the application but had no source identity proof.
-  Neither is a passing Trial execution receipt. The independent declarative
-  HTTP probe is prepared in `e2e/stand/check-application-tools.py`; live business
-  and reader/writer checks remain outstanding.
-- [x] `[must]` Recover the selected immutable Trial during Yjs room bootstrap and
-  effective-branch repair, instead of reloading DEV source after a successful
-  owner materialization. Explicit new source selection must supersede the old
-  Trial binding. Regression: 297 Core/Yjs checks pass in 24.26s
-  (`trial-preview-recovery-regression-20260913-01.xml`). Reopening the real browser
-  is qualified by `trial-browser-09`: both desktop and mobile recover exact
-  candidate revision, release fingerprint and BETA marker after API restart.
-- [x] `[must]` Verify materialization identity and unavailable-Trial presentation
-  in the live Client. Both layouts in `trial-browser-09` show the explicit
-  admission error, not reconnecting state. This qualifies source recovery and
-  rejection UX only; it is not a working application Trial.
-  Client implementation passes 125 focused tests, including skill/API source
-  changes without refetch on timestamp-only updates, plus generic boundaries and
-  the 41-component capability inventory check. Actual nonempty DEV/Trial/stable
-  record isolation remains part of the outstanding executor qualification.
-  Owner materialization and HTTP admission were exercised in receipts
-  `trial-owner-selection-08.json` and `trial-http-admission-08.json`; both implicit
-  and explicit DEV calls were denied. Browser run 08 exposed the bootstrap identity
-  loss and is retained as a failed source-identity qualification, not a Trial pass.
-- [ ] `[should]` Resolve visual findings from Trial rejection review: clipped
-  command captions and an empty-record message shown alongside unavailable data.
-  Qualify loaded-empty versus failed-source behavior without editing the generated
-  application to manufacture a passing lifecycle receipt. New Trial admission
-  feedback and Retry use Client EN/RU dictionaries; `trial-browser-10` verifies
-  the Russian text and exact candidate identity on both layouts. Thirty caller
-  ingress/credential regressions also pass (`trial-caller-ingress-regression-20260913-01.xml`).
-- [ ] `[should]` Resolve the isolated Builder browser's node-status 401/Limited
-  indicator separately from scenario rendering and source publication health.
+### BIP-10
 
-## Current Small Automation Focus
+- [ ] `[must]` **Brief Interpretation And Requirement Provenance**. Status: `partial`.
 
-### Preview Topology Prerequisite
+Owner/dependencies: Core intent/Brief + Builder review.
 
-- [x] `[must]` Sequential Prototype/Automation runs reuse one existing Builder
-  and one Preview. Remove synthetic per-case/repetition hosts from E2E and
-  standalone frozen-Prototype diagnostics. Require explicit host preflight.
-- [x] `[must]` Reject missing production ancestors and standalone DEV hosts at
-  relationship, runtime and workspace-index creation boundaries. Allocate
-  `W-dev`; permit `W-dev-dev` only for an active DEV Builder. Retain a dormant
-  child relation rather than orphaning it on self-host demotion.
-- [x] `[must]` Binding/dialog reads cannot allocate topology. A stale browser
-  URL cannot bootstrap a deleted non-default webspace. Explicit Preview open
-  recreates a missing target while retaining its selected Lifecycle revision.
-- [x] `[must]` Reset the local polluted preview catalog at the user's request,
-  preserving application sources, data and production selections. The audit
-  found 246 DEV webspaces and 637 relations; 236 materialized targets had no
-  registered source. Backups are under `.adaos/state/backups/dev-webspaces-*`.
-  The first restart exposed an additional index-level recreation path, now
-  guarded; its single recreated orphan was also removed.
-- [x] `[must]` Complete the explicitly requested local experimental-webspace
-  cleanup beyond `kind=dev`: remove 20 legacy `preview-*`, `builder_session*`,
-  E2E, Codex and validation hosts misclassified as ordinary workspaces, plus
-  one malformed legacy identifier by exact key without normalizing it to
-  `desktop`. Backup and before/after evidence:
-  `.adaos/state/backups/experimental-webspaces-20260913-165351`.
-  Verify absence in SQLite and the live API catalog. Preserve application
-  sources, ordinary user hosts and the valid `desktop` / `desktop-dev` /
-  `desktop-dev-dev` chain, including concurrent user changes.
-- [ ] `[must]` Make webspace-deletion command admission and completion
-  observable: an events-channel receipt ACK must not hide a core handler
-  admission rejection. During sequential cleanup, a second deletion arrived
-  after the previous row disappeared but before its runtime cleanup completed;
-  the subscription limit (`pending=1 limit=1`) dropped the command after an
-  `ok=true` ACK. Qualify successive requests through terminal completion or
-  explicit retryable rejection; include regression coverage for overlapping
-  cleanup and ensure the client never reports deletion from receipt alone.
-- [x] `[must]` Browser qualification: `desktop:builder` opens the selected
-  application at `desktop-dev`; repeat opens and application switches reuse
-  that target, including recovery after explicit deletion. Evidence:
-  `preview-topology-20260913/browser-select`, `browser-recreated-02` (retains
-  exact Prototype `002` and visible fixture data), `browser-switch-existing`
-  (second original application, same target). Core/SDK/Yjs: 434 checks pass;
-  catalog/recovery services: 24; Builder control skill: 88. The control-skill
-  opening fix is mirrored in Workspace and DEV and checkpointed in Forge.
-- [ ] `[should]` Qualify application presentation metadata in frozen Automation
-  repeat fixtures before treating them as project-picker UI samples. The
-  `test_automation_repeat_20260913_b` diagnostic opened generic `skill_preview`
-  from its Project entrypoint, unlike explicit scenario snapshot selection.
-  This is separate from topology: the existing Preview was reused, not duplicated.
-- [ ] `[deferred]` Queues, concurrent Builder execution and any preview leasing
-  model. Do not emulate those future features with synthetic current hosts.
+Implementation boundary: capture/compile/merge preserve source evidence, but compile_prototype_brief still sets outcome, actors and entities to unknown and starts with empty assumptions/questions. Model-suggested external scope is not reliably distinguished from user obligations at the handoff.
 
-### Frozen Automation Evaluation
+Exit/remaining work: Implement constrained residual interpretation, semantic-ID deltas and material-only clarification (at most three questions). Distinguish user requirements, explicitly accepted additions, suggestions and external gaps. Generic UI approval must not silently accept speculative integration scope; test partial progress without a green full verdict.
 
-Trial and publication experiments are paused by the 2026-09-13 user decision,
-not removed from the target lifecycle. The next gate is a working Equipment
-Inspections Automation against one frozen existing Prototype.
+### BIP-11
 
-- [x] `[must]` Compare the three retained UI revision `002` artifacts separately
-  from current DEV source. The two older examples and lifecycle example were
-  independent generations, not sequential revisions. Evidence:
-  `equipment-automation-frozen-20260913-01/baselines`.
-- [x] `[must]` Select `test_-20260912-e2ebac45ec1a5c5_f3cce37d`, UI `002`, as
-  the design baseline: equipment table, inspection list, checklist table,
-  search/filter controls and separate editors. Repeat capability and interaction
-  probes for the original run 20 attempt 02 on wide/compact screens. They pass;
-  creation/deletion and production rules are not claimed as Prototype passes.
-- [x] `[must]` Freeze its exact acceptance and source digests through Builder.
-  Preserve other experiments and user data; do not regenerate the Prototype.
-  Acceptance `acceptance:e2e:automation-01:equipment-inspections-frozen-ru:1:approve`,
-  WebUI digest `98f3e9605af2ea177831ce912ece7a7aee8754dcc2450df65acfe6ab8150048a`.
-- [x] `[must]` Recover pinned Prototype previews after room reopen. Review of
-  the lifecycle example exposed current Automation UI replacing revision `002`.
-  A render-only success without source parity is insufficient evidence.
-  Core/Yjs: 298 checks pass in 25.14s. `baselines/eed-after-recovery` verifies
-  exact widget/data-source parity, UI `002` and Prototype source fingerprint
-  on both layouts after API restart, despite different current DEV source.
-- [x] `[must]` Keep long free-form Automation briefs out of the bounded execution
-  intent field without discarding requirements. Initial `automation-01` stopped
-  before model submission because its full brief exceeded the 4000-character
-  scope contract. A bounded, explicitly partial projection references the full
-  brief by digest; the task specification keeps the complete original text.
-- [x] `[must]` Audit actual Codex inputs, not just output. The frozen run receives
-  all 4171 brief characters and the correct acceptance. Fix missing generic
-  create-form initialization guidance and ambiguous verification ownership;
-  clarify that canonical UI authority does not forbid owned implementation files.
-  Retained-input diagnostics expose these gaps without leaking credentials.
-  Client: 30 form tests pass, including state-initialized parent choices;
-  Core: binding and packet tests preserve the bounded capsule and full brief.
-- [x] `[must]` Requalify the next admitted correction with the updated input
-  contract. Current `automation-02` retains its original inputs; these fixes
-  must not be credited to that in-flight generation.
-  `automation-03/input-audit.json` confirms all six structural checks, the full
-  unchanged brief and exact accepted revision; manual semantic review remains
-  necessary. Core regression: 324 checks pass in 351.50s.
-- [x] `[must]` Expose feedback reference grammar and normalize only unambiguous
-  fully qualified SDK symbols. `automation-02` generated code in about 17.5
-  minutes but stopped before validation on bare `adaos.sdk.access.require`
-  feedback references. Preserve this failure. Add guarded continuation after
-  parser requalification, retaining the original feedback and rejecting blockers.
-- [x] `[must]` Exercise feedback continuation on the retained candidate.
-  `automation-03` restores the original source and feedback, then uses one
-  targeted model repair for local `data_routes.tool` names versus qualified
-  WebUI names. Worker package checks pass. Native activation still fails:
-  a subprocess persistence test requires authoring-only `ADAOS_REPO_ROOT`.
-- [x] `[must]` Clarify tool reference namespaces and authoring-versus-installed
-  environments in the bounded capsule. Remove `ADAOS_REPO_ROOT` from packaged
-  tests to match the native check. Capture every exact model prompt, including
-  automatic repair suffixes, and enforce feedback blockers on repair turns too.
-- [x] `[must]` Repair the generated persistence test through Builder without
-  changing the accepted UI or removing its persistence assertion. `automation-04`
-  changes only the test environment; native installation passes 19 tests in
-  9.20s. Exact Automation snapshot/widget/data-source parity passes wide/compact.
-  Independent functional acceptance below remains open.
-- [x] `[must]` Verify captured model attempts, not just task.md: receipt digest,
-  full brief and current correction, explicit verification ownership. Name the
-  immutable accepted design separately from the editable Automation candidate.
-  `automation-05/input-audit.json` passes four per-attempt and six base checks.
-- [x] `[must]` Expose read-action invalidation defaults in the generic binding
-  capsule. Live tracing in `automation-04/journey-03` through `journey-05` shows
-  successful writes and delayed reads, not lost records. Read-only callSkill
-  actions with omitted invalidates globally refresh all sources; explicit empty
-  tags suppress this fanout. Client: 200 action/data regressions pass.
-- [x] `[must]` Qualify Builder correction of read-triggered global refresh
-  (`automation-05`): seven read actions now use empty tags, writes retain their
-  targeted tags; browser trace has zero global invalidations. Preserve failed
-  journey evidence; observing late responses does not upgrade a failed verdict.
-- [x] `[must]` Independently exercise DEV-owner HTTP invariants. `automation-05/http-01.json`:
-  11 checks across 26 calls pass, including unauthenticated ingress denial,
-  duplicate retry, stale revision, parent mismatch/missing parent, dependency
-  deletion guard, atomic completion, completed parent/child locks and server
-  filters. These are actual deployed tools, not mocked unit assertions.
-- [x] `[must]` Qualify the ten-step browser lifecycle after live materialization
-  on both layouts. `automation-05/journey-02` passes 10/10 wide and 10/10 compact.
-  Earlier reload failures mixed cached pre-sync rendering with live-read timing;
-  retain them as source-readiness findings, not application data loss.
-- [x] `[must]` Extend that browser pass to injected write failure/draft retention,
-  filter/search controls and changing parent selection. `automation-05/journey-03`
-  passes 13/13 wide and 13/13 compact, with no browser exceptions. Parent-choice
-  and final screenshots inspected. No Prototype regeneration or Trial involved.
-- [x] `[should]` Profile remaining source-readiness and request latency without
-  raising interaction acceptance timeouts. Successful journey 02 records 83/82
-  tool calls, p95 about 3.17/2.87s; direct sequential HTTP calls take 0.42-0.79s.
-  Live readiness after open/reload takes about 6.6-12s. Avoid duplicate reads
-  during cached-to-live materialization while preserving real source changes.
-  Profiling now identifies the dominant read-tool cost in `sdk.access.require`:
-  successful read checks serialize the full access/audit JSON on every call.
-  Reuse the existing successful-read audit suppression policy (with diagnostic
-  counters), without caching grants or suppressing denials/writes. Isolated
-  profiles 02/03 reduce warm calls from 1.26-1.77s to 0.21-0.32s under cProfile;
-  after restart, compact journey 05/06 read p50 falls from 1309 to 698ms and
-  p95 from 2633 to 1245ms. Counts remain 105/107; source readiness is not improved.
-  Wide timings include concurrent verification traffic, not a clean benchmark.
-  Follow-up work targets causal duplicate-read reduction, not a larger timeout.
-  The retained compact trace segment has 40 identity-triggered requests, 49
-  invalidation-triggered requests and 83 cache hits. Eleven mutations share one
-  application-wide tag, refreshing unrelated collections as well as affected
-  records. This is generated binding granularity, not evidence that the generic
-  cache is absent. Optimization must preserve relationship/lock propagation;
-  qualify it on a separate candidate, not silently edit the protected baseline.
-- [x] `[should]` Measure narrower mutation invalidation on the independent C
-  candidate through Builder. `optimized-01` changes only runtime tags and scenario
-  regression checks; its worker commit changes two files, while Forge separately
-  updates manifest metadata. The UI excluding tags, semantic design and companion
-  implementation remain unchanged (`scope-check-02.json`). Both paired journeys
-  pass 8/8 on wide/compact and the final HTTP probe passes 11 checks. Total tool
-  calls fall 61 to 48 and 59 to 45 (21.3%/23.7%); reads fall 52 to 39 and 50 to 36.
-  Evidence: `equipment-automation-repeat-20260913-c/performance-before`,
-  `performance-after`, `optimized-01/read-comparison.json` and `http-after.json`.
-  This is one paired experiment: read latency is noisy (wide p95 increases), not
-  evidence of a general latency improvement. The protected original is untouched.
-  Carry only generic dependency/caption/choice/lock guidance into the bounded
-  binding capsule, never the application's entities or implementation. The updated
-  capsule remains below 12 KB; 33 contract/lifecycle/stand checks pass.
-- [ ] `[should]` Reduce cached-to-live source-readiness latency on a fixed
-  initial-open/reload probe. The read-cost and invalidation improvements above
-  do not yet establish an improvement to the 6.6-12s materialization wait.
-- [x] `[must]` Protect dirty record forms from background refresh without
-  silently advancing their edit revision. Latest server locks remain effective;
-  missing-record recovery and successful repeated saves have regression tests.
-  Client form suite: 37 passing. Two real browser editors plus a diagnostic
-  source retry retain the first draft and reject its stale write on both widths
-  (`automation-05/journey-04`). Corrected transport observation waits for builtin
-  retries to settle. Journey 06 passes 15/15 on both layouts, including a lost
-  response after a committed write and an idempotent retry. Conflict screenshots
-  reviewed; old failed receipts remain failed. This is controlled transport
-  fault injection, not a physical network disconnection. Final Core restart
-  requalification `journey-07` again passes 15/15 on both layouts; the protected
-  WebUI raw SHA-256 remains unchanged. Screenshots retain readable conflict
-  feedback and the first editor's draft.
-- [x] `[must]` Repeat Automation independently from the same accepted `002`,
-  without regenerating the design or overwriting the successful candidate.
-  `e2e/stand/fork-frozen-prototype.py` imports new TEST copies from retained
-  pre-Automation Git assets and exact accepted resources. Inheritance is checked
-  by reversible identity remapping and resource/locale digests. Run at least two
-  fresh sessions, audit actual inputs and independently assess their outputs.
-  Repeats B/C retain the same 4171-character brief and only identity-remapped
-  design. B completes with one automatic locale repair (1128s, 2.071M cumulative
-  tokens, 1.932M cached). C stops on a genuine missing DEV identity explanation
-  (139s execution, 364829 tokens), without editing the app. Their first-run
-  outcomes are not two successful Automations. B generic render/source parity
-  passes both widths, but real tool invocation exposes a runtime relative-import
-  defect before functional acceptance. A node restart during B also interrupted
-  one MCP call; keep that interference separate from clean latency evaluation.
-- [x] `[must]` Clarify personal DEV caller propagation in the public SDK and
-  bounded binding capsule, without weakening authorization. Resume C with the
-  unchanged approved design and full brief; retain its original blocked verdict.
-  Focused context/access/queue checks: 45 pass; broader regression: 422 pass.
-- [x] `[must]` Recover queue observation from transient Windows sharing errors
-  during atomic state replacement. Retry only the file read, not task submission;
-  corruption/permanent denial remain errors. Observation-only resume pins both
-  session and task. The B observer resumes without regenerating its candidate.
-- [x] `[must]` Qualify B/C after shared infrastructure corrections. B proves
-  package checks alone miss lazy relative imports in the actual executor.
-  The generic loader now creates isolated parent packages with real package
-  initialization and reloads owned siblings; 13 executor regressions pass.
-  Native/browser requalification uses the batched restart after active model
-  work finishes. Do not patch generated app code to hide an executor defect.
-  B requalification now passes 11 HTTP checks and 8/8 independent browser steps
-  on both widths (`equipment-automation-repeat-20260913-b/http-02.json` and
-  `journey-02`). This repeat probe does not cover the original candidate's
-  concurrent-editor/lost-response checks. C's clarified task completes package
-  checks (26 skill, 3 scenario) in 1055s with 1.368M cumulative tokens (1.260M
-  cached), then exposes absolute helper-import differences in activation and
-  Forge validation. Shared import isolation now covers regular and namespace
-  packages in all three gates. `recovered-03` completes the same C task through
-  guarded partial-checkpoint reconciliation without another model call.
-  C live `journey-01` passes 8/8 on both layouts and `http-01.json` passes 11
-  checks after the final Core restart. Import/recovery regression: 91 pass in
-  54.04s, plus 10 validated-result recovery checks. Historical failures remain
-  failed; no clean first-pass reliability rate is inferred from these repairs.
-  C `journey-02` also passes after the stand waits for modal dismissal before
-  screenshot capture. Wide/compact settled captures are nonblank; preserve the
-  earlier transition-frame image rather than mistaking it for persistent overlap.
-- [ ] `[should]` Resolve mobile modal theme/header inconsistency and surface
-  actionable server conflict/validation details, not only generic failure
-  feedback. B wide/compact parent screenshots confirm visible selected equipment,
-  but compact uses a light modal with a truncated Homepoint title. Keep these
-  presentation findings separate from the passing functional assertions.
-- [ ] `[should]` Reduce Automation correction context after matched evaluation.
-  The successful seven-binding repair retains a 35.8 KB prompt, including
-  13.4 KB Change projection and 7.5 KB approved brief. Six source reads,
-  297,228 cumulative input tokens (252,928 cached) and 2,253 output tokens show
-  a correct but expensive narrow repair. Preserve exact authority, full brief
-  availability and stable cached contracts; measure smaller repair projections
-  rather than truncating model output or hiding requirements.
-  First safe reduction: keep prior run status/error/evidence, but reference its
-  orchestrator topology/rate metrics instead of injecting those into app context.
-  Full immutable input evidence and the approved brief remain available.
-  Replacing metrics in the retained correction projection saves 984 UTF-8 bytes
-  (10454 to 9470); this comparison holds other projection rules constant.
-  A second discovered duplicate is the full brief appended to companion skill
-  metadata; new scaffolds now name their owning project and refer to the separate
-  brief. Existing generated candidates and admitted inputs remain unchanged.
-  Matched model cost improvement is not yet established.
-  The independent C tag correction uses one captured 32135-byte prompt with the
-  full unchanged 4171-character brief, current narrow instruction and accepted
-  `002`. It completes in about 243s of observed Automation wait with 400840 input
-  tokens (370432 cached) and 4522 output tokens. The model reads actual projection
-  dependencies and adds corresponding checks; only WebUI tags and scenario tests
-  change. This is useful scoped behavior, not a matched cost reduction versus the
-  earlier seven-binding repair. Full input audits and model attempts remain local.
-- [x] `[must]` Run the separate Automation-only declarative brief, inspect its
-  actual input and result, and preserve comparison of existing interactions.
-  Add equipment editing and a visible selected parent/dropdown for creation.
-- [x] `[must]` Independently exercise DEV-owner creation, editing, cancellation, parent
-  selection/reset, search/filtering, draft save, invalid/valid completion,
-  completed-record locks, restart persistence, revision conflicts and error
-  recovery. Keep direct server authorization evidence separate from DEV-owner
-  browser evidence. Stop at blockers, collect reachable findings, then repair
-  through Builder before another acceptance pass.
-  Browser paths and direct DEV-owner HTTP invariants now pass as detailed above.
-  `operations-before.json` and `operations-after-restart.json` compare the same
-  real equipment/inspection/item across API restart and native tested update
-  0.1.0 slot B to 0.1.1 slot A, with unchanged source and retained data. This is a
-  compatible patch update, not schema migration. HTTP 03 again passes 11 checks.
-  Final restart verification (`operations-final-restart-02.json`) again retains
-  exact records and application source. The preceding failed stand invocation
-  selected an HTTP fixture with a different marker; its comparison was rejected
-  and is not treated as record loss or silently rewritten as a pass.
-- [ ] `[must]` Qualify delegated reader/writer application behavior in an
-  installed delivery context when delivery experiments resume. This is blocked
-  by the explicit Trial/publication pause, not waived by successful DEV tests.
-  Both real reader/writer scoped credentials are rejected at the personal DEV
-  boundary and revoked afterwards. Actual delegated application use requires an
-  installed delivery context and remains blocked while Trial/publication is
-  paused; do not treat those 403s as successful reader/writer application tests.
+- [ ] `[must]` **Semantic Authority And Incremental Compilation**. Status: `partial`.
 
-### Remaining Small Automation Cohort
+Owner/dependencies: Core semantic compiler + Client mappings.
 
-- [ ] `[must]` Qualify the seven remaining archetypes through sequential Builder
-  Automation using retained Prototype `002` from the complete visible run
-  `context-archetypes-gpt5-low-20260912-22`. Keep Equipment's accepted candidate
-  unchanged. No Prototype regeneration, additional layout restrictions, Trial or
-  publication in this qualification. Use one existing DEV Builder and preview.
-- [x] `[must]` Declare application-specific Automation obligations separately
-  from Prototype fixtures in `e2e/builder/development/lifecycle/frozen-cohort.yaml`.
-  Keep these domain descriptions in evaluation inputs, outside Core/Client and
-  generic Builder context. Review actual admitted prompts and report missing
-  contracts rather than accepting simulated calculations or external effects.
-- [x] `[must]` Household Budget: exact currency-separated calculations, limits,
-  previous-month comparison, CRUD, invalid input, persistence and browser flow.
-  First attempt found an input-contract gap: the capsule named `read_policy`
-  but omitted its object shape, causing a scalar declaration and a worker repair.
-  The generic capsule now includes an ABI-validated tool route with nested causal
-  triggers/tags; application-specific HTTP/browser journeys stay in E2E fixtures.
-  `automation-cohort-20260913-household-budget-en`: task
-  `task.01M2DM0CRQZ0MJS5Q49HQVZ6HF` completed after one worker validation repair;
-  packaged checks (including fresh-process SQLite reads) passed. Independent
-  `http-01.json` and `errors-02.json` pass 20 + 11 real DEV-owner/anonymous ingress
-  checks. `journey-05` passes 42 steps on each wide/compact viewport, including
-  create, edit, reload, failed-draft retention, cancel, delete and limits.
-  Earlier browser stand failures remain recorded: choice renderer and the final
-  candidate's separate Cancel widget differed from the stand's assumptions.
-  Submission/wait took 15.6 minutes; provider totals are 97,078 fresh input,
-  1,250,048 cached input and 23,720 output tokens (not a single prompt size).
-  DEV qualification does not claim installed delegation or migration coverage.
-- [ ] `[should]` Improve generic action semantics and small-screen scanability:
-  an unconfigured `ui.actions` Cancel currently renders as a tab, and dense
-  multi-column lists/tables need deliberate wrapping and compact presentation.
-  Treat these observed UX findings separately from functional Automation gates;
-  do not regenerate the accepted prototypes or silently add stricter layout rules.
-- [x] `[must]` Service Appointments: real availability, interval conflicts,
-  rescheduling/cancellation, parent choices, persistence and browser flow.
-  `automation-cohort-20260913-service-appointments-ru`: task
-  `task.01M2DNHEKZ3GMWGDJHEBY8PXVX` completed after one worker repair of an
-  overbroad generated test (the year appeared in a skill identifier, not fixture
-  data). Package checks pass 20 skill and 4 scenario tests, including persistence
-  in a fresh process. Independent `http-01.json` passes 28 steps, including
-  concurrent overlapping bookings with exactly one winner. `journey-01` passes
-  60 steps per wide/compact viewport: directory creation, booking, failed-draft
-  retention, move, cancellation, reload and booking from a real free interval.
-  `review-02` confirms widget identity/type/area/source parity; the preceding
-  stand failure incorrectly compared global DOM order across layout areas.
-  Submission/wait took 20.3 minutes; provider totals are 116,189 fresh input,
-  1,330,560 cached input and 33,114 output tokens. This is DEV functional
-  qualification, not installed delegation or unconditional visual approval.
-- [x] `[should]` Recheck the compact Service editor screenshot with animation
-  disabled: background text shows through the modal in `journey-01`. Distinguish
-  a transition capture from a shared Client surface defect before changing code.
-  `journey-02` repeats all 60 steps per viewport and captures an opaque compact
-  editor with animations disabled. This was a transition capture, not a Client
-  surface defect; no Client change was required.
-- [x] `[must]` Inventory/Procurement: atomic stock movements, computed deficit,
-  quote comparison, request/line relationships and submit without fake approval.
-  `automation-cohort-20260913-inventory-procurement-ru`: first task
-  `task.01M2DPZFW3J0XK7BPQ6VV76YMA` passes 11 skill and 5 scenario package tests
-  without worker repair. `http-01.json` passes 40 independent steps, including
-  concurrent overspend, replay, mixed-currency rejection and submitted locks.
-  `journey-04` passes all 72 steps on each wide/compact viewport. `journey-01`
-  exposed a shared Client caption loader restricted to Prototype resource queries;
-  the generic loader now accepts owned-skill reads as well. Earlier attempts also
-  exposed intermittent startup delays; functional passage does not close the
-  separate runtime-latency investigation below. First implementation took 14.5
-  minutes; provider totals are 63,673 fresh input, 853,888 cached input and 24,017
-  output tokens. Trial and installed authorization remain outside this verdict.
-- [ ] `[must]` Local runtime latency: profile startup/read fan-out and post-save
-  refresh under real browser journeys. Inventory `journey-02/03` and Roster
-  `journey-03` encountered slow calls despite successful persistence. Preserve
-  request-start, HTTP timing and runtime diagnostics; do not mask the delay by
-  raising assertion or tool timeouts. One successful repetition is not a latency
-  qualification. Separate browser queueing, ingress, tool loading and execution.
-  Roster `api-profile-01.json` records 90 seconds at 50 Hz: about 98 aggregate
-  thread-seconds waiting for the module-load lock and 25 resolving existing
-  `sys.path` entries beneath it (not CPU seconds). Promotion now normalizes
-  existing entries lexically in one pass, resolving only requested paths. All
-  15 runtime-loader regressions pass, including isolation and reload. Live API
-  verification remains open: the environment rejected its restart, so process
-  9432 was not changed. Do not attribute later old-process timings to this fix.
-  Media `visual-02` repeats a compact startup/filter timeout after the full
-  functional journey passed: initial reads fan out twice and filtered rows do not
-  arrive within the stand's five-second check. This remains a reliability blocker,
-  not a missing record or an excuse to extend the assertion budget.
-- [x] `[must]` Volunteer Roster: availability, overlap/capacity guards,
-  cancellation/reassignment and derived staffing counts.
-  The first admission (`automation-01`) stopped before any model call:
-  `resource.assignment_operation` depended on a compiler-only resource alias
-  absent from persisted acceptance snapshots. The evaluator now also checks
-  executable relationship policies, matching the same command target and
-  editable reference field; it does not infer resource identity from names.
-  The unchanged Prototype `002` is admitted in `automation-02`; task
-  `task.01M2DR64GPKMHD24HJHZXZG8SN` passes 15 skill and 4 scenario package tests
-  after one worker repair of a BOM-prefixed JSON file. Independent `http-01.json`
-  passes 31 checks, including failed reassignment retention, cancellation/history
-  and capacity concurrency. `journey-04` passes 48 steps per wide/compact viewport,
-  including create/edit, readable choices, failed-draft retention, reassignment,
-  reload and cancellation. Initial stand option-selection assumptions and later
-  refresh latency are retained separately. Realization took 15.5 minutes;
-  provider totals are 79,779 fresh input, 984,960 cached input and 24,363 output.
-  This is DEV functional qualification, not broad UX approval: long UTC captions
-  in a native compact select and dense tables remain presentation debt.
-  Regression tests cover compiler and persisted
-  projections plus rejection when the editable relationship field is absent.
-- [x] `[must]` Operations Queue: saved board transitions including drag, details,
-  assignment, filters and computed overdue state.
-  `automation-01` failed before any model call while Git indexed a long Windows
-  source path. The worker now sets `core.longpaths=true` only in its isolated
-  repository; a deep-path regression passes. Retry `automation-02` retains the
-  same accepted Prototype and full original brief, verified in its admitted input.
-  That retry stopped on a valid missing public contract: board move documentation
-  omitted displayed record fields/revision. The Client already spreads these at
-  event top level. Catalog and bounded Automation capsule now document
-  `$event.revision`, awaited command rejection and rollback; 11 Client board tests
-  pass with explicit drag/menu revision assertions. `automation-03` acknowledges
-  this supplied contract; 34 skill and five scenario tests pass after one worker
-  repair of route/test declarations. Independent `http-01.json` passes 23 steps;
-  `journey-04` passes 35 applicable steps per viewport (plus one explicitly
-  inapplicable drag/menu alternative). Actual HTTP rejection of an injected stale
-  revision rolls the board back. Assignment, done/overdue, reload and cancel pass.
-  Earlier browser attempts exposed stand gesture, route-order and command-ID
-  errors, not application defects. Implementation `automation-03` took 9.6 minutes,
-  70,356 fresh input, 921,984 cached input and 14,140 output tokens; earlier blocked
-  attempts remain separate evidence. No Prototype or renderer rewrite was used.
-- [x] `[must]` Knowledge Library: persistent content, search/filter,
-  publish/archive/read-only enforcement and editor failure recovery.
-  First implementation passes 24 skill/four scenario tests and all 27 independent
-  HTTP steps. `journey-01` exposes an actual Client inconsistency: item.details
-  only dispatched its first named action, so read/selection/open-modal never
-  completed. Named-command sequencing now has 24 focused Client tests;
-  `journey-04` qualifies all 46 steps on each viewport without changing the
-  application: full-text round-trip, failed draft retention, publish/archive,
-  read-only enforcement, reload, cancel and archive discovery. Intermediate
-  attempts also corrected stand handling of Ionic disabled controls and the
-  authored active-only filter caption. First model attempt took 10.7 minutes, 55,357 fresh
-  input, 1,053,184 cached input and 16,085 output tokens.
-- [ ] `[must]` Media Review: real media URLs, revision-bound comments/status,
-  new-revision isolation and truthful unavailable media handling.
-  `automation-01` correctly stops at an unspecified external notification
-  obligation introduced by the retained Prototype's Automation handoff, absent
-  from the original case request. Targeted discovery exposes no callable delivery
-  contract or recipient/channel definition. Preserve this failed first attempt
-  (33,883 fresh input, 414,720 cached input, 3,072 output tokens). A separately
-  scoped local-only iteration must not count as full acceptance or simulate
-  notification delivery; recipient/channel clarification remains open.
-  The local-only `automation-02` now passes 40 skill/five scenario tests after
-  one worker repair of an INSERT placeholder mismatch. Both numbered prompts
-  retain the complete brief and explicit partial scope; all four archived output
-  byte counts/digests match. Independent `http-01.json` passes 30 steps;
-  `journey-01` passes 74 steps per viewport, covering image/video playback,
-  unavailable URLs, comment resolution, rejected approval, new editions,
-  preserved history, reload and arbitrary-project filtering. `visual-01` then
-  checks eight read-only steps per viewport on the same saved records: media
-  is scrolled into view and its bounds verified before capture. Earlier compact
-  screenshots captured the catalog above a working but off-screen player;
-  DOM visibility alone was insufficient visual evidence. No application rewrite
-  was needed. `visual-03` passes four read-only steps per viewport with a visible
-  localized unavailable-media message; the preceding `visual-02` latency failure
-  remains open above. Final shared Core/SDK/stand regression selection passes
-  83 tests; Client details has 24 passing tests and its boundary/inventory checks
-  remain clean. Local realization took 14.1 minutes, 82,044 fresh input, 941,824
-  cached input and 21,887 output tokens, separate from the blocked first attempt.
-- [ ] `[should]` Review Automation presentation separately from functional gates:
-  truncated command labels, action-label/field-label localization key reuse,
-  raw boolean/actor projections, and navigation from long mobile collections to
-  their details. Use generic authoring guidance and renderer contracts, not
-  archetype-specific Core branches. Negative HTTP fixtures intentionally retain
-  unavailable links in TEST applications; do not mistake them for successful
-  visual media fixtures or delete records through unsupported private operations.
-- [ ] `[must]` Preserve requirement provenance across Prototype/Automation:
-  distinguish user obligations, explicitly approved additions, model suggestions
-  and unresolved external dependencies. A generic approval of the visible UI must
-  not silently turn speculative integration suggestions into user requirements.
-  Admission must expose that distinction; independently test partial progress
-  without silently weakening the full case verdict.
-- [ ] `[should]` Qualify discovery relevance and drill-down completeness with
-  actual Automation queries. Media's `ContentRef https media source` search
-  returned publication/research functions, while `ContentRef` alone returned no
-  matches. Architecture drill-down exposed metadata rather than a callable
-  notification contract. Distinguish unsupported contract, absent indexed data
-  and low-relevance matches; do not solve this with media-specific query rewrites
-  or more unconditional prompt payload.
-- [ ] `[must]` Retain each first-run result separately from corrected candidates;
-  inspect reachable behavior to the blocker before submitting one combined repair.
-  Report package checks, independent DEV-owner HTTP/browser acceptance, latency
-  and token usage separately. Delegated installed-delivery authorization remains
-  outside the explicitly paused delivery scope.
-  All seven independent HTTP/browser attempts and their corrections are retained
-  under `automation-cohort-20260913-*`. Historical Budget/Service worker outputs
-  overwritten before attempt archival was introduced cannot be reconstructed;
-  this cohort is development evidence, not a pristine first-attempt baseline.
-- [x] `[must]` Preserve each preceding model journal, final message and validation
-  report before a worker repair replaces its live output paths. Pair archived
-  bytes/digests with the numbered admitted prompt; retain latest live paths for
-  recovery compatibility. This prevents successful repairs from erasing evidence
-  of the original failure. Historical overwritten responses cannot be recovered
-  by this change; qualify the archive on the next actual worker repair.
-- [x] `[must]` Verify retained model-attempt archives on an actual worker repair,
-  beyond the passing unit tests. Roster task `task.01M2DR64GPKMHD24HJHZXZG8SN`
-  retains `output/model-attempts/001` with the original journal, final message,
-  stderr and failed validation; all four byte counts/SHA-256 receipts match.
-  The second admitted prompt and live output describe the separate BOM repair.
-  Automation input now explicitly requires UTF-8 without BOM; strict parsing is
-  retained rather than making the validator silently accept malformed artifacts.
+Implementation boundary: Semantic-v2 multi-resource generation, typed links, structural state proof, source maps and lookup-only resources exist. This is not a total contract for the admitted component set or proof of one-way semantic authority on all managed edits.
 
-## Could And Deferred Work
+Exit/remaining work: Complete the supported semantic ABI and requirement-to-runtime mapping; qualify empty-state reachability, granularity, typed gaps, reference/display capacity and incremental preservation. Retain atomic full-artifact promotion; no lossy fallback or forced collection screen for lookup-only data.
 
-- [ ] `[deferred]` Large-prototype decomposition, shared entity/navigation/locale
-  contracts, dependency invalidation, resumable work units and atomic assembly.
-  After the small lifecycle passes, compare at least three sizes, including beyond
-  single-unit capacity, and test one failed unit plus a shared-entity change.
+### BIP-12
 
-- [ ] `[could]` Learn capability ranking from accepted traces after a
-  deterministic baseline and anti-leakage evaluation exist.
-- [ ] `[could]` Add speculative parallel design candidates when measured task
-  value exceeds added inference cost.
-- [ ] `[could]` Add reusable domain packs to a governed registry with explicit
-  installation, trust, attribution, versioning, and removal.
-- [ ] `[deferred]` Autonomous generation of new Client renderer code during
-  Prototype work.
-- [ ] `[deferred]` General multi-agent orchestration. Admit it only for a task
-  class where matched evaluation beats one orchestrated agent on quality and
-  total cost.
-- [ ] `[deferred]` General reverse engineering of product intent from arbitrary
-  legacy code or screenshots.
-- [ ] `[deferred]` Unbounded autonomous visual iteration or automatic Prototype
-  acceptance.
-- [ ] `[deferred]` Multi-user concurrent semantic editing and conflict-free UI
-  document collaboration.
+- [ ] `[must]` **Deterministic Semantic Edits**. Status: `partial`.
+
+Owner/dependencies: SDK semantic UI + Core compiler.
+
+Implementation boundary: Bounded semantic operations and deterministic review transforms exist, alongside legacy renderer edits.
+
+Exit/remaining work: Qualify rename/move/visibility/options through ordinary requests with zero model calls, semantic refs, unchanged unrelated behavior and the declared D0 latency target. Do not equate a literal WebUI patch with semantic cutover.
+
+### BIP-13
+
+- [ ] `[must]` **Scoped Repairs And Preservation**. Status: `partial`.
+
+Owner/dependencies: Core semantic repair + Builder execution.
+
+Implementation boundary: Binding/reference/state repairs, additive visibility, view-only repair, exact invariants and immutable-candidate checks are implemented. Latest local semantic tests pass; full-candidate fallback and complete independent-diagnostic coverage are not eliminated.
+
+Exit/remaining work: Aggregate all independent findings before selecting scope; qualify fixture/value/binding repair, exact replay and unchanged accepted semantics on fresh repeated runs. Compare authoritative slices with full-context/full-regeneration controls before reducing payloads.
+
+### BIP-14
+
+- [ ] `[must]` **Context Routes And Budgets**. Status: `partial`.
+
+Owner/dependencies: Core execution + provider adapter.
+
+Implementation boundary: Semantic requests use typed output and stable/dynamic context separation; selected repairs are scoped. Effective implicit Root profiles, all-route budget enforcement and matched correction-context savings remain unqualified.
+
+Exit/remaining work: Use stage-specific authoritative slices and retrievable refs, byte-stable selected bundles, explicit fresh/cached/output/time/attempt budgets and deterministic stop/fallback. Promote efficient/full/visual routes only by matched evaluation; measure schema-cache tradeoffs and the 60% cache target where supported.
+
+### BIP-15
+
+- [ ] `[must]` **Provider Completion And Resume**. Status: `partial`.
+
+Owner/dependencies: Root adapter + E2E + Builder recovery.
+
+Implementation boundary: Partial-output/grader-usage regressions, numbered prompts and worker attempt archives exist. Older late/failed jobs have incomplete totals; durable-operation-first recovery is not qualified across every interruption path.
+
+Exit/remaining work: Reconcile late completion and accounting idempotently; retain complete and partial raw outputs, missing usage and separate reasoning. Resume exact durable operations without duplicate submission or rewriting old failed verdicts. Verify failed grader usage reaches aggregate reports.
+
+### BIP-16
+
+- [ ] `[must]` **Executable Client Contracts**. Status: `partial`.
+
+Owner/dependencies: Client runtime + Core compiler/acceptance.
+
+Implementation boundary: Forms, live related options, ID/display separation, layouts and media surfaces have real probes. item.details named-command sequencing is fixed, but PageActionService can still return success after cancelled non-form confirmations.
+
+Exit/remaining work: Qualify one action success/cancel/failure contract across used widgets, hydration races, failed drafts and create/update/delete. Verify fresh relationship creation/rename/reopen and actual generated wide/compact artifacts; outcomes derive from record effects, not CRUD verb names.
+
+### BIP-17
+
+- [ ] `[must]` **Repeated Small-Prototype Reliability**. Status: `partial`.
+
+Owner/dependencies: Evaluation + Builder.
+
+Implementation boundary: The visible cohort has complete passing runs and selected repeated/capability probes, but profiles, changes and browser coverage differ. Their union or best candidates is not a matched reliability baseline.
+
+Exit/remaining work: Freeze one candidate/profile and predeclare repetitions, failure budgets and task coverage. Repeat all eight visible archetypes with full actual inputs/outputs and browser probes, distinguishing first-pass, repair, platform and grader failures; keep held-out claims in BIP-04.
+
+### BIP-18
+
+- [ ] `[must]` **Locale Contract Qualification**. Status: `partial`.
+
+Owner/dependencies: Core compiler + Client + Builder.
+
+Implementation boundary: Current-locale generation and scenario-owned dictionaries are implemented. Qualified EN and RU examples do not alone establish the explicit bilingual-change/preservation route.
+
+Exit/remaining work: Verify EN-only, RU-only and explicit bilingual requests plus preservation of existing translations, fallback/interpolation/key parity and viewport changes. Builder's own EN/RU UI requirement remains separate from generated application locale selection.
+
+### BIP-19
+
+- [ ] `[must]` **Presentation And Local Runtime Integration**. Status: `partial`.
+
+Owner/dependencies: Client component roadmap + Core runtime.
+
+Implementation boundary: Wide/compact journeys pass in bounded cases; clipped commands, raw values, label-key reuse, compact detail navigation and some theme/readiness findings remain. BIP-25's storage evidence is narrower than end-to-end latency.
+
+Exit/remaining work: Resolve owner-specific rendering defects and measure compact task completion/readability, not merely page width. Preserve exact preview identity and declared text policies. Optional UX richness stays non-blocking; no archetype-specific widgets or new layout restrictions on accepted prototypes.
+
+### BIP-20
+
+- [ ] `[should]` **UX Guidance And Feedback Corpus**. Status: `partial`.
+
+Owner/dependencies: Builder guidance + evaluation.
+
+Implementation boundary: Generic editor/query/layout guidance exists; no measured, versioned golden-rule promotion process is established.
+
+Exit/remaining work: Curate applicable, explained recommendations with alternatives from sanitized failures and accepted fixes. Evaluate paired simple/richer designs and human feedback across domains. Keep recommendations separate from explicit requirements and platform safety gates.
+
+### BIP-21
+
+- [ ] `[must]` **Bounded Browser Review And Feedback**. Status: `partial`.
+
+Owner/dependencies: Evaluation + Builder review/Dev Tickets.
+
+Implementation boundary: DOM/screenshot/task probes exist, including actual media visibility. An integrated DOM/accessibility/screenshot review with bounded owning-layer feedback is not qualified.
+
+Exit/remaining work: Attach exact source/renderer identity, run deterministic/browser checks first and permit at most two targeted review repairs. Convert unresolved platform findings to owning-layer tickets. The optional model reviewer is BIP-34, not an excuse to defer deterministic review.
+
+### BIP-22
+
+- [ ] `[must]` **Preview Topology And Deletion**. Status: `partial`.
+
+Owner/dependencies: Core topology + Client commands.
+
+Implementation boundary: Registered W -> W-dev -> optional W-dev-dev pairing and bounded cleanup were implemented; the historical webspace-per-case runner prose is superseded.
+
+Exit/remaining work: Qualify idempotent deletion admission/completion, absence after reconnect/prewarm and transparent explicit preview recreation. Keep one preview per selected Builder; no new case/session hosts and no private cleanup bypass.
+
+### BIP-23
+
+- [ ] `[should]` **Source Checkpoints And Artifact Retention**. Status: `partial`.
+
+Owner/dependencies: Developer SDK + Root source persistence.
+
+Implementation boundary: Checkpoint validation and actual Automation source receipts exist. Invalid-source quarantine, sparse checkout hydration, attachment GC and durable scenario-checkpoint fault qualification are not all closed.
+
+Exit/remaining work: Qualify version/task-bound durable acknowledgements and recovery without double version bumps; preserve exact source/task identity through transport failures. Add non-promotable diagnostic checkpoints, safe hydration and owner/revision-bound attachment reclamation. Preserve the must-level durable-checkpoint gate in builder-sdk-boundary.md.
+
+### BIP-24
+
+- [ ] `[should]` **Declared SDK Read Policies**. Status: `partial`.
+
+Owner/dependencies: Builder SDK data routes + Client invalidation.
+
+Implementation boundary: Declared frequency/invalidation policies still have warnings in retained promotion evidence.
+
+Exit/remaining work: Execute declared request limits and causal invalidation tags exactly; test no-op/read/write behavior and turn proven policy conformance into a promotion gate. Link duplicate reads to BIP-03.
+
+### BIP-25
+
+- [x] `[should]` **Bounded Prototype Storage**. Status: `verified`.
+
+Owner/dependencies: Core resource service.
+
+Implementation boundary: Keyed lookup and append-oriented relational traces replace enumeration/whole-journal writes, retaining legacy data. Resource regressions and retained local qualification cover this storage mechanism.
+
+Exit/remaining work: This closes the bounded storage mechanism only. HTTP/browser fan-out and runtime import-lock latency remain BIP-03; no inference from in-process timings to end-to-end performance.
+
+### BIP-26
+
+- [ ] `[must]` **Automation Admission And Recovery**. Status: `partial`.
+
+Owner/dependencies: Core Automation + SDK/MCP + worker.
+
+Implementation boundary: Frozen Equipment and the remaining cohort exercise explicit briefs, owned source, no fixture seeding, binding contracts and partial recovery. First attempts/repairs are now archived.
+
+Exit/remaining work: Complete stage-specific acceptance, fixture/installed authority, source presentation and exact recovery identity across all routes. Validate real declared capabilities and scope before implementation; preserve accepted prototypes. Trial obligation closure and delegated authority remain BIP-28.
+
+### BIP-27
+
+- [ ] `[must]` **Frozen Automation Cohort**. Status: `partial`.
+
+Owner/dependencies: Builder + independent acceptance.
+
+Implementation boundary: All seven retained local HTTP/browser workflows have passing evidence; six qualify the agreed DEV-local scope. Media passes locally but external notification remains unresolved, and intermittent runtime stalls remain.
+
+Exit/remaining work: Resolve Media's requirement provenance/recipient/channel scope through BIP-10, not a fabricated notification. Repeat unchanged applications after BIP-03/BIP-16; distinguish local partial success from full acceptance. Do not regenerate accepted Prototype 002 or manually patch application source.
+
+### BIP-28
+
+- [ ] `[must]` **Installed Lifecycle And Delivery**. Status: `blocked`.
+
+Owner/dependencies: Builder lifecycle + delivery + delegated authorization.
+
+Implementation boundary: Local Trial/promotion mechanisms and historical Equipment/Builder receipts exist. The user paused Trial/publication; personal DEV rejecting delegated credentials does not qualify installed reader/writer behavior.
+
+Exit/remaining work: After explicit resumption, qualify isolated Trial against its release lock, source publication, consumer install/update, retained records, real reader/writer use, human EN/RU compact/wide review and live projection identity. Cover node-status/recovery failures. This is blocked non-deferred work, not waived or silently deferred.
+
+### BIP-29
+
+- [ ] `[must]` **Cutover And Applications Product Proof**. Status: `blocked`.
+
+Owner/dependencies: Builder + Core; depends on BIP-04, BIP-07 through BIP-18 and BIP-21.
+
+Implementation boundary: Semantic generation is used, but the execution adapter remains legacy and no new uncontaminated Applications full-lifecycle proof is established.
+
+Exit/remaining work: Shadow-compare matched routes, retain per-project rollback/immutable accepted revisions, then remove generic calls to legacy text/recipe compilation. Recreate Applications from scenario_default using ordinary requirements, with domain grading only after generation. Human acceptance and delivery additionally depend on BIP-28; archive compatibility only after its rollback window.
+
+### BIP-30
+
+- [x] `[must]` **Exclusive State Operands**. Status: `verified`.
+
+Owner/dependencies: Core semantic provider contract.
+
+Implementation boundary: Provider/canonical state operand alternatives and tagged-field compilation are implemented and covered by contract tests plus typed-generation evidence.
+
+Exit/remaining work: Reopen on a concrete provider/canonical mismatch; broader state meaning, diagnostic aggregation and repairs remain BIP-11/BIP-13.
+
+### BIP-31
+
+- [x] `[must]` **Required Reference Inventory**. Status: `verified`.
+
+Owner/dependencies: Core Prototype context + compiler.
+
+Implementation boundary: Model context supplies exact requirement refs and object-aware operations, with provider constraints and omission/unrelated-binding regressions.
+
+Exit/remaining work: This does not establish residual intent understanding or eliminate every first-call invariant gap (BIP-10/BIP-13).
+
+### BIP-33
+
+- [ ] `[could]` **Catalog Cursor Paging**. Status: `conditional`.
+
+Owner/dependencies: Builder catalog + Client.
+
+Implementation boundary: The current bounded catalog works; no qualifying threshold breach is established.
+
+Exit/remaining work: Implement cursor paging only after the 5,000-match/response-size condition is measured; preserve global search/filter semantics. A false trigger leaves an explicit conditional task, not a completion.
+
+### BIP-34
+
+- [ ] `[could]` **Optional Visual Model Reviewer**. Status: `conditional`.
+
+Owner/dependencies: Builder review + evaluation.
+
+Implementation boundary: Deterministic browser evidence is available; autonomous visual repair remains distinct.
+
+Exit/remaining work: After BIP-21, evaluate an opt-in screenshot model with at most two targeted iterations, exact evidence and ticket routing. Automatic acceptance and unbounded visual loops remain deferred.
+
+### BIP-35
+
+- [ ] `[could]` **Confirmed Feedback Memory**. Status: `conditional`.
+
+Owner/dependencies: Project memory + Builder context.
+
+Implementation boundary: No qualified preference-learning path is established by this audit.
+
+Exit/remaining work: Add inspectable provenance, confirmation, supersession/forgetting, user/subnet isolation and stage-specific retrieval with token accounting. Cross-application reuse requires approval; keep holdouts inaccessible.
+
+### BIP-36
+
+- [ ] `[could]` **Alternative Design Candidates**. Status: `conditional`.
+
+Owner/dependencies: Builder evaluation.
+
+Implementation boundary: No matched benefit/cost case is established.
+
+Exit/remaining work: Compare two alternatives only for high-value ambiguity under an explicit budget. Sequential candidates can be evaluated first; parallel execution must wait for the separately deferred queue/topology design. Do not make large orchestration an implicit prerequisite.
+
+### BIP-37
+
+- [ ] `[could]` **Learned Capability Ranking**. Status: `conditional`.
+
+Owner/dependencies: Capability retrieval + evaluation.
+
+Implementation boundary: Deterministic retrieval quality must first be established in BIP-09.
+
+Exit/remaining work: Learn only from attributable accepted traces and compare with deterministic fallback under equal budgets and anti-leakage controls. Parent roadmap context ranking remains a separate broader contract.
+
+### BIP-38
+
+- [ ] `[could]` **Governed Domain Packs**. Status: `conditional`.
+
+Owner/dependencies: Domain pack registry.
+
+Implementation boundary: Explicit Applications/Research compatibility packs exist, not a governed reusable distribution registry.
+
+Exit/remaining work: Add explicit install/trust/attribution/version/removal contracts without implicit subject activation. Generic and held-out modes remain pack-free.
+
+### BIP-D01
+
+- [ ] `[deferred]` **Large Prototype Orchestration**. Status: `deferred`.
+
+Owner/dependencies: Core planning.
+
+Implementation boundary: Adaptive DAGs, shared contracts, work-unit recovery and scale evaluation remain outside the small lifecycle correction.
+
+Exit/remaining work: Revisit only after the small lifecycle gate; no new deferral is introduced by this audit.
+
+### BIP-D02
+
+- [ ] `[deferred]` **Dedicated Test Workbench**. Status: `deferred`.
+
+Owner/dependencies: Builder evaluation UI.
+
+Implementation boundary: The dedicated adaos_tests/latest-run desktop remains deferred.
+
+Exit/remaining work: Keep existing TEST-labelled projects and previews; future projection requires ENV_TYPE=dev, owned cleanup, exact evidence and truthful beta labels.
+
+### BIP-D03
+
+- [ ] `[deferred]` **Queues And Preview Leasing**. Status: `deferred`.
+
+Owner/dependencies: Execution + topology.
+
+Implementation boundary: Concurrent Builder work and preview leasing remain deferred.
+
+Exit/remaining work: Sequential work reuses one owned preview; applications/revisions isolate evidence, not extra webspaces.
+
+### BIP-D04
+
+- [ ] `[deferred]` **Generated Client Renderer Code**. Status: `deferred`.
+
+Owner/dependencies: Client.
+
+Implementation boundary: Autonomous renderer-code generation during Prototype remains deferred.
+
+Exit/remaining work: Use admitted component contracts and report genuine capability gaps.
+
+### BIP-D05
+
+- [ ] `[deferred]` **General Multi-Agent Orchestration**. Status: `deferred`.
+
+Owner/dependencies: Execution.
+
+Implementation boundary: General multi-agent orchestration remains deferred.
+
+Exit/remaining work: Require matched quality and total-cost benefit over one orchestrated agent.
+
+### BIP-D06
+
+- [ ] `[deferred]` **Legacy Intent Reverse Engineering**. Status: `deferred`.
+
+Owner/dependencies: Builder interpretation.
+
+Implementation boundary: General intent extraction from arbitrary legacy code/screenshots remains deferred.
+
+Exit/remaining work: Do not reinterpret this as blocking current bounded prototype review.
+
+### BIP-D07
+
+- [ ] `[deferred]` **Unbounded Visual Iteration**. Status: `deferred`.
+
+Owner/dependencies: Builder review.
+
+Implementation boundary: Unbounded autonomous visual iteration and automatic acceptance remain deferred.
+
+Exit/remaining work: Human approval is not replaced by the bounded reviewer.
+
+### BIP-D08
+
+- [ ] `[deferred]` **Concurrent Semantic Editing**. Status: `deferred`.
+
+Owner/dependencies: Collaboration.
+
+Implementation boundary: Multi-user concurrent semantic editing remains deferred.
+
+Exit/remaining work: Keep immutable revisions and explicit single-user authority.

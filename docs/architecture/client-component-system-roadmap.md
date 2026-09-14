@@ -13,6 +13,14 @@ repeatable way to grow the Client component set. It owns Client work only.
 Builder intent interpretation, capability selection, compilation, and
 evaluation remain in their Builder architecture and roadmap.
 
+The Builder-side dependency and current qualification scope are tracked once in
+[BIP-08](builder-intent-to-prototype-roadmap.md#bip-08) and
+[BIP-16](builder-intent-to-prototype-roadmap.md#bip-16). This page owns the
+Client tasks; a passing Builder cohort does not automatically close C0-C3.
+Dated Builder measurements are consolidated in the
+[engineering journal](builder-engineering-journal.md), not copied into another
+acceptance checklist.
+
 ## Decision
 
 A bounded Client integrity pass is required before recording a clean generic
@@ -52,7 +60,7 @@ Small-prototype qualification, 2026-09-12:
   tests pass. This bounded audit does not establish full baseline qualification.
 
 Builder owns the semantic adapters and generation experiments in its
-[capability qualification checklist](builder-intent-to-prototype-roadmap.md#small-prototype-capability-qualification-2026-09-12).
+[executable-contract qualification](builder-intent-to-prototype-roadmap.md#bip-16).
 
 The current Client is a useful compatibility runtime, but not yet a clean
 generic baseline:
