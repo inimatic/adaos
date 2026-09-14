@@ -63,7 +63,11 @@ The parent roadmap and SDK migration retain their distinct obligations.
 5. Resume installed delivery only after an explicit decision: BIP-28.
 6. Evaluate conditional could work against measured benefit.
 
-Frozen small DEV Automation is authorized; Trial/publication are paused.
+The user accepted DEV Builder design 071 on 2026-09-14 and authorized its
+Automation and a complete isolated TEST application journey through the new
+Builder. This supersedes the earlier Trial/publication pause for that test
+journey only; it does not authorize replacing operational Workspace Builder
+before parity qualification or publishing unrelated applications.
 Do not regenerate accepted prototypes or manually repair generated application
 code. Use the existing DEV Builder and its single owned preview. Do not feed
 rubrics, held-out cases or finished domain solutions into generation. Preserve
@@ -142,14 +146,26 @@ Implementation boundary: Conversation and governed status projections exist; a w
 - [ ] `[must]` Verify every development setting has an effective acknowledged
   binding. The old form displayed profile/provider/voice while its submit
   command forwarded only model; visual field parity is insufficient.
-- [ ] `[must]` Obtain human acceptance of the wide/compact design and its
+- [x] `[must]` Obtain human acceptance of the wide/compact design and its
   interaction semantics. Automated interaction checks do not grant this.
+  User acceptance of design 071 is explicit in the 2026-09-14 conversation.
 - [ ] `[must]` Bind accepted surfaces to governed state/commands, durable
   conversations and continuations. Verify state-dependent evidence, freshness,
   exact revision identity and scoped screenshot/element feedback end to end.
 - [ ] `[should]` Review Client command/status density, conditional-widget gaps,
   compact view switching and full locale coverage against the accepted design;
   evolve generic ABI/components together without Builder-specific renderer logic.
+- [ ] `[must]` Qualify separate Prototype and Codex model settings: persisted
+  application selection, admitted immutable execution profile, effective CLI
+  model and usage receipts must agree. Root and Subscriptions preserve per-model
+  fresh/cached/output usage and distinguish quota units from monetary cost.
+- [ ] `[must]` Qualify OpenSpec-aligned application specification and Change
+  deltas with version/digest preconditions, explicit acceptance and preserved
+  historical inputs. Do not introduce an independently mutable second tracker.
+- [ ] `[must]` Exercise the accepted live Builder on one isolated TEST
+  application from conversational creation through Prototype, Automation,
+  independent verification and local delivery; record actual limits separately
+  from successful steps. Keep the single paired preview topology.
 - [ ] `[deferred]` Expand read-only artifact inspection into a full file IDE,
   binary/diff editors, bulk asset transformations and collaborative editing.
   This is a BIP-02 sub-scope, not another independent top-level package.

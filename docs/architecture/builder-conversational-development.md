@@ -976,6 +976,33 @@ action. Missing/obsolete storage uses the declared default; no draft, input
 packet, credentials, workflow state or entity selection is stored by this
 mechanism. Profiles do not imply user roles or access permissions.
 
+### Specification And Change Artifacts
+
+Builder follows the proven separation used by OpenSpec: a proposal describes
+the purpose/scope, specification deltas describe changed observable behavior,
+optional technical design records decisions, and execution tasks describe the
+work. The current application specification and a pending Change's delta are
+different artifacts, not an accumulated transcript. Public README remains user
+documentation rather than the authoritative behavior contract.
+
+The application specification has stable requirement IDs, scenarios, revision
+and digest. A Change identifies the exact base and explicit added, modified or
+removed requirements. Accepted deltas advance that base only after stage-scoped
+verification and an authorized decision. A Prototype acceptance alone never
+claims Automation behavior is implemented. Conflicting/stale bases require
+review; retry/duplicate acceptance must not apply the delta twice. Historical
+Run input snapshots and earlier accepted bases are immutable.
+
+Canonical requirements retain the existing Issue identity and execution tasks
+retain journal identity; Markdown is a readable projection/export, not another
+independently mutable requirements database. Small corrections need no mandatory
+four-document ceremony. Basic presents purpose and scope; Detailed exposes the
+delta, decisions, tasks and evidence. Unsupported or unimplemented bindings are
+reported as such rather than simulated success.
+
+References: [OpenSpec concepts](https://github.com/Fission-AI/OpenSpec/blob/main/docs/overview.md)
+and [artifact schema](https://openspec.dev/docs/schemas/spec-driven).
+
 ### Message-To-Result Traceability
 
 **Scope / Состав изменения** presents the requested outcome and independently
