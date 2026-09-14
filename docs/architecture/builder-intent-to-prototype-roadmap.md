@@ -101,6 +101,20 @@ review/start/delivery forms are reused. Capability parity is checked across page
 and modal surfaces, not by restoring the obsolete layout. This is partial live
 integration, not closure of the remaining interaction/continuation obligations.
 
+- [x] `[must]` Exercise retained TEST/non-test picker filters and native template
+  creation in the browser; preserve the acknowledged Project/primary selection
+  instead of clearing canonical state after the creation response arrives.
+- [x] `[must]` Save/reopen distinct Prototype and Codex model preferences through
+  the browser at the primary execution identity. Actual worker execution and
+  usage accounting remain under the separate full-stage qualification gate.
+- [x] `[must]` Align native empty-canvas generation with the semantic E2E route;
+  retain explicit legacy compatibility. Protect scoped EN/RU requests from being
+  misclassified as creation. The native TEST run produced revision 001, not an
+  accepted Prototype: locale/required-field defects were identified in review.
+- [ ] `[must]` Qualify asynchronous state refresh and failed-job recovery through
+  the live screen without manual reload. Chat invalidation has generic unit
+  coverage; the prior run needed rematerialization to update its header.
+
 - [x] `[must]` Retain a capability-based migration contract against Workspace
   Builder, including the operational picker and creation flow. Keep file editing
   deliberately read-only except README; do not claim old unrestricted editing

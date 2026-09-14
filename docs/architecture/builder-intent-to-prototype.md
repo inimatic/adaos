@@ -528,6 +528,21 @@ WebUI-authoritative behind the compatibility adapter. AdaOS does not maintain
 implicit bidirectional synchronization or infer a semantic document from
 arbitrary legacy WebUI; migration requires an explicit reviewed conversion.
 
+Native chat and the evaluation adapter must use the same generation contract
+for the same source authority. A new `scenario_default` empty canvas enters the
+semantic-v2 path without an E2E-only flag. An authored legacy WebUI retains its
+compatibility path; explicit compatibility overrides remain observable. A
+follow-up includes the current semantic source, its revision and digest checked
+against the compiled WebUI. Missing, mismatched or oversized input blocks the
+request; the model must not reconstruct unseen prior work from a title. This
+bounded full-document context is not the deferred large-project orchestrator.
+
+The admitted Brief locale takes precedence over a node's environment default.
+Provider schema, context and output dictionaries must agree on that selection;
+existing translations are preserved. Soft line wraps must not discard the
+beginning of a requirement or detach its negation from the predicate. Original
+source text remains retained independently of normalized requirements.
+
 Existing `adaos.builder.semantic_ui_change.v1` remains the bounded edit
 contract. It should target semantic refs first and compile the affected slice,
 rather than forcing the model to author RFC 6902 paths.

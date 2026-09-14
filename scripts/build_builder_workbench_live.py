@@ -187,8 +187,10 @@ def build():
          design.modal_action("click:context", "design-context")],
         visible="$state.workbenchView === 'brief' && $state.viewProfile === 'detailed'"))
     checks = table("design-checks", "Проверки", "Checks", "$state.workbench.checks", [
+        design.field("stage", "Этап", "Stage"),
         design.field("name", "Проверка", "Check"), design.field("result", "Результат", "Result"),
         design.field("scope", "Редакция", "Revision")], view="checks")
+    checks["dataSource"] = source("get_review")
     checks["actions"] = [design.update("select", selectedTrace="$event"), design.modal_action("select", "design-trace")]
     widgets.append(checks)
     runs = table("design-trace-tasks", "Запуски", "Runs", "$state.workbench.runs", [
@@ -238,6 +240,7 @@ def build():
         chat.update(id=f"design-conversation-{position}-task", area=area,
                     visibleIf=visible + " && $state.conversationMode === 'task'")
         chat["inputs"].pop("hint", None)
+        chat["inputs"]["invalidateOnMessages"] = TAGS
         widgets.append(chat)
         informal = {"id": f"design-conversation-{position}-informal", "type": "ui.chat", "area": area,
                     "visibleIf": visible + " && $state.conversationMode === 'informal'",
@@ -264,8 +267,8 @@ def build():
     picker["dataSource"]["params"]["limit"] = 500
     for action in picker["actions"]:
         if action["type"] == "updateState":
-            action["params"].update({"applicationTitle": "$event.title", "workbenchView": "result", "current": {},
-                "workbench": {}, "commands": {}, "selectedTrace": {}, "selectedFilePath": None})
+            action["params"].update({"applicationTitle": "$event.title", "workbenchView": "result",
+                "selectedTrace": {}, "selectedFilePath": None})
     for item in modals["new-project"]["schema"]["widgets"]:
         if item["id"] == "new-project-form":
             item["inputs"]["fields"].insert(1, design.label(
@@ -274,9 +277,8 @@ def build():
             if action.get("target") == "builder_sdk_control_skill.create_project":
                 action["params"]["title"] = "$event.values.title"
             if action["type"] == "updateState" and action["on"] == "submit":
-                action["params"].update({"workbenchView": "result", "current": {}, "workbench": {}, "commands": {},
+                action["params"].update({"workbenchView": "result",
                     "applicationTitle": "$event.values.title", "selectedProjectTitle": "$event.values.title",
-                    "builderConversationId": None, "builderTopicId": None, "builderThreadId": None,
                     "selectedTrace": {}})
     modals["design-trace"] = design.modal("design-trace", "Трассировка", "Trace", [design.details(
         "design-trace-record", "Запись", "Record", "$state.selectedTrace", [

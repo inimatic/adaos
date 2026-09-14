@@ -130,3 +130,19 @@ def test_output_locales_default_to_current_language_and_preserve_explicit_transl
     assert prototype.output_locales("Make it bilingual EN/RU", locale="en") == ("en", "ru")
     assert prototype.output_locales("На русском и английском", locale="ru") == ("en", "ru")
     assert prototype.output_locales("Show a queue", locale="ru", existing=["en"]) == ("en", "ru")
+
+
+def test_output_locale_agrees_with_admitted_brief_over_node_default() -> None:
+    statement = "Интерфейс на русском. Покажи очередь заявок."
+    brief = intent.compile_brief(statement)
+    assert prototype.model_context(brief)["constraints"]["locale"] == "ru"
+    assert prototype.output_locales(statement, locale="en", brief=brief) == ("ru",)
+    assert prototype.output_locales(statement, locale="en", existing=["en"], brief=brief) == ("en", "ru")
+
+
+def test_wrapped_sentence_does_not_lose_cancel_constraint_or_action_context() -> None:
+    statement = "При отмене редактирования список не\nменяется. По клику на строке покажи\nподробности выбранной записи."
+    context = prototype.model_context(intent.compile_brief(statement))
+    serialized = json.dumps(context, ensure_ascii=False)
+    assert "При отмене редактирования список не" in serialized
+    assert "По клику на строке покажи" in serialized

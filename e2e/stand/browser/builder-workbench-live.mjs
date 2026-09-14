@@ -14,6 +14,7 @@ const browser = await chromium.launch({ headless: true })
 await fs.mkdir(output, { recursive: true })
 try {
   for (const [profile, viewport] of [['wide', { width: 1440, height: 1000 }], ['compact', { width: 390, height: 844 }]]) {
+    if (exerciseId && profile !== 'wide') continue
     const context = await browser.newContext({ viewport, locale: 'ru-RU', colorScheme: 'dark' })
     await context.addInitScript(({ hub, token }) => {
       window.__ADAOS_DEBUG__ = true
@@ -50,7 +51,12 @@ try {
       const geometry = await page.evaluate(() => ({ viewport: innerWidth, width: document.documentElement.scrollWidth,
         widgets: [...document.querySelectorAll('[data-webui-widget-id]')].filter(el => el.getBoundingClientRect().width)
           .map(el => ({ id: el.getAttribute('data-webui-widget-id'), x: el.getBoundingClientRect().x, width: el.getBoundingClientRect().width })) }))
-      report.captures.push({ profile, name, body, geometry })
+      const stateDiagnostic = await page.evaluate(() => [...document.querySelectorAll('ada-details-widget')].map(el => {
+        const instance = window.ng?.getComponent(el)
+        return { id: instance?.widget?.id, state: instance?.state?.getSnapshot?.(),
+          inputs: instance?.widget?.inputs, dataSource: instance?.widget?.dataSource }
+      }))
+      report.captures.push({ profile, name, body, geometry, stateDiagnostic })
       console.log(JSON.stringify({ profile, name, width: geometry.width }))
       if (geometry.width > geometry.viewport + 1) throw new Error(`Document overflow: ${name}`)
       if (/runtime is out of sync|source reconnects|Data source failed|Unknown skill tool/i.test(body)) throw new Error(`Data source failure: ${name}`)
@@ -62,9 +68,10 @@ try {
       await modal.waitFor({ state: 'hidden' })
     }
     try {
+      const initialResponse = page.waitForResponse(response => response.request().postData()?.includes(':get_workbench') && response.status() === 200, { timeout: 60000 })
       await page.goto('http://127.0.0.1:8100/?intent=webspace.open&zone=lo&subnet_id=sn_6acf0c01&webspace_id=desktop-dev&space_kind=development&expected_scenario_id=builder&try_local_hub=1', { waitUntil: 'domcontentloaded', timeout: 60000 })
       await widget('design-current-work').waitFor({ timeout: 60000 })
-      await page.getByText(/\d+ \| builder[_-]/).first().waitFor({ timeout: 30000 })
+      if ((await (await initialResponse).json()).ok !== true) throw new Error('Initial workbench read failed')
       report.captures.push({ profile, name: 'chat-source-diagnostic', value: await page.evaluate(() => {
         const container = document.querySelector('[data-webui-widget-id="design-conversation-side-task"]')
         for (const el of [container, ...container.querySelectorAll('*')]) {
@@ -91,6 +98,21 @@ try {
         if (exerciseId && profile === 'wide') {
           const { exerciseCreation } = await import('./builder-workbench-exercise.mjs')
           await exerciseCreation({ page, widget, command, capture, closeModal, report, id: exerciseId })
+          if (process.env.ADAOS_E2E_OPEN_PREVIEW === '1') {
+            const opened = page.waitForEvent('popup', { timeout: 60000 })
+            const previewResponse = page.waitForResponse(response => response.request().postData()?.includes(':open_preview') && response.status() === 200,
+              { timeout: 60000 })
+            await command('open').click()
+            const receipt = await (await previewResponse).json()
+            if (!receipt.ok || receipt.result?.ok === false) throw new Error('Preview command failed')
+            const previewPage = await opened
+            await previewPage.waitForLoadState('domcontentloaded')
+            report.preview = { url: previewPage.url(), response: receipt }
+            await fs.writeFile(path.join(output, 'preview.json'), JSON.stringify(report.preview, null, 2) + '\n', 'utf8')
+            await previewPage.close()
+            report.checks.push({ profile, check: 'preview_opened_through_builder', passed: true })
+          }
+          continue
         }
         await command('settings').click()
         await widget('node-overview').waitFor()

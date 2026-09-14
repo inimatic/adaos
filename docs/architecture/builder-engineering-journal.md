@@ -597,3 +597,35 @@ intake and independent Automation review remain open. The mutation stand may
 create only an explicitly named `workbench_test_*` application and records the
 exact creation response. Core/Client commits remain local during qualification;
 unrelated Yjs/page-data work is excluded.
+
+## 2026-09-14: Native Chat Qualification After Picker Reuse
+
+Browser tests exercised the retained TEST/non-test filters, scenario-default
+creation and separate model save/reopen at the primary component. A late form
+state reset erased an already received project projection; the reset was removed.
+DEV Builder 0.2.133 was checkpointed locally, without publishing Workspace.
+
+The first native request was misrouted: "create the current application's
+prototype" entered legacy project creation. A bounded existing-target guard and
+EN/RU regressions now retain that target. The next request exposed an E2E/native
+route mismatch: native chat still emitted renderer patches with a 5,000-token
+budget, whereas the qualified adapter used semantic v2. The native empty-canvas
+and semantic-source routes now use the semantic contract; authored legacy WebUI
+is not implicitly converted. Input text fell from 42,888 to 25,567 UTF-8 bytes
+(provider schema excluded from these message-byte measurements).
+
+TEST `workbench_test_20260914_b` produced revision 001 through chat. Wide/compact
+rendering passed, but this was not acceptance: the output language contradicted
+the admitted RU Brief, title validation was absent, and the header remained
+stale after the background result. The initial interaction probe stopped at lost
+focus after dismissing the detail editor. The locale policy now uses the Brief,
+wrapped requirements no longer lose unfinished lines, and follow-up input must
+include the digest-matched current semantic source. Generic chat invalidation
+and focus-preserving pending detail commands were added; 46 Client unit tests
+pass. The combined scenario/SDK/Brief suite has 160 passing tests.
+
+The next explicit review request is being qualified against revision 001.
+No new Prototype acceptance, Automation success, Trial, release or replacement
+of Workspace Builder is claimed. Mutation observers retain terminal failures
+and never automatically resend paid requests. Cohort browser probes are reused
+through a provenance adapter for actual UI creation/preview receipts.

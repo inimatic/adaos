@@ -79,9 +79,10 @@ def model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[st
     return compile_prototype_model_context(brief, compact=compact)
 
 
-def output_locales(instruction: str, *, locale: str, existing: list[str] = ()) -> tuple[str, ...]:
+def output_locales(instruction: str, *, locale: str, existing: list[str] = (),
+                   brief: Mapping[str, Any] | None = None) -> tuple[str, ...]:
     from adaos.services.builder.prototype_context import prototype_output_locales
-    return prototype_output_locales(instruction, locale=locale, existing=existing)
+    return prototype_output_locales(instruction, locale=locale, existing=existing, brief=brief)
 
 
 def merge_briefs(*briefs: Mapping[str, Any]) -> dict[str, Any]:

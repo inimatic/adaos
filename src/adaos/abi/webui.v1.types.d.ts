@@ -542,6 +542,7 @@ export interface WebUiLayout {
 }
 
 export interface WebUiChatInputs {
+  invalidateOnMessages?: string[]
   multiline?: boolean
   composerRows?: number
   composerAutoGrow?: boolean

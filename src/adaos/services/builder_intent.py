@@ -244,7 +244,9 @@ def _knowledge(
 
 def _clauses(statement: str) -> list[tuple[str, int, int]]:
     result: list[tuple[str, int, int]] = []
-    for match in re.finditer(r"[^.!?;\n]+(?:[.!?;]|$)", statement):
+    # A wrapped sentence is still one source clause. Excluding newlines here
+    # silently discarded every unfinished line before its continuation.
+    for match in re.finditer(r"[^.!?;]+(?:[.!?;]|$)", statement):
         raw = match.group(0)
         leading = len(raw) - len(raw.lstrip(" \t\r\n,;:-"))
         value = raw.strip(" \t\r\n,;:-.!?")

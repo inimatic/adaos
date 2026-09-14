@@ -1958,6 +1958,10 @@
         "placeholder": { "type": "string" },
         "hint": { "type": "string" },
         "sendCommand": { "type": "string", "minLength": 1 },
+        "invalidateOnMessages": {
+          "type": "array", "items": { "type": "string", "minLength": 1 },
+          "description": "Invalidate only these data-source tags after new messages or progress phase/status changes. Initial history, older pages and token-only progress updates do not invalidate reads."
+        },
         "openCommand": { "type": "string", "minLength": 1 }
       }
     },

@@ -42,6 +42,14 @@ after the clean baseline from the observed cross-domain gap taxonomy.
 
 ## Current Audit
 
+- [x] `[must]` Add opt-in, tag-addressed chat read invalidation for new messages
+  and lifecycle transitions, excluding initial/older history and token deltas.
+  Keep the implementation generic; ABI and 21 chat unit tests cover the contract.
+- [ ] `[must]` Qualify focus restoration after asynchronous detail commands on
+  wide/compact surfaces. Pending command guards must not blur the opener before
+  an overlay captures it. The local component fix passes unit tests; browser
+  rerun remains necessary.
+
 Small-prototype qualification, 2026-09-12:
 
 - [x] `[must]` Add a generic responsive query toolbar with page-scoped state,

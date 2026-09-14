@@ -437,6 +437,16 @@ dispatching mutations. `inputs.refresh=true` exposes a localized icon command
 that refreshes only this table's data source. Metadata mutations must invalidate
 both detail and affected catalog sources.
 
+### Chat-Driven Read Freshness
+
+`ui.chat.inputs.invalidateOnMessages` optionally names data-source invalidation
+tags. A new message or a progress phase/status transition refreshes only these
+reads. Initial history, older pagination and token-only progress updates do not
+refresh them. A source replacement resets the observer. No domain identifier,
+background polling loop or mutation retry belongs in this renderer mechanism.
+This supplements explicit action invalidations; durable domain invalidation
+outside a visible conversation remains a separate runtime concern.
+
 ### Form matrix
 
 This is a distinct semantic type for field-centric grid layouts where the table

@@ -194,9 +194,11 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
     return context
 
 
-def prototype_output_locales(instruction: str, *, locale: str, existing: list[str] = ()) -> tuple[str, ...]:
+def prototype_output_locales(instruction: str, *, locale: str, existing: list[str] = (),
+                            brief: Mapping[str, Any] | None = None) -> tuple[str, ...]:
     """Choose authoring languages without making a translation request implicit."""
-    language = locale.lower().replace("_", "-").split("-")[0]
+    admitted = _known_value((brief or {}).get("constraints", {}).get("locale"))
+    language = str(admitted or locale).lower().replace("_", "-").split("-")[0]
     if language not in {"en", "ru"}:
         language = "en"
     text = instruction.casefold()
