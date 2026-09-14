@@ -116,6 +116,10 @@ Implementation boundary: Conversation and governed status projections exist; a w
   deferred work and unprocessed messages; no invented tasks or completion score.
   The qualified specimen covers Prototype 003 only; it is not live cross-stage
   coverage or acceptance authority.
+- [x] `[should]` Qualify Basic/Detailed presentation in one design schema:
+  default Basic, remembered browser choice, optional individual detail views,
+  unchanged critical status/decisions and retained revision/selection/drafts.
+  Keep this interaction qualification separate from live workflow replacement.
 - [ ] `[must]` Bind Scope, Process, Conversation and Review to existing canonical
   Issue/task/Run/evidence/decision refs, not a second requirements tracker.
   Preserve verbatim source versions and exact admitted input snapshots; qualify

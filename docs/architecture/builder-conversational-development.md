@@ -946,6 +946,36 @@ or private reference files into public documentation without a reviewed reason.
 Rendering treats authored Markdown as untrusted content, not executable HTML
 or instructions; file/link navigation retains the existing safety boundary.
 
+### Presentation Depth
+
+Builder has one Workbench schema with **Basic / Основной** and
+**Detailed / Подробный** presentation profiles. Basic is the default. Profiles
+select meaningful groups of controls and level of detail, not different
+workflow implementations or independently maintained layouts.
+
+Basic keeps application/revision identity, current work and next command,
+Conversation, Result and a concise scope summary. Technical sections remain
+available through a section menu and contextual inspection. Detailed exposes
+their direct navigation and the full requirement/source/evidence projection.
+Opening one detailed section does not require changing the profile; an already
+focused section remains open when the profile changes. Both read the same
+canonical records and use the same action contracts.
+
+Blockers, failures, stale/unknown status, result limitations and consequences of
+decisions are never hidden by the profile. Switching does not change the
+Application, Change, Preview revision, selected record, conversation mode,
+unsent draft, workflow state or acceptance authority. Form and conversation
+state must survive a presentation change; it is not a page/session restart.
+
+The browser remembers only the selected presentation profile, scoped to the
+subnet and Builder page/widget identity, not the developed application's ID or
+revision. This is an explicit static-menu preference in the generic Client
+`rememberSelection` contract. Restore validates the saved scalar against the
+declared options and updates local presentation state without dispatching an
+action. Missing/obsolete storage uses the declared default; no draft, input
+packet, credentials, workflow state or entity selection is stored by this
+mechanism. Profiles do not imply user roles or access permissions.
+
 ### Message-To-Result Traceability
 
 **Scope / Состав изменения** presents the requested outcome and independently

@@ -213,3 +213,30 @@ def test_trace_widgets_reuse_native_chat_actions_without_changing_preview():
     assert set(links["actions"][0]["params"]) == {"traceRecord", "traceContextVisible"}
     assert "'003'" in widgets["design-scope-requirements"]["visibleIf"]
     assert any(w["id"] == "design-review-coverage" for w in app["modals"]["design-accept"]["schema"]["widgets"])
+
+
+def test_view_profiles_change_only_local_presentation_and_share_result_state():
+    page = design.build_document()["ui"]["application"]["desktop"]["pageSchema"]
+    widgets = {w["id"]: w for w in page["widgets"]}
+    assert page["initialState"]["viewProfile"] == "basic"
+    header = widgets["design-workbench-header"]
+    preference = next(b for b in header["inputs"]["buttons"] if b["id"] == "view-profile")
+    assert preference["rememberSelection"] is True
+    assert {b["id"] for b in preference["options"]} == {"basic", "detailed"}
+    switch = next(a for a in header["actions"] if a["on"] == "select:view-profile")
+    assert switch == design.update("select:view-profile", viewProfile="$event.id")
+    assert len([w for w in page["widgets"] if w["id"] == "design-assets"]) == 1
+    assert {r["id"] for r in widgets["design-scope-summary"]["dataSource"]["value"]} == {
+        r["id"] for r in widgets["design-scope-requirements"]["dataSource"]["value"]}
+    for id in ["design-current-work", "design-primary-actions", "design-checks", "design-conversation-full-task", "design-conversation-full-informal"]:
+        assert "viewProfile" not in widgets[id].get("visibleIf", "")
+
+
+def test_basic_view_can_inspect_individual_sections_without_switching_profile():
+    page = design.build_document()["ui"]["application"]["desktop"]["pageSchema"]
+    header = next(w for w in page["widgets"] if w["id"] == "design-workbench-header")
+    inspect = next(a for a in header["actions"] if a["on"] == "select:inspect-section")
+    assert inspect == design.update("select:inspect-section", workbenchView="$event.id")
+    tabs = next(w for w in page["widgets"] if w["id"] == "design-workbench-views")
+    process = next(b for b in tabs["inputs"]["buttons"] if b["id"] == "process")
+    assert "$state.workbenchView === 'process'" in process["visibleIf"]

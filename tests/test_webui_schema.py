@@ -12,6 +12,22 @@ def _load_schema() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize("patch,valid", [
+    ({}, True),
+    ({"rememberSelection": "yes"}, False),
+    ({"selectedStateKey": "draft.mode"}, False),
+    ({"selectedStateKey": "__proto__"}, False),
+    ({"options": []}, False),
+    ({"optionsDataSource": {"kind": "static", "value": []}}, False),
+])
+def test_remembered_menu_selection_contract(patch, valid):
+    schema = _load_schema()
+    validator = Draft202012Validator({"$ref": "#/$defs/actionButton", "$defs": schema["$defs"]})
+    button = {"id": "view", "rememberSelection": True, "selectedStateKey": "view",
+              "options": [{"id": "basic"}, {"id": "detailed"}], **patch}
+    assert validator.is_valid(button) is valid
+
+
 def test_i18n_text_spec_accepts_bounded_inline_translations() -> None:
     schema = _load_schema()["$defs"]["i18nTextSpec"]
 

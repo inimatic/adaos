@@ -223,7 +223,7 @@
       "events": ["click", "click:<buttonId>", "select:<buttonId>"],
       "interactions": { "menu": "adaptiveToolbar buttons with options use a viewport-bounded overlay. Selection emits select:<buttonId> with the option as $event (id/value/menu_id), not $event.option. displaySelectedLabel=false keeps a short authored trigger label; optionMetaPaths chooses secondary option fields. Selection does not execute another command implicitly." },
       "responsive": { "desktop": "bounded command group", "compact": "wraps without overlapping" },
-      "postconditions": ["Every declared button has an executable or explicitly disabled action contract."]
+      "postconditions": ["Every declared button has an executable or explicitly disabled action contract.", "A static menu may opt into rememberSelection=true with a top-level selectedStateKey for presentation preferences. The browser remembers only a declared scalar option, isolated by subnet/page/widget/button. Restoring never dispatches actions; unknown saved values are ignored. Do not persist workflow authority, entity selection, drafts or secrets this way."]
     },
     {
       "id": "ui.queryToolbar",

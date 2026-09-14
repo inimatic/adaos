@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCENARIO = ROOT / ".adaos/dev/sn_6acf0c01/scenarios/builder"
 OUTPUT = ROOT / "e2e/artifacts/builder/workbench-design-20260914"
 LOCALES: dict[str, dict[str, str]] = {"ru": {}, "en": {}}
-REVISION = "070"
+REVISION = "071"
 PREVIEW_URL = "http://127.0.0.1:8100/?intent=webspace.open&zone=lo&subnet_id=sn_6acf0c01&webspace_id=desktop-dev&space_kind=development&expected_scenario_id=builder&try_local_hub=1"
 REQUEST = (
     "Design a new DEV Builder prototype for human review, based on the target "
@@ -30,10 +30,11 @@ REQUEST = (
     "review, partial results, failure, recovery, context inspection and history. "
     "Do not implement Automation, create Trials, publish, or invoke an LLM from "
     "the design specimen. Do not accept the new design on behalf of the user. "
-    "Revision 070: trace immutable user messages through versioned requirements, "
-    "execution tasks, attempts, partial and corrected results, checks and review. "
-    "Preserve context-only, deferred, unprocessed and informal messages without "
-    "inventing tasks; model bidirectional inspection without live execution. "
+    "Revision 071: add Basic and Detailed presentation profiles to one shared "
+    "interface. Default to Basic; remember only this preference in the browser. "
+    "Keep failures, limitations and decisions visible in both profiles. Never "
+    "retarget a revision, selection, conversation or draft when switching views. "
+    "Allow individual detailed sections to be inspected without switching profile. "
     "Retain compact process menu; visible revision identity; task actors "
     "and milestones; separate reference inputs from generated file trees; batch "
     "clarification with retained drafts; explicit local Alpha, Beta and Stable "
@@ -404,6 +405,7 @@ def build_document():
     add_delivery_views(page, modals)
     add_review_surfaces(page, modals)
     add_trace_views(page, modals)
+    add_view_profiles(page)
     resources = {f"builder.design.i18n.{locale}": {"kind": "data", "role": "i18n", "locale": locale, "path": f"assets/i18n/design-{REVISION}-{locale}.json", "mime": "application/json", "delivery": "core"} for locale in LOCALES}
     resources["builder.design.reference"] = {"kind": "image", "scope": "scenario", "path": f"assets/design-{REVISION}-reference.png", "mime": "image/png", "delivery": "core"}
     return {"schema": "adaos.webui.v1", "generated_by": "human-authored-builder-design",
@@ -769,6 +771,47 @@ def add_trace_views(page, modals):
     coverage = table("design-review-coverage", trace["scope_rows"], [field("title", "Пункт", "Item", overflow="wrap"), field("admission", "Граница приемки", "Acceptance scope", overflow="wrap"), field("result", "Подтверждение", "Evidence", overflow="wrap")],
                      title=("Покрытие задания · прототип 003", "Scope coverage · prototype 003"))
     modals["design-accept"]["schema"]["widgets"].insert(-1, coverage)
+
+
+def add_view_profiles(page):
+    page["initialState"]["viewProfile"] = "basic"
+    widgets = {w["id"]: w for w in page["widgets"]}
+    detailed = "$state.viewProfile === 'detailed'"
+    basic = "$state.viewProfile !== 'detailed'"
+    secondary = {"checks", "process", "inputs", "files", "readme", "development-feedback"}
+    tabs = widgets["design-workbench-views"]["inputs"]["buttons"]
+    secondary_options = []
+    for tab in tabs:
+        if tab["id"] in secondary:
+            secondary_options.append({k: tab[k] for k in ("id", "label", "label_i18n", "icon")})
+            tab["visibleIf"] = detailed + f" || $state.workbenchView === '{tab['id']}'"
+    secondary_options.append(label("Поставки", "Deliveries", id="deliveries", icon="cube-outline"))
+    header = widgets["design-workbench-header"]
+    header["inputs"]["buttons"].extend([
+        button("inspect-section", "Разделы", "Sections", "list-outline", options=secondary_options,
+               displaySelectedLabel=False, visibleIf=basic),
+        button("view-profile", "Вид", "View", "options-outline", selectedStateKey="viewProfile", rememberSelection=True,
+               title="Представление Builder", options=[label("Основной", "Basic", id="basic"), label("Подробный", "Detailed", id="detailed")]),
+    ])
+    header["actions"].extend([update("select:inspect-section", workbenchView="$event.id"), update("select:view-profile", viewProfile="$event.id")])
+    for button_spec in header["inputs"]["buttons"]:
+        if button_spec["id"] == "deliveries":
+            button_spec["visibleIf"] = detailed + " || $state.workbenchView === 'deliveries'"
+
+    groups = {"scope_diagnostics": ["design-scope-requirements", "design-scope-sources"]}
+    page["meta"]["builder"]["presentation_groups"] = groups
+    for ids in groups.values():
+        for id in ids:
+            widgets[id]["visibleIf"] = "(" + widgets[id]["visibleIf"] + ") && " + detailed
+    context = widgets["design-context-command"]
+    context["visibleIf"] = "(" + context["visibleIf"] + ") && (" + detailed + " || $state.workbenchView === 'process')"
+    rows = [{"id": row["id"], "title": row["title"].split(" · ", 1)[-1], "status": row["status"]}
+            for row in widgets["design-scope-requirements"]["dataSource"]["value"]]
+    summary = {"id": "design-scope-summary", "type": "ui.list", "area": "main",
+               "visibleIf": basic + " && $state.workbenchView === 'brief' && $state.previewRevision === '003'",
+               "dataSource": source(rows), "inputs": {"titleKey": "title", "subtitleKey": "status", "search": False},
+               "actions": copy.deepcopy(widgets["design-scope-requirements"]["actions"])}
+    page["widgets"].insert(page["widgets"].index(widgets["design-task-brief"]) + 1, summary)
 
 
 def audit_safety(value):

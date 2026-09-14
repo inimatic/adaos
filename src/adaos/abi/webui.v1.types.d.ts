@@ -421,6 +421,10 @@ export interface WebUiActionButton {
   stateKey?: string
   /** Keep the menu trigger's authored label/icon when false. Defaults to true. */
   displaySelectedLabel?: boolean
+  selectedStateKey?: string
+  options?: readonly Record<string, unknown>[]
+  /** Remember a static-menu presentation choice; restore does not dispatch actions. */
+  rememberSelection?: boolean
   optionMetaPaths?: readonly string[]
   selected?: boolean
   connected?: boolean
@@ -434,7 +438,7 @@ export interface WebUiListItemButton extends WebUiActionButton {}
 
 export interface WebUiActionsInputs {
   buttons?: readonly WebUiActionButton[]
-  variant?: 'tabs' | 'segmented' | 'toolbar' | 'stack' | 'header'
+  variant?: 'tabs' | 'segmented' | 'toolbar' | 'stack' | 'header' | 'adaptiveToolbar'
   size?: 'small' | 'default' | 'medium'
   [key: string]: unknown
 }

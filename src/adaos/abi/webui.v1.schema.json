@@ -1863,6 +1863,11 @@
           "minLength": 1,
           "description": "Page-state key containing the selected option value for a menu-style action."
         },
+        "rememberSelection": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt-in browser preference for a static menu and a top-level selectedStateKey. Scoped by subnet/page/widget/button; restores only a declared scalar option without dispatching actions. Presentation preferences only, never workflow authority, drafts or entity selection."
+        },
         "optionMetaPaths": {
           "type": "array", "items": { "type": "string" },
           "description": "Ordered option fields displayed as secondary menu text."
@@ -1899,7 +1904,18 @@
         "state": { "type": "string" },
         "whenKey": { "$ref": "#/$defs/fieldPath" },
         "whenEquals": {}
-      }
+      },
+      "allOf": [{
+        "if": { "required": ["rememberSelection"], "properties": { "rememberSelection": { "const": true } } },
+        "then": {
+          "required": ["selectedStateKey", "options"],
+          "not": { "required": ["optionsDataSource"] },
+          "properties": {
+            "selectedStateKey": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+            "options": { "minItems": 1 }
+          }
+        }
+      }]
     },
 
     "actionButtonList": {

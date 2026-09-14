@@ -351,6 +351,13 @@ machine-checked impact set.
 - [x] `[should]` Resolve declared `resource:<id>` images/posters in the generic
   media preview through the page resource registry; preserve missing/loading/
   error states and existing media safety checks. No Builder-specific resolver.
+- [x] `[should]` Support opt-in `rememberSelection` for a static command menu's
+  top-level `selectedStateKey`, using existing subnet-scoped browser storage
+  plus page/widget/button identity. Restore only declared scalar choices without
+  action dispatch; exclude dynamic menus, unsafe state paths and all undeclared
+  state. Failed actions or navigation to another scope must not save a choice.
+  Core schema, types, capability catalog and Client tests evolve together; this
+  preference is presentation-only, never workflow authority or draft storage.
 - [ ] `[should]` Qualify dense Workbench composition without product-specific
   CSS: long primary-command labels, compact view navigation, hidden-widget gaps
   and two-column tables. Review the table's fixed 520px minimum as a declared

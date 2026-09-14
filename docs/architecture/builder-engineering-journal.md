@@ -433,3 +433,44 @@ The packaged UI contains revision 070, its 23 trace records and all three
 referenced resources. Client commit `c652ccc` is pinned with matching gitlink
 and `.sha`. No Git push, Workspace replacement, new Webspace, LLM call or API
 restart was performed.
+
+## 2026-09-14: Basic And Detailed Workbench Presentation
+
+DEV Builder design 071 adds Basic (default) and Detailed profiles in one schema,
+with shared workflow state, records and actions. Basic retains Result, Scope
+and Conversation, with a compact requirement list linked to the same trace
+records. Technical sections remain reachable through Sections; a focused section
+stays open when the profile changes. Detailed exposes their direct navigation
+and full requirement/source projection. Neither profile hides critical status,
+limitations or decision consequences, or resets revision, selection or drafts.
+
+The generic Client command menu supports opt-in `rememberSelection` for static
+options and a safe top-level state key. Only the declared scalar preference is
+stored, scoped by subnet/page/widget/button. Restore does not dispatch actions;
+obsolete values, dynamic menus, failed actions and scope changes do not write
+unrelated state. Opt-out menus perform no preference storage lookups. Schema,
+types, capability catalog and Client tests share this contract; there are no
+Builder-specific branches in the renderer. This is presentation persistence,
+not workflow authority, document storage or operational replacement.
+
+Verification: 73 Python design/schema/contract tests and 37 Client command-menu,
+scoped-storage and page-state tests pass. Client boundary checks pass and the
+capability inventory remains current at 41 widgets. DEV browser qualification
+passes 56 checks at 1440x1000 and 390x844, with 114 screenshots, no page errors
+or document-width overflow. Evidence:
+`e2e/artifacts/builder/workbench-design-20260914/browser-071-final/report.json`.
+Two additional read-only browser checks preserve the operational Workspace
+surface. The screenshot probe waits for rendered summary rows and scrolls them
+into view; an earlier run was interrupted by a development-server reload during
+a Client edit, so the final qualification runs without source changes.
+
+Checkpoint: local `builder@0.2.132` via
+`adaos dev project push builder --local-only --bump patch`, with 62 source files.
+Release digest: `sha256:e964bad9feba548a4579e5d3e2811c4ccbf79700251ff00e5dad00f0ff5db336`.
+Source revision: `sha256:a8eafdc29db13a9d33cf26c841657b77981a5dfee921b7bd455c3c6229467c14`.
+Client commit `f00e93e` is pinned with matching gitlink and `.sha`.
+The package contains UI 071, the Basic default and referenced resources. Actual
+acceptance is pending and Automation is not started. Full locale/light-theme
+qualification and canonical live trace bindings remain open. Concurrent Core
+Yjs and Client page-data changes are excluded. No Git push, Workspace replacement,
+new Webspace, LLM call or API restart was performed.
