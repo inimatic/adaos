@@ -13,6 +13,9 @@ from adaos.apps.cli.active_control import resolve_control_token
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inspect", action="store_true")
+    parser.add_argument("--select-created", type=Path, help="Read-only review of the TEST application from a creation receipt")
+    parser.add_argument("--trial-evidence", type=Path, help="Prepare only the reviewed TEST Trial from independent evidence")
+    parser.add_argument("--open-trial", type=Path, help="Open the exact retained TEST Trial through Process")
     parser.add_argument("--exercise-test", help="Create one new workbench_test_* application through the UI")
     parser.add_argument("--resume-created", type=Path, help="Prior report proving this stand created the TEST application")
     parser.add_argument("--prototype-prompt", type=Path, help="Submit one explicit prompt through the created TEST application's chat")
@@ -31,6 +34,36 @@ def main():
            "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub),
            "ADAOS_E2E_OUTPUT": str(args.output.resolve())}
     env["ADAOS_E2E_CODEX_MODEL"] = args.codex_model
+    if args.select_created:
+        import json
+        receipt = json.loads(args.select_created.read_text(encoding="utf-8"))["created_test"]
+        if args.exercise_test or not receipt["id"].startswith("workbench_test_") or receipt["result"]["project"]["created_by"] != "builder.user":
+            parser.error("Read-only selection requires an owned TEST receipt and no exercise")
+        env["ADAOS_E2E_SELECT_CREATED"] = json.dumps(receipt, ensure_ascii=False)
+    if args.trial_evidence:
+        import hashlib
+        import json
+        if not args.select_created or not args.inspect:
+            parser.error("Trial review requires owned selection in inspect mode")
+        root = args.trial_evidence.resolve()
+        session = json.loads(Path(f".adaos/state/builder/automation/scenario.{receipt['id']}.json").read_text(encoding="utf-8"))
+        raw = Path(f".adaos/dev/sn_6acf0c01/scenarios/{receipt['id']}/webui.json").read_bytes()
+        reports = []
+        for name in ("automation-http-01.json", "automation-browser-02.json", "automation-restart-02.json"):
+            path = root / name
+            evidence = json.loads(path.read_text(encoding="utf-8"))
+            if evidence.get("passed") is not True or evidence.get("scenario") != receipt["id"] or evidence.get("task") != session["current_task_id"] or evidence.get("source_sha256") != hashlib.sha256(raw).hexdigest():
+                parser.error("Current independent HTTP, browser and restart evidence required")
+            reports.append({"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+        env["ADAOS_E2E_PREPARE_TRIAL"] = json.dumps({"scenario": receipt["id"], "task": session["current_task_id"],
+            "reviewer": {"id": "agent:codex-independent-test-review", "kind": "agent", "delegated_by": "user:local"},
+            "scope": "Explicitly delegated TEST Trial preparation, not human or stable/publication acceptance", "reports": reports}, ensure_ascii=False)
+    if args.open_trial:
+        import json
+        trial = json.loads(args.open_trial.read_text(encoding="utf-8"))
+        if not args.select_created or not args.inspect or args.trial_evidence or trial.get("passed") is not True or trial["scenario"] != receipt["id"]:
+            parser.error("Exact TEST Trial receipt and inspect-only selection required")
+        env["ADAOS_E2E_OPEN_TRIAL"] = json.dumps(trial, ensure_ascii=False)
     if args.automation_followup:
         if not args.automation_brief:
             parser.error("An explicit follow-up brief is required")

@@ -54,6 +54,34 @@ def test_preview_lookup_is_named_without_allocating_topology() -> None:
     assert source_webspace_id_for("unrelated-dev") == "unrelated-dev"
 
 
+@pytest.mark.parametrize("source", [None, "desktop"])
+def test_trial_pin_uses_existing_topology_and_survives_service_recreation(tmp_path, source):
+    from adaos.services.workspaces.relations import BUILDER_PROJECT_PREVIEW, WebspaceRelationshipRegistry
+
+    relations = WebspaceRelationshipRegistry.from_context()
+    relation, _ = relations.ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW)
+    service = BuilderWorkbenchService(state_dir=tmp_path, relationship_registry=relations)
+    target = service.pin_trial_preview(
+        relation.target_webspace_id, scenario_id="example", revision="0.1.0",
+        candidate_id="candidate-1", release_digest="sha256:exact", source_webspace_id=source,
+    )
+    recovered = BuilderWorkbenchService(state_dir=tmp_path, relationship_registry=relations)
+    assert recovered.existing_preview_target(relation.target_webspace_id) == target
+    assert target["candidate_id"] == "candidate-1" and not target["follow_active"]
+    before = service.binding_path("desktop").read_bytes()
+    with pytest.raises(ValueError, match="does not own"):
+        service.pin_trial_preview(
+            relation.target_webspace_id, scenario_id="other", revision="0.1.0",
+            candidate_id="candidate-2", release_digest="sha256:other", source_webspace_id="other",
+        )
+    with pytest.raises(ValueError, match="explicit Builder preview relation"):
+        service.pin_trial_preview(
+            "orphan-dev", scenario_id="example", revision="0.1.0",
+            candidate_id="candidate-1", release_digest="sha256:exact",
+        )
+    assert service.binding_path("desktop").read_bytes() == before
+
+
 @pytest.mark.asyncio
 async def test_ensure_dev_webspace_creates_explicit_prompt_ide_binding(tmp_path: Path) -> None:
     calls: list[tuple[str, str, str, bool]] = []

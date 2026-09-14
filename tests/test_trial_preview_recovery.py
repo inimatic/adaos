@@ -74,10 +74,14 @@ def test_selected_trial_recovery_binds_candidate_ui_tools_and_identity(monkeypat
     assert result["materialization_identity"]["source_fingerprint"] == "trial:sha256:exact"
     assert result["materialization_identity"]["revision"] == "candidate-1"
     assert calls == [("example", "candidate-1")]
+    target.update(candidate_id="candidate-1", revision="0.2.0")
+    service.selected_preview_inputs("preview", scenario_id="example", operations=operations)
+    assert calls[-1] == ("example", "candidate-1")
     assert service.selected_preview_inputs("ordinary", scenario_id="example", operations=operations) == {}
     with pytest.raises(ValueError, match="identity"):
         service.selected_preview_inputs("preview", scenario_id="other", operations=operations)
     target["revision"] = ""
+    target.pop("candidate_id")
     with pytest.raises(ValueError, match="identity"):
         service.selected_preview_inputs("preview", scenario_id="example", operations=operations)
 

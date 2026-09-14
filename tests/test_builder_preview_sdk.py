@@ -349,7 +349,10 @@ def test_select_target_materializes_exact_trial_candidate(monkeypatch, via_owner
         preview,
         "materialize_revision_via_owner" if via_owner else "materialize_revision",
         lambda **kwargs: materializations.append(dict(kwargs))
-        or {"ok": True, "materialization": {"ready": True}},
+        or {"ok": True, "materialization": {"ready": True}, "preview_target": {
+            "stage": "trial", "revision": "0.2.0", "object_id": "recipes",
+            "candidate_id": "candidate.recipes", "release_digest": "sha256:exact",
+        }},
     )
     monkeypatch.setattr("adaos.sdk.data.events.publish", lambda *args, **kwargs: None)
 
@@ -363,6 +366,9 @@ def test_select_target_materializes_exact_trial_candidate(monkeypatch, via_owner
 
     assert result["target"]["stage"] == "trial"
     assert result["target"]["revision"] == "0.2.0"
+    assert result["target"]["candidate_id"] == "candidate.recipes"
+    assert result["target"]["release_digest"] == "sha256:exact"
+    assert result["target"]["follow_active"] is False
     assert result["preview_webspace_id"] == "dev1-dev"
     assert materializations[0]["preview_stage"] == "trial"
     assert materializations[0]["revision"] == "0.2.0"

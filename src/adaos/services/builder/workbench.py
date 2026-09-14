@@ -1497,6 +1497,43 @@ class BuilderWorkbenchService:
             self.publish_projection_sync(source_id)
         return updated
 
+    def pin_trial_preview(
+        self,
+        webspace_id: str,
+        *,
+        scenario_id: str,
+        revision: str,
+        candidate_id: str,
+        release_digest: str,
+        label: str | None = None,
+        source_webspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist Trial execution intent before publishing a materialized room.
+
+        Placement navigation and direct materialization bypass SDK selection.
+        Derive the owner from existing topology, never caller-provided metadata.
+        A failed rebuild retains this pin so tools cannot fall back to DEV.
+        """
+        relation = self.relationships.require_preview_target(webspace_id)
+        source = relation.source_webspace_id
+        if source_webspace_id and source_webspace_id != source:
+            raise ValueError("Trial materialization source does not own the preview")
+        if not scenario_id or not candidate_id or not release_digest:
+            raise ValueError("Trial materialization requires an exact candidate identity")
+        target = {
+            "schema": "adaos.builder.preview_target.v1",
+            "object_type": "scenario",
+            "object_id": scenario_id,
+            "stage": "trial",
+            "revision": revision or candidate_id,
+            "candidate_id": candidate_id,
+            "release_digest": release_digest,
+            "label": label,
+            "follow_active": False,
+        }
+        self.set_preview_target(source_webspace_id=source, target=target)
+        return target
+
     def open_dev_webspace(self, source_webspace_id: str | None = None, *, base_url: str | None = None) -> dict[str, Any]:
         binding = self.get_workspace_binding(source_webspace_id)
         dev_id = str(binding.get("dev_webspace_id") or "").strip()

@@ -1860,7 +1860,8 @@ def _reject_unavailable_trial_execution(body: ToolCall, ctx: AgentContext) -> No
 
     state_dir = Path(ctx.paths.state_dir())
     activation = TrialActivationStore(state_dir / "artifact_pipeline/trial-activations").find_for_target(
-        scenario_id=str(target.get("object_id") or ""), revision=target.get("revision"))
+        scenario_id=str(target.get("object_id") or ""),
+        revision=target.get("candidate_id") or target.get("revision"))
     skill = body.tool.partition(":")[0]
     if activation and not any(item.get("kind") == "skill" and item.get("artifact_id") == skill
                               for item in activation.get("package_refs", [])):

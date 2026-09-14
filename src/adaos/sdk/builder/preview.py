@@ -757,6 +757,8 @@ def select_target(
         "label": label,
         "follow_active": bool(follow_active),
     }
+    if stage_token == "trial" and isinstance(materialized.get("preview_target"), Mapping):
+        target = {**dict(materialized["preview_target"]), "follow_active": False}
     binding = _plain(_service().set_preview_target(source_webspace_id=source, target=target))
     return {
         "ok": bool(materialized.get("ok", True)),

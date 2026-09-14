@@ -112,6 +112,23 @@ def test_trial_admission_precedes_idempotency_replay(monkeypatch):
         asyncio.run(tool_bridge_module._call_tool_with_identity(tool_bridge_module.ToolCall(tool="owned:read"), None, Response(), _fake_ctx()))
 
 
+def test_trial_admission_uses_exact_candidate_not_same_version(tmp_path, monkeypatch):
+    from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+
+    monkeypatch.setattr(tool_bridge_module, "_existing_trial_preview_target", lambda *args: {
+        "stage": "trial", "object_id": "example", "revision": "0.1.0", "candidate_id": "candidate-1",
+    })
+    def lookup(self, **kwargs):
+        assert kwargs == {"scenario_id": "example", "revision": "candidate-1"}
+        return None
+    monkeypatch.setattr(TrialActivationStore, "find_for_target", lookup)
+    with pytest.raises(HTTPException) as error:
+        tool_bridge_module._reject_unavailable_trial_execution(
+            tool_bridge_module.ToolCall(tool="owned:read"), SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path)),
+        )
+    assert error.value.detail["error"] == "trial_runtime_unavailable"
+
+
 def test_workspace_autosync_skips_project_owned_skill(monkeypatch) -> None:
     updates: list[str] = []
     ctx = _fake_ctx()

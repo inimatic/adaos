@@ -49,7 +49,7 @@ class WebspaceBuilderPublicationService:
             return {}
         stage = target["stage"]
         selected = str(target.get("object_id") or "").strip()
-        revision = str(target.get("revision") or "").strip()
+        revision = str(target.get("candidate_id") or target.get("revision") or "").strip()
         if not selected or not revision or (scenario_id and scenario_id != selected):
             raise ValueError("selected preview identity does not match the requested scenario")
         if stage == "prototype":
@@ -609,6 +609,21 @@ class WebspaceBuilderPublicationService:
                 "error": "scenario_not_found",
             }
 
+        trial_target = None
+        if preview_stage_token == "trial":
+            from adaos.services.builder.workbench import BuilderWorkbenchService
+
+            trial_target = await asyncio.to_thread(
+                BuilderWorkbenchService.from_context().pin_trial_preview,
+                webspace_id,
+                scenario_id=resolved_scenario_id,
+                revision=str(revision or "").strip(),
+                candidate_id=candidate_id,
+                release_digest=release_digest,
+                label=preview_label,
+                source_webspace_id=source_webspace_id or None,
+            )
+
         identity_update = {
             "attempted": False,
             "changed": False,
@@ -720,6 +735,8 @@ class WebspaceBuilderPublicationService:
                 "webspace_identity_update": identity_update,
             }
         )
+        if trial_target is not None:
+            result["preview_target"] = trial_target
         return result
 
     async def reload_preview_webspaces_for_project(

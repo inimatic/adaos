@@ -787,3 +787,39 @@ effects. Its pending action is retained; the test must use normal scoped UI
 approval, not inject authorization or call an unguarded internal publish API.
 No Trial or stable result is claimed in this increment. Workspace Builder and
 the user's unrelated Core/Client changes remain untouched.
+
+## 2026-09-14: Trial Placement And Execution Boundary
+
+Native TEST preparation used the normal pending-action approval UI. The next
+request created an immutable Candidate and placement but returned a stale workflow
+generation error after the side effect. Exact placement replay now returns the
+retained result without a write or another activation; all 64 workflow tests
+pass, including rejection of changed identity and safety evidence. The original
+HTTP failure remains in `trial-native-03`, not rewritten as successful admission.
+`trial-reconciliation-01` proves exact Candidate identity and parsed-JSON equality
+with the accepted Automation UI; package formatting changes the raw byte digest.
+
+Opening that placement exposed a release-blocking gap. The common materializer
+loaded immutable UI and tool declarations but placement navigation did not persist
+the Trial pin consumed by the HTTP execution guard. Four read-only calls through
+arguments/context and explicit/implicit DEV all returned HTTP 200 with existing
+DEV records despite `data_mode=empty`. `trial-boundary-before` retains those
+responses and the unchanged DEV database digest. No Trial writes or acceptance
+were attempted. Package activation explicitly skips runtime reload; the empty
+Trial runtime cannot be treated as an admitted isolated executor.
+
+The correction pins the exact Candidate/release through existing owner topology
+before materialization becomes visible. Interrupted rebuilds retain the denial
+boundary; SDK selection preserves the Candidate pin rather than replacing it
+with a version-only pointer. Isolated execution remains an explicit BIP-28 task,
+not an implied consequence of UI rendering. No LLM request or budget increase is
+needed for either of these runtime defects. Core and Client remain unpushed.
+
+After one API restart, `trial-navigation-02` opens the exact placement from
+the live Builder on both widths and shows the localized unavailable-runtime
+informer. `trial-boundary-after` returns HTTP 409 for all four routes with the
+same DEV database digest. The combined boundary, preview, recovery, workbench
+and materialization suite passes all 264 tests. Screenshots were inspected;
+application localization and header are not qualified by these denial checks,
+and an empty collection message is not proof of an empty isolated Trial store.
+The three preserved Workspace Builder source digests still match the baseline.

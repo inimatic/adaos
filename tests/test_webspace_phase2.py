@@ -5529,10 +5529,14 @@ def test_builder_trial_preview_reads_exact_runtime_activation(monkeypatch, tmp_p
     }
 
 
+@pytest.mark.parametrize("rebuild_fails", [False, True])
 def test_builder_trial_apply_uses_candidate_preflight_and_exact_skill_snapshot(
     monkeypatch,
     tmp_path: Path,
+    rebuild_fails: bool,
 ) -> None:
+    from adaos.services.builder.workbench import BuilderWorkbenchService
+
     webspace_id = "phase2-exact-trial-preview"
     _pair_preview(webspace_id)
     ensure_workspace(webspace_id)
@@ -5595,7 +5599,12 @@ def test_builder_trial_apply_uses_candidate_preflight_and_exact_skill_snapshot(
     rebuild_calls: list[dict[str, object]] = []
 
     async def _fake_rebuild(*args, **kwargs):  # noqa: ARG001
+        target = BuilderWorkbenchService.from_context().existing_preview_target(webspace_id)
+        assert target["stage"] == "trial" and target["candidate_id"] == "candidate-1"
+        assert target["release_digest"] == release_digest
         rebuild_calls.append(dict(kwargs))
+        if rebuild_fails:
+            raise RuntimeError("rebuild interrupted")
         return {"ok": True, "accepted": True}
 
     def _exact_skills(self, skills_root: Path):
@@ -5632,6 +5641,14 @@ def test_builder_trial_apply_uses_candidate_preflight_and_exact_skill_snapshot(
         _fake_rebuild,
     )
 
+    if rebuild_fails:
+        with pytest.raises(RuntimeError, match="rebuild interrupted"):
+            asyncio.run(webspace_runtime_module.apply_builder_revision_materialization(
+                webspace_id, scenario_id="recipes", revision="0.2.0", preview_stage="trial",
+            ))
+        assert BuilderWorkbenchService.from_context().existing_preview_target(webspace_id)["candidate_id"] == "candidate-1"
+        return
+
     result = asyncio.run(
         webspace_runtime_module.apply_builder_revision_materialization(
             webspace_id,
@@ -5643,6 +5660,7 @@ def test_builder_trial_apply_uses_candidate_preflight_and_exact_skill_snapshot(
     )
 
     assert result["accepted"] is True
+    assert result["preview_target"]["candidate_id"] == "candidate-1"
     assert result["validation"]["source"] == "immutable_trial_workspace"
     assert result["validation"]["candidate_id"] == "candidate-1"
     assert rebuild_calls[0]["scenario_resolution"] == "builder_trial_candidate"

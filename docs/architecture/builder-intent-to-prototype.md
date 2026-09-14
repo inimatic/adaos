@@ -429,6 +429,13 @@ and candidate identity; a CLI-local YDoc update is not evidence of a live previe
 When an isolated executor is unavailable, Trial-owned tool calls fail closed
 before idempotent replay, DEV/stable resolution or cross-node fallback. Platform
 shell tools outside the candidate remain separate from application execution.
+This boundary belongs to the common materializer, including placement navigation
+and direct owner-side materialization, not only the SDK's preview-selection UI.
+Persist the exact Candidate/release pin before publishing the room or changing
+its scenario identity. Derive its owner from the registered preview relationship;
+caller metadata cannot create a relationship or nominate another owner. A failed
+rebuild retains the pin and remains unavailable, rather than enabling DEV as a
+recovery path. Reopen must use the Candidate ID, not a potentially reused version.
 Client runtime read and stale-value caches include materialization identity, not
 only webspace and query arguments. Missing runtime admission is an error, not a
 transport reconnect and not permission to display another stage's records.
@@ -444,6 +451,13 @@ an application-specific executor or another independent interpreter of manifests
 Keep caller/control authority distinct from candidate-owned data and projection
 state; don't clone user grants or infer owner privileges from preview metadata.
 Unsupported execution capabilities remain explicit blockers, not silent fallback.
+
+Placement recording is idempotent only for the same normalized result identity,
+target, runtime binding, activation and safety evidence. Such a replay may return
+the retained placement after the workflow generation has advanced, without a
+write, generation increment or second activation. Changed identity still requires
+the current generation. Reconciliation of an acknowledged side effect is not
+permission to resubmit publication or model work after a timeout.
 
 Application-owned transactions and business invariants are ordinary Automation
 implementation work. A skill may use standard-library storage transactions under

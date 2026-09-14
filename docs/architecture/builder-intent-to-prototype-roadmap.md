@@ -534,9 +534,25 @@ Exit/remaining work: Resolve Media's requirement provenance/recipient/channel sc
 
 Owner/dependencies: Builder lifecycle + delivery + delegated authorization.
 
-Implementation boundary: Local Trial/promotion mechanisms and historical Equipment/Builder receipts exist. The user paused Trial/publication; personal DEV rejecting delegated credentials does not qualify installed reader/writer behavior.
+Implementation boundary: Local Trial/promotion mechanisms and historical Equipment/Builder receipts exist. The retained native TEST journey is explicitly resumed; other delivery remains paused. Personal DEV rejecting delegated credentials does not qualify installed reader/writer behavior. Candidate materialization and an active placement do not establish isolated skill execution.
 
-Exit/remaining work: After explicit resumption, qualify isolated Trial against its release lock, source publication, consumer install/update, retained records, real reader/writer use, human EN/RU compact/wide review and live projection identity. Cover node-status/recovery failures. This is blocked non-deferred work, not waived or silently deferred.
+- [x] `[must]` Reconcile an exact retained placement without repeating activation
+  after a stale workflow response. Changed candidate, target, runtime or safety
+  evidence still fails the generation precondition; preserve the first failure.
+- [x] `[must]` Persist the exact Trial execution pin in common materialization,
+  before room publication, for placement navigation and direct owner routes.
+  Qualify no DEV/stable fallback through both HTTP routing forms, after reopen,
+  with an interrupted rebuild and on desktop/mobile. An explicit unavailable
+  informer is a denial boundary, not functional Trial acceptance.
+  Evidence: `trial-navigation-02`, `trial-boundary-before/after`, and 264 Core
+  boundary/recovery/materialization tests. Candidate-owned execution remains open.
+- [ ] `[must]` Admit the immutable Candidate to the existing skill engine with
+  its own prepared runtime, mutable data, declarations and SDK context. Record
+  executed package/lock/data-root/caller identity; prove DEV/stable records and
+  sources unchanged. Do not implement a TEST-specific executor or bypass the
+  guard simply because the package and UI are present.
+
+Exit/remaining work: Qualify the resumed TEST Trial against its release lock, then source publication, consumer install/update, retained records, real reader/writer use, human EN/RU compact/wide review and live projection identity. Cover node-status/recovery failures. This is blocked non-deferred work, not waived or silently deferred.
 
 ### BIP-29
 
