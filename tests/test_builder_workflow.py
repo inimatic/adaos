@@ -1752,6 +1752,47 @@ def test_change_set_advances_through_automation_trial_and_publication(
     assert any(item["kind"] == "placement" for item in placed["process"]["nodes"])
 
 
+@pytest.mark.parametrize("changed", [None, "candidate", "digest", "target", "runtime", "activation", "safety", "status"])
+def test_placement_replay_is_noop_only_for_exact_result(workflow_project, changed):
+    service, root = workflow_project
+    generation = service.describe("scenario", "recipes")["generation"]
+    placement = {
+        "kind": "trial", "result_ref": {"kind": "candidate", "id": "candidate-a", "digest": "sha256:" + "a" * 64},
+        "target": {"webspace_id": "desktop-dev", "space_kind": "development"},
+        "runtime_binding": {"kind": "isolated_trial_workspace", "path": "trials/candidate-a"},
+        "trial_activation_ref": "activation-a", "safety": {"status": "verified"}, "data_mode": "empty",
+    }
+    first = service.record_project_placement("scenario", "recipes", placement, expected_generation=generation)
+    persisted = (root / "prompt_state.json").read_bytes()
+    events = []
+    service.event_sink = events.append
+    if changed == "candidate":
+        placement["result_ref"]["id"] = "candidate-b"
+    elif changed == "digest":
+        placement["result_ref"]["digest"] = "sha256:" + "b" * 64
+    elif changed == "target":
+        placement["target"]["webspace_id"] = "different-dev"
+    elif changed == "runtime":
+        placement["runtime_binding"]["path"] = "trials/candidate-b"
+    elif changed == "activation":
+        placement["trial_activation_ref"] = "activation-b"
+    elif changed == "safety":
+        placement["safety"] = {}
+    elif changed == "status":
+        placement["status"] = "detached"
+    if changed:
+        with pytest.raises(BuilderWorkflowError, match="stale Builder workflow generation"):
+            service.record_project_placement("scenario", "recipes", placement, expected_generation=generation)
+    else:
+        placement["updated_at"] = "2026-09-15T00:00:00+00:00"
+        replay = service.record_project_placement("scenario", "recipes", placement, expected_generation=generation)
+        assert replay["duplicate"] is True
+        assert replay["placement"] == first["placement"]
+        assert replay["workflow"]["generation"] == first["workflow"]["generation"]
+    assert (root / "prompt_state.json").read_bytes() == persisted
+    assert events == []
+
+
 def test_builder_text_continuation_is_durable_and_generation_bound(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

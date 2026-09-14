@@ -2964,8 +2964,6 @@ class BuilderWorkflowService:
         with _LOCK:
             state = self._read_state(kind, project_id)
             workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
-            if int(workflow.get("generation") or 0) != int(expected_generation):
-                raise BuilderWorkflowError("stale Builder workflow generation")
             project = _mapping(workflow.get("project"))
             try:
                 normalized = normalize_project_placement(
@@ -2974,6 +2972,19 @@ class BuilderWorkflowService:
                 )
             except BuilderPlacementError as exc:
                 raise BuilderWorkflowError(str(exc)) from exc
+            # A retained activation can be observed twice. Only an exact
+            # placement replay may survive stale generation, without a write.
+            identity = {key: value for key, value in normalized.items()
+                        if key not in {"created_at", "updated_at"}}
+            for item in project.get("placements") or []:
+                if (isinstance(item, Mapping)
+                        and int(expected_generation) <= int(workflow.get("generation") or 0)
+                        and {key: value for key, value in item.items()
+                             if key not in {"created_at", "updated_at"}} == identity):
+                    return {"ok": True, "duplicate": True, "placement": copy.deepcopy(dict(item)),
+                            "workflow": self.describe(kind, project_id)}
+            if int(workflow.get("generation") or 0) != int(expected_generation):
+                raise BuilderWorkflowError("stale Builder workflow generation")
             placements = [
                 copy.deepcopy(dict(item))
                 for item in project.get("placements") or []
