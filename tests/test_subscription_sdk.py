@@ -51,6 +51,8 @@ def test_codex_usage_snapshot_projects_bounded_24h_usage(monkeypatch) -> None:
         "updated_at": "2026-09-03T03:47:22Z",
         "webspace_id": "desktop",
         "reason": None,
+        "last_model": None,
+        "by_model": [],
     }
 
 
@@ -76,6 +78,18 @@ def test_codex_usage_refresh_failure_returns_stale_cached_data(monkeypatch) -> N
     assert snapshot.used_tokens == 100
     assert snapshot.remaining_tokens == 900
     assert snapshot.reason == "TimeoutError: root unavailable"
+
+
+def test_codex_usage_preserves_bounded_model_breakdown_without_raw_payload(monkeypatch):
+    monkeypatch.setattr(economic_policy, "current_subnet_economic_status", lambda: {
+        "usage": {"codex.api.tokens": {"used_24h": 15, "usage_breakdown": {"window_24h": {
+            "last_model": "model-a", "by_model": [{"model": "model-a", "runs": 1,
+                "fresh_input_tokens": 4, "cached_input_tokens": 6, "output_tokens": 5,
+                "billable_tokens": 15, "token": "not-public"}]}}}}})
+    snapshot = subscriptions.get_codex_usage_snapshot()
+    assert snapshot["last_model"] == "model-a"
+    assert snapshot["by_model"][0]["billable_tokens"] == 15
+    assert "token" not in snapshot["by_model"][0]
 
 
 def test_codex_usage_snapshot_is_unavailable_without_metering(monkeypatch) -> None:

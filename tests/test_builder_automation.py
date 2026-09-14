@@ -1583,6 +1583,9 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Pa
     run_root = tmp_path / "run"
     runtime_root = run_root / "runtime"
     runtime_root.mkdir(parents=True)
+    (runtime_root / "codex-execution-profile.json").write_text(
+        json.dumps({"model": "gpt-5.4", "model_source": "explicit_cli"}), encoding="utf-8"
+    )
     journal = runtime_root / "codex-events.jsonl"
     journal.write_text(
         json.dumps(
@@ -1620,6 +1623,7 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Pa
 
     assert len(calls) == 1
     assert calls[0]["status"] == "failed"
+    assert calls[0]["model"] == "gpt-5.4"
     assert calls[0]["total_tokens"] == 1600
     assert calls[0]["reasoning_tokens"] == 80
     assert calls[0]["idempotency_key"].endswith(":task.1:codex-usage:v1")

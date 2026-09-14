@@ -83,6 +83,7 @@ def _default(kind: str, project_id: str) -> dict[str, Any]:
         "llm_provider": None,
         "llm_profile": None,
         "llm_profile_updated_at": None,
+        "builder_codex_profile": None,
         "target_node_id": None,
         "workflow_state": "tz",
         "archived": False,
@@ -177,12 +178,18 @@ def set_preferences(
     llm_model: str | None = None,
     llm_provider: str | None = None,
     llm_profile: Mapping[str, Any] | None = None,
+    codex_profile: Mapping[str, Any] | None = None,
     workflow_state: str | None = None,
     archived: bool | None = None,
 ) -> dict[str, Any]:
     """Persist the small allowlisted Builder development preference set."""
 
     state = _read(kind, project_id)
+    if codex_profile is not None:
+        from adaos.services.codex_profiles import normalize_codex_profile
+
+        state["builder_codex_profile"] = normalize_codex_profile(codex_profile)
+        state["codex_profile_updated_at"] = _now()
     if llm_model is not None:
         model = str(llm_model).strip()
         if not model:

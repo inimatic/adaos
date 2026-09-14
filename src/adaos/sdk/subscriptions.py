@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping
 
 
@@ -46,6 +46,8 @@ class CodexUsageSnapshot:
     updated_at: str
     webspace_id: str
     reason: str | None = None
+    last_model: str | None = None
+    by_model: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -129,6 +131,14 @@ def get_codex_usage_model(
         updated_at=updated_at,
         webspace_id=_text(webspace_id) or "desktop",
         reason=reason or None,
+        last_model=_text(window.get("last_model")) or None,
+        by_model=[
+            {"model": _text(row.get("model"))[:200] or None,
+             **{key: _optional_int(row.get(key)) for key in (
+                 "runs", "fresh_input_tokens", "cached_input_tokens", "output_tokens", "billable_tokens")}}
+            for row in (window.get("by_model") or [])[:100]
+            if isinstance(row, Mapping)
+        ] if isinstance(window.get("by_model"), list) else [],
     )
 
 

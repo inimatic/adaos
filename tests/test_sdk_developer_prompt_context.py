@@ -51,3 +51,14 @@ def test_prompt_context_round_trip(project_root: Path) -> None:
 def test_prompt_context_rejects_empty_addendum(project_root: Path) -> None:
     with pytest.raises(projects.DeveloperProjectError, match="addendum text is required"):
         prompt_context.append_addendum("scenario", "builder", "  ")
+
+
+def test_codex_preferences_are_separate_from_prototype_model(project_root: Path) -> None:
+    prompt_context.set_preferences("scenario", "builder", llm_model="gpt-5")
+    prompt_context.set_preferences("scenario", "builder", codex_profile={"model": "gpt-5.4", "reasoning_effort": "low"})
+    loaded = prompt_context.get("scenario", "builder")
+    assert loaded["builder_llm_model"] == "gpt-5"
+    assert loaded["builder_codex_profile"]["model"] == "gpt-5.4"
+    with pytest.raises(ValueError):
+        prompt_context.set_preferences("scenario", "builder", codex_profile={"model": ""})
+    assert prompt_context.get("scenario", "builder")["builder_codex_profile"] == loaded["builder_codex_profile"]

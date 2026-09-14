@@ -4794,7 +4794,10 @@ class LocalSkillFactoryWorker:
 
     @staticmethod
     def _record_codex_attempt(runtime_dir: Path, result: CodexRunResult, *, attempt: int) -> None:
+        from adaos.services.codex_profiles import execution_profile_from_command
+
         suffix = "" if attempt == 0 else f"-repair-{attempt}"
+        _write_json(runtime_dir / f"codex-execution-profile{suffix}.json", execution_profile_from_command(result.command))
         (runtime_dir / f"codex-events{suffix}.jsonl").write_text(result.events, encoding="utf-8")
         (runtime_dir / f"codex-stderr{suffix}.log").write_text(result.stderr, encoding="utf-8")
         if result.final_message:

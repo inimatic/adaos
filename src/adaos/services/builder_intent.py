@@ -178,6 +178,10 @@ _EXCLUSION_END_PATTERN = re.compile(
     r"\b(?:не\s+(?:нужн\w*|требу\w*)|not\s+(?:needed|required|necessary))\s*$|"
     r"^no\b.+\b(?:is|are)\s+(?:needed|required|necessary)\s*$", re.IGNORECASE
 )
+_EXCLUSION_START_PATTERN = re.compile(
+    r"^(?:do\s+not|don't)\s+(?:implement|include)\b|"
+    r"^не\s+(?:реализ\w*|включ\w*)\b", re.IGNORECASE
+)
 
 
 def partition_intent_scope(statement: str) -> tuple[str, list[dict[str, Any]]]:
@@ -190,7 +194,7 @@ def partition_intent_scope(statement: str) -> tuple[str, list[dict[str, Any]]]:
         for begin, finish in segments:
             begin, finish = _trim_job_span(clause, begin, finish)
             segment = clause[begin:finish]
-            if not _EXCLUSION_END_PATTERN.search(segment):
+            if not (_EXCLUSION_END_PATTERN.search(segment) or _EXCLUSION_START_PATTERN.search(segment)):
                 continue
             segment_start, segment_end = start + begin, start + finish
             exclusions.append({"id": f"exclusion:{len(exclusions) + 1:02d}", "statement": segment,

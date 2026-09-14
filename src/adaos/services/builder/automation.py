@@ -5520,6 +5520,8 @@ class BuilderAutomationService:
             event_path = str(local_run.get("events_path") or "").strip()
             paths = [Path(event_path)] if event_path else []
         total: dict[str, Any] = {}
+        observed_models: set[str] = set()
+        unresolved_models = False
         for path in paths:
             usage = BuilderAutomationService._codex_journal_usage(str(path))
             accuracy = "provider_reported"
@@ -5552,6 +5554,16 @@ class BuilderAutomationService:
                 total["attempts"] = int(total.get("attempts") or 0) + 1
                 if accuracy != "provider_reported":
                     total["accuracy"] = accuracy
+                profile_path = path.with_name(path.name.replace("codex-events", "codex-execution-profile").replace(".jsonl", ".json"))
+                try:
+                    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    profile = {}
+                model = str(profile.get("model") or "") if isinstance(profile, Mapping) else ""
+                if model:
+                    observed_models.add(model)
+                else:
+                    unresolved_models = True
             for key, value in usage.items():
                 if key == "model_tokens":
                     continue
@@ -5560,6 +5572,8 @@ class BuilderAutomationService:
             total["model_tokens"] = int(total.get("input_tokens") or 0) + int(
                 total.get("output_tokens") or 0
             )
+            total["model"] = next(iter(observed_models)) if len(observed_models) == 1 and not unresolved_models else None
+            total["model_accuracy"] = "explicit_cli" if total["model"] else "unresolved"
         return total
 
     @staticmethod
@@ -5935,6 +5949,7 @@ class BuilderAutomationService:
             "status": task_status,
             "source": "builder_automation",
             "accuracy": "reported" if usage_accuracy == "provider_reported" else "estimated",
+            "model": usage.get("model"),
             "input_tokens": int(usage.get("input_tokens") or 0),
             "cached_input_tokens": int(usage.get("cached_input_tokens") or 0),
             "output_tokens": int(usage.get("output_tokens") or 0),

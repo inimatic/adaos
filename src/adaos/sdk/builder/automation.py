@@ -74,6 +74,10 @@ def start(
 ) -> dict[str, Any]:
     """Start or resume implementation from an approved brief."""
 
+    if agent_profile is None:
+        from adaos.sdk.developer import prompt_context
+
+        agent_profile = prompt_context.get(object_type, object_id).get("builder_codex_profile")
     service = _service()
     result = service.start_from_execute(
         object_type=object_type,

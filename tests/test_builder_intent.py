@@ -164,6 +164,26 @@ def test_explicit_exclusions_are_preserved_without_operations_or_automation_debt
     assert brief["exclusions"][0]["statement"] == "uploads are not required"
 
 
+def test_excluded_feature_list_does_not_become_crud_obligations() -> None:
+    from adaos.services.ui_capabilities import qualify_ui_request
+
+    for statement in (
+        "Show the work history. Do not implement storage, create records, or upload files.",
+        "Покажи историю работы. Не реализуй хранение, создание записей или загрузку файлов.",
+    ):
+        qualified = qualify_ui_request(statement)
+        brief = qualified["prototype_brief"]
+        assert qualified["requirements"]["prototype_resource"] is False
+        assert not ({"create", "update", "delete"} & {row["kind"] for row in brief["operations"]})
+        assert len(brief["exclusions"]) == 1
+        assert brief["problem"]["value"] == statement
+        evidence = brief["exclusions"][0]["evidence"][0].split("=")[1]
+        start, end = map(int, evidence.split(":"))
+        assert statement[start:end] == brief["exclusions"][0]["statement"]
+    brief = compile_prototype_brief("Do not implement uploads, but create and edit records.")
+    assert {"create", "update"} <= {row["kind"] for row in brief["operations"]}
+
+
 def test_brief_drives_generic_capabilities_without_internal_prompt_terms() -> None:
     selection = selected_ui_capabilities(
         "Team members need to scan work, open one item, add a request, "

@@ -47,6 +47,31 @@ busy/terminal/input flags, summary/error, and the stable steps `queued`,
 Session files and full Skill Factory task evidence remain service state and are
 not copied into the Web UI document.
 
+## Model Selection And Accounting
+
+Prototype and Automation have separate model preferences. Codex selection is
+an application-owned `builder_codex_profile`, not the Prototype's
+`builder_llm_model` or a browser-only choice. The public
+`builder.model_settings` facade reads Root's `automation` catalog and accepts
+only a model advertised as available. An unavailable/older Root must not create
+a fabricated fallback catalog. The CLI account may still reject a Root-listed
+model; that is an execution failure, not permission to switch models silently.
+
+The Automation SDK passes the stored profile unless the caller explicitly
+supplies an execution profile. The admitted session/task retains that profile;
+later settings changes cannot rewrite past runs. The worker separately records
+the explicit CLI model/reasoning configuration without credential-bearing
+arguments. Usage reports use this execution evidence; missing historical model
+identity remains unresolved rather than inferred from today's preference.
+
+Root retains per-model fresh input, cached input and output tokens. Subscription
+token quotas and provider monetary cost are separate quantities. A monetary
+estimate uses only a Root-managed versioned tariff, never a caller-supplied
+price. Missing model/tariff means unpriced, not zero cost; deterministic work
+has a separate zero-model receipt. Reasoning tokens are included in provider
+output and must not be charged twice. UI, live Root configuration and end-to-end
+accounting qualification remain in the BIP-02 replacement gate.
+
 ## Delivery And Recovery
 
 Every persisted session update emits `builder.automation.changed`. Builder UI

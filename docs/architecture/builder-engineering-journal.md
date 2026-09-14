@@ -474,3 +474,34 @@ acceptance is pending and Automation is not started. Full locale/light-theme
 qualification and canonical live trace bindings remain open. Concurrent Core
 Yjs and Client page-data changes are excluded. No Git push, Workspace replacement,
 new Webspace, LLM call or API restart was performed.
+
+## 2026-09-14: Accepted Design And Initial Automation Prerequisites
+
+The user explicitly accepted Builder design 071 and authorized Automation plus
+a complete isolated TEST journey. The acceptance is now recorded through the
+public workflow SDK, tied to revision 071 and its browser evidence; workflow
+generation advanced to 14. The receipt is
+`e2e/artifacts/builder/workbench-automation-20260914/design-acceptance.json`.
+The immutable design and operational Workspace Builder were not rewritten.
+
+The first acceptance attempt exposed a generic scope-interpreter defect:
+"Do not implement ..., create ..." became a required create operation. Explicit
+negative implementation/include clauses now remain exclusions with exact source
+spans; contrasted positive clauses remain required. This is not a Builder
+exception or acceptance bypass. 77 intent/capability/handoff tests passed, then
+the original design passed the unchanged acceptance gate.
+
+Initial model accounting work separates stored Codex preferences from Prototype,
+adds a Root-catalog SDK and records explicit CLI model evidence per attempt.
+Automation passes actual known model identity to Root; unknown historical
+identity is not reconstructed. Root development profiles support Automation
+scope, per-model token buckets and optional operator-managed tariff estimates.
+The subscription SDK retains bounded model breakdowns. No live Root policy or
+Subscriptions UI has been qualified yet; selection UI, complete cost projection,
+durable specification deltas and the actual Builder Automation remain open.
+
+Verification of this prerequisite slice: 37 model/preferences/subscription/SDK
+tests and six focused Automation usage tests passed. Backend TypeScript build
+and seven usage/cost tests passed locally. These are not end-to-end results.
+No model execution, Trial, publication, Git push or API restart occurred in
+this increment. Concurrent Core Yjs and Client page-data changes stay excluded.
