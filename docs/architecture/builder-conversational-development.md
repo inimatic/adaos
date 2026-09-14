@@ -803,7 +803,7 @@ the result, review decision or recovery action to be buried in the chat stream:
   Prototype base are separate refs, not interchangeable revision numbers;
 - a compact current-work area shows the focused Change, scope, meaningful last
   event/freshness, blockers and the next available command;
-- the central surface can focus Result, Task brief, Checks, Process or
+- the central surface can focus Result, Change scope, Checks, Process or
   Conversation; focused work is not replaced by incidental inspection;
 - Result review places the exact candidate beside its scoped conversation on
   a wide screen; compact screens offer the same conversation as a focused view;
@@ -837,7 +837,7 @@ explicit command. The Preview indicator shows `proto:`, `active:`, or
 ### Navigation, Materials And Delivery Axes
 
 Navigation narrows scope from Application to Revision and its Result, Files,
-Checks or Task. Process and Deliveries are related projections, not nested
+Checks or Scope. Process and Deliveries are related projections, not nested
 release-channel labels. Use a compact, stable menu trigger; long option labels
 wrap inside a viewport-bounded overlay above other widgets. Menus preserve
 keyboard focus and distinguish selection from execution. A design-only process
@@ -945,6 +945,79 @@ README in the immutable artifact. Do not copy prompts, secrets, external tickets
 or private reference files into public documentation without a reviewed reason.
 Rendering treats authored Markdown as untrusted content, not executable HTML
 or instructions; file/link navigation retains the existing safety boundary.
+
+### Message-To-Result Traceability
+
+**Scope / Состав изменения** presents the requested outcome and independently
+understandable requirements/concerns, not the raw prompt or execution plan.
+One message can introduce several Issues; several messages can clarify the same
+Issue. The requirement view is the existing Issue model, not a parallel mutable
+requirements tracker. Each row shows its source messages, authority, current
+version, intended stage, disposition and linked result/evidence when available.
+
+**Process** presents execution tasks and their attempts. A task answers how a
+bounded part of the Change will be performed; it can implement or check several
+Issues, and an Issue can require several tasks. Task refs belong to the existing
+execution journal described by the
+[Governed Workflow Model](governed-workflow-runtime.md#related-models-that-must-stay-separate).
+Retries are new Runs, not new requirements. Neither message count nor task count
+is a completeness metric. Small Changes do not require elaborate decomposition.
+
+The minimum inspection path is bidirectional:
+
+```text
+source message version <-> Issue version <-> execution task <-> Run
+                                                            <-> result
+                                                            <-> check/evidence
+result + admitted Issue versions + evidence <-> acceptance decision
+```
+
+These are typed many-to-many references across existing stores, not one nested
+tree or one canonical linear workflow. Edges retain their actor, reason and
+source scope; an LLM may propose an interpretation but cannot fabricate a user
+instruction, completed task, check result or human decision.
+
+Source messages retain stable dialog/message identity, author, timestamp and
+verbatim UTF-8 content version. Normalized summaries never replace originals.
+Editing a source or clarifying an Issue creates a new version/supersession;
+previous runs keep their exact admitted versions and input-packet digest. A
+Run inspector exposes the recorded inputs and linked artifacts, not a packet
+reconstructed from today's conversation. Sensitive inputs require authorized
+inspection and explicit redaction labels; a redacted view is not passed off as
+the original digest-bearing payload. User attachments remain governed by the
+input-reference contract, not copied into every task.
+
+Every source message has an explicit disposition: incorporated requirement,
+clarification, scope decision, context only, informal discussion, queued addendum
+or unprocessed. Context-only messages can be used by a Run without creating a
+task. An informal proposal needs the existing promotion decision. Deferred work
+retains the deciding message, reason and follow-up destination or an explicit
+unassigned state. New messages received during a Run cannot silently mutate its
+input or be declared covered by its earlier result. Unprocessed is observable,
+not automatically a blocker of an already frozen candidate; a potentially
+material pending change must be disclosed before its acceptance decision.
+
+The Workbench uses existing views and compact linked-record inspection:
+
+- Conversation offers source/related-work actions on original messages and
+  result/check actions on correlated outcome receipts.
+- Scope lists requirements and their sources; Process lists tasks, attempts and
+  partial/failed outcomes. A retry never hides the previous outcome.
+- Result links back to its admitted scope and independent checks. Reading a
+  related record does not switch Preview, Change focus or an unsent chat draft.
+- Review lists the included Issue versions with exact candidate evidence,
+  unresolved items, explicitly deferred work and next-stage obligations. Worker
+  completion is not verification, and verification is not human acceptance.
+- Historical or missing references show their identity and availability; never
+  substitute the current revision's scope or evidence. Execution/acceptance
+  authority is not granted by a successful navigation or a synthesized summary.
+
+Recommendations and model-selected implementation details remain qualitative
+design choices unless explicitly admitted as requirements. Prototype acceptance
+does not demand Automation persistence or hypothetical UX refinements. There is
+no LLM-reported percentage of fulfillment and no mandatory graph editor. The
+native design specimen illustrates this contract for one Prototype; live
+canonical bindings and cross-stage qualification remain BIP-02 work.
 
 ### Human Decision And Feedback Surface
 

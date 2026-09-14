@@ -378,3 +378,58 @@ Release digest: `sha256:db268318baba3e397bd14793cb98cf589461b7b00b554f879e131b81
 Source revision: `sha256:1c2f2ef4c63e4cab4eaf0c9c8695fb29913d48ab1d8e2613d070c27929c35fa6`.
 Workspace UI and owned handler hashes match the preservation receipt. No Git
 push, Workspace replacement, new Webspace, LLM call or API restart was performed.
+
+## 2026-09-14: Message-To-Result Design Traceability
+
+DEV Builder design 070 replaces Task with Scope and models linked inspection
+of original messages, versioned requirements, execution tasks, attempts,
+partial/corrected results and checks. A single human-authored fixture in
+`scripts/fixtures/builder-workbench-trace.json` supplies 23 illustrative records;
+the generator derives bidirectional projections and exact UTF-8 input snapshots.
+This fixture is not loaded by the production Core or a model prompt/template.
+The architecture keeps requirements in the existing Issue model and execution
+tasks in the existing journal; BIP-02 owns the remaining canonical bindings.
+
+The specimen covers one Change's Prototype 003 scope: one request introduces
+four requirements, a subsequent clarification creates R1 v2, one requirement
+belongs to Automation and README is explicitly deferred. Context-only, informal
+and later unprocessed messages do not acquire invented execution tasks. P16
+retains its original input and failed E16 result after the P17 correction and
+E17 check. Inspection never changes the Preview or current Change. Historical
+002 has an explicit unavailable trace instead of substituted 003 evidence.
+
+Native chat message actions and linked-record inspection connect Conversation,
+Scope, Process, Result and Review without another top-level menu or graph
+editor. Review lists current obligations and evidence separately from future
+or deferred work. All trace/check records are marked as illustrative: the
+actual design remains unaccepted and Automation remains not started. This
+does not prove live trace capture or consistent projection across all simulated
+process states. Full locale/light-theme qualification and operational parity
+remain open; compact tables and raw JSON still use bounded horizontal scrolling.
+
+Browser qualification exposed a generic Client defect: long Markdown code
+expanded the details grid beyond its modal. Explicit zero-minimum grid tracks
+and bounded scrolling now preserve all input bytes without enlarging the panel.
+The Client change is CSS-only, has a rendered narrow/wide regression test, and
+does not alter the ABI or add Builder-specific rendering logic. Early probe
+failures also identified hidden-view and modal-render timing assumptions in
+the harness; these were corrected without relaxing the functional assertions.
+
+Verification: 93 distinct Python tests passed (60 design/schema, 33 Workbench),
+34 Client details/Markdown tests passed, and the capability inventory remains
+current at 41 widgets. DEV browser qualification passes 50 checks at 1440x1000
+and 390x844, with 108 screenshots, no page errors or document-width overflow.
+Evidence: `e2e/artifacts/builder/workbench-design-20260914/browser-070/report.json`.
+Workspace UI and owned handler hashes still match the preservation receipt.
+Two additional read-only browser checks confirm its operational wide/compact
+surface remains available after the generic Client rendering correction.
+Concurrent Core Yjs and Client page-data changes are excluded from these commits.
+
+Checkpoint: local `builder@0.2.131` via
+`adaos dev project push builder --local-only --bump patch`, with 59 source files.
+Release digest: `sha256:bed0014f74fd873434b81ae168245ce339f19ad7c7f5269a69e50489d94bb8f5`.
+Source revision: `sha256:882028cdef03e73a96f7560255737a0c59d20b833c711777d416daf6adde872a`.
+The packaged UI contains revision 070, its 23 trace records and all three
+referenced resources. Client commit `c652ccc` is pinned with matching gitlink
+and `.sha`. No Git push, Workspace replacement, new Webspace, LLM call or API
+restart was performed.

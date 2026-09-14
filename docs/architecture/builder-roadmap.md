@@ -206,13 +206,17 @@ does not close BC-11.1 or BC-11.2. The target surface and existing Dev Tickets
 feedback contract are specified in the conversational architecture's
 [Workbench projection](builder-conversational-development.md#builder-workbench-projection).
 
-The next design iteration separates inspected revision, process/actor and
+The design separates inspected revision, process/actor and
 delivery channel; reference inputs are distinct from generated application
 files. Read-only trees and batch clarifications use generic Client components.
 Live input storage/context receipts, durable answers and governed delivery
 bindings remain unchecked BIP-02 work. File IDE/binary asset editing is deferred
 there; a simulated Beta/Stable walkthrough does not resume the paused delivery
 qualification or promote the design into Workspace.
+Message/Issue/task/Run/result traceability belongs to the same BIP-02 scope:
+linked inspection is a projection, not a new requirements or execution store.
+Exact input versions, late-message disposition and candidate-specific review
+coverage must be qualified against canonical records before replacement.
 
 - [ ] `[must]` **BC-11.1** Derive the dependent Prototype -> Automation ->
   verification -> Trial -> Publication bridge from one governed snapshot.

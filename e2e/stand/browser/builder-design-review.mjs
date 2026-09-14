@@ -34,11 +34,12 @@ try {
     page.on('pageerror', error => report.errors.push({ profile, error: error.message }))
     const url = `http://127.0.0.1:8100/?intent=webspace.open&zone=lo&subnet_id=sn_6acf0c01&webspace_id=${webspace}&space_kind=${workspaceOnly ? 'workspace' : 'development'}&expected_scenario_id=builder&try_local_hub=1`
     const command = id => page.locator(`[data-command-id="${id}"]`).filter({ visible: true }).first()
-    const capture = async name => {
+    const capture = async (name, focus) => {
       await page.evaluate(async () => {
         for (const el of document.querySelectorAll('ion-content')) await el.scrollToTop(0)
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       })
+      if (focus) await focus.evaluate(el => el.scrollIntoView({ block: 'start' }))
       await page.screenshot({ path: path.join(output, `${profile}-${name}.png`), fullPage: true, animations: 'disabled' })
       const geometry = await page.evaluate(() => ({
         viewport: innerWidth,
@@ -117,12 +118,113 @@ try {
           await command(id).click()
           await capture(`view-${id}`)
         }
+        const records = specimen.ui.application.desktop.pageSchema.initialState.traceRecords
+        const widget = id => page.locator(`[data-webui-widget-id="${id}"]`).filter({ visible: true }).last()
+        const closeModal = () => page.locator('ion-modal').last().getByRole('button', { name: /^(close|закрыть)$/i }).click()
+        const assertRecord = async id => {
+          await widget('design-trace-record').getByText(records[id].body, { exact: true }).waitFor()
+        }
+        const follow = async id => {
+          await widget('design-trace-links').getByText(records[id].title, { exact: true }).click()
+          await assertRecord(id)
+        }
+        await command('brief').click()
+        await widget('design-scope-requirements').getByText(records['req-readme'].title, { exact: true }).waitFor()
+        if (await widget('design-scope-requirements').locator('tbody tr').count() !== 4) throw new Error('Scope merges requirements or invents new ones')
+        await widget('design-scope-requirements').getByText(records['req-edit-v2'].title, { exact: true }).click()
+        await assertRecord('req-edit-v2')
+        await capture('trace-requirement')
+        await follow('msg-02')
+        await follow('run-p17')
+        await command('trace-context').click()
+        const packet = await widget('design-trace-context').innerText()
+        if (!packet.includes(records['msg-02'].body) || !packet.includes('req-edit-v2') || packet.includes(records['msg-05'].body)) throw new Error('Run input snapshot is stale or includes a later message')
+        const contextBounds = await widget('design-trace-context').evaluate(el => {
+          const bounds = el.getBoundingClientRect()
+          return [...el.querySelectorAll('dd, ion-card-title')].every(row => {
+            const rect = row.getBoundingClientRect()
+            return rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1
+          })
+        })
+        if (!contextBounds) throw new Error('Input snapshot text escapes the details panel')
+        await capture('trace-run-context', widget('design-trace-context'))
+        await follow('run-p16')
+        await command('trace-context').click()
+        const oldPacket = await widget('design-trace-context').innerText()
+        if (!oldPacket.includes('req-edit-v1') || oldPacket.includes(records['msg-02'].body)) throw new Error('Historical input was rewritten by clarification')
+        await follow('result-p16')
+        await follow('evidence-16')
+        await capture('trace-failed-attempt')
+        await follow('req-selection')
+        await follow('evidence-17')
+        await follow('result-003')
+        await command('trace-root').click()
+        await assertRecord('req-edit-v2')
+        await closeModal()
+        await widget('design-workbench-header').getByText(`Редакция 003 · Change 12 · макет ${revision}`, { exact: true }).waitFor()
+        report.checks.push({ profile, check: 'bidirectional_trace_versions_attempts_and_exact_input_snapshots', passed: true })
+
+        await command('trace-suggestion').click()
+        await assertRecord('suggest-confirm')
+        if (await widget('design-trace-links').getByText(records['task-ui'].title, { exact: true }).count()) throw new Error('Suggestion became an assigned task')
+        await closeModal()
+        await command('trace-messages').click()
+        await widget('design-trace-message-list').getByText(records['msg-06'].title, { exact: true }).waitFor()
+        if (await widget('design-trace-message-list').locator('tbody tr').count() !== 6) throw new Error('Source message index dropped a disposition')
+        for (const id of ['msg-04', 'msg-05', 'msg-06']) {
+          await widget('design-trace-message-list').getByText(records[id].title, { exact: true }).click()
+          await assertRecord(id)
+          const links = await widget('design-trace-links').innerText()
+          for (const task of ['task-ui', 'task-check', 'task-storage']) {
+            if (links.includes(records[task].title)) throw new Error(`${id} gained an invented execution task`)
+          }
+          if (id === 'msg-04') await follow('run-p17')
+          if (id === 'msg-05') await capture('trace-unprocessed-message')
+          await closeModal()
+        }
+        await closeModal()
+        await command('process').click()
+        await widget('design-trace-tasks').getByText(records['task-storage'].title, { exact: true }).click()
+        await assertRecord('task-storage')
+        if ((await widget('design-trace-links').innerText()).includes(records['run-p17'].title)) throw new Error('Automation task gained a Prototype run')
+        await closeModal()
+        report.checks.push({ profile, check: 'context_unprocessed_informal_and_deferred_work_not_promoted', passed: true })
+
+        await command('result').click()
+        await command('trace-result').click()
+        await assertRecord('result-003')
+        await follow('evidence-17')
+        await follow('req-edit-v2')
+        await follow('msg-01')
+        await closeModal()
+        await command('conversation').click()
+        const chat = widget('design-conversation-full-task')
+        await chat.getByText(records['msg-01'].body, { exact: true }).waitFor()
+        await chat.getByRole('button', { name: records['msg-01'].status, exact: true }).click()
+        await assertRecord('msg-01')
+        await closeModal()
+        await command('accept').click()
+        const coverage = widget('design-review-coverage')
+        await coverage.getByText(records['req-readme'].title, { exact: true }).waitFor()
+        if (await coverage.locator('tbody tr').count() !== 4 || await coverage.getByText('В приемке 003', { exact: true }).count() !== 2) throw new Error('Review includes future work as current obligations')
+        await coverage.getByText('Автоматизация', { exact: true }).waitFor()
+        await coverage.getByText('Отложено по M03', { exact: true }).waitFor()
+        await capture('trace-review-coverage')
+        await coverage.getByText(records['req-readme'].title, { exact: true }).click()
+        await follow('msg-03')
+        await closeModal()
+        await closeModal()
+        report.checks.push({ profile, check: 'result_and_native_chat_to_source_review_uses_stage_scoped_evidence', passed: true })
+
         await command('history').click()
         await page.locator('ion-modal ada-table-widget tbody tr').filter({ hasText: '002' }).last().click()
         await capture('history')
         await command('show').click()
         await page.locator('[data-webui-widget-id="design-revision-identity"]').getByText('Редакция 002', { exact: true }).waitFor()
         if (await command('accept').count() || await command('edit').count()) throw new Error('Historical preview exposes candidate editing/acceptance')
+        await command('brief').click()
+        await widget('design-trace-unavailable').waitFor()
+        if (await widget('design-scope-requirements').count()) throw new Error('Historical revision displays current scope')
         await command('readme').click()
         if (!await command('edit-readme').isDisabled() || !await command('ask-readme').isDisabled()) throw new Error('Historical README exposes editing')
         await page.locator('[data-webui-widget-id="design-readme"]').getByText('Исторический снимок · только чтение', { exact: true }).waitFor()
@@ -299,6 +401,7 @@ try {
       }
       }
     } catch (error) {
+      console.log(JSON.stringify({ profile, failure: error.message }))
       report.checks.push({ profile, passed: false, error: error.message, body: (await page.locator('body').innerText()).slice(0, 16000) })
       await capture('failure')
     }

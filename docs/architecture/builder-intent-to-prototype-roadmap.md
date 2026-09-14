@@ -110,6 +110,20 @@ Implementation boundary: Conversation and governed status projections exist; a w
 - [x] `[should]` Restore the full wrapping application title, clarify revision
   labeling and model component selection, development settings, Preview link/QR,
   informal discussion, platform-request consent and public README editing.
+- [x] `[should]` Qualify native bidirectional design navigation from original
+  messages through versioned Issues, tasks, attempts, partial/corrected results
+  and checks. Review separates current Prototype obligations from Automation,
+  deferred work and unprocessed messages; no invented tasks or completion score.
+  The qualified specimen covers Prototype 003 only; it is not live cross-stage
+  coverage or acceptance authority.
+- [ ] `[must]` Bind Scope, Process, Conversation and Review to existing canonical
+  Issue/task/Run/evidence/decision refs, not a second requirements tracker.
+  Preserve verbatim source versions and exact admitted input snapshots; qualify
+  many-to-many links, retries, late messages, source edits and explicit deferral.
+- [ ] `[must]` Derive stage/candidate coverage from admitted Issue versions and
+  independent evidence. Expose missing/stale refs and material unprocessed
+  addenda; navigation cannot retarget Preview or authorize execution/acceptance.
+  Recommendations and next-stage work must not become implicit Prototype gates.
 - [ ] `[must]` Retain composition-scoped file selection and ownership: Project,
   Scenario, Skill and referenced dependency; validate missing/stale member,
   exact revision and path/digest on reads and proposed changes.
@@ -155,13 +169,13 @@ the old functionality.
 | Preview selection, new window, QR, comparison | Result / Preview / Revisions | Local specimen link/QR and revision inspection modeled; live target comparison/reachability pending |
 | Formal task chat and history | Conversation | Native chat plus local composer modeled; durable conversation and workflow commands pending |
 | Informal discussion | Conversation scope menu | Separate scope and confirmed proposal modeled; canonical cross-channel binding pending |
-| Technical specification and addenda | Task / Conversation | Read-only brief and proposal modeled; editable specification/addendum lifecycle pending |
+| Technical specification and addenda | Scope / Conversation | Versioned requirements and sources modeled; canonical specification/addendum lifecycle pending |
 | Prototype approval, Automation start/retry/return | Current work / Process | Separate decisions/recovery modeled; governed implementation bindings and return-to-Prototype pending |
 | Process tree, exact ref inspection, history | Process / Revisions | Revision navigation modeled; complete live graph/provenance pending |
 | Trial, release, source push, publication | Deliveries | Local Beta/Stable decision specimen; real distribution/source push qualification remains gated |
 | Stable subscription update plan/apply | Deliveries / Application overview | Not modeled; retained must gate, no silent omission |
 | Development Feedback filters/details | Signals | Finding and consent modeled; full filtering/triage and downstream receipts pending |
-| Bound development session / initiator | Task provenance / Application overview | Real project-owned initiator retained in architecture; not modeled in this fixture |
+| Bound development session / initiator | Scope provenance / Application overview | Real project-owned initiator retained in architecture; not modeled in this fixture |
 | Dev Tickets / screenshots | Dev Tickets | Existing panel reused; full capture/upload/global-scope qualification remains open |
 | Public user documentation | README | Render/edit/reopen modeled; actual file writes, conflicts and release packaging pending |
 

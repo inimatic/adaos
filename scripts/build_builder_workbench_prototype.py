@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCENARIO = ROOT / ".adaos/dev/sn_6acf0c01/scenarios/builder"
 OUTPUT = ROOT / "e2e/artifacts/builder/workbench-design-20260914"
 LOCALES: dict[str, dict[str, str]] = {"ru": {}, "en": {}}
-REVISION = "069"
+REVISION = "070"
 PREVIEW_URL = "http://127.0.0.1:8100/?intent=webspace.open&zone=lo&subnet_id=sn_6acf0c01&webspace_id=desktop-dev&space_kind=development&expected_scenario_id=builder&try_local_hub=1"
 REQUEST = (
     "Design a new DEV Builder prototype for human review, based on the target "
@@ -30,9 +30,10 @@ REQUEST = (
     "review, partial results, failure, recovery, context inspection and history. "
     "Do not implement Automation, create Trials, publish, or invoke an LLM from "
     "the design specimen. Do not accept the new design on behalf of the user. "
-    "Revision 069: restore complete application title and component-scoped Files; "
-    "review old Builder parity, development settings, Preview link/QR, informal "
-    "discussion, consent for platform feedback and shared public README editing. "
+    "Revision 070: trace immutable user messages through versioned requirements, "
+    "execution tasks, attempts, partial and corrected results, checks and review. "
+    "Preserve context-only, deferred, unprocessed and informal messages without "
+    "inventing tasks; model bidirectional inspection without live execution. "
     "Retain compact process menu; visible revision identity; task actors "
     "and milestones; separate reference inputs from generated file trees; batch "
     "clarification with retained drafts; explicit local Alpha, Beta and Stable "
@@ -266,7 +267,7 @@ def build_document():
     actions = [toolbar("design-primary-actions", [dict(b, visibleIf=w["visibleIf"]) for w in actions for b in w["inputs"]["buttons"]],
                        [a for w in actions for a in w["actions"]])]
     tabs = toolbar("design-workbench-views", [
-        button("result", "Результат", "Result", "eye-outline"), button("brief", "Задача", "Task", "document-text-outline"),
+        button("result", "Результат", "Result", "eye-outline"), button("brief", "Состав изменения", "Scope", "document-text-outline"),
         button("checks", "Проверки", "Checks", "shield-checkmark-outline"), button("process", "Процесс", "Process", "git-branch-outline"),
         button("conversation", "Обсуждение", "Conversation", "chatbubbles-outline"),
         button("inputs", "Материалы", "Inputs", "attach-outline"),
@@ -402,6 +403,7 @@ def build_document():
     add_material_views(page, modals)
     add_delivery_views(page, modals)
     add_review_surfaces(page, modals)
+    add_trace_views(page, modals)
     resources = {f"builder.design.i18n.{locale}": {"kind": "data", "role": "i18n", "locale": locale, "path": f"assets/i18n/design-{REVISION}-{locale}.json", "mime": "application/json", "delivery": "core"} for locale in LOCALES}
     resources["builder.design.reference"] = {"kind": "image", "scope": "scenario", "path": f"assets/design-{REVISION}-reference.png", "mime": "image/png", "delivery": "core"}
     return {"schema": "adaos.webui.v1", "generated_by": "human-authored-builder-design",
@@ -530,7 +532,7 @@ def add_review_surfaces(page, modals):
     page["initialState"].update(
         readmeRecordId="readme", readmeText="# Осмотр оборудования\n\nУчет оборудования, осмотров и пунктов проверки.\n\n## Работа\n\nВыберите оборудование, затем осмотр. Редактирование доступно отдельной командой.\n\n## Ограничения\n\nРедакция 003 демонстрирует интерфейс; постоянное хранение относится к автоматизации.",
         readmeStatus="Черновик для публичного README.md", readmeAuthor="Builder · пример", conversationMode="task",
-        conversationModes={"task": {"id": "task", "label": "Задача · Change 12", "thread": "specimen:equipment:change:12"}, "informal": {"id": "informal", "label": "Свободное обсуждение", "thread": "specimen:equipment:informal"}},
+        conversationModes={"task": {"id": "task", "label": "Изменение 12", "thread": "specimen:equipment:change:12"}, "informal": {"id": "informal", "label": "Свободное обсуждение", "thread": "specimen:equipment:informal"}},
         informalNote="", platformRequestStatus="Не отправлен", platformRequestTarget="client",
     )
     page["initialState"]["designSettings"].update(profile="standard", model="gpt-5", provider="openai", reasoning="low", voice=False)
@@ -573,7 +575,7 @@ def add_review_surfaces(page, modals):
 
     for suffix, area, visible in (("side", "conversation", "$state.workbenchView !== 'conversation'"), ("full", "main", "$state.workbenchView === 'conversation'")):
         page["widgets"].append(toolbar("design-conversation-controls-" + suffix, [button("conversation-mode", "Обсуждение", "Conversation", "chatbubbles-outline", selectedStateKey="conversationMode", options=[
-            label("Задача · Change 12", "Task · Change 12", id="task"), label("Свободное обсуждение", "Informal discussion", id="informal")]), button("conversation-channels", "Каналы", "Channels", "link-outline")],
+            label("Изменение 12", "Change 12", id="task"), label("Свободное обсуждение", "Informal discussion", id="informal")]), button("conversation-channels", "Каналы", "Channels", "link-outline")],
             [update("select:conversation-mode", conversationMode="$event.id"), modal_action("click:conversation-channels", "design-conversation-channels")], area=area, visible=visible))
         for mode in ("task", "informal"):
             condition = visible + f" && $state.conversationMode === '{mode}'"
@@ -592,8 +594,9 @@ def add_review_surfaces(page, modals):
             composer["inputs"]["autoCommit"] = True
             page["widgets"].append(composer)
             note = "$state.pendingNote" if mode == "task" else "$state.informalNote"
-            page["widgets"].append(details(f"design-pending-note-{suffix}-{mode}", "Сохраненное сообщение · макет", "Retained message · specimen", {"text": note, "thread": "$state.conversationModes." + mode + ".thread", "intent": "$state.pendingIntent" if mode == "task" else "discussion"},
-                [field("text", "Текст", "Text"), field("intent", "Намерение", "Intent"), field("thread", "Диалог", "Conversation")], area=area, visible=condition + " && " + note))
+            page["widgets"].append(details(f"design-pending-note-{suffix}-{mode}", "Сохраненное сообщение · макет", "Retained message · specimen", {"text": note, "thread": "$state.conversationModes." + mode + ".thread", "intent": "$state.pendingIntent" if mode == "task" else "discussion",
+                **text_field("disposition", "Не передано исполнителю; разбор и трассировка этого нового сообщения еще не выполнены.", "Not sent to an executor; this new message has not been classified or traced yet.")},
+                [field("text", "Текст", "Text"), field("intent", "Намерение", "Intent"), field("thread", "Диалог", "Conversation"), field("disposition", "Учет в работе", "Disposition")], area=area, visible=condition + " && " + note))
         page["widgets"].append(toolbar("design-promote-idea-" + suffix, [button("promote-idea", "Предложить для задачи", "Propose for task", "arrow-forward-outline")], [modal_action("click:promote-idea", "design-promote-idea")], area=area, visible=visible + " && $state.conversationMode === 'informal' && $state.informalNote"))
     modals["design-promote-idea"] = modal("design-promote-idea", "Передать идею в задачу?", "Propose this idea for the task?", [
         details("design-idea-summary", "Дополнение к Change 12", "Addendum to Change 12", {"text": "$state.informalNote", "effect": "После подтверждения появится предложение в задаче. Текущий исполнитель и принятые редакции не изменятся."}, [field("text", "Идея", "Idea"), field("effect", "Последствие", "Effect")]),
@@ -619,6 +622,155 @@ def add_review_surfaces(page, modals):
     ])
 
 
+def trace_specimen():
+    """Compile read-only projections from one Builder-owned illustrative ledger."""
+    graph = read(ROOT / "scripts/fixtures/builder-workbench-trace.json")
+    if graph.get("synthetic") is not True:
+        raise ValueError("The design ledger must be explicitly synthetic")
+    records = {n["id"]: copy.deepcopy(n) for n in graph["nodes"]}
+    if len(records) != len(graph["nodes"]):
+        raise ValueError("Duplicate trace identity")
+    relations = {
+        "requests": ("Запрашивает", "Исходный запрос"), "clarifies": ("Уточняет", "Уточнение"),
+        "defers": ("Откладывает", "Решение отложить"), "supersedes": ("Уточняет версию", "Новая версия"),
+        "implements": ("Реализует", "Реализация"), "checks": ("Проверяет", "Задача проверки"),
+        "attempt_of": ("Задача исполнения", "Попытка исполнения"), "repairs": ("Исправляет попытку", "Исправляющая попытка"),
+        "produces": ("Результат", "Получено запуском"), "evaluates": ("Проверяемый результат", "Проверка результата"),
+        "rejects": ("Невыполненное требование", "Неуспешная проверка"), "verifies": ("Подтверждает", "Подтверждающая проверка"),
+        "uses_message": ("Сообщение во входных данных", "Учтено запуском"), "uses_requirement": ("Версия требования во входных данных", "Учтено запуском"),
+    }
+    kinds = {"message": "Сообщение", "requirement": "Требование", "suggestion": "Рекомендация", "task": "Задача исполнения", "run": "Запуск", "revision": "Результат", "evidence": "Проверка"}
+    edges = [tuple(e) for e in graph["edges"]]
+    for record in records.values():
+        record["entityLabel"] = kinds[record["entity"]]
+        if record["entity"] == "message":
+            record["digest"] = "sha256:" + hashlib.sha256(record["body"].encode("utf-8")).hexdigest()
+        if record["entity"] == "run":
+            packet = {"synthetic": True, "run_id": record["id"], "instruction": record["body"],
+                      "messages": [{k: records[ref][k] for k in ("id", "version", "timestamp", "body")} for ref in record["message_refs"]],
+                      "requirements": [{k: records[ref][k] for k in ("id", "version", "body")} for ref in record["requirement_refs"]]}
+            serialized = json.dumps(packet, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            record["digest"] = "sha256:" + hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+            record["packet"] = packet
+            record["context"] = "```json\n" + json.dumps(packet, ensure_ascii=False, indent=2) + "\n```"
+            edges.extend((record["id"], "uses_message", ref) for ref in record["message_refs"])
+            edges.extend((record["id"], "uses_requirement", ref) for ref in record["requirement_refs"])
+        record["related"] = []
+    for left, relation, right in edges:
+        if left not in records or right not in records or relation not in relations:
+            raise ValueError(f"Invalid trace edge: {(left, relation, right)}")
+        for origin, target, description in ((left, right, relations[relation][0]), (right, left, relations[relation][1])):
+            records[origin]["related"].append({"id": target, "title": records[target]["title"],
+                                              "relation": description, "status": records[target]["status"]})
+    for record in records.values():
+        grouped = {}
+        for link in record["related"]:
+            if link["id"] in grouped:
+                grouped[link["id"]]["relation"] += " · " + link["relation"]
+            else:
+                grouped[link["id"]] = link
+        record["related"] = list(grouped.values())
+    scope = []
+    for ref in graph["scope"]:
+        n = records[ref]
+        source_ids = [left.replace("msg-", "M") for left, relation, right in edges if right == ref and relation in {"requests", "clarifies", "defers"}]
+        verified = any(relation == "verifies" and right == ref for _, relation, right in edges)
+        scope.append({"id": ref, "title": n["title"], "sources": ", ".join(source_ids), "status": n["status"],
+                      "result": "003 · E17" if verified else "Нет результата",
+                      "admission": "В приемке 003" if n["included"] else ("Автоматизация" if n["stage"] == "automation" else "Отложено по M03")})
+    return {**graph, "records": records, "edges": edges, "scope_rows": scope}
+
+
+def add_trace_views(page, modals):
+    trace = trace_specimen()
+    records = trace["records"]
+    page["initialState"].update(traceRecords=records, traceRecord={}, traceRoot={}, traceContextVisible=False)
+    available = "$state.previewRevision === '003'"
+
+    def open_trace(on, ref="$event.id"):
+        path = "$state.traceRecords." + ref
+        return {"on": on, "type": "openModal", "params": {"modalId": "design-trace", "statePatch": {
+            "traceRecord": path, "traceRoot": path, "traceContextVisible": False}}}
+
+    def table(id, rows, columns, *, title=None, visible=None):
+        widget = {"id": id, "type": "ui.table", "area": "main", "dataSource": source(rows),
+                  "inputs": {"columns": columns, "rowKey": "id", "selectable": True, "search": False, "pagination": {"enabled": False}},
+                  "actions": [open_trace("select")]}
+        if title:
+            widget.update(text_field("title", *title))
+        if visible:
+            widget["visibleIf"] = visible
+        return widget
+
+    scope_columns = [field("title", "Требование / замечание", "Requirement / concern", overflow="wrap", width="36%"),
+                     field("sources", "Источники", "Sources", overflow="wrap"), field("status", "Состояние", "Status", overflow="wrap"),
+                     field("result", "Результат", "Result", overflow="wrap")]
+    brief = next(w for w in page["widgets"] if w["id"] == "design-task-brief")
+    brief.update(text_field("title", "Состав изменения", "Change scope"))
+    brief["dataSource"] = source({**text_field("goal", "Редактирование оборудования с сохранением выбранного осмотра.", "Edit equipment while retaining the selected inspection."),
+                                  **text_field("scope", "Change 12 · снимок задания для прототипа 003 · демонстрационные записи", "Change 12 · scope snapshot for prototype 003 · illustrative records")})
+    brief["inputs"]["fields"] = [field("goal", "Цель", "Goal"), field("scope", "Основа", "Basis")]
+    brief["visibleIf"] += " && " + available
+    offset = page["widgets"].index(brief) + 1
+    page["widgets"][offset:offset] = [
+        table("design-scope-requirements", trace["scope_rows"], scope_columns, visible="$state.workbenchView === 'brief' && " + available),
+        toolbar("design-scope-sources", [button("trace-messages", "Исходные сообщения · 6", "Source messages · 6", "chatbubbles-outline"),
+                                        button("trace-suggestion", "Рекомендация · вне приемки", "Suggestion · not required", "bulb-outline")],
+                [modal_action("click:trace-messages", "design-trace-messages"), open_trace("click:trace-suggestion", "suggest-confirm")], visible="$state.workbenchView === 'brief' && " + available),
+        details("design-trace-unavailable", "Трассировка недоступна", "Trace unavailable", {
+            **text_field("reason", "Для исторической редакции 002 в этом макете нет записей трассировки. Данные редакции 003 не подставляются.", "This specimen has no trace records for historical revision 002. Revision 003 data is not substituted.")},
+            [field("reason", "Причина", "Reason")], visible="($state.workbenchView === 'brief' || $state.workbenchView === 'process') && $state.previewRevision !== '003'"),
+    ]
+    process = next(w for w in page["widgets"] if w["id"] == "design-process")
+    offset = page["widgets"].index(process)
+    process["visibleIf"] += " && " + available
+    page["widgets"][offset:offset] = [table("design-trace-tasks", [records[ref] for ref in trace["tasks"]],
+        [field("title", "Задача исполнения", "Execution task", overflow="wrap"), field("status", "Состояние / попытки", "Status / attempts", overflow="wrap")],
+        title=("План прототипа 003 · образец", "Prototype 003 plan · specimen"), visible="$state.workbenchView === 'process' && " + available)]
+    preview = next(w for w in page["widgets"] if w["id"] == "design-preview-commands")
+    preview["inputs"]["buttons"].append(button("trace-result", "Связь с заданием", "Trace to scope", "git-branch-outline", visibleIf=available))
+    preview["actions"].append(open_trace("click:trace-result", "result-003"))
+    for w in page["widgets"]:
+        if w["id"].startswith("design-conversation-controls-"):
+            w["inputs"]["buttons"].append(button("trace-messages", "Источники", "Sources", "list-outline"))
+            w["actions"].append(modal_action("click:trace-messages", "design-trace-messages"))
+        if w["type"] == "ui.chat":
+            mode = "informal" if w["id"].endswith("-informal") else "task"
+            messages = [
+                {"id": n["id"], "from": "user", "text": n["body"], "ts": int(datetime.fromisoformat(n["timestamp"]).timestamp() * 1000),
+                 "actions": [{"id": "trace-" + n["id"], "label": n["status"], "fill": "clear", "title": "Источник и связанные записи", "action": open_trace("click", n["id"])}]}
+                for n in records.values() if n["entity"] == "message" and n["conversation"] == mode]
+            if mode == "task":
+                for run, result, text in [
+                    ("run-v16", "result-p16", "P16 / V16 · образец: частичный результат подготовлен. Проверка выявила сброс выбранного осмотра."),
+                    ("run-v17", "result-003", "P17 / V17 · образец: редакция 003 подготовлена и проверена по R1 v2 и R2. Приемка пользователя ожидается."),
+                ]:
+                    messages.append({"id": "receipt-" + run, "from": "hub", "text": text,
+                                     "ts": int(datetime.fromisoformat(records[run]["timestamp"]).timestamp() * 1000),
+                                     "actions": [{"id": "trace-" + result, "label": "Результат и проверки", "fill": "clear", "action": open_trace("click", result)}]})
+            w["dataSource"] = source({"messages": sorted(messages, key=lambda m: m["ts"])})
+    source_rows = [{"id": n["id"], "title": n["title"], "status": n["status"], "conversation": "Change 12" if n["conversation"] == "task" else "Свободное обсуждение"} for n in records.values() if n["entity"] == "message"]
+    modals["design-trace-messages"] = modal("design-trace-messages", "Исходные сообщения", "Source messages", [
+        table("design-trace-message-list", source_rows, [field("title", "Сообщение", "Message", overflow="wrap"), field("status", "Учет в работе", "Disposition", overflow="wrap"), field("conversation", "Диалог", "Conversation", overflow="wrap")]),
+    ])
+    modals["design-trace"] = modal("design-trace", "Связи и происхождение", "Trace and provenance", [
+        toolbar("design-trace-navigation", [button("trace-root", "К исходной записи", "Back to entry", "arrow-undo-outline", enabledIf="$state.traceRecord.id !== $state.traceRoot.id"),
+                                          button("trace-context", "Контекст запуска", "Run context", "code-slash-outline", visibleIf="$state.traceRecord.entity === 'run'")],
+                [update("click:trace-root", traceRecord="$state.traceRoot", traceContextVisible=False), update("click:trace-context", traceContextVisible=choose(equals("$state.traceContextVisible", True), False, True))]),
+        details("design-trace-record", "$state.traceRecord.title", "$state.traceRecord.title", "$state.traceRecord",
+                [field("entityLabel", "Тип записи", "Record type"), field("status", "Состояние", "Status"), field("timestamp", "Зафиксировано", "Recorded at"),
+                 field("version", "Версия записи", "Record version"), field("body", "Содержание · дословно для сообщений", "Content · verbatim for messages"), field("note", "Границы и пояснения", "Scope and notes")]),
+        details("design-trace-context", "Снимок входных данных · образец", "Input snapshot · specimen", "$state.traceRecord",
+                [field("executor", "Исполнитель", "Executor"), field("digest", "Отпечаток снимка", "Snapshot digest"), field("context", "Передаваемые данные", "Input packet", kind="markdown")], visible="$state.traceRecord.entity === 'run' && $state.traceContextVisible"),
+        {"id": "design-trace-links", "type": "ui.list", "area": "main", **text_field("title", "Связанные записи", "Linked records"), "dataSource": source("$state.traceRecord.related"),
+         "inputs": {"titleKey": "title", "subtitleKey": "relation", "previewKey": "status", "previewOverflow": "wrap", "search": False},
+         "actions": [update("select", traceRecord="$state.traceRecords.$event.id", traceContextVisible=False)]},
+    ])
+    coverage = table("design-review-coverage", trace["scope_rows"], [field("title", "Пункт", "Item", overflow="wrap"), field("admission", "Граница приемки", "Acceptance scope", overflow="wrap"), field("result", "Подтверждение", "Evidence", overflow="wrap")],
+                     title=("Покрытие задания · прототип 003", "Scope coverage · prototype 003"))
+    modals["design-accept"]["schema"]["widgets"].insert(-1, coverage)
+
+
 def audit_safety(value):
     if isinstance(value, dict):
         if "on" in value and value.get("type") == "openUrl":
@@ -632,6 +784,8 @@ def audit_safety(value):
             raise ValueError("Design specimen must not execute external or live commands")
         if value.get("sendCommand"):
             raise ValueError("Design chat cannot dispatch live transport commands")
+        if value.get("command") or value.get("token"):
+            raise ValueError("Design message actions cannot dispatch commands or approval tokens")
         if value.get("kind") in {"api", "skill", "mcp", "stream", "resourceQuery", "projection"}:
             raise ValueError("Design specimen must not query live process data")
         for child in value.values():

@@ -1,6 +1,8 @@
 """Safety and contract checks for the human-authored Builder design specimen."""
 
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,8 @@ def test_specimen_uses_native_schema_without_live_execution():
     {"kind": "api", "url": "/api/builder"},
     {"on": "click", "type": "openUrl", "params": {"url": "https://example.test"}},
     {"sendCommand": "voice.chat.user"},
+    {"label": "Execute", "command": "voice.chat.user"},
+    {"label": "Approve", "token": "unreviewed-approval"},
 ])
 def test_rejects_live_or_incompatible_contracts(action):
     with pytest.raises(ValueError):
@@ -155,3 +159,57 @@ def test_readme_informal_chat_and_platform_feedback_do_not_implicitly_execute():
     proposal = application["modals"]["design-promote-idea"]["schema"]["widgets"][-1]
     assert proposal["actions"][0]["params"]["requestedFile"] == ""
     assert proposal["actions"][0]["params"]["requestComponent"] == ""
+
+
+def test_trace_preserves_verbatim_versioned_inputs_and_attempt_history():
+    trace = design.trace_specimen()
+    records = trace["records"]
+    first = records["run-p16"]["packet"]
+    retry = records["run-p17"]["packet"]
+    assert [r["id"] for r in first["requirements"]] == ["req-edit-v1", "req-selection"]
+    assert [r["id"] for r in retry["requirements"]] == ["req-edit-v2", "req-selection"]
+    assert [m["id"] for m in first["messages"]] == ["msg-01"]
+    assert [m["id"] for m in retry["messages"]] == ["msg-01", "msg-02", "msg-03", "msg-04"]
+    for record in records.values():
+        if record["entity"] == "run":
+            raw = json.dumps(record["packet"], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            assert record["digest"] == "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+            for message in record["packet"]["messages"]:
+                assert message["body"] == records[message["id"]]["body"]
+        if record["entity"] == "message":
+            assert record["digest"] == "sha256:" + hashlib.sha256(record["body"].encode("utf-8")).hexdigest()
+    assert ("run-p17", "repairs", "run-p16") in trace["edges"]
+    assert ("evidence-16", "evaluates", "result-p16") in trace["edges"]
+    assert ("evidence-17", "evaluates", "result-003") in trace["edges"]
+
+
+def test_trace_links_are_bidirectional_and_nonrequirements_do_not_gain_tasks():
+    trace = design.trace_specimen()
+    records = trace["records"]
+    for left, _, right in trace["edges"]:
+        assert right in {r["id"] for r in records[left]["related"]}
+        assert left in {r["id"] for r in records[right]["related"]}
+    assert not records["msg-05"]["related"]
+    assert not records["msg-06"]["related"]
+    assert not records["suggest-confirm"]["related"]
+    assert {r["id"] for r in records["msg-04"]["related"]} == {"run-p17"}
+    included = [r for r in trace["scope_rows"] if r["admission"] == "В приемке 003"]
+    assert {r["id"] for r in included} == {"req-edit-v2", "req-selection"}
+    assert all(r["result"] == "003 · E17" for r in included)
+    assert ("msg-03", "defers", "req-readme") in trace["edges"]
+
+
+def test_trace_widgets_reuse_native_chat_actions_without_changing_preview():
+    app = design.build_document()["ui"]["application"]
+    page = app["desktop"]["pageSchema"]
+    widgets = {w["id"]: w for w in page["widgets"]}
+    chat = widgets["design-conversation-full-task"]
+    message = next(m for m in chat["dataSource"]["value"]["messages"] if m["id"] == "msg-02")
+    assert message["text"] == page["initialState"]["traceRecords"]["msg-02"]["body"]
+    action = message["actions"][0]["action"]
+    assert action["params"]["statePatch"]["traceRecord"] == "$state.traceRecords.msg-02"
+    assert action["type"] == "openModal"
+    links = app["modals"]["design-trace"]["schema"]["widgets"][-1]
+    assert set(links["actions"][0]["params"]) == {"traceRecord", "traceContextVisible"}
+    assert "'003'" in widgets["design-scope-requirements"]["visibleIf"]
+    assert any(w["id"] == "design-review-coverage" for w in app["modals"]["design-accept"]["schema"]["widgets"])
