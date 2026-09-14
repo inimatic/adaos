@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCENARIO = ROOT / ".adaos/dev/sn_6acf0c01/scenarios/builder"
 OUTPUT = ROOT / "e2e/artifacts/builder/workbench-design-20260914"
 LOCALES: dict[str, dict[str, str]] = {"ru": {}, "en": {}}
-REVISION = "066"
+REVISION = "069"
+PREVIEW_URL = "http://127.0.0.1:8100/?intent=webspace.open&zone=lo&subnet_id=sn_6acf0c01&webspace_id=desktop-dev&space_kind=development&expected_scenario_id=builder&try_local_hub=1"
 REQUEST = (
     "Design a new DEV Builder prototype for human review, based on the target "
     "Builder workflow and SOTA interaction patterns. Preserve the operational "
@@ -29,7 +30,10 @@ REQUEST = (
     "review, partial results, failure, recovery, context inspection and history. "
     "Do not implement Automation, create Trials, publish, or invoke an LLM from "
     "the design specimen. Do not accept the new design on behalf of the user. "
-    "Revision 066: compact process menu; visible revision identity; task actors "
+    "Revision 069: restore complete application title and component-scoped Files; "
+    "review old Builder parity, development settings, Preview link/QR, informal "
+    "discussion, consent for platform feedback and shared public README editing. "
+    "Retain compact process menu; visible revision identity; task actors "
     "and milestones; separate reference inputs from generated file trees; batch "
     "clarification with retained drafts; explicit local Alpha, Beta and Stable "
     "delivery decisions. All delivery records and transitions remain fixtures."
@@ -220,24 +224,24 @@ def specimens():
 def build_document():
     samples = specimens()
     header = toolbar("design-workbench-header", [
-        button("applications", "Осмотр оборудования", "Equipment inspections", "folder-open-outline"),
+        button("applications", "$state.applicationTitle", "$state.applicationTitle", "folder-open-outline"),
         button("history", "Редакции", "Revisions", "git-branch-outline"),
-        button("specimens", "Состояние процесса", "Process state", "options-outline",
+        button("specimens", "Состояние", "State", "options-outline",
                displaySelectedLabel=False, selectedStateKey="current.id", optionMetaPaths=["actor"],
                options=[{k: v[k] for k in ("id", "label", "label_i18n", "icon", "actor", "actor_i18n")} for v in samples.values()]),
         button("deliveries", "Поставки", "Deliveries", "cube-outline"),
         button("feedback", "Dev Tickets", "Dev Tickets", "ticket-outline"),
         button("settings", "Настройки", "Settings", "settings-outline"),
     ], [modal_action("click:applications", "design-applications"),
-        update("select:specimens", current="$state.samples.$event.id", previewRevision="003", inspectedRevision="003"),
+        update("select:specimens", current="$state.samples.$event.id", previewRevision="003", inspectedRevision="003", selectedFile={}, selectedFileId=""),
         update("click:deliveries", workbenchView="deliveries"),
         modal_action("click:history", "design-history"), modal_action("click:settings", "design-settings"),
         feedback("click:feedback")],
-        statusDataSource=source({"title": "$state.current.title", "title_i18n": "$state.current.title_i18n",
+        statusDataSource=source({"title": "$state.applicationTitle",
             "state": "$state.current.state", "state_i18n": "$state.current.state_i18n",
-            **text_field("target_label", f"Прототип $state.previewRevision · текущий 003 · Change 12 · макет {REVISION}", f"Prototype $state.previewRevision · head 003 · Change 12 · design {REVISION}")}))
+            **text_field("target_label", f"Редакция $state.previewRevision · Change 12 · макет {REVISION}", f"Revision $state.previewRevision · Change 12 · design {REVISION}")}))
     status = details("design-current-work", "", "", "$state.current", [
-        field("actor", "Ответственность", "Responsibility"), field("summary", "Сейчас", "Now"), field("timing", "Активность · образец", "Activity · specimen")])
+        field("title", "Процесс", "Process"), field("actor", "Ответственность", "Responsibility"), field("summary", "Сейчас", "Now"), field("timing", "Активность · образец", "Activity · specimen")])
     actions = []
     for id, condition, buttons, commands in [
         ("planning", "$state.current.id === 'planning'", [button("generate", "Создать прототип", "Create prototype", "construct-outline")], [update("click:generate", current="$state.samples.working")]),
@@ -267,14 +271,18 @@ def build_document():
         button("conversation", "Обсуждение", "Conversation", "chatbubbles-outline"),
         button("inputs", "Материалы", "Inputs", "attach-outline"),
         button("files", "Файлы", "Files", "folder-outline"),
+        button("readme", "README", "README", "book-outline"),
+        button("development-feedback", "Сигналы", "Feedback", "warning-outline"),
     ], [update("click", workbenchView="$event.id")], variant="segmented", selectedStateKey="workbenchView")
     result_widgets = [
-        details("design-revision-identity", "Прототип $state.previewRevision", "Prototype $state.previewRevision", {
+        details("design-revision-identity", "Редакция $state.previewRevision", "Revision $state.previewRevision", {
             "application": "$state.applicationTitle", "revision": "$state.previewRevision", "notice": "Демонстрационные данные · локальные взаимодействия",
         }, [field("notice", "ДЕМО", "DEMO")], visible="$state.workbenchView === 'result'"),
         toolbar("design-preview-commands", [button("inspect", "К редакции 003", "Revision 003", "eye-outline"),
+                                             button("preview-link", "Открыть Preview", "Open Preview", "open-outline"),
+                                             button("preview-qr", "QR", "QR", "qr-code-outline"),
                                              button("annotate", "Замечание", "Feedback", "create-outline")],
-                [update("click:inspect", previewRevision="003", inspectedRevision="003"), feedback("click:annotate")], visible="$state.workbenchView === 'result'"),
+                [update("click:inspect", previewRevision="003", inspectedRevision="003", selectedFile={}, selectedFileId=""), modal_action("click:preview-link", "design-preview"), modal_action("click:preview-qr", "design-preview"), feedback("click:annotate")], visible="$state.workbenchView === 'result'"),
         {"id": "design-assets", "type": "ui.table", "area": "main", **text_field("title", "Оборудование", "Equipment"),
          "visibleIf": "$state.workbenchView === 'result'", "dataSource": source(choose(equals("$state.previewRevision", "002"), "$state.baselineAssets", ["$state.assetPump", "$state.assetFan"])),
          "inputs": {"columns": [field("name", "Название", "Name"), field("location", "Локация", "Location")],
@@ -306,24 +314,7 @@ def build_document():
                              [modal_action("click:context", "design-context")], visible="$state.workbenchView === 'process' || $state.workbenchView === 'brief'")
     diagnostics = details("design-diagnostics", "Диагностика · образец", "Diagnostics · specimen", {"run": "$state.current.run", "state": "$state.current.id", "revision": "$state.previewRevision"},
                           [field("run", "Запуск", "Run"), field("state", "Состояние", "State"), field("revision", "Preview", "Preview")], visible="$state.designSettings.diagnostics")
-    conversations = []
-    for suffix, area, condition in (("side", "conversation", "$state.workbenchView !== 'conversation'"), ("full", "main", "$state.workbenchView === 'conversation'")):
-        conversations.append(details("design-conversation-" + suffix, "Обсуждение задачи", "Task conversation", {
-            "user": "Нужно редактировать объект. При выборе строки должны оставаться видны его осмотры.",
-            "builder": "Сохраню выбор по клику. Редактирование вынесу в отдельную команду и модальное окно.",
-            "result": "$state.current.summary", "result_i18n": "$state.current.summary_i18n",
-        }, [field("user", "Вы · 14:28", "You · 14:28"), field("builder", "Builder · 14:29", "Builder · 14:29"), field("result", "Последний результат", "Latest result")], area=area, visible=condition))
-        composer = form("design-composer-" + suffix, [
-            label("Намерение сообщения", "Message intent", id="intent", type="dropdown", defaultValue="correction", options=[
-                label("Исправить результат", "Correct result", value="correction"), label("Добавить требование", "Add requirement", value="requirement"),
-                label("Обсудить без изменений", "Discuss without changes", value="discussion")]),
-            label("Сообщение", "Message", id="text", type="longText", required=True, stateKey="draftMessage"),
-        ], "Сохранить сообщение в макете", "Keep message in specimen", [update("submit", pendingNote="$event.values.text", pendingIntent="$event.values.intent")], area=area)
-        composer["visibleIf"] = condition
-        conversations.append(composer)
-        conversations.append(details("design-pending-note-" + suffix, "Для следующего шага", "For the next step", {"text": "$state.pendingNote", "intent": "$state.pendingIntent"},
-                                     [field("text", "Сообщение сохранено", "Message retained"), field("intent", "Намерение", "Intent")], area=area, visible=condition + " && $state.pendingNote"))
-    widgets = [header, status, *actions, tabs, *result_widgets, brief, checks, process, context_button, diagnostics, *conversations]
+    widgets = [header, status, *actions, tabs, *result_widgets, brief, checks, process, context_button, diagnostics]
     page = {"id": "builder", "title": "Builder", "layout": {"type": "split", "areas": [{"id": "main", "role": "main"}, {"id": "conversation", "role": "aux", "width": 360}],
             "auxWidth": 360, "variants": [{"id": "conversation-focus", "when": "$state.workbenchView === 'conversation'", "type": "single", "areas": [{"id": "main", "role": "main"}]}]},
             "presentation": {"defaultProfile": "desktop", "profiles": {"desktop": {"density": "compact", "maxContentWidthPx": 1600}}},
@@ -333,7 +324,7 @@ def build_document():
                              "baselineAssets": [{"id": "pump", "name": "Насос К-1", "location": "Цех 1"}, {"id": "fan", "name": "Вентилятор Н-7", "location": "Котельная"}],
                              "settingsId": "settings",
                              "designSettings": {"diagnostics": False},
-                             "pendingNote": "", "draftMessage": "", "reviewNote": "", "answer": ""},
+                             "pendingNote": "", "reviewNote": "", "answer": ""},
             "meta": {"builder": {"scenario_id": "builder", "functional": False, "design_prototype": True, "binding_mode": "mock",
                                  "workflow_contract": "adaos.builder.workflow.v1", "human_acceptance": "pending",
                                  "live_commands": False, "specimen_states": list(samples)}}, "widgets": widgets}
@@ -380,7 +371,7 @@ def build_document():
                 {"id": "002", "name": "002 · согласованная основа", "base": "001", "status": "Зафиксирована", "updated": "Вчера, 18:12"},
             ]), "inputs": {"columns": [field("name", "Редакция", "Revision"), field("status", "Состояние", "State"), field("updated", "Обновлено", "Updated")], "selectable": True, "pagination": {"enabled": False}}, "actions": [update("select", inspectedRevision="$event.id")]},
             details("design-history-inspection", "Редакция $state.inspectedRevision", "Revision $state.inspectedRevision", {"effect": "Просмотр истории не меняет цель Preview и основу следующего сообщения."}, [field("effect", "Навигация", "Navigation")]),
-            toolbar("design-history-actions", [button("show", "Показать эту редакцию", "Show this revision", "eye-outline")], [update("click:show", previewRevision="$state.inspectedRevision", workbenchView="result", selectedAssetId="", selectedAsset={}), {"on": "click:show", "type": "closeModal"}]),
+            toolbar("design-history-actions", [button("show", "Показать эту редакцию", "Show this revision", "eye-outline")], [update("click:show", previewRevision="$state.inspectedRevision", workbenchView="result", selectedAssetId="", selectedAsset={}, selectedFile={}, selectedFileId=""), {"on": "click:show", "type": "closeModal"}]),
         ]),
         "design-applications": modal("design-applications", "Приложения · демонстрационные записи", "Applications · demonstration records", [
             {"id": "design-application-table", "type": "ui.table", "area": "main", "dataSource": source([
@@ -410,6 +401,7 @@ def build_document():
     modals["design-answer"]["schema"]["widgets"][1]["inputs"]["autoCommit"] = True
     add_material_views(page, modals)
     add_delivery_views(page, modals)
+    add_review_surfaces(page, modals)
     resources = {f"builder.design.i18n.{locale}": {"kind": "data", "role": "i18n", "locale": locale, "path": f"assets/i18n/design-{REVISION}-{locale}.json", "mime": "application/json", "delivery": "core"} for locale in LOCALES}
     resources["builder.design.reference"] = {"kind": "image", "scope": "scenario", "path": f"assets/design-{REVISION}-reference.png", "mime": "image/png", "delivery": "core"}
     return {"schema": "adaos.webui.v1", "generated_by": "human-authored-builder-design",
@@ -433,15 +425,40 @@ def add_material_views(page, modals):
              **text_field("content", "Код реализации появляется на этапе автоматизации. В прототипе 003 его еще нет.", "Implementation code is added during Automation. Prototype 003 has no implementation yet.")}]}]}
     baseline = copy.deepcopy(files)
     baseline["children"][0]["children"][0]["content"] = '```json\n{"revision": "002", "layout": "split", "interaction": "select"}\n```'
-    page["initialState"].update(fileTree=files, baselineFileTree=baseline, selectedFile={}, selectedFileId="",
+    components = {
+        "project": {"id": "project", "label": "equipment-inspections", "component_kind": "project", "version": "0.2.0", "baseVersion": "0.1.0", "editable": True,
+                    "tree": {"id": "project-root", "children": [
+                        {"id": "project-manifest", "title": "project.yaml", "path": "project.yaml", "kind": "YAML", "content": "```yaml\nid: equipment-inspections\ncomponents:\n  - scenario:equipment\n  - skill:equipment\n```"},
+                        {"id": "readme", "title": "README.md", "path": "README.md", "kind": "Markdown"}]}},
+        "scenario": {"id": "scenario", "label": "equipment", "component_kind": "scenario", "version": "0.2.0", "baseVersion": "0.1.0", "editable": True,
+                     "tree": files["children"][0], "baselineTree": baseline["children"][0]},
+        "skill": {"id": "skill", "label": "equipment_skill", "component_kind": "skill", "version": "0.1.0", "baseVersion": "0.1.0", "editable": True,
+                  "tree": {"id": "skill-root", "children": [{"id": "skill-manifest", "title": "skill.yaml", "path": "skills/equipment/skill.yaml", "kind": "YAML",
+                      "content": "```yaml\nid: equipment_skill\nstatus: scaffold\n```"}]}},
+        "dependency": {"id": "dependency", "label": "voice_chat_skill", "component_kind": "skill", "version": "0.6.19", "baseVersion": "0.6.19", "editable": False,
+                       "tree": {"id": "dependency-root", "children": [{"id": "dependency-manifest", "title": "skill.yaml", "path": "skills/voice_chat_skill/skill.yaml", "kind": "YAML",
+                           "content": "```yaml\nid: voice_chat_skill\nversion: 0.6.19\n```"}]}},
+    }
+    for component in components.values():
+        component.setdefault("baselineTree", copy.deepcopy(component["tree"]))
+    components["project"]["baselineTree"]["children"][1]["content"] = "# Осмотр оборудования\n\nВыбор оборудования и просмотр осмотров."
+    page["initialState"].update(selectedFile={}, selectedFileId="",
+        fileComponents=components, selectedComponent=components["scenario"], selectedComponentId="scenario",
         attachmentDraft=[], includeReference=False, referenceId="reference", inputRecordId="input-record")
     visible = "$state.workbenchView === 'files'"
     page["widgets"].extend([
-        details("design-files-scope", "Файлы приложения · прототип $state.previewRevision", "Application files · prototype $state.previewRevision",
+        details("design-files-scope", "Файлы приложения · редакция $state.previewRevision", "Application files · revision $state.previewRevision",
                 {**text_field("scope", "Снимок редакции. Содержимое файлов в этом макете сокращено; это не проводник рабочего компьютера.", "Revision snapshot. File contents in this specimen are abbreviated; this is not a filesystem browser.")},
                 [field("scope", "Область", "Scope")], visible=visible),
+        toolbar("design-component-picker", [button("component", "Компонент", "Component", "layers-outline", selectedStateKey="selectedComponentId", optionMetaPaths=["component_kind"],
+            options=[{k: c[k] for k in ("id", "label", "component_kind")} for c in components.values()])],
+            [update("select:component", selectedComponentId="$event.id", selectedComponent="$state.fileComponents.$event.id", selectedFile={}, selectedFileId="")], visible=visible),
+        details("design-component-scope", "$state.selectedComponent.label", "$state.selectedComponent.label", {
+            "component_kind": "$state.selectedComponent.component_kind", "version": choose(equals("$state.previewRevision", "002"), "$state.selectedComponent.baseVersion", "$state.selectedComponent.version"),
+            "access": choose(equals("$state.selectedComponent.editable", True), "Собственный компонент", "Подключенная зависимость · только чтение")},
+            [field("component_kind", "Тип", "Kind"), field("version", "Версия компонента", "Component version"), field("access", "Владение", "Ownership")], visible=visible),
         {"id": "design-file-tree", "type": "visual.taigaTree", "area": "main", "visibleIf": visible,
-         "dataSource": source(choose(equals("$state.previewRevision", "002"), "$state.baselineFileTree", "$state.fileTree")),
+         "dataSource": source(choose(equals("$state.previewRevision", "002"), "$state.selectedComponent.baselineTree", "$state.selectedComponent.tree")),
          "inputs": {"hideRoot": True, "expanded": True, "wrapTitles": True, "selectionMode": "leaf", "selectedStateKey": "selectedFileId"},
          "actions": [update("select", selectedFile="$event", selectedFileId="$event.id"), modal_action("select", "design-file-viewer")]},
         details("design-inputs-scope", "Материалы для Builder", "Materials for Builder", {
@@ -466,17 +483,21 @@ def add_material_views(page, modals):
         **text_field("delivery", "Выбранные файлы: только имена и метаданные в памяти браузера. Байты не загружены; модель ничего не получила.", "Selected files: names and metadata in browser memory only. Bytes are not uploaded; nothing was sent to the model."),
         "included": "$state.includeReference", "files": "$state.attachmentDraft",
     }, [field("delivery", "Доставка", "Delivery"), field("included", "Пример кода выбран", "Code reference selected"), field("files", "Локальный выбор", "Local selection")], visible="$state.workbenchView === 'inputs'")])
-    modals["design-file-viewer"] = modal("design-file-viewer", "Файл · прототип $state.previewRevision", "File · prototype $state.previewRevision", [
-        details("design-file-content", "$state.selectedFile.title", "$state.selectedFile.title", "$state.selectedFile", [field("path", "Путь", "Path"), field("kind", "Формат", "Format"), field("content", "Содержимое", "Content", kind="markdown")]),
-        toolbar("design-file-request", [button("request-file-change", "Предложить изменение", "Request a change", "chatbox-outline", enabledIf="$state.previewRevision === '003'")],
-                [update("click:request-file-change", workbenchView="conversation", requestedFile="$state.selectedFile.path", requestRevision="$state.previewRevision"), {"on": "click:request-file-change", "type": "closeModal"}]),
+    modals["design-file-viewer"] = modal("design-file-viewer", "Файл приложения", "Application file", [
+        details("design-file-content", "$state.selectedFile.title", "$state.selectedFile.title", {
+            "path": "$state.selectedFile.path", "kind": "$state.selectedFile.kind", "revision": "$state.previewRevision",
+            "content": choose(equals("$state.selectedFile.id", "readme"),
+                              choose(equals("$state.previewRevision", "002"), "$state.selectedFile.content", "$state.readmeText"), "$state.selectedFile.content")},
+            [field("path", "Путь", "Path"), field("kind", "Формат", "Format"), field("revision", "Редакция", "Revision"), field("content", "Содержимое", "Content", kind="markdown")]),
+        toolbar("design-file-request", [button("request-file-change", "Предложить изменение", "Request a change", "chatbox-outline", enabledIf="$state.previewRevision === '003' && $state.selectedComponent.editable")],
+                [update("click:request-file-change", workbenchView="conversation", conversationMode="task", requestedFile="$state.selectedFile.path", requestComponent="$state.selectedComponent.label", requestRevision="$state.previewRevision"), {"on": "click:request-file-change", "type": "closeModal"}]),
     ])
     modals["design-input-viewer"] = modal("design-input-viewer", "Исходный материал", "Input reference", [
         details("design-input-content", "$state.selectedInput.name", "$state.selectedInput.name", "$state.selectedInput", [field("role", "Назначение", "Role"), field("content", "Содержимое", "Content", kind="markdown")]),
         details("design-reference-image", "Скриншот-ориентир", "Reference screenshot", "$state.selectedInput", [], mediaKey="media", mediaKindKey="mediaKind", visible="$state.selectedInput.id === 'screen'"),
     ])
-    page["widgets"].append(details("design-file-request-scope", "Предложение к файлу", "File change request", {"file": "$state.requestedFile", "revision": "$state.requestRevision"},
-        [field("file", "Файл", "File"), field("revision", "Основа сообщения", "Message base")], visible="$state.workbenchView === 'conversation' && $state.requestedFile"))
+    page["widgets"].append(details("design-file-request-scope", "Предложение к файлу", "File change request", {"file": "$state.requestedFile", "component": "$state.requestComponent", "revision": "$state.requestRevision"},
+        [field("component", "Компонент", "Component"), field("file", "Файл", "File"), field("revision", "Основа сообщения", "Message base")], visible="$state.workbenchView === 'conversation' && $state.requestedFile && $state.conversationMode === 'task'"))
 
 
 def add_delivery_views(page, modals):
@@ -505,14 +526,112 @@ def add_delivery_views(page, modals):
         ])
 
 
+def add_review_surfaces(page, modals):
+    page["initialState"].update(
+        readmeRecordId="readme", readmeText="# Осмотр оборудования\n\nУчет оборудования, осмотров и пунктов проверки.\n\n## Работа\n\nВыберите оборудование, затем осмотр. Редактирование доступно отдельной командой.\n\n## Ограничения\n\nРедакция 003 демонстрирует интерфейс; постоянное хранение относится к автоматизации.",
+        readmeStatus="Черновик для публичного README.md", readmeAuthor="Builder · пример", conversationMode="task",
+        conversationModes={"task": {"id": "task", "label": "Задача · Change 12", "thread": "specimen:equipment:change:12"}, "informal": {"id": "informal", "label": "Свободное обсуждение", "thread": "specimen:equipment:informal"}},
+        informalNote="", platformRequestStatus="Не отправлен", platformRequestTarget="client",
+    )
+    page["initialState"]["designSettings"].update(profile="standard", model="gpt-5", provider="openai", reasoning="low", voice=False)
+    settings = modals["design-settings"]["schema"]["widgets"][0]
+    settings["inputs"]["fields"].extend([
+        label("Название приложения", "Application title", id="applicationTitle", type="shortText", required=True),
+        label("Профиль разработки", "Development profile", id="profile", type="dropdown", options=[label("Стандартный", "Standard", value="standard"), label("Строгий", "Strict", value="strict"), label("Творческий", "Creative", value="creative")]),
+        label("Провайдер · пример", "Provider · specimen", id="provider", type="dropdown", options=[label("OpenAI", "OpenAI", value="openai")]),
+        label("Модель · пример", "Model · specimen", id="model", type="dropdown", options=[label("gpt-5", "gpt-5", value="gpt-5")]),
+        label("Интенсивность рассуждений", "Reasoning effort", id="reasoning", type="dropdown", options=[label("Low", "Low", value="low"), label("High", "High", value="high")]),
+        label("Голосовой ввод", "Voice input", id="voice", type="toggle"),
+    ])
+    settings["dataSource"] = source({"id": "settings", "applicationTitle": "$state.applicationTitle", **{key: "$state.designSettings." + key for key in ("diagnostics", "profile", "provider", "model", "reasoning", "voice")}})
+    settings["actions"][0]["params"]["applicationTitle"] = "$event.values.applicationTitle"
+    modals["design-settings"]["schema"]["widgets"].append(details("design-settings-boundary", "Настройки разработки", "Development settings", {
+        **text_field("scope", "Применяются к следующим запускам этого приложения, не меняют уже выполняющийся. В макете сохраняются локально; доступность моделей и голосового канала не проверяется.", "Apply to future runs of this application, not a running executor. This specimen stores local values; model and voice-channel availability are not checked.")}, [field("scope", "Область", "Scope")]))
+    modals["design-preview"] = modal("design-preview", "Preview макета Builder", "Builder specimen Preview", [
+        details("design-preview-target", "Точное назначение", "Exact destination", {
+            "target": f"dev:builder · макет {REVISION} · desktop-dev", "url": PREVIEW_URL,
+            **text_field("boundary", "Откроется этот макет Builder, не настоящее приложение Осмотр оборудования. Адрес 127.0.0.1 доступен только на этой машине; для другого устройства нужен адрес от сервиса назначения Preview.", "Opens this Builder specimen, not a real Equipment inspections application. 127.0.0.1 works only on this machine; another device needs a reachable address from the Preview destination service.")},
+            [field("target", "Цель", "Target"), field("boundary", "Доступность", "Availability"), field("url", "Ссылка", "Link")]),
+        {"id": "design-preview-qr", "type": "visual.qrCode", "area": "main", "dataSource": source({"qr_text": PREVIEW_URL, "caption": "Локальный адрес макета Builder"}), "inputs": {"bindField": "qr_text", "captionField": "caption", "width": 220}},
+        toolbar("design-preview-open", [button("open-preview-window", "Открыть в новом окне", "Open in new window", "open-outline")],
+            [{"on": "click:open-preview-window", "type": "openUrl", "params": {"url": PREVIEW_URL, "target": "_blank"}}]),
+    ])
+    page["widgets"].extend([
+        details("design-readme", "README.md", "README.md", {"content": choose(equals("$state.previewRevision", "002"), "# Осмотр оборудования\n\nВыбор оборудования и просмотр осмотров.", "$state.readmeText"),
+            "status": choose(equals("$state.previewRevision", "002"), "Исторический снимок · только чтение", "$state.readmeStatus"),
+            "author": choose(equals("$state.previewRevision", "002"), "Builder · пример 002", "$state.readmeAuthor")},
+            [field("content", "Документ пользователя", "User documentation", kind="markdown"), field("status", "Публикация", "Publication"), field("author", "Последняя правка", "Last edit")], visible="$state.workbenchView === 'readme'"),
+        toolbar("design-readme-actions", [button("edit-readme", "Редактировать README", "Edit README", "create-outline", enabledIf="$state.previewRevision === '003'"),
+            button("ask-readme", "Предложить правку Builder", "Ask Builder to revise", "chatbox-outline", enabledIf="$state.previewRevision === '003'")],
+            [modal_action("click:edit-readme", "design-readme-editor"), update("click:ask-readme", workbenchView="conversation", conversationMode="task", requestedFile="README.md", requestComponent="equipment-inspections", requestRevision="$state.previewRevision")], visible="$state.workbenchView === 'readme'"),
+    ])
+    editor = form("design-readme-form", [label("README.md · Markdown", "README.md · Markdown", id="content", type="longText", required=True)], "Сохранить в макете", "Save in specimen", [
+        update("submit", readmeText="$event.values.content", readmeAuthor="Вы · локальная правка", readmeStatus="Изменено в макете · не опубликовано"), {"on": "submit", "type": "closeModal"}])
+    editor["dataSource"] = source({"id": "readme", "content": "$state.readmeText"})
+    editor["inputs"]["selectedStateKey"] = "readmeRecordId"
+    modals["design-readme-editor"] = modal("design-readme-editor", "Редактирование README.md", "Edit README.md", [editor])
+
+    for suffix, area, visible in (("side", "conversation", "$state.workbenchView !== 'conversation'"), ("full", "main", "$state.workbenchView === 'conversation'")):
+        page["widgets"].append(toolbar("design-conversation-controls-" + suffix, [button("conversation-mode", "Обсуждение", "Conversation", "chatbubbles-outline", selectedStateKey="conversationMode", options=[
+            label("Задача · Change 12", "Task · Change 12", id="task"), label("Свободное обсуждение", "Informal discussion", id="informal")]), button("conversation-channels", "Каналы", "Channels", "link-outline")],
+            [update("select:conversation-mode", conversationMode="$event.id"), modal_action("click:conversation-channels", "design-conversation-channels")], area=area, visible=visible))
+        for mode in ("task", "informal"):
+            condition = visible + f" && $state.conversationMode === '{mode}'"
+            messages = ([{"id": "request", "from": "user", "text": "Нужно редактировать объект, не теряя его осмотры."}, {"id": "response", "from": "hub", "text": "$state.current.summary"}] if mode == "task" else [
+                {"id": "idea", "from": "user", "text": "Стоит ли позже добавить журнал обслуживания? Пока только обсуждаем."}, {"id": "discussion", "from": "hub", "text": "Можно обсудить варианты. Это не меняет Change 12 и не запускает разработку."}])
+            page["widgets"].append({"id": f"design-conversation-{suffix}-{mode}", "type": "ui.chat", "area": area, "visibleIf": condition, "dataSource": source({"messages": messages}), "inputs": {"alignRightFrom": "user"}})
+            fields = []
+            if mode == "task":
+                fields.append(label("Намерение сообщения", "Message intent", id="intent", type="dropdown", defaultValue="correction", stateKey="draft.taskIntent", options=[
+                    label("Исправить результат", "Correct result", value="correction"), label("Добавить требование", "Add requirement", value="requirement"),
+                    label("Обсудить без изменений", "Discuss without changes", value="discussion")]))
+            fields.append(label("Сообщение", "Message", id="text", type="longText", required=True, stateKey="draft." + mode))
+            composer = form(f"design-composer-{suffix}-{mode}", fields, "Сохранить сообщение в макете", "Keep message in specimen", [
+                update("submit", **({"pendingNote": "$event.values.text", "pendingIntent": "$event.values.intent"} if mode == "task" else {"informalNote": "$event.values.text"}))], area=area)
+            composer["visibleIf"] = condition
+            composer["inputs"]["autoCommit"] = True
+            page["widgets"].append(composer)
+            note = "$state.pendingNote" if mode == "task" else "$state.informalNote"
+            page["widgets"].append(details(f"design-pending-note-{suffix}-{mode}", "Сохраненное сообщение · макет", "Retained message · specimen", {"text": note, "thread": "$state.conversationModes." + mode + ".thread", "intent": "$state.pendingIntent" if mode == "task" else "discussion"},
+                [field("text", "Текст", "Text"), field("intent", "Намерение", "Intent"), field("thread", "Диалог", "Conversation")], area=area, visible=condition + " && " + note))
+        page["widgets"].append(toolbar("design-promote-idea-" + suffix, [button("promote-idea", "Предложить для задачи", "Propose for task", "arrow-forward-outline")], [modal_action("click:promote-idea", "design-promote-idea")], area=area, visible=visible + " && $state.conversationMode === 'informal' && $state.informalNote"))
+    modals["design-promote-idea"] = modal("design-promote-idea", "Передать идею в задачу?", "Propose this idea for the task?", [
+        details("design-idea-summary", "Дополнение к Change 12", "Addendum to Change 12", {"text": "$state.informalNote", "effect": "После подтверждения появится предложение в задаче. Текущий исполнитель и принятые редакции не изменятся."}, [field("text", "Идея", "Idea"), field("effect", "Последствие", "Effect")]),
+        toolbar("design-idea-confirm", [button("confirm-idea", "Передать в макете", "Propose in specimen", "checkmark-outline")], [update("click:confirm-idea", pendingNote="$state.informalNote", pendingIntent="proposed_addendum", conversationMode="task", requestedFile="", requestComponent="", requestRevision=""), {"on": "click:confirm-idea", "type": "closeModal"}]),
+    ])
+    modals["design-conversation-channels"] = modal("design-conversation-channels", "Каналы текущего диалога", "Conversation channels", [
+        details("design-conversation-route", "Один диалог, разные способы доставки", "One conversation, different delivery channels", {"conversation": choose(equals("$state.conversationMode", "task"), "$state.conversationModes.task.thread", "$state.conversationModes.informal.thread"), "web": "Макет · локальные сообщения", "telegram": "Не подключен; требуется привязка Telegram", "boundary": "Задача и свободное обсуждение имеют разные идентификаторы. Смена канала не меняет полномочия и не переносит сообщения в другую задачу."},
+            [field("conversation", "Диалог", "Conversation"), field("web", "Web", "Web"), field("telegram", "Telegram", "Telegram"), field("boundary", "Область", "Scope")]),
+    ])
+    page["widgets"].extend([
+        details("design-development-feedback", "Сигналы разработки", "Development feedback", {"source": "Validator · Change 12 · редакция 003", "category": "missing_capability", "finding": "Пример: для следующего требования не хватает универсального API или компонента отображения.", "effect": "Уточнение бизнес-требования не устраняет ограничение платформы. Нужен отдельный запрос владельцу Core или Client.", "status": "$state.platformRequestStatus"},
+            [field("source", "Происхождение", "Origin"), field("category", "Тип", "Category"), field("finding", "Наблюдение", "Finding"), field("effect", "Влияние", "Impact"), field("status", "Запрос в платформу", "Platform request")], visible="$state.workbenchView === 'development-feedback'"),
+        toolbar("design-development-feedback-actions", [button("request-platform", "Подготовить запрос в платформу", "Prepare platform request", "construct-outline")], [modal_action("click:request-platform", "design-platform-request")], visible="$state.workbenchView === 'development-feedback'"),
+    ])
+    modals["design-platform-request"] = modal("design-platform-request", "Запрос доработки платформы", "Platform development request", [
+        form("design-platform-request-form", [label("Получатель", "Recipient", id="target", type="dropdown", required=True, defaultValue="client", options=[label("Core / SDK", "Core / SDK", value="core"), label("Client / UI", "Client / UI", value="client")]),
+            label("Что требуется", "Requested capability", id="summary", type="longText", required=True)], "Проверить запрос", "Review request", [update("submit", platformRequestTarget="$event.values.target", platformRequestSummary="$event.values.summary"), {"on": "submit", "type": "closeModal"}, modal_action("submit", "design-platform-consent")]),
+    ])
+    modals["design-platform-consent"] = modal("design-platform-consent", "Разрешить передачу запроса?", "Authorize sending this request?", [
+        details("design-platform-consent-details", "Отдельный цикл разработки", "Separate development cycle", {"target": "$state.platformRequestTarget", "summary": "$state.platformRequestSummary", "included": "Текст запроса, Change 12, редакция 003, ссылка на сигнал. Исходники, вложения и полный чат не включены.", "effect": "В макете будет записано только согласие, ничего не отправится. В рабочем процессе потребуется квитанция доставки и связь с внешней задачей; текущая задача не возобновляется автоматически."},
+            [field("target", "Получатель", "Recipient"), field("summary", "Содержание", "Content"), field("included", "Что передается", "Included data"), field("effect", "Последствия", "Effects")]),
+        toolbar("design-platform-consent-actions", [button("confirm-platform", "Разрешить в макете", "Authorize in specimen", "checkmark-outline")], [update("click:confirm-platform", platformRequestStatus="Согласован в макете · не отправлен"), {"on": "click:confirm-platform", "type": "closeModal"}]),
+    ])
+
+
 def audit_safety(value):
     if isinstance(value, dict):
-        if "on" in value and value.get("type") not in {"updateState", "openModal", "closeModal", "openDevTickets"}:
+        if "on" in value and value.get("type") == "openUrl":
+            if value.get("params") != {"url": PREVIEW_URL, "target": "_blank"}:
+                raise ValueError("Only navigation to the current local specimen is allowed")
+        elif "on" in value and value.get("type") not in {"updateState", "openModal", "closeModal", "openDevTickets"}:
             raise ValueError("Only local state, modal navigation and the existing feedback panel are allowed")
         if value.get("type") == "openModal" and not value.get("params", {}).get("modalId"):
             raise ValueError("Modal navigation must use the Client modalId contract")
-        if value.get("type") in {"callSkill", "callMcp", "callHost", "resourceOperation", "openWorkspace", "openUrl"}:
+        if value.get("type") in {"callSkill", "callMcp", "callHost", "resourceOperation", "openWorkspace"}:
             raise ValueError("Design specimen must not execute external or live commands")
+        if value.get("sendCommand"):
+            raise ValueError("Design chat cannot dispatch live transport commands")
         if value.get("kind") in {"api", "skill", "mcp", "stream", "resourceQuery", "projection"}:
             raise ValueError("Design specimen must not query live process data")
         for child in value.values():

@@ -324,6 +324,13 @@ machine-checked impact set.
 
 ## C3. Renderer Conformance And Delivery
 
+- [ ] `[should]` Qualify conversational choice controls as a reusable composition
+  of chat, menus and message actions. Scope selection, action/response identity,
+  draft isolation, keyboard focus and narrow layout must preserve the canonical
+  interaction contract and limited-channel alternatives. Builder's prototype
+  currently composes existing `ui.chat`, `ui.actions` and `ui.form`; it does not
+  establish a new chat transport or grant dropdowns workflow authority.
+
 - [ ] `[must]` Add contract-driven renderer tests for semantic input,
   interactions, action emission, state ownership, and structured failures.
 - [ ] `[must]` Add compact and wide browser probes with DOM, accessibility

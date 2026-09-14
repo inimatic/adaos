@@ -107,6 +107,23 @@ Implementation boundary: Conversation and governed status projections exist; a w
 - [ ] `[must]` Persist clarification drafts per Project/Change/question set;
   reject stale continuation and resume only after required answers and explicit
   consent. Batch rendering alone does not implement durable continuations.
+- [x] `[should]` Restore the full wrapping application title, clarify revision
+  labeling and model component selection, development settings, Preview link/QR,
+  informal discussion, platform-request consent and public README editing.
+- [ ] `[must]` Retain composition-scoped file selection and ownership: Project,
+  Scenario, Skill and referenced dependency; validate missing/stale member,
+  exact revision and path/digest on reads and proposed changes.
+- [ ] `[must]` Bind public README read/edit/save/cancel and LLM patches to one
+  artifact with digest preconditions, conflict review and publication boundary.
+- [ ] `[must]` Bind separate informal/formal histories and drafts to canonical
+  dialogs. Confirm promotion to an addendum; preserve Web/Telegram authority,
+  correlation and delivery identity without a Builder-only chat implementation.
+- [ ] `[must]` Restore Development Feedback filtering/provenance and reviewed
+  Core/Client escalation with payload consent, delivery receipts, downstream
+  task identity and explicit dependency recheck/continuation.
+- [ ] `[must]` Verify every development setting has an effective acknowledged
+  binding. The old form displayed profile/provider/voice while its submit
+  command forwarded only model; visual field parity is insufficient.
 - [ ] `[must]` Obtain human acceptance of the wide/compact design and its
   interaction semantics. Automated interaction checks do not grant this.
 - [ ] `[must]` Bind accepted surfaces to governed state/commands, durable
@@ -120,6 +137,33 @@ Implementation boundary: Conversation and governed status projections exist; a w
   This is a BIP-02 sub-scope, not another independent top-level package.
 
 Exit/remaining work: Project generated, structurally qualified, browser qualified, user accepted, Automation ready and blocked/partial outcomes separately. Show material assumptions and useful recovery without exposing internal prompt phases.
+
+#### Replacement Parity Gate
+
+The operational Workspace Builder and its functional-parity manifest remain
+the reference until the accepted replacement passes live bindings. The matrix
+is a migration boundary, not a declaration that simulated controls implement
+the old functionality.
+
+| Existing capability | Target surface | Replacement boundary |
+| --- | --- | --- |
+| Select/create application; templates | Application picker | Selection specimen exists; creation/template flow not modeled yet |
+| Metadata, versions, stability; missing application | Application overview / Settings | Name editing modeled; complete metadata, missing-state recovery and archive/delete/restore not modeled |
+| Component list, file tree, protected files | Files | Component/tree/ownership modeled; real scoped reads and errors pending |
+| General source-file editing | Files / external development tools | Deliberately narrowed MVP: read-only plus LLM request; full file IDE deferred, README exception modeled |
+| Development model/profile/provider controls | Settings | Local fields modeled; effective settings binding/validation pending |
+| Preview selection, new window, QR, comparison | Result / Preview / Revisions | Local specimen link/QR and revision inspection modeled; live target comparison/reachability pending |
+| Formal task chat and history | Conversation | Native chat plus local composer modeled; durable conversation and workflow commands pending |
+| Informal discussion | Conversation scope menu | Separate scope and confirmed proposal modeled; canonical cross-channel binding pending |
+| Technical specification and addenda | Task / Conversation | Read-only brief and proposal modeled; editable specification/addendum lifecycle pending |
+| Prototype approval, Automation start/retry/return | Current work / Process | Separate decisions/recovery modeled; governed implementation bindings and return-to-Prototype pending |
+| Process tree, exact ref inspection, history | Process / Revisions | Revision navigation modeled; complete live graph/provenance pending |
+| Trial, release, source push, publication | Deliveries | Local Beta/Stable decision specimen; real distribution/source push qualification remains gated |
+| Stable subscription update plan/apply | Deliveries / Application overview | Not modeled; retained must gate, no silent omission |
+| Development Feedback filters/details | Signals | Finding and consent modeled; full filtering/triage and downstream receipts pending |
+| Bound development session / initiator | Task provenance / Application overview | Real project-owned initiator retained in architecture; not modeled in this fixture |
+| Dev Tickets / screenshots | Dev Tickets | Existing panel reused; full capture/upload/global-scope qualification remains open |
+| Public user documentation | README | Render/edit/reopen modeled; actual file writes, conflicts and release packaging pending |
 
 ### BIP-03
 

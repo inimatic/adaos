@@ -869,6 +869,39 @@ Two resource surfaces have different authority and lifetime:
   inspection cannot mutate the current head. Package source, runtime data and
   reference inputs are not mixed in one editable filesystem.
 
+Application Files first selects a member of the inspected composition: Project
+root, owned Scenario/Skill, or referenced dependency. The selector names its
+kind, identity, version/source and ownership. The tree is scoped to that member;
+the same relative filename in two members cannot address the same file by
+accident. Changing member/revision clears stale file selection. Read/patch
+requests carry Project, composition revision, member ref and path/digest.
+Referenced dependencies are read-only and cannot be edited or forked implicitly.
+Absent/unavailable members and truncated listings must be explicit, not silently
+replaced with the Project root. Preserve the old component-selection capability,
+not necessarily its vertically stacked list layout.
+
+The header's full application name is ordinary wrapping text, including suffixes;
+ellipsis is acceptable only in compact command triggers. Use `Revision <id>` for
+the inspected working artifact and expose its actual kind (Prototype,
+Implementation or Release) in provenance instead of hard-coding `Prototype` for
+every phase. If an alternate head must be shown, say `Latest candidate <id>`
+and explain what it differs from; omit a duplicate unexplained `current <id>`.
+
+Development settings belong in Settings, scoped to this application and future
+runs. Provider/model/profile/reasoning and channel controls must expose effective
+acknowledged values, reject unsupported combinations and retain the running
+request's original settings. A displayed field with no applied binding is not
+feature parity. Model/provider choice is obtained from capabilities, not a
+permanently hard-coded renderer menu.
+
+Preview retains both opening a new window and QR access through the destination
+resolver, using the exact materialized artifact and existing paired Webspace.
+Showing a QR code does not prove cross-device reachability: local-only,
+unavailable/stale, reachable and unauthorized destinations are different states.
+Do not encode access tokens or create Webspaces to obtain a link. A specimen
+may open itself through an explicitly labeled local-only link; that is not a
+real generated application's Preview or remote-device qualification.
+
 MVP input intake uses reviewed stored references and observable upload/error/
 removal states, not a desktop file picker that pretends bytes reached the LLM.
 The design specimen may exercise only local metadata selection, provided it
@@ -893,6 +926,25 @@ The reusable interaction basis is the
 and [tree view](https://www.w3.org/WAI/ARIA/apg/patterns/treeview/): focus and
 selection are different, and hierarchy should be navigable rather than flattened.
 These patterns do not require Builder-specific Client components.
+
+### Public Application README
+
+`README.md` at the Project root is the canonical user-facing documentation
+artifact, co-authored by the human and LLM. It is distinct from the technical
+specification, private context/materials and workflow logs. Expose rendered
+Markdown, an explicit edit/save/cancel path, authorship/base revision and a
+scoped request to Builder. Its tree entry and README view read the same bytes.
+Historical revisions and foreign dependencies remain read-only.
+
+README editing is an MVP exception to otherwise read-only generated files.
+Human and LLM writes use the same revision/digest precondition; stale writes
+show a conflict with both versions, never last-writer-wins or silent overwrite.
+Draft/current/released/public documentation remain distinguishable. Saving an
+edit neither releases nor publishes it; public release includes the reviewed
+README in the immutable artifact. Do not copy prompts, secrets, external tickets
+or private reference files into public documentation without a reviewed reason.
+Rendering treats authored Markdown as untrusted content, not executable HTML
+or instructions; file/link navigation retains the existing safety boundary.
 
 ### Human Decision And Feedback Surface
 
@@ -925,6 +977,36 @@ explicit continuation validates the required answers against the still-current
 question set and candidate. An obsolete answer is not silently applied to a
 new Change. Optional preferences cannot block continuation. This does not
 mandate questionnaires for already-clear small requests.
+
+Informal application discussion and formal Change conversation are distinct
+scopes with stable conversation identities and separate drafts/history. A menu
+may select the scope, while message commands remain explicit actions. Discussing
+an idea never changes a workflow or starts execution. Proposing an informal
+message for a Change requires confirmation, preserves its origin and creates a
+visible proposal/addendum; it does not rewrite accepted scope or interrupt an
+active executor. Selecting a file or historical artifact cannot silently retarget
+an unsent message.
+
+Conversation scope is not a transport channel. Web, Telegram and voice project
+the same canonical dialog through trusted bindings with deduplication, response
+correlation, role and freshness checks. A dropdown is one Web presentation of a
+semantic choice; a limited channel may present the same choice as buttons or a
+numbered question. Do not give Client dropdown state workflow authority. Reuse
+the conversational protocol and chat renderer instead of creating a separate
+Builder-only transport/composer. A disconnected channel stays disconnected in
+the interface until actual binding/delivery evidence exists.
+
+Development Feedback is separate from clarification and UI Dev Tickets. A
+missing SDK/renderer capability can require another development cycle. The
+surface exposes finding/category, source, Project/Change/revision, affected
+contract, expected/observed behavior, evidence, blocking effect and triage status.
+It offers a reviewed request to the owning Core or Client team. Before sending,
+show recipient and exact payload/redactions and ask for consent. Proposed,
+authorized, queued, delivered, accepted and resolved are different facts; link
+the downstream task/receipt and deduplicate retries. Sending or receiving a fix
+does not automatically accept or resume the original application task: recheck
+the dependency/capability and obtain the appropriate continuation. Preserve
+Development Feedback filtering and provenance when replacing the old Builder.
 
 Feedback reuses **Dev Tickets**, its screenshot capture and Required actions
 element selection. Builder must not introduce a second screenshot store or

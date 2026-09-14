@@ -30,6 +30,8 @@ def test_specimen_uses_native_schema_without_live_execution():
     {"on": "click", "type": "futureUnknownExecutor"},
     {"on": "click", "type": "openModal", "target": "legacy-incompatible"},
     {"kind": "api", "url": "/api/builder"},
+    {"on": "click", "type": "openUrl", "params": {"url": "https://example.test"}},
+    {"sendCommand": "voice.chat.user"},
 ])
 def test_rejects_live_or_incompatible_contracts(action):
     with pytest.raises(ValueError):
@@ -79,7 +81,8 @@ def test_files_inputs_and_process_are_separate_scoped_views():
     widgets = {w["id"]: w for w in page["widgets"]}
     assert widgets["design-file-tree"]["type"] == "visual.taigaTree"
     assert widgets["design-file-tree"]["inputs"]["selectionMode"] == "leaf"
-    assert page["initialState"]["fileTree"] != page["initialState"]["baselineFileTree"]
+    component = page["initialState"]["fileComponents"]["scenario"]
+    assert component["tree"] != component["baselineTree"]
     assert page["initialState"]["includeReference"] is False
     viewer = application["modals"]["design-file-viewer"]["schema"]["widgets"]
     assert all(w["type"] != "ui.form" for w in viewer)
@@ -104,3 +107,51 @@ def test_delivery_steps_are_explicit_local_simulations():
         actions = modals["design-" + command]["schema"]["widgets"][-1]["actions"]
         assert actions[0]["params"]["current"] == "$state.samples." + target
         assert actions[1]["type"] == "closeModal"
+
+
+def test_component_selection_retains_ownership_and_revision_scope():
+    application = design.build_document()["ui"]["application"]
+    page = application["desktop"]["pageSchema"]
+    components = page["initialState"]["fileComponents"]
+    assert {c["component_kind"] for c in components.values()} == {"project", "skill", "scenario"}
+    assert components["dependency"]["editable"] is False
+    assert components["scenario"]["tree"] != components["scenario"]["baselineTree"]
+    picker = next(w for w in page["widgets"] if w["id"] == "design-component-picker")
+    assert picker["actions"][0]["params"]["selectedFile"] == {}
+    viewer = application["modals"]["design-file-viewer"]["schema"]["widgets"][-1]
+    assert "$state.selectedComponent.editable" in viewer["inputs"]["buttons"][0]["enabledIf"]
+    assert viewer["actions"][0]["params"]["requestComponent"] == "$state.selectedComponent.label"
+
+
+def test_header_has_application_title_and_no_ambiguous_head_label():
+    page = design.build_document()["ui"]["application"]["desktop"]["pageSchema"]
+    header = next(w for w in page["widgets"] if w["id"] == "design-workbench-header")
+    status = header["inputs"]["statusDataSource"]["value"]
+    assert status["title"] == "$state.applicationTitle"
+    assert status["target_label"].startswith("Редакция $state.previewRevision")
+    assert "текущий" not in status["target_label"]
+    assert header["inputs"]["buttons"][0]["label"] == "$state.applicationTitle"
+
+
+def test_readme_informal_chat_and_platform_feedback_do_not_implicitly_execute():
+    application = design.build_document()["ui"]["application"]
+    page = application["desktop"]["pageSchema"]
+    chats = [w for w in page["widgets"] if w["type"] == "ui.chat"]
+    assert len(chats) == 4
+    assert all(w["dataSource"]["kind"] == "static" and not w["inputs"].get("sendCommand") for w in chats)
+    ids = page["initialState"]["conversationModes"]
+    assert ids["task"]["thread"] != ids["informal"]["thread"]
+    editor = application["modals"]["design-readme-editor"]["schema"]["widgets"][0]
+    assert editor["inputs"]["selectedStateKey"] == "readmeRecordId"
+    assert editor["actions"][0]["params"]["readmeText"] == "$event.values.content"
+    viewer = application["modals"]["design-file-viewer"]["schema"]["widgets"][0]
+    assert viewer["dataSource"]["value"]["content"]["then"]["else"] == "$state.readmeText"
+    for w in page["widgets"]:
+        if w["id"].startswith("design-composer-") and w["id"].endswith("-task"):
+            assert {o["value"] for o in w["inputs"]["fields"][0]["options"]} == {"correction", "requirement", "discussion"}
+            assert w["actions"][0]["params"]["pendingIntent"] == "$event.values.intent"
+    consent = application["modals"]["design-platform-consent"]["schema"]["widgets"][-1]
+    assert set(consent["actions"][0]["params"]) == {"platformRequestStatus"}
+    proposal = application["modals"]["design-promote-idea"]["schema"]["widgets"][-1]
+    assert proposal["actions"][0]["params"]["requestedFile"] == ""
+    assert proposal["actions"][0]["params"]["requestComponent"] == ""

@@ -317,3 +317,64 @@ Source revision: `sha256:e63b1d86617d054589b44b31b0fa75ba211665a36d0ec4676946827
 The source snapshot includes deployable assets; local UI-revision history is
 separate development evidence. Core Client gitlink and `.sha` are aligned.
 Human acceptance and real bindings remain open. No Git push or API restart.
+
+## 2026-09-14: Workbench Compatibility And Shared README
+
+The next user review restored the full application identity and asked for old
+Builder parity, component-scoped Files, informal conversation, platform feedback
+and public documentation. Revisions 067-069 retain immutable design evidence;
+069 is materialized in the existing `desktop-dev`. The full name wraps in the
+header, including a long suffix; the bounded menu uses the same name. The
+identity line is `Revision 003 / Change 12 / design 069`, without an unexplained
+duplicate head or a phase-independent `Prototype` label.
+
+Files selects Project, Scenario, owned Skill or read-only dependency before
+rendering its version-scoped tree. Revision/member changes clear file selection.
+README has one local draft shared by rendered view, editor and tree inspection;
+save/reopen, cancel and read-only historical inspection are exercised. This
+does not write a live project file or publish documentation. The target adds
+the real shared human/LLM artifact with digest preconditions and conflict review.
+
+Native `ui.chat`, adjacent scope menus and local forms model formal and informal
+dialogs. Correction/requirement/discussion intents remain available; unsent
+drafts survive scope changes without mixing. A confirmed informal proposal
+cannot inherit an unrelated earlier file request. Channel identity is separate
+from task scope; Telegram remains explicitly disconnected. Development Feedback
+has a dedicated surface and a reviewed Core/Client request with consent before
+dispatch. The specimen records consent only, not a fabricated delivery receipt.
+Settings and the local Preview link/QR use existing generic components; the QR
+does not claim that a loopback address is reachable from another device.
+
+The old operational UI and functional-parity manifest were compared explicitly.
+BIP-02 now owns the replacement parity matrix, including unmodeled creation,
+metadata/lifecycle operations, technical specification/addenda, stable updates,
+initiator provenance and full feedback triage. The old settings form displayed
+profile/provider/voice but forwarded only model: future qualification must check
+effective application of each setting, not just field presence. No new
+Builder-specific renderer or chat transport was introduced. Concurrent Core Yjs
+and Client page-data/build changes were left outside this change.
+
+The browser caught a real initial README binding error: nested state-reference
+text in a tree record was not dereferenced by the viewer. The specimen now
+binds the viewer explicitly to the canonical local draft. A later extended
+probe incorrectly selected an Angular option by its serialized value; the
+probe now selects its visible label and still verifies the semantic intent.
+These are distinct findings, not reasons to relax the acceptance checks.
+
+Verification: 88 distinct Python tests passed across design, Workbench and WebUI
+schema; the final design/schema rerun passed all 55 cases. Final DEV browser
+qualification passes 44 checks at 1440x1000 and 390x844, with 98 screenshots,
+no page errors and no document-width overflow. Two additional read-only browser
+checks confirm the operational Workspace surface is preserved. DEV evidence is
+`e2e/artifacts/builder/workbench-design-20260914/browser-069/report.json`.
+The local package was inspected: it contains revision 069 and all three
+referenced resource files. Full EN/RU content, light theme, live transports,
+actual file writes/conflict handling and overall replacement acceptance remain
+open; this evidence qualifies the local design, not operational equivalence.
+
+Checkpoint: local `builder@0.2.130` via
+`adaos dev project push builder --local-only --bump patch`, with 56 source files.
+Release digest: `sha256:db268318baba3e397bd14793cb98cf589461b7b00b554f879e131b81c42c6230`.
+Source revision: `sha256:1c2f2ef4c63e4cab4eaf0c9c8695fb29913d48ab1d8e2613d070c27929c35fa6`.
+Workspace UI and owned handler hashes match the preservation receipt. No Git
+push, Workspace replacement, new Webspace, LLM call or API restart was performed.
