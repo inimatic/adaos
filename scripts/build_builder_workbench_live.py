@@ -350,13 +350,24 @@ def build():
             design.field("conversation_id", "Диалог", "Conversation"), design.field("thread_id", "Тема задания", "Task thread")])])
     phases = {"prototype": ("Прототип", "Prototype"), "automation": ("Автоматизация", "Automation"),
               "publication": ("Публикация", "Publication")}
-    statuses = {"prototype_editing": ("Доработка прототипа", "Prototype in progress"),
+    statuses = {"ready": ("Готово к работе", "Ready"),
+                "prototype_editing": ("Доработка прототипа", "Prototype in progress"),
                 "prototype_review": ("Ожидается проверка прототипа", "Prototype review needed"),
                 "automation_ready": ("Готово к автоматизации", "Ready for automation"),
+                "automation_failed": ("Ошибка автоматизации", "Automation failed"),
+                "automation_cancelled": ("Автоматизация остановлена", "Automation stopped"),
+                "automation_waiting": ("Выполняется автоматизация", "Automation running"),
+                "verification": ("Ожидается проверка реализации", "Implementation review needed"),
                 "verification_review": ("Ожидается проверка реализации", "Implementation review needed"),
+                "prototype_derivation_waiting": ("Подготовка прототипа из реализации", "Deriving prototype from implementation"),
                 "trial_ready": ("Реализация зафиксирована", "Implementation checkpointed"),
+                "trial_waiting": ("Подготовка Beta", "Preparing beta"),
                 "trial_review": ("Ожидается решение по Beta", "Beta review needed"),
                 "publication_ready": ("Готово к публикации", "Ready for publication"),
+                "publication_waiting": ("Выполняется публикация", "Publishing"),
+                "reconciliation_required": ("Требуется проверка состояния", "State reconciliation required"),
+                "cancelled": ("Изменение отменено", "Change cancelled"),
+                "superseded": ("Заменено другим изменением", "Superseded"),
                 "published": ("Опубликовано", "Published")}
     for prefix, labels in (("phase", phases), ("state", statuses)):
         for key, (ru, en) in labels.items():

@@ -91,6 +91,12 @@ must be qualified before using it for invoice settlement.
 
 ## Delivery And Recovery
 
+The worker and checkpoint use the same complete skill-manifest schema, including
+normalization and nested read-policy rules. Syntax, tool-link and targeted data
+route checks are additional checks, not substitutes for that schema. Structural
+failures belong in the bounded local repair report before source application or
+any checkpoint upload; deterministic checks must not first appear at publication.
+
 Every persisted session update emits `builder.automation.changed`. Builder UI
 can update from that event and call `get_state` for first paint or recovery.
 The persisted session and Skill Factory task are authoritative if an event is

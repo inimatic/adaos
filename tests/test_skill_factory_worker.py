@@ -4821,6 +4821,33 @@ def test_worker_compiles_manifest_bound_workflow_definition(tmp_path: Path) -> N
     assert workflow_check["definition_digest"].startswith("sha256:")
 
 
+def test_worker_rejects_manifest_schema_errors_before_checkpoint(tmp_path):
+    from adaos.services.skill.validation import validate_manifest_schema
+
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "demo"
+    skill_root.mkdir(parents=True)
+    manifest = {"name": "demo", "version": "0.1.0", "description": "Test", "entry": "handlers/main.py",
+                "data_routes": [{"surface": "widget:items", "route": "tool", "tool": "list_items",
+                                 "max_request_hz": 4, "preserve_last_value": True,
+                                 "read_policy": {"mode": "explicit", "triggers": ["mount"]}}]}
+    (skill_root / "skill.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    checks, errors = [], []
+    LocalSkillFactoryWorker._validate_skill_manifests(workspace, checks, errors)
+    assert checks == [{"kind": "skill.manifest.schema", "path": "skills/demo/skill.yaml", "ok": False}]
+    assert len(errors) == len(validate_manifest_schema(manifest))
+    assert any("Additional properties" in error for error in errors)
+    assert any("max_request_hz" in error and "required" in error for error in errors)
+    route = manifest["data_routes"][0]
+    for key in ("max_request_hz", "preserve_last_value"):
+        route["read_policy"][key] = route.pop(key)
+    (skill_root / "skill.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    checks, errors = [], []
+    LocalSkillFactoryWorker._validate_skill_manifests(workspace, checks, errors)
+    assert errors == [], errors
+    assert checks[0]["ok"] is True
+
+
 def test_worker_treats_browser_data_route_warnings_as_strict_errors(
     tmp_path: Path,
 ) -> None:

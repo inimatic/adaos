@@ -340,6 +340,20 @@ def validate_local_resource_declarations(
     return issues
 
 
+def validate_manifest_schema(manifest: Any) -> List[Issue]:
+    """Use the install/checkpoint manifest contract without importing candidate code."""
+    data = _normalize_spec(manifest) if isinstance(manifest, dict) else manifest
+    validator = Draft202012Validator(_load_schema())
+    issues = []
+    for error in validator.iter_errors(data):
+        pointer = "/".join(str(part) for part in error.absolute_path)
+        issues.append(Issue("error", "schema.invalid", f"skill.yaml schema violation: {error.message}",
+                            "skill.yaml" + (":" + pointer if pointer else "")))
+        if len(issues) >= 20:
+            break
+    return issues
+
+
 def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     issues: List[Issue] = []
     sy = skill_dir / "skill.yaml"
@@ -348,11 +362,8 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
         return issues
     raw = _read_yaml(sy)
     data = _normalize_spec(raw)
-    try:
-        schema = _load_schema()
-        Draft202012Validator(schema).validate(data)
-    except ValidationError as e:
-        issues.append(Issue("error", "schema.invalid", f"skill.yaml schema violation: {e.message}", "skill.yaml"))
+    issues.extend(validate_manifest_schema(raw))
+    if issues:
         return issues
 
     handler = skill_dir / "handlers" / "main.py"

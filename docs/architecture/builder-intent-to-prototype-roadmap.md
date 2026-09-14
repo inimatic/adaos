@@ -214,6 +214,9 @@ integration, not closure of the remaining interaction/continuation obligations.
   validate the selected reasoning effort and refresh availability at admission.
   Preserve explicit profile changes between terminal iterations in history;
   never silently substitute another model after an executor rejection.
+- [x] `[must]` Run the checkpoint's complete skill-manifest schema in worker
+  validation before apply, in addition to targeted contract checks. Retain schema
+  paths in repair evidence; do not label partial checks install-strict coverage.
 - [ ] `[must]` Qualify OpenSpec-aligned application specification and Change
   deltas with version/digest preconditions, explicit acceptance and preserved
   historical inputs. Do not introduce an independently mutable second tracker.

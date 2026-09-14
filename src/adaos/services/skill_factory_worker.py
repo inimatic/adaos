@@ -6851,6 +6851,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             errors,
             changed_paths=changed_paths,
         )
+        self._validate_skill_manifests(workspace, checks, errors)
         self._validate_skill_webui_contracts(workspace, checks, errors)
         self._validate_skill_data_routes(workspace, checks, errors)
         self._validate_skill_dependency_isolation(workspace, checks, errors)
@@ -7569,6 +7570,26 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         "warnings": len(issues),
                     }
                 )
+
+    @staticmethod
+    def _validate_skill_manifests(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        from adaos.services.skill.validation import validate_manifest_schema
+
+        for path in sorted(workspace.glob("skills/*/skill.yaml")):
+            relative = path.relative_to(workspace).as_posix()
+            try:
+                manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+                issues = validate_manifest_schema(manifest)
+            except Exception as exc:
+                errors.append(f"{relative}: manifest schema validation failed: {type(exc).__name__}: {exc}")
+                checks.append({"kind": "skill.manifest.schema", "path": relative, "ok": False})
+                continue
+            errors.extend(f"{relative}: {issue.code}: {issue.message} ({issue.where})" for issue in issues)
+            checks.append({"kind": "skill.manifest.schema", "path": relative, "ok": not issues})
 
     @staticmethod
     def _validate_skill_data_routes(

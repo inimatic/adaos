@@ -718,3 +718,29 @@ context was not truncated. A historic Prototype-only instruction also remains
 as traceable source text; its stage must not override the current Automation
 brief. This is a context-review concern, not evidence that the model executed
 or misunderstood the task. Workspace Builder is still unchanged.
+
+## 2026-09-14: Native Automation And Manifest Gate Gap
+
+The native follow-up ran `gpt-5.5 / medium` against accepted TEST revision 002.
+The first implementation failed two packaged tests: Cyrillic case-insensitive
+search and a test walker treating JSON-schema union types as hashable strings.
+One worker repair corrected both; packaged skill/scenario tests passed. The
+validated worker run lasted approximately eight minutes, without an execution
+timeout. Reported cumulative usage across both attempts was 1,667,692 input
+tokens (1,524,096 cached) and 19,614 output, including 3,623 reasoning tokens.
+These are cumulative agent-turn inputs, not a single context-window size.
+Root retained the explicit model usage receipt; no tariff was invented.
+
+Finalization then stopped at skill checkpoint: `max_request_hz` and
+`preserve_last_value` had been placed outside `read_policy`. This is an actual
+manifest error, not network loss or an older Root schema. Worker validation had
+checked route behavior but omitted the full skill schema used by checkpoint.
+The worker now shares that complete schema check with install/checkpoint
+validation. The retained result is not independently accepted or delivered;
+the next correction addresses the current implementation, not a new Prototype.
+
+The workbench now distinguishes a failed execution from its retry-ready gate,
+without inventing different command permissions. Locale coverage includes all
+current governed states. The obsolete stand that could send Builder itself to
+Codex was removed: Builder is implemented directly, and model work stays on the
+isolated TEST application. DEV SDK-control tests pass (103); Workspace unchanged.

@@ -100,7 +100,8 @@ export async function exerciseCreation({ page, widget, command, capture, closeMo
     assert.equal(state.selectedProjectId, id)
     assert.equal(state.workbench.prototype_revision, '002')
     const intent = { id, brief: automationBrief, followup, requested_model: settings.codex_model,
-      requested_effort: settings.codex_effort, created_at: new Date().toISOString() }
+      requested_effort: settings.codex_effort, previous_task_id: state.workbench.automation_task_id,
+      created_at: new Date().toISOString() }
     await fs.writeFile(path.join(process.env.ADAOS_E2E_OUTPUT, 'automation-intent.json'), JSON.stringify(intent, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' })
     await command('implement').click()
     const form = followup ? 'automation-followup' : 'automation-start'
@@ -122,6 +123,7 @@ export async function exerciseCreation({ page, widget, command, capture, closeMo
     assert.equal(session.agent_profile?.reasoning_effort, settings.codex_effort)
     if (followup) {
       assert.ok(session.iteration > 0)
+      assert.notEqual(session.current_task_id, intent.previous_task_id)
       assert.ok((session.agent_profile_history || []).every(previous => previous.task_id !== session.current_task_id))
     }
     record('automation_started_from_native_form', { result: value.result })
