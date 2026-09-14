@@ -114,19 +114,28 @@ route a message using an unrelated stale Automation session.
 Worker completion is not the terminal Automation state. The session remains
 `commit_ready` while it:
 
-1. checkpoints the target and every project-owned changed component in Forge;
-2. verifies current commit/task metadata;
-3. prepares and activates the DEV skill;
+1. records the validated source snapshot and prepares/activates the DEV skills;
+2. runs any admitted consumer-owned acceptance checks;
+3. checkpoints the target and every project-owned changed component in Forge,
+   verifying exact source/task metadata and the owning composition;
 4. rematerializes the paired DEV scenario.
 
 Only then does it become `completed` as an implementation/finalization result.
 This does not certify user outcomes, installed authorization or Trial/release
 acceptance. The frozen Prototype, declared implementation scope and independent
-HTTP/browser evidence remain separate gates. Any unconfirmed checkpoint becomes a
-terminal `forge_checkpoint` failure before activation. A follow-up turn moves
+HTTP/browser evidence remain separate gates. An unconfirmed checkpoint becomes a
+terminal `forge_checkpoint` failure and cannot certify delivery, even if an
+isolated DEV activation already succeeded. A follow-up turn moves
 the preceding readiness into bounded history and clears summary, failure,
-task, and progress fields so navigation/reconnect cannot resurrect the old
-terminal projection.
+task, progress and finalization start time so navigation/reconnect cannot
+resurrect the old terminal projection or inflate the new attempt's duration.
+
+Network request timeouts, asynchronous observation windows and execution/cost
+budgets have distinct ownership. Increase an observation/execution budget only
+against retained progress, transport diagnostics and complete input/output
+evidence. Do not extend connection timeouts to hide an unavailable endpoint,
+unsupported model, deterministic validation failure or duplicated context.
+An observer expiring does not authorize another paid model submission.
 
 The editable component set is read from the owning `adaos.project.v1`
 manifest. Runtime skill requirements and retained publications do not expand

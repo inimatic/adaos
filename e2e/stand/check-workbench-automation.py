@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 from time import perf_counter
 from uuid import uuid4
 
@@ -21,6 +22,7 @@ def main():
     parser.add_argument("--start", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resume", type=Path, help="Verify retained records after an independently performed restart")
+    parser.add_argument("--browser", action="store_true", help="Run independent desktop/mobile interactions")
     args = parser.parse_args()
     load_dotenv()
     root = Path.cwd()
@@ -39,6 +41,15 @@ def main():
     webui = root / f".adaos/dev/sn_6acf0c01/scenarios/{identifier}/webui.json"
     source_digest = hashlib.sha256(webui.read_bytes()).hexdigest()
     hub = "http://127.0.0.1:8778"
+    if args.browser:
+        if args.resume:
+            parser.error("Browser review and restart verification are separate phases")
+        environment = {**os.environ, "ADAOS_E2E_HUB_URL": hub,
+            "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub),
+            "ADAOS_E2E_SCENARIO_ID": identifier, "ADAOS_E2E_TASK_ID": task,
+            "ADAOS_E2E_SOURCE_SHA256": source_digest, "ADAOS_E2E_OUTPUT": str(output)}
+        script = Path(__file__).with_name("browser") / "workbench-test-automation.mjs"
+        raise SystemExit(subprocess.run(["node", str(script)], env=environment).returncode)
     client = requests.Session()
     client.headers["X-AdaOS-Token"] = resolve_control_token(base_url=hub)
     report = {"scope": "Independent DEV-owner HTTP acceptance; no delegated-user or delivery claim",

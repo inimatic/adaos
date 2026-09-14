@@ -217,6 +217,19 @@ integration, not closure of the remaining interaction/continuation obligations.
 - [x] `[must]` Run the checkpoint's complete skill-manifest schema in worker
   validation before apply, in addition to targeted contract checks. Retain schema
   paths in repair evidence; do not label partial checks install-strict coverage.
+- [x] `[must]` Qualify the retained native TEST Automation independently through
+  local HTTP and desktop/mobile CRUD, cancellation, validation, search, stale
+  writes and persistence after a real API restart. Keep exact task/source refs;
+  this single application does not close repeated-generation or installed-role
+  coverage. No generated application code was hand-edited for acceptance.
+- [x] `[must]` Verify live Root-to-DEV-Subscriptions model projection against
+  the reported task usage, including fresh/cached/output totals and unpriced
+  cost coverage. The period aggregate is not an exact per-task financial ledger;
+  browser presentation remains under the parent model-setting qualification.
+- [ ] `[must]` Attach external independent Automation review to canonical
+  task/source-bound evidence shown by Review. Distinguish automatic Forge
+  checkpointing from reviewer acceptance; an empty consumer requirement set
+  must not appear as independently verified user outcomes.
 - [ ] `[must]` Qualify OpenSpec-aligned application specification and Change
   deltas with version/digest preconditions, explicit acceptance and preserved
   historical inputs. Do not introduce an independently mutable second tracker.

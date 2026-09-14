@@ -744,3 +744,46 @@ without inventing different command permissions. Locale coverage includes all
 current governed states. The obsolete stand that could send Builder itself to
 Codex was removed: Builder is implemented directly, and model work stays on the
 isolated TEST application. DEV SDK-control tests pass (103); Workspace unchanged.
+
+## 2026-09-14: Independent Automation Runtime Qualification
+
+The next native `gpt-5.5 / medium` iteration corrected only the malformed manifest
+and added its regression check. One model attempt completed in approximately two
+minutes. The exact retained prompt was 30,972 UTF-8 bytes and included the complete
+original brief, current correction, accepted Prototype identity and verification
+ownership. No required context was omitted. Root acknowledged 239,990 input
+tokens, including 190,848 cached, and 3,143 output, including 245 reasoning tokens.
+The narrow correction did not repeat the full brief as a second addendum.
+
+Full skill-schema checks, packaged tests, DEV activation and both Forge
+checkpoints passed. Independent `automation-http-01` passed 15 checks, including
+null inputs, Cyrillic search, server-side validation and stale-update refusal.
+`automation-browser-02` passed actual wide/compact create, edit, cancellation,
+delete confirmation, empty search and persistence after page reload. The first
+browser report exposed an evaluator race: it read the editor before async data
+arrived. Waiting for the expected field value fixed the check without editing
+the generated application. A real local API restart preserved both retained
+HTTP records byte-for-byte at the JSON value level; `automation-restart-02`
+then removed only those evidence-owned records.
+
+The stronger Builder browser stand now waits for the selected application and
+stage projection, not just HTTP 200. Both widths show the completed TEST task.
+Independent reports are still external: automatic Forge checkpointing projects
+trial-ready state, while Review correctly has no consumer acceptance receipt.
+Canonical linkage of external review remains open rather than fabricating a
+receipt in the worker session. A new iteration also clears its predecessor's
+finalization timestamp; three focused progress/finalization tests pass.
+
+DEV Subscriptions refreshed the actual Root snapshot through the RU endpoint.
+Its `gpt-5.5` period row contains fresh, cached and output usage and explicitly
+unpriced runs. The task's model agrees with the native selection and Root
+acknowledgement. The first diagnostic expected a nonexistent aggregate input
+field; the corrected check uses the public fresh/cached fields. No accounting
+implementation changed to satisfy the stand. Browser accounting presentation
+and settled monetary billing are not claimed.
+
+The first native Trial attempt reached the network-approval gate before side
+effects. Its pending action is retained; the test must use normal scoped UI
+approval, not inject authorization or call an unguarded internal publish API.
+No Trial or stable result is claimed in this increment. Workspace Builder and
+the user's unrelated Core/Client changes remain untouched.

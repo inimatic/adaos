@@ -3582,6 +3582,7 @@ class BuilderAutomationService:
                 "completion_notified_task_id",
                 "completion_notified_at",
                 "finalizing_task_id",
+                "finalization_started_at",
                 "last_result",
                 "last_failure",
                 "local_run",

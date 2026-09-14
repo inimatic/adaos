@@ -3026,6 +3026,7 @@ def test_retry_after_reaccepting_same_change_reenters_automation(
             "change_id": "automation.failed",
             "current_task_id": "task.failed",
             "agent_profile": old_profile,
+            "finalization_started_at": "2026-09-04T00:00:00+00:00",
             "updated_at": "2026-09-04T00:00:00+00:00",
         }
     )
@@ -3081,6 +3082,7 @@ def test_retry_after_reaccepting_same_change_reenters_automation(
     assert transitions == ["automation_started"]
     retained = service.get_session("scenario", "recipes")
     assert retained["iteration"] == 2
+    assert "finalization_started_at" not in retained
     expected_profile = {**new_profile, "provider": "openai-codex-cli"} if replace_profile else old_profile
     assert retained["agent_profile"] == expected_profile
     history = retained.get("agent_profile_history") or []
