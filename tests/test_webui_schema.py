@@ -12,6 +12,20 @@ def _load_schema() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize("value,valid", [(True, True), (False, True), ("$state.archived", True),
+                                         ("$state.filters.archived", True), ("false", False), (1, False), ({}, False)])
+def test_standalone_toggle_preserves_supported_state_binding(value, valid):
+    schema = _load_schema()
+    validator = Draft202012Validator({"$ref": "#/$defs/toggleInputs", "$defs": schema["$defs"]})
+    assert validator.is_valid({"value": value}) is valid
+
+
+def test_action_button_supports_client_localized_tooltip():
+    schema = _load_schema()
+    Draft202012Validator({"$ref": "#/$defs/actionButton", "$defs": schema["$defs"]}).validate(
+        {"id": "create", "title": "New application", "title_i18n": {"key": "application.create"}})
+
+
 @pytest.mark.parametrize("patch,valid", [
     ({}, True),
     ({"rememberSelection": "yes"}, False),

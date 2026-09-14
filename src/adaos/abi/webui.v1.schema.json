@@ -1830,6 +1830,7 @@
           "type": "string",
           "description": "Concise native tooltip and accessible name for the command. Falls back to description, label, then id."
         },
+        "title_i18n": { "$ref": "#/$defs/i18nTextSpec" },
         "description": {
           "type": "string",
           "description": "Longer explanation of the command, suitable for a tooltip fallback and channel-neutral help."
@@ -1984,8 +1985,8 @@
       "properties": {
         "label": { "type": "string" },
         "description": { "type": "string" },
-        "value": { "type": "boolean" },
-        "defaultValue": { "type": "boolean" },
+        "value": { "anyOf": [{ "type": "boolean" }, { "type": "string", "pattern": "^\\$state\\.[A-Za-z_][A-Za-z0-9_.]*$" }] },
+        "defaultValue": { "anyOf": [{ "type": "boolean" }, { "type": "string", "pattern": "^\\$state\\.[A-Za-z_][A-Za-z0-9_.]*$" }] },
         "disabled": { "type": "boolean" },
         "loadingText": { "type": "string" },
         "valuePath": { "$ref": "#/$defs/fieldPath" },

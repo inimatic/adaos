@@ -137,6 +137,10 @@ Implementation boundary: Conversation and governed status projections exist; a w
   exact revision and path/digest on reads and proposed changes.
 - [ ] `[must]` Bind public README read/edit/save/cancel and LLM patches to one
   artifact with digest preconditions, conflict review and publication boundary.
+- [x] `[must]` Supply the document SDK prerequisite: bounded UTF-8 text reads,
+  confined project/component paths, atomic writes and shared-lock digest
+  preconditions. Concurrent writers cannot silently overwrite a newer edition.
+  Live README conflict UX and release qualification remain open above.
 - [ ] `[must]` Bind separate informal/formal histories and drafts to canonical
   dialogs. Confirm promotion to an addendum; preserve Web/Telegram authority,
   correlation and delivery identity without a Builder-only chat implementation.
@@ -155,6 +159,9 @@ Implementation boundary: Conversation and governed status projections exist; a w
 - [ ] `[should]` Review Client command/status density, conditional-widget gaps,
   compact view switching and full locale coverage against the accepted design;
   evolve generic ABI/components together without Builder-specific renderer logic.
+- [x] `[must]` Align generic ABI validation with existing Client support for
+  localized action tooltips and state-bound toggle values. No Builder renderer
+  specialization; schema and document SDK regression suite: 61 passing tests.
 - [ ] `[must]` Qualify separate Prototype and Codex model settings: persisted
   application selection, admitted immutable execution profile, effective CLI
   model and usage receipts must agree. Root and Subscriptions preserve per-model

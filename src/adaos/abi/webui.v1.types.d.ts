@@ -406,10 +406,29 @@ export interface WebUiListMetaField {
 export type WebUiActionButtonKind = 'primary' | 'secondary' | 'danger'
 export type WebUiActionButtonFill = 'solid' | 'outline' | 'clear'
 
+export type WebUiI18nTextSpec = string | {
+  key?: string
+  fallback?: string
+  params?: Readonly<Record<string, unknown>>
+  translations?: Readonly<Record<string, string>>
+}
+
+export interface WebUiToggleInputs {
+  label?: string
+  description?: string
+  value?: boolean | `$state.${string}`
+  defaultValue?: boolean | `$state.${string}`
+  disabled?: boolean
+  valuePath?: string
+  bindField?: string
+}
+
 export interface WebUiActionButton {
   id: string
   label?: string
+  label_i18n?: WebUiI18nTextSpec
   title?: string
+  title_i18n?: WebUiI18nTextSpec
   description?: string
   guidanceActionId?: string
   icon?: string
