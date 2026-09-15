@@ -1395,3 +1395,21 @@ before using its current generation. Tests cover unrelated generation changes
 and rejection of each changed identity/decision; 21 lifecycle/placement tests
 pass. Already-prepared Trial reconciliation remains available in native Builder;
 the generic SDK's explicit replay entry point remains a parity follow-up.
+
+### 2026-09-15: Successor Change Exposes Process-As-UI Acceptance
+
+The second Reading List Change was submitted once through native chat against
+revision 005. GPT-5 low returned a full candidate and one binding repair. The
+remaining three coverage failures requested Automation handoff documentation,
+truthful Prototype persistence claims and no automatic stage advancement, not UI.
+The bounded EN/RU process classifier now retains these under independent review
+and excludes them from widget-proof obligations, including coordinated privacy
+instructions. Negative/conditional application rules remain required UI behavior.
+The context/intent/semantic suites pass; native retained-response replay follows.
+
+Actual input also exposes unresolved BIP-10 capacity debt: all prior corrections
+remain alongside the successor instruction and current semantic document. Do not
+label a classifier patch a general context solution. Retained input digests,
+requirement counts and actual primary/repair usage are audited by
+`inspect-builder-prototype-context.py` without rewriting model input or exporting
+installed records. The second cycle remains incomplete.

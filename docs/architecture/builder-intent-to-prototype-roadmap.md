@@ -399,6 +399,11 @@ Exit/remaining work: Admit contracts by shape/operation/authority before optiona
   from widget coverage in model context and compiler, retaining exact Brief IDs
   and constraints in the compiled artifact. Preserve ambiguous application rules.
   This narrow classification is not a general semantic interpreter or review pass.
+  Coordinated stage prohibitions, explicit Automation handoff descriptions and
+  truthful Prototype-vs-production claims belong to process review, not widgets.
+  Keep accepted source history without repeating completed Change directives as
+  current execution instructions. Qualify scoped residual interpretation and
+  incremental context size; more regex coverage alone cannot close this task.
 - [ ] `[must]` Qualify process-constraint review and subsequent Automation handoff
   on the retained application increments; do not count discarded UI bindings as
   evidence that a privacy, preservation or stage restriction was satisfied.

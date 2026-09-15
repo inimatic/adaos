@@ -26,16 +26,19 @@ def process_constraint_kind(statement: str) -> str | None:
     text = str(statement).strip().rstrip(".!;")
     rules = {
         "stage_boundary": (
-            r"(?:do not|don't|never) (?:start|run|begin) (?:automation|codex)(?: or (?:publish|publication))?",
+            r"(?:do not|don't|never) (?:start|run|begin) (?:automation|codex)(?:\s*(?:,|or|and)\s*(?:automation|codex|beta preparation|trial preparation|publish|publication))*(?: automatically)?",
             r"(?:do not|don't|never) publish(?: (?:yet|automatically))?",
             r"(?:refine|update) the current .{1,100} prototype \d+ only",
             r"after applying,? stop for (?:independent )?prototype review",
             r"(?:stop|pause) for (?:independent )?prototype review after applying",
+            r"(?:stop|pause) for (?:independent )?prototype review",
             r"this is a prototype (?:correction|change|iteration),? not an? (?:automation|implementation)(?: or publication)? request",
             r"не (?:запускай|начинай|запускать) (?:автоматизацию|codex)(?: и не публикуй)?",
+            r"не (?:запускай|начинай|запускать) (?:автоматизацию|codex)(?:\s*(?:,|или|и)\s*(?:подготовку (?:beta|trial)|публикацию))+(?: автоматически)?",
             r"после применения остановись (?:для|перед) (?:независимой )?проверки? прототипа",
         ),
         "data_isolation": (
+            r"(?:do not|don't|never) (?:inspect|read|copy|access)(?: (?:or|and) (?:inspect|read|copy|access))* (?:the )?(?:(?:installed|workspace|trial|stable|production|live|current)[ /]+)+(?:records|data|settings(?: values)?|configuration|credentials|secrets)(?:[, /]*(?:or |and )?(?:records|data|settings(?: values)?|configuration|credentials|secrets))*",
             r"(?:do not|don't|never) (?:inspect|read|copy|access) (?:the )?(?:installed|workspace|trial|stable|production|live|current) (?:records|data|settings|configuration|credentials|secrets)(?:[, /]*(?:or |and )?(?:records|data|settings|configuration|credentials|secrets))*?(?: into .+)?",
             r"use (?:only )?synthetic .{0,80}(?:records|data|fixtures) only",
             r"(?:не читай|не копируй|не просматривай) (?:установленные|рабочие|реальные|пользовательские) (?:данные|записи|настройки|секреты)(?:[, ]+(?:и |или )?(?:данные|записи|настройки|секреты))*",
@@ -48,6 +51,10 @@ def process_constraint_kind(statement: str) -> str | None:
             r"не переименовывай (?:существующие )?идентификаторы полей",
         ),
         "automation_scope": (
+            r"(?:describe|document|outline|explain) (?:the )?(?:implementation|data migration|implementation/data migration)(?: work)? (?:needed by|required (?:by|for)|for) (?:the )?(?:automation|codex)(?: (?:stage|phase))?",
+            r"(?:do not|don't|never) (?:claim|imply) (?:that )?prototype (?:persistence|storage|execution) (?:is|equals) (?:production|installed|real) (?:persistence|storage|execution)",
+            r"(?:опиши|опишите|задокументируй) (?:работы по )?(?:реализации|миграции данных|реализации и миграции данных)(?: для|,? необходимые для) (?:этапа )?автоматизации",
+            r"не (?:выдавай|выдавайте) (?:хранение данных|исполнение) прототипа за (?:production|промышленное) (?:хранение данных|исполнение)",
             r"(?:real|actual) .{1,160} belong(?:s)? to automation",
             r"(?:real|actual) .{1,160} (?:is|are) for (?:the )?automation (?:stage|phase)(?: later)?",
         ),

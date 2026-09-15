@@ -12,6 +12,16 @@ from adaos.services.builder.semantic_prototype import _brief_requirement_ids
     ("Do not inspect installed records, settings or secrets", "data_isolation"),
     ("After applying, stop for independent Prototype review", "stage_boundary"),
     ("do not start Automation or publish", "stage_boundary"),
+    ("do not start Automation, Beta preparation or publication automatically", "stage_boundary"),
+    ("Stop for Prototype review", "stage_boundary"),
+    ("Do not inspect or copy installed Workspace/Trial records, settings values or credentials", "data_isolation"),
+    ("Do not inspect or copy installed Workspace/Trial records, settings or credentials", "data_isolation"),
+    ("Describe the implementation/data migration work needed by Automation", "automation_scope"),
+    ("do not claim Prototype persistence is production persistence", "automation_scope"),
+    ("Outline the implementation required for the Codex stage", "automation_scope"),
+    ("Опиши работы по миграции данных для этапа автоматизации", "automation_scope"),
+    ("Не выдавай хранение данных прототипа за промышленное хранение данных", "automation_scope"),
+    ("Не запускай автоматизацию, подготовку beta или публикацию автоматически", "stage_boundary"),
     ("Refine the current Example prototype 003 only", "stage_boundary"),
     ("Do not rename the existing resource field identifiers merely to qualify references", "source_preservation"),
     ("reference qualification and field identity are different", "source_preservation"),
@@ -44,6 +54,10 @@ def test_process_constraints_are_retained_without_fabricated_widget_proof(direct
     "Do not inspect installed records in this application: offer a button for their owners instead",
     "Не удалять запись без подтверждения", "Не показывать секреты в таблице",
     "Use an Automation tab to show process status", "Preserve create and edit dialogs",
+    "Do not start Automation tasks before the application owner selects a record",
+    "Describe the data migration work in a panel with editable steps",
+    "Do not claim a book before its owner approves",
+    "Do not inspect production records without the user's consent in this application",
 ])
 def test_ambiguous_and_application_rules_are_not_discarded_as_process_constraints(statement):
     from adaos.services.builder_intent import process_constraint_kind
