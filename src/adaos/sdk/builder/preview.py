@@ -632,6 +632,14 @@ def select_target(
     workflow = BuilderWorkflowService.from_context().describe("scenario", scenario_id)
     if follow_active:
         stage_token = str(workflow.get("active_phase") or "prototype")
+        capabilities = _plain(workflow.get("capabilities"))
+        # A running/waiting Automation task is not yet a previewable result.
+        # Automatic project selection can retain its real Prototype; an explicit
+        # Automation selection below must still report that it is unavailable.
+        if (stage_token == "automation" and not revision
+                and not capabilities.get("can_preview_automation")
+                and capabilities.get("can_preview_prototype")):
+            stage_token = "prototype"
     if stage_token not in {"prototype", "automation"}:
         raise ValueError("Preview is DEV-only; open Trial or stable through its production placement")
     capability = {

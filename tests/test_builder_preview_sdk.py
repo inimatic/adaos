@@ -102,6 +102,35 @@ def test_revision_selection_persists_actual_target_and_keeps_project_identity(mo
     assert events[0][0][1]["object_type"] == kind
 
 
+@pytest.mark.parametrize("follow_active", [False, True])
+def test_waiting_automation_follows_available_prototype_but_explicit_selection_fails(monkeypatch, follow_active):
+    from adaos.services.builder.workflow import BuilderWorkflowService
+
+    service = _Workbench()
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(BuilderWorkflowService, "from_context", lambda: SimpleNamespace(describe=lambda *args: {
+        "active_phase": "automation", "prototype": {"head_revision": "006"},
+        "capabilities": {"can_preview_prototype": True, "can_preview_automation": False},
+    }))
+    renders = []
+    monkeypatch.setattr(preview, "select_project", lambda *args, **kwargs: {
+        "ok": True, "preview_webspace_id": "desktop-dev", "binding": {
+            "selection": {"object_type": "scenario", "object_id": "app", "title": "Example"}},
+    })
+    monkeypatch.setattr(preview, "materialize_revision", lambda **kwargs: renders.append(kwargs) or {"ok": True})
+    monkeypatch.setattr("adaos.sdk.data.events.publish", lambda *args, **kwargs: None)
+    if follow_active:
+        result = preview.select_target("scenario", "app", stage="automation", follow_active=True)
+        assert result["target"]["stage"] == "prototype"
+        assert result["target"]["revision"] == "006"
+        assert result["target"]["follow_active"] is True
+        assert len(renders) == 1
+    else:
+        with pytest.raises(ValueError, match="automation Preview is not available"):
+            preview.select_target("scenario", "app", stage="automation")
+        assert not renders
+
+
 def test_project_preview_recreation_keeps_aggregate_identity_and_pinned_revision(monkeypatch):
     from adaos.services.workspaces import index
 

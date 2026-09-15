@@ -1467,3 +1467,10 @@ tries to select an unavailable Automation Preview, producing an error toast
 while the valid Prototype remains available. Collect this for the next Builder
 fix batch; explicit unavailable-target selection must still fail truthfully.
 The second Automation and full data-adoption acceptance are still in progress.
+
+The SDK follow-active selector now resolves a pending Automation to its available
+Prototype when there is no explicit revision pin. Explicit Automation requests
+remain rejected until a result is previewable. The selected target remains
+truthfully labeled Prototype, not Automation. The 52 Preview SDK/architecture
+tests pass; activate and qualify the live picker in the next coordinated restart,
+without interrupting the running Automation worker.
