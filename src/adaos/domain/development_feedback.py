@@ -44,6 +44,7 @@ _ITEM_FIELDS = {
     "recommendation",
     "evidence_refs",
     "application_trace",
+    "clarification_questions",
 }
 _APPLICATION_TRACE_FIELDS = {
     "schema",
@@ -183,7 +184,39 @@ def development_feedback_model_rules() -> dict[str, Any]:
     return {"category": sorted(_CATEGORIES), "impact": sorted(_IMPACTS),
             "max_items": 8, "max_target_refs": 20, "max_evidence_refs": 20,
             "target_refs": "Use kind:identifier, e.g. sdk:adaos.sdk.access.require. Fully qualified adaos.sdk symbols normalize to sdk: references; other bare names are invalid.",
-            "text_limits": {"summary": 1000, "details": 3000, "recommendation": 2000}}
+            "text_limits": {"summary": 1000, "details": 3000, "recommendation": 2000},
+            "clarification_questions": {
+                "when": "Only blocking insufficient_context caused by a necessary user decision; never optional UX detail or an SDK/platform gap.",
+                "max_questions": 8,
+                "item": {"id": "stable simple identifier", "question": "one self-contained question (max 1000 chars)",
+                         "reason": "why this decision is necessary (max 1000 chars)", "options": "optional list of up to 4 short suggested answers"},
+                "safety": "Never ask for secret values or private production records. Ordinary implementation choices remain autonomous."}}
+
+
+def normalize_clarification_questions(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 8:
+        raise ValueError("clarification requires 1..8 questions")
+    result = []
+    for raw in value:
+        if not isinstance(raw, Mapping) or set(raw) - {"id", "question", "reason", "options"}:
+            raise ValueError("clarification question fields are invalid")
+        identifier = raw.get("id")
+        if not isinstance(identifier, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", identifier):
+            raise ValueError("clarification question id is invalid")
+        if any(item["id"] == identifier for item in result):
+            raise ValueError("clarification question ids must be unique")
+        options = raw.get("options", [])
+        if (not isinstance(options, list) or len(options) > 4
+                or any(not isinstance(item, str) or not item.strip() or len(item) > 240 for item in options)):
+            raise ValueError("clarification options are invalid")
+        fields = {}
+        for key in ("question", "reason"):
+            item = raw.get(key)
+            if not isinstance(item, str) or not item.strip() or len(item) > 1000:
+                raise ValueError(f"clarification {key} must be bounded non-empty text")
+            fields[key] = item.strip()
+        result.append({"id": identifier, **fields, "options": list(options)})
+    return result
 
 
 def _target_ref(value: Any) -> str:
@@ -253,6 +286,11 @@ def normalize_development_feedback(value: Any) -> list[dict[str, Any]]:
         if len(evidence_refs) > 20:
             raise ValueError("development feedback has too many evidence refs")
         application_trace = _application_trace(item.get("application_trace"))
+        questions = None
+        if "clarification_questions" in item:
+            if category != "insufficient_context" or item.get("blocking") is not True:
+                raise ValueError("user clarification requires blocking insufficient_context")
+            questions = normalize_clarification_questions(item["clarification_questions"])
         normalized.append(
             {
                 "category": category,
@@ -264,6 +302,7 @@ def normalize_development_feedback(value: Any) -> list[dict[str, Any]]:
                 "details": _text(item.get("details"), field="details", limit=3000),
                 "recommendation": _text(item.get("recommendation"), field="recommendation", limit=2000),
                 "evidence_refs": evidence_refs,
+                **({"clarification_questions": questions} if questions else {}),
                 **(
                     {"application_trace": application_trace}
                     if application_trace
@@ -271,7 +310,20 @@ def normalize_development_feedback(value: Any) -> list[dict[str, Any]]:
                 ),
             }
         )
+    questions = [question for item in normalized for question in item.get("clarification_questions", [])]
+    if questions:
+        normalize_clarification_questions(questions)
     return normalized
+
+
+def required_user_questions(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """A platform blocker must not be disguised as an answerable user decision."""
+    blocking = [item for item in items if item.get("blocking")]
+    if not blocking or any(not item.get("clarification_questions") for item in blocking):
+        return []
+    return normalize_clarification_questions([
+        question for item in blocking for question in item["clarification_questions"]
+    ])
 
 
 def parse_development_feedback(message: str) -> list[dict[str, Any]]:
@@ -297,4 +349,6 @@ __all__ = [
     "normalize_development_feedback",
     "development_feedback_model_rules",
     "parse_development_feedback",
+    "normalize_clarification_questions",
+    "required_user_questions",
 ]

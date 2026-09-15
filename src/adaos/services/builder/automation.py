@@ -3337,6 +3337,7 @@ class BuilderAutomationService:
         expected_session_id: str | None = None,
         expected_iteration: int | None = None,
         agent_profile: Mapping[str, Any] | None = None,
+        clarification_response: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         instruction = str(text or "").strip()
         if not instruction:
@@ -3351,6 +3352,18 @@ class BuilderAutomationService:
             if not session:
                 return {"ok": False, "handled": False, "error": "automation_session_not_found"}
             session = self.refresh_session(session)
+            clarification_source = None
+            clarification_input = None
+            needs_input = (session.get("last_failure") or {}).get("failure_class") == "user_input_required"
+            if needs_input or clarification_response:
+                from adaos.services.builder.clarification import BuilderClarificationService
+
+                if not clarification_response:
+                    raise ValueError("Answer the current clarification questions and explicitly continue Automation")
+                clarification_service = BuilderClarificationService(self.state_dir)
+                clarification_input = clarification_service.resume_input(session, **dict(clarification_response))
+                clarification_source = copy.deepcopy(session)
+                instruction = clarification_input["text"]
             if expected_session_id is not None or expected_iteration is not None:
                 if (not expected_session_id or type(expected_iteration) is not int
                         or expected_iteration < 0
@@ -3544,8 +3557,14 @@ class BuilderAutomationService:
             session["change_id"] = self._change_id(
                 session_id=str(session.get("session_id") or ""),
                 iteration=int(session["iteration"]),
-                seed=changed_at,
+                seed=clarification_input["response_id"] if clarification_input else changed_at,
             )
+            if clarification_input:
+                session["clarification_continuation"] = {
+                    key: value for key, value in clarification_input.items() if key != "text"
+                }
+            else:
+                session.pop("clarification_continuation", None)
             session.setdefault("turns", []).append(
                 {"iteration": session["iteration"], "text": instruction, "created_at": changed_at}
             )
@@ -3593,6 +3612,7 @@ class BuilderAutomationService:
                 "progress",
                 "task",
                 "codex_usage_accounting",
+                "clarification",
             ):
                 session.pop(stale_key, None)
             provider_artifacts = self._ensure_resource_provider_companion(
@@ -3623,6 +3643,13 @@ class BuilderAutomationService:
             session.setdefault("task_history", []).append(session["current_task_id"])
             session["updated_at"] = _now_iso()
             self._save_session(session)
+            if clarification_source is not None:
+                clarification_service.complete(
+                    clarification_source,
+                    interaction_id=clarification_response["interaction_id"],
+                    expected_generation=clarification_response["expected_generation"],
+                    continuation_task_id=session["current_task_id"],
+                )
             if transition_token == "return_to_prototype":
                 self._workflow().transition(
                     str(session.get("object_type") or ""),
@@ -3673,6 +3700,67 @@ class BuilderAutomationService:
             "automation": self.project_session(session),
         }
 
+    def clarification_state(self, *, object_type: str, object_id: str) -> dict[str, Any]:
+        from adaos.services.builder.clarification import BuilderClarificationService
+
+        with _LOCK:
+            session = self.get_session(object_type, object_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            session = self.refresh_session(session)
+            if (session.get("last_failure") or {}).get("failure_class") != "user_input_required":
+                return {"pending": False, "questions": [], "can_resume": False}
+            return {"pending": True, **BuilderClarificationService(self.state_dir).project(session)}
+
+    def answer_clarification(self, *, object_type: str, object_id: str, **answer) -> dict[str, Any]:
+        from adaos.services.builder.clarification import BuilderClarificationService
+
+        with _LOCK:
+            session = self.get_session(object_type, object_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            session = self.refresh_session(session)
+            result = BuilderClarificationService(self.state_dir).answer(session, **answer)
+            return {"ok": True, "clarification": result}
+
+    def resume_clarification(self, *, object_type: str, object_id: str, interaction_id: str,
+                             expected_generation: int, confirmed: bool) -> dict[str, Any]:
+        from adaos.services import conversation_store
+        from adaos.services.artifact_pipeline.storage import mutation_lock
+        from adaos.services.policy.caller import current_caller
+
+        token = hashlib.sha256(interaction_id.encode("utf-8")).hexdigest()
+        with _LOCK, mutation_lock(self.state_dir / "builder/clarifications" / (token + ".resume.lock")):
+            session = self.get_session(object_type, object_id)
+            record = conversation_store.get_interaction(interaction_id)
+            caller = current_caller()
+            if not record or caller is None or caller.ref() != record["owner"]:
+                raise PermissionError("Clarification requires its verified owner")
+            if not session or confirmed is not True:
+                raise ValueError("Current Automation and explicit continuation consent are required")
+            binding = record["metadata"].get("binding") or {}
+            if (binding.get("object_type"), binding.get("object_id"), binding.get("change_id")) != (
+                session.get("object_type"), session.get("object_id"), session.get("canonical_change_id") or session.get("change_set_id")
+            ):
+                raise ValueError("Clarification belongs to another Project/Change")
+            receipt = session.get("clarification_continuation") or {}
+            if receipt.get("interaction_id") == interaction_id:
+                if type(expected_generation) is not int or record["generation"] not in {expected_generation, expected_generation + 1}:
+                    raise ValueError("Clarification changed; reopen the current questions")
+                task_id = session.get("current_task_id")
+                source = {**session, **binding, "current_task_id": binding["run_id"],
+                          "last_failure": {"failure_class": "user_input_required", "details": {
+                              "clarification_questions": record["metadata"]["questions"]}}}
+                from adaos.services.builder.clarification import BuilderClarificationService
+
+                BuilderClarificationService(self.state_dir).complete(source, interaction_id=interaction_id,
+                    expected_generation=expected_generation, continuation_task_id=task_id)
+                return {"ok": True, "duplicate": True, "session": session, "automation": self.project_session(session)}
+            return self.submit_turn(text="Continue after explicit user clarification.", object_type=object_type,
+                object_id=object_id, expected_session_id=session["session_id"], expected_iteration=session["iteration"],
+                clarification_response={"interaction_id": interaction_id, "expected_generation": expected_generation,
+                                        "confirmed": confirmed})
+
     def retry_failed(
         self,
         *,
@@ -3690,6 +3778,8 @@ class BuilderAutomationService:
             if not session:
                 raise ValueError("automation_session_not_found")
             session = self.refresh_session(session)
+            if (session.get("last_failure") or {}).get("failure_class") == "user_input_required":
+                raise ValueError("Answer the current clarification questions before continuing Automation")
             status = str(session.get("status") or "").strip()
             if status == "queued":
                 turns = [
@@ -5299,15 +5389,18 @@ class BuilderAutomationService:
             else {}
         )
         error = str(failure.get("error") or failure.get("message") or task.get("error") or "").strip() or None
+        clarification = session.get("clarification") if failure.get("failure_class") == "user_input_required" else None
         return {
             "schema": AUTOMATION_PROJECTION_SCHEMA,
             "stage": "automation",
             "session_id": str(session.get("session_id") or "") or None,
             "status": status,
+            "waiting_for_input": bool(clarification),
+            "clarification": copy.deepcopy(clarification),
             "phase": BuilderAutomationService._phase_for_status(status),
             "busy": status in _ACTIVE_STATUSES,
             "terminal": status in _TERMINAL_STATUSES,
-            "can_submit": status
+            "can_submit": not bool(clarification) and status
             in {"waiting_for_core", "completed", "failed", "cancelled", "expired"},
             "webspace_id": str(session.get("webspace_id") or "desktop"),
             "project": {
@@ -6489,6 +6582,13 @@ class BuilderAutomationService:
                 "message": failure.get("message") or failure.get("error") or "Automation failed",
                 "updated_at": failure.get("reported_at") or current.get("updated_at"),
             }
+            if failure.get("failure_class") == "user_input_required":
+                from adaos.services.builder.clarification import BuilderClarificationService
+
+                current["clarification"] = BuilderClarificationService(self.state_dir).project(current)
+                current["progress"].update(status="awaiting_input", message="Answer the clarification questions, then continue Automation")
+            else:
+                current.pop("clarification", None)
         self._save_session(current)
         needs_detached_finalization = bool(
             self.materialize_on_completion
@@ -6606,6 +6706,20 @@ class BuilderAutomationService:
             _WORKER_LOCK.release()
 
     def _submit(self, session: Mapping[str, Any], *, iteration_instruction: str) -> dict[str, Any]:
+        clarification_receipt = session.get("clarification_continuation") or {}
+        clarification_task_id = None
+        if clarification_receipt:
+            clarification_task_id = "task.clarification." + hashlib.sha256(
+                str(clarification_receipt["response_id"]).encode("utf-8")
+            ).hexdigest()[:32]
+            try:
+                retained = self.factory.read_task(clarification_task_id)
+            except KeyError:
+                retained = None
+            if retained:
+                if retained.get("links", {}).get("clarification_continuation") != clarification_receipt:
+                    raise ValueError("Retained clarification task binding mismatch")
+                return {"ok": True, "duplicate": True, "task": retained}
         kind = str(session["object_type"])
         project_id = str(session["object_id"])
         companions = self._resolve_companion_skill_ids(
@@ -7005,6 +7119,7 @@ class BuilderAutomationService:
             },
             "links": {
                 "automation_session_id": session.get("session_id"),
+                "clarification_continuation": copy.deepcopy(clarification_receipt) or None,
                 "webspace_id": session.get("webspace_id"),
                 "iteration": session.get("iteration"),
                 "change_set_id": session.get("change_set_id"),
@@ -7079,6 +7194,8 @@ class BuilderAutomationService:
             agent_profile = session.get("agent_profile")
         if agent_profile:
             request["artifacts"]["agent_profile"] = copy.deepcopy(agent_profile)
+        if clarification_task_id:
+            request["task_id"] = clarification_task_id
         return self.factory.submit_realize_request(request)
 
     def _launch_worker(self, session_id: str) -> None:
@@ -7384,7 +7501,7 @@ class BuilderAutomationService:
                         self._save_session(session)
                         finalizing_projection = self.project_session(session)
             if failed_session is not None:
-                if failed_session.get("status") == "failed":
+                if failed_session.get("status") == "failed" and not failed_session.get("clarification"):
                     failed_session = self._capture_worker_publication_gate_failure(
                         failed_session
                     )

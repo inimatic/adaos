@@ -157,6 +157,30 @@ def submit(
     )
 
 
+def get_clarification(*, object_type: str, object_id: str) -> dict[str, Any]:
+    """Read the current model question batch, exact bindings and retained answers."""
+    return _service().clarification_state(object_type=object_type, object_id=object_id)
+
+
+def answer_clarification(*, object_type: str, object_id: str, interaction_id: str,
+                         expected_generation: int, answers: Mapping[str, str],
+                         idempotency_key: str) -> dict[str, Any]:
+    """Save partial owner answers; this never starts a model execution."""
+    return _service().answer_clarification(object_type=object_type, object_id=object_id,
+        interaction_id=interaction_id, expected_generation=expected_generation,
+        answers=dict(answers), idempotency_key=idempotency_key)
+
+
+def resume_clarification(*, object_type: str, object_id: str, interaction_id: str,
+                         expected_generation: int, confirmed: bool) -> dict[str, Any]:
+    """Explicitly continue the same Change after every required question is answered."""
+    service = _service()
+    result = service.resume_clarification(object_type=object_type, object_id=object_id,
+        interaction_id=interaction_id, expected_generation=expected_generation, confirmed=confirmed)
+    return _foreground_result(service, result, object_type=object_type, object_id=object_id,
+                              webspace_id=str((result.get("session") or {}).get("webspace_id") or "desktop"))
+
+
 def retry_failed(
     *,
     object_type: str,
@@ -289,6 +313,9 @@ def release_candidate_runtime(
 
 
 __all__ = [
+    "get_clarification",
+    "answer_clarification",
+    "resume_clarification",
     "get_state",
     "release_candidate_runtime",
     "reconcile_checkpoint",

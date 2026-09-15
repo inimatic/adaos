@@ -30,7 +30,7 @@ from adaos.domain.development_validation import (
     normalize_validation_budget,
 )
 from adaos.domain.development_escalations import parse_development_escalations
-from adaos.domain.development_feedback import parse_development_feedback
+from adaos.domain.development_feedback import parse_development_feedback, required_user_questions
 from adaos.domain.development_budget import (
     execution_billable_token_limit,
     execution_prompt_token_limit,
@@ -3859,6 +3859,7 @@ class LocalSkillFactoryWorker:
         agent_profile = dict((assignment.get("codex") or {}).get("agent_profile") or {})
         root_mcp: dict[str, Any] | None = None
         failure_feedback_refs: list[str] = []
+        clarification_questions: list[dict[str, Any]] = []
         for path in (input_dir, output_dir, runtime_dir):
             path.mkdir(parents=True, exist_ok=True)
         process_owner = self._current_process_owner()
@@ -4121,6 +4122,7 @@ class LocalSkillFactoryWorker:
                 codex_result.final_message
             )
             feedback_items = parse_development_feedback(codex_result.final_message)
+            clarification_questions = required_user_questions(feedback_items)
             development_feedback = self._record_codex_development_feedback(
                 assignment, feedback_items,
             )
@@ -4284,6 +4286,7 @@ class LocalSkillFactoryWorker:
                     )
                 failure_stage = "development_feedback"
                 repair_feedback = parse_development_feedback(codex_result.final_message)
+                clarification_questions = required_user_questions(repair_feedback)
                 development_feedback.extend(self._record_codex_development_feedback(assignment, repair_feedback))
                 if any(item.get("blocking") for item in repair_feedback):
                     failure_feedback_refs = [item["feedback_id"] for item in development_feedback]
@@ -4474,6 +4477,9 @@ class LocalSkillFactoryWorker:
                             },
                         }
                     )
+                if clarification_questions:
+                    failure_report.update(failure_class="user_input_required", retryable=False,
+                        details={**failure_report.get("details", {}), "clarification_questions": clarification_questions})
                 self.factory.fail_task(
                     failure_report
                 )
@@ -4957,6 +4963,8 @@ class LocalSkillFactoryWorker:
                     "stage": "codex_final_response",
                     "target_type": target_type,
                     "target_id": target_id,
+                    **({"clarification_questions": item["clarification_questions"]}
+                       if item.get("clarification_questions") else {}),
                     **(
                         {"application_trace": application_trace}
                         if application_trace
@@ -4969,6 +4977,8 @@ class LocalSkillFactoryWorker:
                         json.dumps(
                             {
                                 "category": item.get("category"),
+                                **({"task_id": assignment.get("task_id"), "questions": item["clarification_questions"]}
+                                   if item.get("clarification_questions") else {}),
                                 "summary": str(item.get("summary") or "")
                                 .strip()
                                 .casefold(),
