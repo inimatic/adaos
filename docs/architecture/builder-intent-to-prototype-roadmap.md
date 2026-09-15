@@ -674,8 +674,10 @@ Implementation boundary: Local Trial/promotion mechanisms and historical Equipme
 - [ ] `[must]` Qualify repeated Automation against the same immutable Prototype
   handoff after later Preview demo edits. Partial: admission and worker bind and
   verify a previous Core/model-input snapshot in the same session/acceptance;
-  19 focused tests cover identity and tampering. Live continuation and broader
-  first-admission snapshot lifecycle remain open. Never weaken live freshness
+  19 focused tests cover identity and tampering. Reading List continuation now
+  qualifies retained Prototype `006` through repair, independent verification
+  and Stable `0.1.8`. Broader first-admission snapshot lifecycle remains open.
+  Never weaken live freshness
   checks to reconstruct an older acceptance from current mutable records.
 - [ ] `[must]` Bind Beta review to `AP4-21` migration/data evidence and preserve
   Beta writes on acceptance (`Keep data=true`); distinguish immutable code from

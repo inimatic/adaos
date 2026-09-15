@@ -181,8 +181,9 @@ Project/Application identity collapse.
   records. Snapshot-finalization interruption is reconciled without reseeding.
   Local native Builder placement and Root candidate publication now use this
   journal for declared SQLite stores and typed configuration. Synthetic tests
-  are prerequisites, not live qualification; the two Reading List cycles,
-  general storage adapters and Beta-to-Beta recovery/loss confirmation remain open.
+  are prerequisites, not live qualification. Two Reading List Stable/Beta/Stable
+  increments now pass the bounded live proof below; general storage adapters
+  and Beta-to-Beta recovery/loss confirmation remain open.
   Failed preparation now has exact-contract SDK cancellation back to the
   unchanged Stable, with durable recovery fencing and retained private evidence.
   This is not post-adoption rollback or loss-confirmed Beta replacement.
@@ -190,18 +191,21 @@ Project/Application identity collapse.
   empty creation, retry, legacy DEV migration, installed-upgrade refusal and
   transactional rollback have synthetic coverage. Generated Reading List code
   now passes actual SDK initialization, HTTP CRUD/settings, public discovery,
-  desktop/mobile browser review and restart persistence. The first native Beta
-  migrated the two private Stable records intact, but placement projection
-  rejected the existing `snapshot` mode; contract/replay qualification precedes
-  continuation. The full two-cycle live proof remains open.
+  desktop/mobile browser review and restart persistence. Both native Beta
+  cutovers and Stable adoptions preserve private records and declared settings.
+  Same-Candidate replay does not reseed Beta. This does not establish the
+  separate successive-Beta replacement and loss-consent proof in `APP6-10`.
 - [ ] `[must]` `APP1-16` Automatically select the node's own Builder Beta after
   each completed local development cycle, including installed Stable upgrades,
   without a second Applications permission. Project the pre-release flag from
   selected local Beta plus external subscription intent, without silently opting
   into public testing. Verify publisher denial, failed-migration fencing,
   replay, all-room refresh, Stable acceptance and unchanged external subscription.
-  The SDK now delegates local placement to the migration coordinator; live
-  Builder/UI proof is still required.
+  The SDK delegates local placement to the migration coordinator. Both native
+  Reading List increments qualify automatic local selection, one desktop tile,
+  unchanged external subscription and Stable acceptance. Scoped release notices
+  are reconciled before room refresh, including idempotent candidate replay.
+  Background execution and all-room qualification remain open.
 - [ ] `[must]` `APP1-15` Inherit declared Workspace configuration and scoped
   credential bindings in Beta without copying plaintext into packages or model
   context. Retain compatible overrides across Beta updates/runtime rebuilds;
@@ -220,9 +224,11 @@ Project/Application identity collapse.
   vault for the verified owner, with synthetic DEV isolation and live revocation.
   A local Windows Keyring roundtrip/revoke probe passes. Delegated/background
   grants, legacy plaintext import, credential retention/garbage collection and
-  full live two-cycle qualification remain open. Reading List's first native
-  Stable/Beta/Stable cycle preserves both settings, including Beta edits; DEV
-  restart preservation and stale revision rejection are independently qualified.
+  full credential lifecycle qualification remain open. Reading List's two native
+  Stable/Beta/Stable cycles preserve settings, including Beta edits and one
+  additive setting in the second increment; DEV restart preservation and stale
+  revision rejection are independently qualified. Reading List declares no
+  credential slot, so these live cycles do not qualify credential transfer.
 - [x] `[must]` Qualify the `APP1-14` failed-preparation recovery primitive:
   exact Candidate/contract, unchanged Stable verification, durable interrupted
   recovery, retained evidence and no false completed-migration admission.
@@ -243,8 +249,16 @@ Project/Application identity collapse.
   only E2E-owned records through public tools and reverify the original records.
   Evidence: `reading-list-migrations-20260915/cycle-1/stable-01` and
   `stable-data-http-01.json`; value comparisons remain private recovery proofs.
-  The second complete increment remains required by `APP6-10`; these sub-proofs
-  do not close it or claim live credential-slot qualification.
+- [x] `[must]` Qualify a second native Reading List increment against accepted
+  Prototype `006`: expanded HTTP validation, wide/compact browser commands,
+  restart, immutable published migration history and every supported prior
+  schema. Prepare the same Beta through Builder and accept its exact changelog
+  into Stable `0.1.8`. All three current user records and three settings survive;
+  three Beta-only E2E records also survive adoption and are removed through
+  public tools after verification. Private comparisons reverify both original
+  records and the third added between increments. Evidence:
+  `reading-list-migrations-20260915/cycle-2/acceptance-03`, `beta-replay-01`,
+  `stable-02`, `stable-data-http-01.json`. Broader `APP6-10` remains open.
 
 **Exit proof:** two Applications sharing one component install and remove
 without premature package/data deletion; an incompatible version is rejected;

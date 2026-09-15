@@ -1615,3 +1615,20 @@ notifications API was opened. The lifecycle now updates scoped notices before
 room refresh; Client prefers catalog release metadata over the stale page,
 preserving explicit DEV materialization. Local replay is idempotent. Requalify
 the same Candidate without reseeding Beta or generating another version.
+
+### 2026-09-16: Second Native Increment Closed
+
+After restart, `cycle-2/beta-replay-01` reuses the exact `0.1.8` Candidate and
+preserves all six Beta records and three settings. `stable-02` observes the
+correct Beta changelog and accepts it through the native browser control;
+Stable selection, reload and compact layout pass. Before cleanup, private
+comparison proves exact adoption of all six records and three settings.
+`stable-data-http-01.json` verifies and removes only the three E2E-owned records
+through public tools. Final private comparisons preserve all three user records,
+including both original records from before the first increment.
+
+This closes the two requested small, managed Reading List increments, not the
+entire lifecycle roadmap. Successive-Beta replacement/loss consent, broader
+storage/background authority, About resource portability and independent Root
+MCP CLI discovery remain open. No installed record contents entered public
+artifacts or model context, and no application source was manually corrected.
