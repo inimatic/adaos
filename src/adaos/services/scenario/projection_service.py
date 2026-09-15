@@ -283,6 +283,19 @@ def _context_local_node_id(ctx: Any) -> str:
     return _local_node_id()
 
 
+def _local_infrastate_projection_paths(path: str, node_id: str | None) -> list[str]:
+    raw = str(path or "").strip()
+    if not raw:
+        return []
+    parts = [part for part in raw.removeprefix("y:").split("/") if part]
+    if len(parts) < 2 or parts[0] != "data" or parts[1] != "infrastate":
+        return [raw]
+    scoped = node_scope_data_path(raw, node_id)
+    if not scoped or scoped == raw:
+        return [raw]
+    return [raw, scoped]
+
+
 def _positive_int(value: Any) -> int | None:
     try:
         result = int(value)
@@ -1724,10 +1737,20 @@ class ProjectionService:
             uid = user_id or UserProfileService(self.ctx).current_user_id()
             path = path.replace("{user_id}", uid)
 
+        write_paths = _local_infrastate_projection_paths(path, _context_local_node_id(self.ctx))
         segments = [s for s in path.split("/") if s]
         if len(segments) < 2:
             return
         root_name = segments[0]
+        root_names = list(
+            dict.fromkeys(
+                parts[0]
+                for parts in ([s for s in write_path.split("/") if s] for write_path in write_paths)
+                if len(parts) >= 2
+            )
+        )
+        if not root_names:
+            return
         owner = _projection_write_owner()
         # ProjectionService is the authority boundary for skill-visible Yjs
         # writes. Prefer the active live room for every governed projection so
@@ -1879,20 +1902,25 @@ class ProjectionService:
             if compaction_needed and not live_room_update:
                 detached_compaction_needed = True
 
-        def _mutator(doc, txn) -> None:
-            return apply_yjs_projection_value_to_doc(
-                doc,
-                txn,
-                path,
-                projected_value,
-                write_context=write_context,
-            )
+        def _mutator(doc, txn) -> bool:
+            changed = False
+            for write_path in write_paths:
+                changed = bool(
+                    apply_yjs_projection_value_to_doc(
+                        doc,
+                        txn,
+                        write_path,
+                        projected_value,
+                        write_context=write_context,
+                    )
+                ) or changed
+            return changed
 
         async def _try_live_room_projection() -> Mapping[str, Any]:
             return await submit_live_room_mutation(
                 ws_id,
                 _mutator,
-                root_names=[root_name],
+                root_names=root_names,
                 source="projection_service",
                 owner=owner,
                 channel=f"projection.{str(target.backend or 'yjs')}.live_room",
@@ -1900,17 +1928,25 @@ class ProjectionService:
                 update_callback=_on_yjs_update,
             )
 
+        async def _try_local_projection_bridge_paths() -> Mapping[str, Any]:
+            last_result: Mapping[str, Any] = {}
+            for write_path in write_paths:
+                last_result = await _try_local_projection_bridge(
+                    ws_id,
+                    write_path,
+                    projected_value,
+                    owner=owner,
+                    channel=f"projection.{str(target.backend or 'yjs')}.live_room.http_bridge",
+                )
+                if not (bool(last_result.get("ok")) and bool(last_result.get("room_applied"))):
+                    return last_result
+            return dict(last_result or {"ok": True, "room_applied": True, "reason": "applied"})
+
         if prefer_live_room:
             live_result = await _try_live_room_projection()
             if bool(live_result.get("applied")):
                 return
-            bridge_result = await _try_local_projection_bridge(
-                ws_id,
-                path,
-                projected_value,
-                owner=owner,
-                channel=f"projection.{str(target.backend or 'yjs')}.live_room.http_bridge",
-            )
+            bridge_result = await _try_local_projection_bridge_paths()
             if bool(bridge_result.get("ok")) and bool(bridge_result.get("room_applied")):
                 return
             _log.debug(
@@ -1930,7 +1966,7 @@ class ProjectionService:
                 await run_detached_ydoc_mutation(
                     ws_id,
                     _mutate_detached,
-                    load_mark_roots=[root_name],
+                    load_mark_roots=root_names,
                     governed=True,
                     write_source="projection_service",
                     write_owner=owner,
