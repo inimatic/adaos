@@ -24,6 +24,12 @@ Application declares what it may do
 
 The implementation sequence lives in
 [Application Access, Permissions, and Roles Roadmap](application-access-permissions-roadmap.md).
+Fast reads of release-bound permission profiles, flat compatibility
+permissions, Application role declarations, role matrices, validation state,
+and Builder permission-profiler inputs are indexed by
+[Application Registry Projection](application-registry-projection.md). This
+page still owns effective authorization, dynamic grant freshness, revocation,
+and audit.
 
 ## Current Baseline
 

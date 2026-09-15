@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-09-07.
+Last reviewed: 2026-09-15.
 
 This document defines the canonical AdaOS model for creating, testing,
 publishing, discovering, installing, updating, removing, and improving an
@@ -50,6 +50,14 @@ and the Users & Access product projection are owned by
 That architecture also defines Builder final verification for permission,
 role, access, secret, disclosure, and regression evidence before Trial,
 publication, or external install/update review.
+
+Fast Application inventory, Catalog, component ownership, release availability,
+permission-declaration summaries, startup snapshot trust, background manifest
+validation, and federated Application fact indexing are owned by
+[Application Registry Projection](application-registry-projection.md). That
+projection is a private, rebuildable read model. It does not replace immutable
+release/package records, Application lifecycle operations, skill-owned data,
+or access-policy authority.
 
 In this document, `dev/.runtime` is a logical shorthand for the per-subnet,
 component-scoped preview slots, for example

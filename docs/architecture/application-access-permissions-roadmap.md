@@ -6,6 +6,8 @@ Last reviewed: 2026-09-15.
 
 Target architecture:
 [Application Access, Permissions, and Roles](application-access-permissions.md).
+Companion fast-read projection architecture and embedded roadmap:
+[Application Registry Projection](application-registry-projection.md).
 
 This roadmap sequences the first enforceable AdaOS slice for Application-level
 permissions, Application-defined roles, per-user/child/guest Application access,
@@ -67,6 +69,10 @@ Application declaration -> install/update review -> access grant/role assignment
    operations.
 9. Advanced policy engines, enterprise identity, and marketplace compliance
    follow evidence from the local proof.
+10. Permission-profile and Application-role declaration indexes are read-model
+    inputs owned by the Application Registry Projection. Effective
+    authorization, dynamic grants, revocation freshness, and audit remain owned
+    here.
 
 ## AAPR0. Architecture and Ownership
 

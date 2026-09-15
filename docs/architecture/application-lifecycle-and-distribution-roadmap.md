@@ -2,12 +2,14 @@
 
 Status: target implementation roadmap.
 
-Last reviewed: 2026-09-08.
+Last reviewed: 2026-09-15.
 
 Target architecture:
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
 Companion access architecture:
 [Application Access, Permissions, and Roles](application-access-permissions.md).
+Companion fast-read projection architecture and embedded roadmap:
+[Application Registry Projection](application-registry-projection.md).
 
 This roadmap sequences the Application domain, SDK/MCP surface, Builder-built
 Applications product, trusted prerelease pilot, stable release proof, and later
@@ -46,6 +48,10 @@ tests, operation receipts, or end-to-end evidence.
 9. A successful Builder response, Prototype, or Automation run is not release
    readiness. Trial/publication gates must require the relevant verification
    report when the Application access roadmap makes it mandatory.
+10. Application catalog/search performance, trusted startup snapshots,
+    background manifest validation, and federated Application fact indexing are
+    owned by the Application Registry Projection roadmap. This roadmap consumes
+    those read models but does not redefine their trust or rebuild semantics.
 
 ## Current Baseline
 
