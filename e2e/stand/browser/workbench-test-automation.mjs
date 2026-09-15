@@ -190,6 +190,37 @@ try {
       await widget('books_list').getByText(marker + '-updated', { exact: true }).waitFor({ state: 'hidden' })
       check('delete-refreshes-list')
       await capture('completed')
+      await reveal('settings_list')
+      await widget('settings_list').locator('tbody tr').filter({ has: page.locator('td') }).first().click()
+      const preferred = field('settings_editor', 'preferred_view')
+      await preferred.waitFor()
+      const radios = preferred.getByRole('radio')
+      const radioChoice = await radios.count() > 0
+      let nextValue
+      if (radioChoice) {
+        assert.equal(await radios.count(), 2, 'Both supported presentation modes are selectable')
+        nextValue = await radios.first().isChecked() ? 1 : 0
+        await radios.nth(nextValue).check()
+      } else {
+        const select = preferred.locator('select')
+        const currentValue = await select.inputValue()
+        const alternatives = await select.locator('option').evaluateAll(options => options
+          .filter(option => option.value && !option.disabled).map(option => option.value))
+        nextValue = alternatives.find(value => value !== currentValue)
+        assert.ok(nextValue, 'Both supported presentation modes are selectable')
+        await select.selectOption(nextValue)
+      }
+      await mutate('update_settings', () => widget('settings_editor').getByRole('button', { name: /сохранить|save/i }).click())
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      await page.locator('[data-webui-widget-id]').first().waitFor({ timeout: 60000 })
+      await reveal('settings_list')
+      await widget('settings_list').locator('tbody tr').filter({ has: page.locator('td') }).first().click()
+      const reopened = field('settings_editor', 'preferred_view')
+      if (radioChoice) await expect(reopened.getByRole('radio').nth(nextValue)).toBeChecked()
+      else await expect(reopened.locator('select')).toHaveValue(nextValue)
+      check('settings-edit-persists-after-reload')
+      await capture('settings')
+      await close()
       if (trial) {
         const home = () => page.locator('ion-header ion-buttons ion-button')
           .filter({ has: page.locator('ion-icon[name="close-outline"]'), visible: true }).first()

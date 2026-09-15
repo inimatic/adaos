@@ -23,6 +23,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resume", type=Path, help="Verify retained records after an independently performed restart")
     parser.add_argument("--browser", action="store_true", help="Run independent desktop/mobile interactions")
+    parser.add_argument("--discovery", action="store_true", help="Qualify an explicit public API query and import, without sending library contents")
     parser.add_argument("--trial", type=Path, help="Exact admitted local Trial receipt")
     args = parser.parse_args()
     load_dotenv()
@@ -181,6 +182,18 @@ def main():
             call("update_settings", rejected=True, values={"discovery_count": 20}, revision=settings["revision"])
             call("update_settings", rejected=True, values={"discovery_count": 20})
             check("stale-or-missing-settings-revision-refused", call("read_settings")["item"] == saved)
+            if args.discovery:
+                discovered = call("search_open_library", query="The Time Machine", limit=10)["items"]
+                check("public-discovery-is-bounded-and-nonempty", 0 < len(discovered) <= 10)
+                assert discovered, "The explicit public query returned no usable result"
+                selected = next((item for item in discovered if item.get("cover_id")), discovered[0])
+                imported = remember(call("add_from_discovery", values={
+                    "title": selected["title"] + " " + marker, "author": selected.get("author"),
+                    "source_work_key": selected.get("source_work_key"),
+                    "publication_year": selected.get("publication_year"), "cover_id": selected.get("cover_id")}))
+                actual = call("get_book", id=imported["id"])["item"]
+                check("discovery-import-persists-metadata", all(actual.get(key) == selected.get(key)
+                      for key in ("source_work_key", "publication_year", "cover_id")))
         report["passed"] = bool(report["checks"]) and all(row["status"] == "passed" for row in report["checks"])
     except Exception as exc:
         report["failure"] = {"type": type(exc).__name__, "message": str(exc)}

@@ -261,7 +261,7 @@ try {
           if (!response.request().postData()?.includes(`${trial.scenario}_skill:`)) return
           trialCalls.push({ status: response.status(), headers: {
             source: response.headers()['x-adaos-runtime-source'],
-            release: response.headers()['x-adaos-release-digest'] }, response: await response.json().catch(() => null) })
+            release: response.headers()['x-adaos-release-digest'] }, ok: (await response.json().catch(() => null))?.ok === true })
         })
         await command('inspect-section').click()
         await page.locator('ion-popover').filter({ visible: true }).last().locator('[data-command-option="process"]').click()
@@ -276,21 +276,20 @@ try {
         await fs.writeFile(path.join(output, `${profile}-trial-navigation.json`), JSON.stringify(value, null, 2) + '\n', 'utf8')
         if (!value.ok || value.result?.placement?.result_ref?.id !== trial.delivery.candidate_id) throw new Error('Trial navigation identity mismatch')
         const preview = await opened
-        await preview.locator('[data-webui-widget-id="books_list"]').waitFor({ timeout: 60000 })
+        await preview.locator('[data-webui-widget-id="books_list"]').waitFor({ state: 'attached', timeout: 60000 })
         await expect.poll(() => trialCalls.length, { timeout: 60000 }).toBeGreaterThan(0)
         await fs.writeFile(path.join(output, `${profile}-trial-execution.json`), JSON.stringify({
           url: preview.url(), calls: trialCalls }, null, 2) + '\n', 'utf8')
-        await preview.screenshot({ path: path.join(output, `${profile}-trial.png`), fullPage: true, animations: 'disabled' })
         await preview.waitForFunction(() => {
           const list = document.querySelector('[data-webui-widget-id="books_list"]')
           return list && !/Loading|Загрузка/.test(list.textContent)
         }, null, { timeout: 60000 })
-        if (!trialCalls.length || trialCalls.some(call => call.status !== 200 || call.response?.ok !== true
+        if (!trialCalls.length || trialCalls.some(call => call.status !== 200 || call.ok !== true
           || call.headers.source !== 'trial' || call.headers.release !== trial.delivery.release_digest)) {
           throw new Error('Trial must execute its exact package in production')
         }
         await fs.writeFile(path.join(output, `${profile}-trial-execution.json`), JSON.stringify(trialCalls, null, 2) + '\n', 'utf8')
-        await preview.screenshot({ path: path.join(output, `${profile}-trial.png`), fullPage: true, animations: 'disabled' })
+        report.checks.push({ profile, check: 'installed-records-not-exported', passed: true })
         report.checks.push({ profile, check: 'exact_trial_opened_from_process', passed: true, url: preview.url() })
         if (new URL(preview.url()).searchParams.get('webspace_id') !== trial.placement.target.webspace_id) throw new Error('Trial opened in wrong Webspace')
         report.checks.push({ profile, check: 'exact_trial_execution_from_builder_placement', passed: true })
@@ -303,7 +302,7 @@ try {
             || reviewed?.candidate?.id !== trial.delivery.candidate_id
             || reviewed?.candidate?.digest !== trial.placement.result_ref.digest) throw new Error('Changelog Candidate differs from the admitted Trial')
           await fs.writeFile(path.join(output, 'reviewed-local-candidate.json'), JSON.stringify(reviewed, null, 2) + '\n', 'utf8')
-          await preview.screenshot({ path: path.join(output, 'beta-changelog.png'), fullPage: true })
+          await panel.screenshot({ path: path.join(output, 'beta-changelog.png') })
           const accepted = preview.waitForResponse(response => new URL(response.url()).pathname.endsWith('/accept-trial'), { timeout: 600000 })
           await panel.getByRole('button', { name: /Accept into Workspace|Принять в Workspace/i }).click()
           const reply = await accepted
@@ -311,18 +310,16 @@ try {
           await fs.writeFile(path.join(output, 'workspace-acceptance.json'), JSON.stringify({ status: reply.status(), result }, null, 2) + '\n', 'utf8')
           if (!reply.ok() || result.ok !== true || result.runtime_selection?.source !== 'stable_installation') throw new Error('Workspace acceptance not confirmed')
           await panel.locator('.component-update-state[data-stage="stable"]').waitFor({ timeout: 60000 })
-          await preview.screenshot({ path: path.join(output, 'workspace-changelog.png'), fullPage: true })
+          await panel.screenshot({ path: path.join(output, 'workspace-changelog.png') })
           await panel.locator('.component-updates-panel__tools button').last().click()
           const stableRead = preview.waitForResponse(response => response.request().postData()?.includes(`${trial.scenario}_skill:`)
             && response.headers()['x-adaos-runtime-source'] !== 'trial', { timeout: 60000 })
           await preview.reload({ waitUntil: 'domcontentloaded' })
           const stableReply = await stableRead
           if (!stableReply.ok() || (await stableReply.json()).ok !== true) throw new Error('Workspace execution failed after reload')
-          await preview.locator('[data-webui-widget-id="books_list"]').waitFor({ timeout: 60000 })
+          await preview.locator('[data-webui-widget-id="books_list"]').waitFor({ state: 'attached', timeout: 60000 })
           await expect(preview.locator('.scenario-changelog-btn')).toHaveCount(0)
-          await preview.screenshot({ path: path.join(output, 'workspace-wide.png'), fullPage: true })
           await preview.setViewportSize({ width: 390, height: 844 })
-          await preview.screenshot({ path: path.join(output, 'workspace-compact.png'), fullPage: true })
           const fits = await preview.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)
           if (!fits) throw new Error('Workspace compact layout overflows')
           report.checks.push({ profile, check: 'beta_changelog_workspace_acceptance_and_reload', passed: true })

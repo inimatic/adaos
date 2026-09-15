@@ -1324,3 +1324,23 @@ all pass. Live HTTP/browser acceptance correctly stops on the retained diagnosti
 DEV database: metadata columns already exist under the previous custom ledger.
 This is not repaired by forging checksum history. Installed Stable remains
 unchanged; only the E2E-owned DEV fixture may be archived before clean qualification.
+
+### 2026-09-15: Independent Automation And Restart Qualification
+
+The incompatible diagnostic DEV fixture was archived privately after verifying
+E2E ownership, no overlap with the two Stable records, and a stopped API. The
+application now initializes a clean DEV store with the actual Core ledger.
+HTTP review qualified CRUD, revision conflicts, typed settings, bounded live
+Open Library discovery and metadata import. Browser review passed at 1440 and
+390 px, including settings edits through the generated radio controls. A real
+API restart preserved all three retained test records and settings; cleanup
+removed only those owned test records through their public tools.
+
+Evidence: `reading-list-migrations-20260915/cycle-1/acceptance`,
+`automation-browser-06.json` and `migration-chain-02.json`. Trial admission can
+reference original reports explicitly without renaming them, and validates the
+current migration manifest digest. Installed reads and Trial/Stable screenshots
+must not export library records; their tests retain only outcome metadata and
+changelog-panel images. Beta/Stable cutover is still a separate unqualified gate.
+Visible actions without a selected record remain a UX follow-up, not a claimed
+fix or a reason to regenerate the accepted Prototype during Automation.

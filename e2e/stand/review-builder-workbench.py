@@ -17,6 +17,8 @@ def main():
     parser.add_argument("--modal-settings-only", action="store_true", help="Review shared modal preferences and explicit DEV defaults without another LLM request")
     parser.add_argument("--select-created", type=Path, help="Read-only review of the TEST application from a creation receipt")
     parser.add_argument("--trial-evidence", type=Path, help="Prepare only the reviewed TEST Trial from independent evidence")
+    parser.add_argument("--browser-evidence", type=Path, help="Explicit browser report for Trial review, without renaming original evidence")
+    parser.add_argument("--migration-evidence", type=Path, help="Independent current declared migration chain qualification")
     parser.add_argument("--open-trial", type=Path, help="Open the exact retained TEST Trial through Process")
     parser.add_argument("--accept-trial", action="store_true", help="Accept only that exact owned TEST Candidate into local Workspace from its changelog")
     parser.add_argument("--exercise-test", help="Create one new workbench_test_* application through the UI")
@@ -33,6 +35,8 @@ def main():
     parser.add_argument("--codex-model", default="gpt-5.5")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if (args.browser_evidence or args.migration_evidence) and not args.trial_evidence:
+        parser.error("Independent evidence overrides require Trial review")
     if args.inspect and args.exercise_test:
         parser.error("Inspect-only mode cannot create, refine or automate a TEST application")
     load_dotenv()
@@ -83,11 +87,22 @@ def main():
         session = json.loads(Path(f".adaos/state/builder/automation/scenario.{receipt['id']}.json").read_text(encoding="utf-8"))
         raw = Path(f".adaos/dev/sn_6acf0c01/scenarios/{receipt['id']}/webui.json").read_bytes()
         reports = []
-        for name in ("automation-http-01.json", "automation-browser-02.json", "automation-restart-02.json"):
-            path = root / name
+        paths = [root / "automation-http-01.json", args.browser_evidence or root / "automation-browser-02.json",
+                 root / "automation-restart-02.json"]
+        for path in paths:
+            path = path.resolve()
             evidence = json.loads(path.read_text(encoding="utf-8"))
             if evidence.get("passed") is not True or evidence.get("scenario") != receipt["id"] or evidence.get("task") != session["current_task_id"] or evidence.get("source_sha256") != hashlib.sha256(raw).hexdigest():
                 parser.error("Current independent HTTP, browser and restart evidence required")
+            reports.append({"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+        if args.migration_evidence:
+            path = args.migration_evidence.resolve()
+            evidence = json.loads(path.read_text(encoding="utf-8"))
+            manifest = Path(f".adaos/dev/sn_6acf0c01/skills/{receipt['id']}_skill/skill.yaml")
+            if (evidence.get("passed") is not True or evidence.get("scenario") != receipt["id"]
+                    or evidence.get("task") != session["current_task_id"]
+                    or evidence.get("manifest_sha256") != hashlib.sha256(manifest.read_bytes()).hexdigest()):
+                parser.error("Current independent declared migration evidence required")
             reports.append({"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
         env["ADAOS_E2E_PREPARE_TRIAL"] = json.dumps({"scenario": receipt["id"], "task": session["current_task_id"],
             "reviewer": {"id": "agent:codex-independent-test-review", "kind": "agent", "delegated_by": "user:local"},
