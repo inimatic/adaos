@@ -1045,7 +1045,34 @@ def test_checkout_build_version_uses_sha_identity_when_history_fetch_skipped(
     )
 
 
-def test_complete_history_for_build_identity_unshallows_standard_clone(monkeypatch, tmp_path: Path) -> None:
+def test_complete_history_for_build_identity_skips_unshallow_by_default(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    shallow_path = tmp_path / ".git" / "shallow"
+    shallow_path.parent.mkdir(parents=True)
+    shallow_path.write_text("deadbeef\n", encoding="utf-8")
+    monkeypatch.delenv("ADAOS_CORE_UPDATE_COMPLETE_HISTORY_FOR_BUILD_IDENTITY", raising=False)
+    monkeypatch.setattr(
+        mod,
+        "_run",
+        lambda *_args, **_kwargs: pytest.fail("core update prepare must not fetch full history by default"),
+    )
+
+    result = mod._ensure_complete_history_for_build_identity(tmp_path)
+
+    assert result == {
+        "state": "complete",
+        "was_shallow": True,
+        "fetch_mode": "skipped",
+        "reason": "bounded_build_identity",
+        "identity_mode": "base_version_plus_git_sha",
+    }
+    assert shallow_path.exists()
+
+
+def test_complete_history_for_build_identity_unshallows_with_explicit_opt_in(
+    monkeypatch, tmp_path: Path
+) -> None:
     import adaos.apps.core_update_apply as mod
 
     shallow_path = tmp_path / ".git" / "shallow"
@@ -1053,6 +1080,7 @@ def test_complete_history_for_build_identity_unshallows_standard_clone(monkeypat
     shallow_path.write_text("deadbeef\n", encoding="utf-8")
     calls: list[tuple[list[str], Path | None]] = []
 
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_COMPLETE_HISTORY_FOR_BUILD_IDENTITY", "1")
     monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
 
     def _fake_run(cmd, *, cwd=None):
@@ -1108,6 +1136,7 @@ def test_complete_history_for_build_identity_rejects_still_shallow_checkout(
     shallow_path = tmp_path / ".git" / "shallow"
     shallow_path.parent.mkdir(parents=True)
     shallow_path.write_text("deadbeef\n", encoding="utf-8")
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_COMPLETE_HISTORY_FOR_BUILD_IDENTITY", "1")
     monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
     monkeypatch.setattr(mod, "_run", lambda *_args, **_kwargs: None)
 

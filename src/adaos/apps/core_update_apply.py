@@ -1633,12 +1633,17 @@ def _ensure_complete_history_for_build_identity(
     shallow_path = repo_dir / ".git" / "shallow"
     if not shallow_path.exists():
         return {"state": "complete", "was_shallow": False}
-    if _is_probably_git_sha(str(target_version or "").strip()) and not _complete_history_for_build_identity_enabled():
+    if not _complete_history_for_build_identity_enabled():
+        reason = (
+            "immutable_target_version"
+            if _is_probably_git_sha(str(target_version or "").strip())
+            else "bounded_build_identity"
+        )
         return {
             "state": "complete",
             "was_shallow": True,
             "fetch_mode": "skipped",
-            "reason": "immutable_target_version",
+            "reason": reason,
             "identity_mode": "base_version_plus_git_sha",
         }
     git = shutil.which("git")
