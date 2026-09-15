@@ -92,6 +92,16 @@ Exit/remaining work: Complete the reachable-path/ownership inventory and immutab
 
 Owner/dependencies: Builder workflow + Client.
 
+- [ ] `[must]` Qualify revision-scoped flat Process stages, separate current-work
+  emphasis from inspected selection, and disable unavailable stages without
+  replacing server admission. Automation requires an accepted UI Prototype.
+- [ ] `[must]` Qualify scenario-header Changelog and exact local Candidate
+  acceptance into Workspace without a Dev Ticket. Keep publisher authority,
+  immutable Trial source, subscription selection and public publication separate.
+- [ ] `[must]` Restore reviewed README generation through the generic content
+  SDK; implementation and usage evidence are tracked in
+  [CG-01--CG-05](content-generation-roadmap.md), not duplicated here.
+
 Implementation boundary: Conversation and governed status projections exist; a worker's completed state is not independent Automation acceptance. A human-authored DEV Builder design specimen covers current work, separate decisions, history, context and existing Dev Tickets. Its local state transitions are not live workflow implementation or model-generation evidence.
 
 The DEV candidate now binds the accepted design shell to canonical SDK state.

@@ -79,6 +79,28 @@ def test_builder_application_sdk_has_no_raw_authority_parameters() -> None:
         assert forbidden.isdisjoint(inspect.signature(function).parameters), name
 
 
+@pytest.mark.parametrize("difference", ["selection", "workflow", "publication_unconfirmed"])
+def test_local_trial_acceptance_preserves_selection_on_stale_or_unconfirmed_publication(monkeypatch, difference):
+    from adaos.sdk.builder import lifecycle, workflow
+    selection = SimpleNamespace(release_digest="release", source="local_trial", revision=1)
+    release = SimpleNamespace(accepted_candidate_id="different" if difference == "selection" else "candidate")
+    app = SimpleNamespace(entrypoints=({"presentation_ref": "scenario:test"},))
+    store = SimpleNamespace(get_application=lambda _: app, get_runtime_selection=lambda *args: selection,
+                            get_release=lambda *args: release)
+    effects = []
+    service = SimpleNamespace(store=store, select_runtime=lambda **kwargs: effects.append(kwargs))
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:test")
+    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *args, **kwargs: None)
+    state = {"delivery": {"status": "accepted", "candidate_id": "other" if difference == "workflow" else "candidate",
+                          "package_digest": "digest"}, "publication": {"status": "unknown"}}
+    monkeypatch.setattr(workflow, "get_state", lambda *args: state)
+    monkeypatch.setattr(lifecycle, "publish_candidate", lambda *args, **kwargs: {"ok": False})
+    with pytest.raises(ValueError):
+        applications.accept_local_trial("test", webspace_id="desktop", candidate_id="candidate", candidate_digest="digest", actor_ref="user:test")
+    assert effects == []
+
+
 def test_builder_updates_application_metadata_through_durable_operation(
     monkeypatch, tmp_path: Path
 ) -> None:

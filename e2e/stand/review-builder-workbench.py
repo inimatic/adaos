@@ -13,9 +13,11 @@ from adaos.apps.cli.active_control import resolve_control_token
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inspect", action="store_true")
+    parser.add_argument("--refinement", action="store_true", help="Review Process, modal resizing and one README draft on the owned TEST")
     parser.add_argument("--select-created", type=Path, help="Read-only review of the TEST application from a creation receipt")
     parser.add_argument("--trial-evidence", type=Path, help="Prepare only the reviewed TEST Trial from independent evidence")
     parser.add_argument("--open-trial", type=Path, help="Open the exact retained TEST Trial through Process")
+    parser.add_argument("--accept-trial", action="store_true", help="Accept only that exact owned TEST Candidate into local Workspace from its changelog")
     parser.add_argument("--exercise-test", help="Create one new workbench_test_* application through the UI")
     parser.add_argument("--resume-created", type=Path, help="Prior report proving this stand created the TEST application")
     parser.add_argument("--prototype-prompt", type=Path, help="Submit one explicit prompt through the created TEST application's chat")
@@ -34,6 +36,14 @@ def main():
            "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub),
            "ADAOS_E2E_OUTPUT": str(args.output.resolve())}
     env["ADAOS_E2E_CODEX_MODEL"] = args.codex_model
+    if args.accept_trial:
+        if not args.open_trial or args.refinement:
+            parser.error("Acceptance requires an exact Trial receipt and no competing refinement")
+        env["ADAOS_E2E_ACCEPT_TRIAL"] = "1"
+    if args.refinement:
+        if not args.select_created or not args.inspect:
+            parser.error("Refinement review requires an owned TEST selection and inspect mode")
+        env["ADAOS_E2E_REFINEMENT"] = "1"
     if args.select_created:
         import json
         receipt = json.loads(args.select_created.read_text(encoding="utf-8"))["created_test"]

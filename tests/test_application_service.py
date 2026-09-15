@@ -103,6 +103,23 @@ def service(tmp_path: Path) -> ApplicationService:
     return result
 
 
+def test_native_workspace_publication_adoption_requires_exact_closure(service):
+    from adaos.domain.artifact_release import WorkspaceLock, WorkspaceSlot
+    release = service.register_release(_release())
+    lock = WorkspaceLock(lock_revision=1, updated_at="2026-09-15T00:00:00Z",
+        slots=(WorkspaceSlot(slot_id="main", project_id="recipes", release="recipes@1.0.0", release_digest=release.release_digest),),
+        components=release.project_release.components)
+    installed = service.reconcile_workspace_installation("app_recipes", release.release_digest, lock)
+    assert installed.status == "active" and installed.revision == 1
+    assert service.reconcile_workspace_installation("app_recipes", release.release_digest, lock) == installed
+    assert not service.store.get_channels("app_recipes")["channels"]
+    from dataclasses import replace
+    with pytest.raises(ApplicationServiceError, match="closure"):
+        service.reconcile_workspace_installation("app_recipes", release.release_digest, replace(lock, components=()))
+    with pytest.raises(ApplicationServiceError, match="exact"):
+        service.reconcile_workspace_installation("app_recipes", release.release_digest, replace(lock, slots=()))
+
+
 def test_store_enforces_one_to_one_legacy_project_mapping(tmp_path: Path) -> None:
     store = ApplicationStore(tmp_path)
     store.save_application(_application(), expected_revision=0)

@@ -472,8 +472,10 @@ def _extract_job_output_text(payload: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def _message_list(messages: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
-    return [{"role": str(msg.get("role", "user") or "user"), "content": str(msg.get("content", "") or "")} for msg in messages]
+def _message_list(messages: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [{"role": str(msg.get("role", "user") or "user"),
+             "content": msg["content"] if isinstance(msg.get("content"), list) else str(msg.get("content", "") or "")}
+            for msg in messages]
 
 
 def _responses_payload(base_payload: Mapping[str, Any], messages: list[Mapping[str, str]]) -> Dict[str, Any]:
@@ -482,6 +484,16 @@ def _responses_payload(base_payload: Mapping[str, Any], messages: list[Mapping[s
     input_items: list[dict[str, Any]] = []
     for msg in messages:
         role = str(msg.get("role") or "user").strip().lower()
+        if isinstance(msg.get("content"), list):
+            if role != "user":
+                raise ValueError("Multimodal input is allowed only as user content")
+            parts = []
+            for part in msg["content"]:
+                if not isinstance(part, Mapping) or part.get("type") not in {"input_text", "input_image"}:
+                    raise ValueError("Unsupported multimodal input part")
+                parts.append(dict(part))
+            input_items.append({"role": "user", "content": parts})
+            continue
         content = str(msg.get("content") or "")
         if not content.strip():
             continue

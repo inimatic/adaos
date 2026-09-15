@@ -314,6 +314,64 @@ class ComponentUpdateService:
             result = current
         return result
 
+    def reconcile_local_trials(self, webspace_id: str) -> int:
+        from adaos.sdk.builder import applications, lifecycle, workflow
+        from adaos.services.applications.store import ApplicationStore
+
+        store = ApplicationStore(Path(self.state_dir or current_state_dir()))
+        selections = [item for item in store.list_runtime_selections() if item.webspace_id == webspace_id]
+        if not selections:
+            return 0
+        publisher = applications._local_subnet_ref()
+        count = 0
+        for selection in selections:
+            if selection.webspace_id != webspace_id or selection.source not in {"local_trial", "stable_installation"}:
+                continue
+            application = store.get_application(selection.application_id)
+            if application.publisher_ref != publisher:
+                continue
+            release = store.get_release(selection.application_id, selection.release_digest)
+            scenario = applications._primary_scenario(application)
+            state = workflow.get_state("scenario", scenario)
+            delivery = state.get("delivery") or {}
+            if delivery.get("candidate_id") != release.accepted_candidate_id:
+                continue
+            published = selection.source == "stable_installation" and lifecycle._published_candidate_matches(
+                state.get("publication") or {}, candidate_id=delivery["candidate_id"],
+                candidate_digest=str(delivery.get("package_digest") or delivery.get("release_digest") or ""))
+            notice = self.record_aprobation(component_type="scenario", component_id=scenario,
+                aprobation={"source_kind": "builder_local_trial", "trial": {
+                    "candidate_id": delivery["candidate_id"], "candidate_digest": delivery.get("package_digest"),
+                    "release_digest": release.release_digest, "version": release.project_release.version,
+                    "status": "published" if published else delivery.get("status"),
+                }, "changelog": {"title": application.display["title"],
+                    "summary": str((state.get("change") or state.get("change_set") or {}).get("request") or application.display.get("summary") or "")}},
+                webspace_id=webspace_id)
+            if notice:
+                count += 1
+        return count
+
+    def accept_local_trial(self, notice_id: str, *, candidate_id: str, candidate_digest: str,
+                           webspace_id: str, actor: str) -> dict[str, Any]:
+        from adaos.sdk.builder import applications
+        from adaos.services.applications.store import ApplicationStore
+
+        notice = self._read()["notices"].get(notice_id)
+        if not notice or notice.get("source_kind") != "builder_local_trial":
+            raise ValueError("The local Trial notice is unavailable")
+        if (notice["candidate"]["id"], notice["candidate"]["digest"]) != (candidate_id, candidate_digest):
+            raise ValueError("The reviewed Candidate changed")
+        store = ApplicationStore(Path(self.state_dir or current_state_dir()))
+        matches = [selection for selection in store.list_runtime_selections()
+                   if selection.webspace_id == webspace_id and
+                   store.get_release(selection.application_id, selection.release_digest).accepted_candidate_id == candidate_id]
+        if len(matches) != 1:
+            raise ValueError("The reviewed Candidate has no unambiguous RuntimeSelection")
+        result = applications.accept_local_trial(matches[0].application_id, webspace_id=webspace_id,
+            candidate_id=candidate_id, candidate_digest=candidate_digest, actor_ref=actor)
+        self.reconcile_local_trials(webspace_id)
+        return result
+
     def active_component_metadata(self, component_type: str, component_id: str) -> dict[str, Any] | None:
         notices = self.list_notices(
             component_type=component_type,

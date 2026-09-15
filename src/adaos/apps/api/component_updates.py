@@ -34,6 +34,7 @@ def list_component_updates(
     service: ComponentUpdateService = Depends(_get_service),
 ) -> dict[str, Any]:
     service.reconcile_builder_sessions()
+    service.reconcile_local_trials(webspace_id)
     items = service.list_notices(
         component_type=component_type,
         component_id=component_id,
@@ -84,3 +85,25 @@ def respond_to_component_update(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "notice": notice}
+
+
+class ComponentTrialAcceptRequest(BaseModel):
+    candidate_id: str = Field(min_length=1)
+    candidate_digest: str = Field(min_length=1)
+    webspace_id: str = Field(min_length=1)
+    confirmed: bool = False
+
+
+@router.post("/{notice_id}/accept-trial")
+def accept_component_trial(notice_id: str, body: ComponentTrialAcceptRequest,
+                           service: ComponentUpdateService = Depends(_get_service)) -> dict[str, Any]:
+    from adaos.services.personalization_runtime import current_user_id
+
+    if not body.confirmed:
+        raise HTTPException(status_code=409, detail="Workspace acceptance requires confirmation")
+    try:
+        return service.accept_local_trial(notice_id, candidate_id=body.candidate_id,
+            candidate_digest=body.candidate_digest, webspace_id=body.webspace_id,
+            actor="user:" + current_user_id())
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

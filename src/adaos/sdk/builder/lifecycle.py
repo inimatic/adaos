@@ -301,9 +301,13 @@ def decide_trial(
     accepted: bool,
     actor: str,
     idempotency_key: str,
+    expected_candidate_id: str | None = None,
+    expected_candidate_digest: str | None = None,
 ) -> dict[str, Any]:
     state = workflow.get_state(object_type, object_id)
     candidate_id, candidate_digest = _candidate_identity(state)
+    if expected_candidate_id is not None and (candidate_id, candidate_digest) != (expected_candidate_id, expected_candidate_digest):
+        raise ValueError("The reviewed Candidate changed; reopen its changelog")
     decided = projects.decide_candidate(
         candidate_id,
         accepted=accepted,
@@ -340,9 +344,13 @@ def publish_candidate(
     *,
     actor: str,
     idempotency_key: str,
+    expected_candidate_id: str | None = None,
+    expected_candidate_digest: str | None = None,
 ) -> dict[str, Any]:
     state = workflow.get_state(object_type, object_id)
     candidate_id, candidate_digest = _candidate_identity(state)
+    if expected_candidate_id is not None and (candidate_id, candidate_digest) != (expected_candidate_id, expected_candidate_digest):
+        raise ValueError("The reviewed Candidate changed; reopen its changelog")
     automation_state = _mapping(state.get("automation"))
     delivery_state = _mapping(state.get("delivery"))
     publication_state = _mapping(state.get("publication"))

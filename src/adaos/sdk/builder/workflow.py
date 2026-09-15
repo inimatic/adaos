@@ -16,6 +16,12 @@ def get_state(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().describe(object_type, object_id))
 
 
+def get_process_stages(object_type: str, object_id: str, *, revision: str | None = None) -> list[dict[str, Any]]:
+    from adaos.services.builder.process_stages import process_stages
+
+    return process_stages(get_state(object_type, object_id), revision=revision)
+
+
 def save_specification_delta(object_type: str, object_id: str, delta: Mapping[str, Any], *,
                              change_id: str, expected_generation: int, actor: str) -> dict[str, Any]:
     """Save explicit add/modify/remove requirements for review, never accept them."""
@@ -303,6 +309,7 @@ __all__ = [
     "create_conversation_input_interaction",
     "get_interaction_frame",
     "get_process_explanation",
+    "get_process_stages",
     "get_project_placement_navigation",
     "get_state",
     "invoke_command",

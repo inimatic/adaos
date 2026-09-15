@@ -80,3 +80,42 @@ def test_failed_submission_resumes_same_root_identity(tmp_path):
     service.broker.submit_response_job = submit
     request(service)
     assert calls[0][1]["request_id"] == calls[1][1]["request_id"]
+
+
+def test_recursive_schema_keeps_its_original_root():
+    schema = {"type": "object", "properties": {"children": {"type": "array", "items": {"$ref": "#"}}}}
+    result = draft_schema(schema)
+    assert result["$defs"]["content"]["properties"]["children"]["items"]["$ref"] == "#/$defs/content"
+
+
+def test_missing_root_identity_is_retryable(tmp_path):
+    service, _ = setup_service(tmp_path)
+    service.broker.submit_response_job = lambda *args, **kwargs: {"status": "queued"}
+    with pytest.raises(ValueError, match="durable job identity"):
+        request(service)
+    assert service.get("draft-1")["status"] == "submitting"
+
+
+def test_unresolved_model_is_rejected_before_root_admission(tmp_path):
+    service, calls = setup_service(tmp_path)
+    with pytest.raises(ValueError, match="unresolved UI expression"):
+        request(service, model="$state.model")
+    assert calls == []
+
+
+def test_multimodal_input_is_explicit_bounded_and_separate_from_instructions(tmp_path):
+    from adaos.sdk.llm.media import image_input, validate_image_input
+    from adaos.sdk.llm.llm_client import _message_list, _responses_payload
+    picture = image_input(b"\x89PNG\r\n\x1a\nexample", media_type="image/png")
+    service, calls = setup_service(tmp_path)
+    request(service, images=[picture])
+    messages, _ = calls[0]
+    assert picture["data_url"] not in messages[0]["content"]
+    payload = _responses_payload({}, _message_list(messages))
+    assert payload["input"][0]["content"][1]["image_url"] == picture["data_url"]
+    with pytest.raises(ValueError, match="digest"):
+        validate_image_input({**picture, "sha256": "wrong"})
+    with pytest.raises(ValueError, match="URLs"):
+        validate_image_input({**picture, "data_url": "http://localhost/private"})
+    with pytest.raises(ValueError, match="four"):
+        request(service, images=[picture] * 5)

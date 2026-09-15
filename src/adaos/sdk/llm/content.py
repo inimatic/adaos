@@ -25,11 +25,11 @@ def _service():
 def generate(*, request_id: str, purpose: str, prompt: str, schema: Mapping[str, Any], data: Any = None,
              model: str | None = None, reasoning: Mapping[str, Any] | None = None,
              temperature: float | None = None, max_output_tokens: int | None = None,
-             context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+             context: Mapping[str, Any] | None = None, images: list[Mapping[str, Any]] | None = None) -> dict[str, Any]:
     """Submit once; reuse request_id only for retrying exactly the same input."""
     return _service().submit(request_id=request_id, purpose=purpose, prompt=prompt, schema=schema,
                              data=data, model=model, reasoning=reasoning, temperature=temperature,
-                             max_output_tokens=max_output_tokens, context=context)
+                             max_output_tokens=max_output_tokens, context=context, images=images)
 
 
 def get(request_id: str) -> dict[str, Any]:

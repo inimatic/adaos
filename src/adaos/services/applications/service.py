@@ -13,7 +13,7 @@ from adaos.domain.application import (
     RuntimeSelection,
     utc_now,
 )
-from adaos.domain.artifact_release import canonical_payload_digest
+from adaos.domain.artifact_release import WorkspaceLock, canonical_payload_digest
 
 from .store import ApplicationStore
 
@@ -89,6 +89,33 @@ class ApplicationService:
 
     def register_release(self, release: ApplicationRelease) -> ApplicationRelease:
         return self.store.put_release(release)
+
+    def reconcile_workspace_installation(self, application_id: str, release_digest: str,
+                                         workspace_lock: WorkspaceLock) -> ApplicationInstallation:
+        """Adopt a native publication only after its exact closure is active."""
+        application = self.store.get_application(application_id)
+        release = self.store.get_release(application_id, release_digest)
+        packages = {item.key: item.digest for item in workspace_lock.components}
+        if not any(slot.project_id == application.legacy_project_id and slot.release_digest == release_digest
+                   for slot in workspace_lock.slots):
+            raise ApplicationServiceError("Workspace does not contain this exact Application release")
+        if any(packages.get(item.key) != item.digest for item in release.project_release.components):
+            raise ApplicationServiceError("Workspace Application package closure differs from the release")
+        refs = tuple({"component_ref": item.key, "package_digest": item.digest, "lifecycle": "shared"}
+                     for item in release.project_release.components)
+        try:
+            current = self.store.get_installation(application_id)
+        except FileNotFoundError:
+            current = None
+        if current and current.status == "active" and current.installed_release_digest == release_digest:
+            return current
+        if current and current.status not in {"active", "removed"}:
+            raise ApplicationServiceError("Resolve the in-progress Application installation first")
+        value = (replace(current, installed_release_digest=release_digest, component_refs=refs,
+                         status="active", revision=current.revision + 1, updated_at=utc_now()) if current else
+                 ApplicationInstallation(installation_id=f"installation:{application_id}", application_id=application_id,
+                     installed_release_digest=release_digest, component_refs=refs, data_policy="retain", status="active", revision=1))
+        return self.store.save_installation(value, expected_revision=current.revision if current else 0)
 
     def list_releases(self, application_id: str) -> list[dict[str, Any]]:
         channels = self.store.get_channels(application_id).get("channels") or {}

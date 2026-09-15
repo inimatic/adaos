@@ -814,7 +814,14 @@ the result, review decision or recovery action to be buried in the chat stream:
 - compact layouts render the same view sequentially or in a modal/drawer.
 
 The former Lifecycle tree becomes **Process view**, a derived provenance and
-progress projection:
+progress projection. Its primary surface is a concise list of stages for the
+selected Change/artifact lineage, not the full project tree. Current work or a
+pending human decision is bold and marked as current independently of inspection
+selection. Unavailable future stages are disabled with an explicit reason.
+Automation requires acceptance of the exact Prototype even for utility-oriented
+applications; no implicit UI-less bypass is admitted. Historical inspection
+retains its own evidence and never inherits acceptance from another revision.
+Full provenance, branches and run history remain available as details:
 
 ```text
 Change CH-142

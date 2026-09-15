@@ -2163,6 +2163,8 @@ class BuilderWorkflowService:
         prototype = _mapping(current.get("prototype"))
         acceptance = _mapping(prototype.get("acceptance"))
         acceptance_required = bool(prototype.get("acceptance_required"))
+        if not prototype.get("head_revision") or not bool(prototype.get("stable")):
+            raise BuilderWorkflowError("A Prototype revision must be accepted before Automation starts")
         if not acceptance and not acceptance_required:
             return None
         if not acceptance:

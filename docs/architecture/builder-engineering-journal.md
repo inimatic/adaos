@@ -903,3 +903,26 @@ the DEV database and Reading List source hashes are unchanged. Desktop and
 mobile screenshots were inspected. The focused AppComponent, diagnostics and
 availability-flags suites pass 185/185; YDoc passes 155/155 separately. Client
 commit `b78014c` contains only the catalog guard correction and its regressions.
+
+### 2026-09-15: Modal, Stage And Content Refinement
+
+`workbench-automation-20260914/refinement-review-06` passes wide/compact live
+Builder rendering and the six-stage Process projection. The current Beta stage
+remains distinct from the inspected Prototype. Wide layout also passes modal
+maximize/minimize, device-scoped resize/save/reopen, and README draft generation
+without saving. GPT-5 returns 263 input / 1250 output tokens (1024 reasoning).
+This receipt does not qualify all-device preferences or local stable acceptance.
+
+Earlier attempts exposed old materialized Builder source, an incorrect stand
+selector, the required network approval panel, and literal `$state` values in
+form defaults. Builder now uses the established `stateKey` binding, and runtime
+content rejects unresolved model expressions before Root admission. The initial
+README packet contained only title, empty description and existing README;
+declared component/tool summaries were added after inspecting that packet.
+Their browser result and README save remain to be qualified.
+
+The current focused suites pass 152 Core/skill tests and 205 Client shell/list
+tests; modal/action suites separately pass 96. Candidate acceptance now requires
+exact publication evidence and the active Workspace package closure. Stable
+placement uses the production owner, not Preview; its live acceptance is pending.
+Unrelated in-progress Yjs/PageData edits are not part of these checkpoints.

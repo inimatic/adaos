@@ -1,5 +1,27 @@
 # Web UI Architecture
 
+## Modal Presentation Preferences
+
+Modal `presentation.size` declares width/height as viewport percentages (25--100).
+It is an application default, not a user preference. The browser may resize an
+overlay without saving; compact viewports remain full-screen. Maximize and resize
+share one presentation state, including modals initially declared fullscreen.
+
+Saved sizes belong to the current user. Device-local values use scoped browser
+storage; all-device values use current-user preferences. Scope selectors cover
+the current scenario/modal or all scenarios, and the current desktop or all
+desktops. Exact scopes override wildcard defaults; the local device wins an
+otherwise equal scope. Switching user or desktop invalidates an open save form.
+
+Alpha/beta can offer an additional application-default action. It resolves an
+existing DEV declaration, shows its destination, and requires explicit consent
+and an unchanged source digest. It never creates a development fork implicitly,
+edits a sealed Trial, or silently publishes the modified application.
+
+Typed content generation is specified in [Content Generation](content-generation.md).
+Form consumers review drafts and explicitly apply/save them; the renderer does
+not embed domain-specific prompting or provider credentials.
+
 ## Purpose
 
 This document fixes the target architecture for the AdaOS browser client.

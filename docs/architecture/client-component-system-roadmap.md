@@ -42,6 +42,13 @@ after the clean baseline from the observed cross-domain gap taxonomy.
 
 ## Current Audit
 
+- [ ] `[must]` Qualify generic modal resize and fullscreen restoration on desktop
+  and mobile. Persist current-user device/scenario/webspace scopes; resolve exact
+  scopes before wildcards. Saving application defaults from alpha/beta requires
+  explicit DEV source confirmation and source-digest concurrency control.
+- [ ] `[should]` Qualify opt-in current/disabled collection rows with keyboard
+  behavior and truthful semantic/ABI discovery. No Builder-specific renderer.
+
 - [x] `[must]` Add opt-in, tag-addressed chat read invalidation for new messages
   and lifecycle transitions, excluding initial/older history and token deltas.
   Keep the implementation generic; ABI and 21 chat unit tests cover the contract.

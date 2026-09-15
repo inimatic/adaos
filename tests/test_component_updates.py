@@ -222,3 +222,21 @@ def test_component_update_reconciles_builder_session_and_api(tmp_path: Path) -> 
     )
     assert responded.status_code == 200
     assert responded.json()["notice"]["unread"] is False
+
+
+def test_local_trial_api_requires_explicit_confirmation(monkeypatch):
+    from types import SimpleNamespace
+    from adaos.services import personalization_runtime
+    calls = []
+    service = SimpleNamespace(accept_local_trial=lambda *args, **kwargs: calls.append((args, kwargs)) or {"ok": True})
+    monkeypatch.setattr(personalization_runtime, "current_user_id", lambda: "owner")
+    app = FastAPI()
+    app.include_router(updates_api.router, prefix="/api/component-updates")
+    app.dependency_overrides[updates_api._get_service] = lambda: service
+    client = TestClient(app)
+    body = {"candidate_id": "candidate", "candidate_digest": "digest", "webspace_id": "desktop"}
+    headers = {"X-AdaOS-Token": "dev-local-token"}
+    assert client.post('/api/component-updates/test/accept-trial', json=body, headers=headers).status_code == 409
+    assert calls == []
+    assert client.post('/api/component-updates/test/accept-trial', json={**body, "confirmed": True}, headers=headers).status_code == 200
+    assert calls[0][1]["actor"] == "user:owner"

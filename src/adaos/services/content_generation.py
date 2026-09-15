@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -36,7 +37,7 @@ def draft_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
             return [relocate(item) for item in value]
         if not isinstance(value, dict):
             return value
-        return {key: "#/$defs/content" + item[1:] if key == "$ref" and isinstance(item, str) and item.startswith("#/")
+        return {key: "#/$defs/content" + item[1:] if key in {"$ref", "$dynamicRef"} and isinstance(item, str) and (item == "#" or item.startswith("#/"))
                 else relocate(item) for key, item in value.items()}
     return {"type": "object", "properties": {
         "status": {"type": "string", "enum": ["completed", "out_of_scope"]},
@@ -60,7 +61,14 @@ class ContentGenerationService:
     def submit(self, *, request_id: str, purpose: str, prompt: str, schema: Mapping[str, Any],
                data: Any = None, model: str | None = None, reasoning: Mapping[str, Any] | None = None,
                temperature: float | None = None, max_output_tokens: int | None = None,
-               context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+               context: Mapping[str, Any] | None = None, images: list[Mapping[str, Any]] | None = None) -> dict[str, Any]:
+        from adaos.sdk.llm.media import validate_image_input
+
+        if len(images or []) > 4:
+            raise ValueError("At most four explicit images are supported in one content request")
+        image_inputs = [validate_image_input(value) for value in images or []]
+        if model is not None and (not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}", model)):
+            raise ValueError("Model must be an explicit model identifier, not an unresolved UI expression")
         if not isinstance(purpose, str) or not purpose.strip() or not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("Application purpose and user prompt are required")
         envelope = draft_schema(schema)
@@ -70,6 +78,7 @@ class ContentGenerationService:
         encoded = json.dumps(request, ensure_ascii=False, allow_nan=False)
         if len(encoded.encode("utf-8")) > 1024 * 1024:
             raise ValueError("Content request exceeds 1 MiB; split the input, it will not be truncated")
+        request["images"] = image_inputs
         path = self._path(request_id)
         with mutation_lock(path.with_suffix(".lock")):
             if path.exists():
@@ -88,10 +97,14 @@ class ContentGenerationService:
                   "If the user request is outside this purpose, return status out_of_scope, data null and a brief explanation. "
                   "On completion data must satisfy the content schema. Never claim to have saved or applied the draft.\n"
                   "Application purpose:\n" + purpose},
-                 {"role": "user", "content": json.dumps({"request": prompt, "current_data": data}, ensure_ascii=False)}],
+                 {"role": "user", "content": [
+                     {"type": "input_text", "text": json.dumps({"request": prompt, "current_data": data}, ensure_ascii=False)},
+                     *[{"type": "input_image", "image_url": item["data_url"], "detail": item["detail"]} for item in image_inputs]]}],
                 model=model, reasoning=reasoning, temperature=temperature, max_tokens=max_output_tokens,
                 text={"format": {"type": "json_schema", "name": "content_draft", "strict": True, "schema": envelope}},
                 request_id=record["root_request_id"], profile_scope="runtime")
+            if not isinstance(job, Mapping) or not job.get("job_id"):
+                raise ValueError("Root did not return a durable job identity; retry the same request_id")
             record["job"] = {"job_id": job.get("job_id"), "base_url": (job.get("_client") or {}).get("base_url")}
             self._capture(record, job)
             atomic_write_json(path, record)

@@ -1987,6 +1987,15 @@
       "additionalProperties": true,
       "description": "Inputs for one standalone boolean setting.",
       "properties": {
+        "size": {
+          "type": "object", "additionalProperties": false,
+          "required": ["width", "height"],
+          "properties": {
+            "width": {"type": "number", "minimum": 25, "maximum": 100},
+            "height": {"type": "number", "minimum": 25, "maximum": 100}
+          },
+          "description": "Default dialog size in viewport percentages. Personal preferences may override; compact screens remain fullscreen."
+        },
         "label": { "type": "string" },
         "description": { "type": "string" },
         "value": { "anyOf": [{ "type": "boolean" }, { "type": "string", "pattern": "^\\$state\\.[A-Za-z_][A-Za-z0-9_.]*$" }] },
@@ -2708,6 +2717,10 @@
           "type": "string",
           "minLength": 1,
           "description": "Local page-state key that receives the successful callSkill or callMcp result."
+        },
+        "requestIdParam": {
+          "type": "string", "minLength": 1,
+          "description": "For callSkill, inject a unique invocation id into this parameter if absent; retain it through approval retries. This is not the semantic event_id."
         },
         "resultPath": {
           "type": "string",

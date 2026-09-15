@@ -9,6 +9,7 @@ from starlette.requests import ClientDisconnect
 
 from adaos.apps.api.auth import require_token
 from adaos.sdk.developer import artifact_context
+from adaos.sdk.developer.projects import DeveloperProjectError
 from adaos.services.builder import (
     BuilderAutomationService,
     BuilderProjectCatalogService,
@@ -21,6 +22,37 @@ from adaos.services.builder import (
 
 
 router = APIRouter(dependencies=[Depends(require_token)])
+
+
+class ModalSettingsRequest(BaseModel):
+    kind: str = Field(pattern="^(skill|scenario)$")
+    object_id: str = Field(min_length=1)
+    modal_id: str = Field(min_length=1)
+    width: float = Field(ge=25, le=100)
+    height: float = Field(ge=25, le=100)
+    expected_digest: str = Field(min_length=1)
+    confirmed: bool = False
+
+
+@router.get("/modal-settings")
+def read_modal_settings(kind: str, object_id: str, modal_id: str) -> dict[str, Any]:
+    from adaos.sdk.developer import modal_settings
+    try:
+        return modal_settings.read(kind, object_id, modal_id)
+    except (ValueError, OSError, DeveloperProjectError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.patch("/modal-settings")
+def save_modal_settings(body: ModalSettingsRequest) -> dict[str, Any]:
+    from adaos.sdk.developer import modal_settings
+    if not body.confirmed:
+        raise HTTPException(status_code=409, detail="Confirm the DEV source edit first")
+    try:
+        return modal_settings.write(body.kind, body.object_id, body.modal_id, width=body.width,
+                                    height=body.height, expected_digest=body.expected_digest)
+    except (ValueError, OSError, DeveloperProjectError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _get_service() -> BuilderWorkspaceService:

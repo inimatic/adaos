@@ -17,6 +17,7 @@ try {
   for (const [profile, viewport] of [['wide', { width: 1440, height: 1000 }], ['compact', { width: 390, height: 844 }]]) {
     if (exerciseId && profile !== 'wide') continue
     if (process.env.ADAOS_E2E_PREPARE_TRIAL && profile !== 'wide') continue
+    if (process.env.ADAOS_E2E_ACCEPT_TRIAL && profile !== 'wide') continue
     const context = await browser.newContext({ viewport, locale: 'ru-RU', colorScheme: 'dark' })
     await context.addInitScript(({ hub, token }) => {
       window.__ADAOS_DEBUG__ = true
@@ -107,6 +108,76 @@ try {
       }) })
       await capture('initial')
       report.checks.push({ profile, check: 'live_workbench_render', passed: true })
+      if (process.env.ADAOS_E2E_REFINEMENT) {
+        await command('specimens').click()
+        const stages = widget('process-tree').locator('ion-item.collection-focus-item')
+        await expect(stages).toHaveCount(6, { timeout: 60000 })
+        await expect(widget('process-tree').locator('[aria-current="step"]')).toHaveCount(1)
+        await expect(stages.last()).toHaveAttribute('aria-disabled', 'true')
+        await capture('process-stages')
+        report.checks.push({ profile, check: 'revision_stage_list_current_and_disabled', passed: true })
+        await closeModal()
+        await command('applications').click()
+        const modal = page.locator('ion-modal').filter({ visible: true }).last()
+        if (profile === 'wide') {
+          const bounds = () => modal.evaluate(el => el.shadowRoot.querySelector('.modal-wrapper').getBoundingClientRect().width)
+          const before = await bounds()
+          await modal.getByRole('button', { name: 'Fullscreen', exact: true }).click()
+          await expect.poll(bounds).toBeLessThan(before - 20)
+          const controls = modal.locator('ada-modal-size-controls')
+          const width = controls.locator('input[type="range"]').first()
+          await width.evaluate(el => { el.value = '70'; el.dispatchEvent(new Event('input', { bubbles: true })) })
+          await controls.getByRole('button', { name: /^(Сохранить размер|Save size)$/ }).click()
+          await expect(controls.getByRole('status')).toHaveText(/Размер сохранён|Size saved/)
+          await capture('modal-size-saved')
+          await closeModal()
+          await command('applications').click()
+          await expect.poll(bounds).toBeCloseTo(viewport.width * .7, 0)
+          report.checks.push({ profile, check: 'modal_maximize_resize_reopen', passed: true })
+        }
+        await closeModal()
+        if (profile === 'wide') {
+          const details = await widget('design-current-work').locator('ada-details-widget')
+            .evaluate(el => window.ng.getComponent(el).state.getSnapshot())
+          if (!String(details.selectedProjectId).startsWith('workbench_test_')) throw new Error('README generation must target the retained TEST only')
+          await command('inspect-section').click()
+          await page.locator('[data-command-option="readme"]').filter({ visible: true }).click()
+          await widget('design-readme-actions').getByRole('button', { name: /редакт|edit/i }).click()
+          const form = widget('readme-generate')
+          await form.locator('textarea').fill('Составь краткий README на русском для этого приложения: назначение и работа со списком чтения. Не добавляй неподтверждённые функции.')
+          const responsePromise = page.waitForResponse(response => response.request().postData()?.includes('builder_sdk_control_skill:generate_readme'), { timeout: 90000 })
+          await form.getByRole('button', { name: /Generate draft|Создать черновик/i }).click()
+          let response = await (await responsePromise).json()
+          await fs.writeFile(path.join(output, 'readme-submit.json'), JSON.stringify(response, null, 2) + '\n', 'utf8')
+          if (response.detail?.error === 'action_approval_required') {
+            const actionId = response.detail.pending_action_id
+            if (!actionId || response.detail.tool !== 'builder_sdk_control_skill:generate_readme') throw new Error('Unexpected README approval target')
+            await closeModal()
+            if (!await page.locator('.pending-action-item').count()) await page.locator('.pending-actions-fab').click()
+            await page.waitForFunction(actionId => [...document.querySelectorAll('.pending-action-item')]
+              .some(el => window.ng?.getContext(el)?.$implicit?.id === actionId), actionId, { timeout: 30000 })
+            const index = await page.locator('.pending-action-item').evaluateAll((items, actionId) =>
+              items.findIndex(el => window.ng?.getContext(el)?.$implicit?.id === actionId), actionId)
+            const resumed = page.waitForResponse(response => response.request().postData()?.includes('builder_sdk_control_skill:generate_readme'), { timeout: 90000 })
+            await page.locator('.pending-action-item').nth(index).getByRole('button', { name: /^(подтвердить|approve)(:|$)/i }).click()
+            response = await (await resumed).json()
+            await fs.writeFile(path.join(output, 'readme-admitted.json'), JSON.stringify(response, null, 2) + '\n', 'utf8')
+            await page.locator('.pending-actions-panel__header button').click()
+            await widget('design-readme-actions').getByRole('button', { name: /редакт|edit/i }).click()
+          }
+          if (response.ok !== true) throw new Error('README submit not admitted; inspect the exact response before retry')
+          await page.waitForFunction(() => {
+            const element = document.querySelector('[data-webui-widget-id="readme-generation-status"] ada-details-widget')
+            const status = element && window.ng?.getComponent(element)?.state?.getSnapshot()?.readmeGeneration?.status
+            return ['completed', 'out_of_scope', 'refused', 'failed', 'cancelled', 'invalid_output', 'incomplete'].includes(status)
+          }, null, { timeout: 600000 })
+          await widget('readme-generated-draft').waitFor()
+          await widget('readme-generated-draft').scrollIntoViewIfNeeded()
+          await capture('readme-generated-draft')
+          report.checks.push({ profile, check: 'readme_draft_generated_without_save', passed: true })
+          await closeModal()
+        }
+      }
       if (process.env.ADAOS_E2E_OPEN_TRIAL) {
         const trial = JSON.parse(process.env.ADAOS_E2E_OPEN_TRIAL)
         const trialCalls = []
@@ -117,7 +188,7 @@ try {
             release: response.headers()['x-adaos-release-digest'] }, response: await response.json().catch(() => null) })
         })
         await command('specimens').click()
-        const node = widget('process-tree').locator('.tree-widget__node').filter({ hasText: `Beta in ${trial.placement.target.webspace_id}` })
+        const node = widget('process-tree').locator(`ion-item[data-focus-ref="trial:${trial.delivery.candidate_id}"]`)
         await node.waitFor({ timeout: 30000 })
         const response = page.waitForResponse(response => response.request().postData()?.includes('builder_sdk_control_skill:get_project_placement_navigation'), { timeout: 90000 })
         void response.catch(() => {})
@@ -146,6 +217,39 @@ try {
         report.checks.push({ profile, check: 'exact_trial_opened_from_process', passed: true, url: preview.url() })
         if (new URL(preview.url()).searchParams.get('webspace_id') !== trial.placement.target.webspace_id) throw new Error('Trial opened in wrong Webspace')
         report.checks.push({ profile, check: 'exact_trial_execution_from_builder_placement', passed: true })
+        if (process.env.ADAOS_E2E_ACCEPT_TRIAL) {
+          await preview.locator('.scenario-changelog-btn').click()
+          const panel = preview.locator('.component-updates-panel')
+          await panel.locator('.component-update-detail').waitFor()
+          const reviewed = await panel.evaluate(el => window.ng.getOwningComponent(el).selectedComponentUpdate)
+          if (reviewed?.component?.id !== trial.scenario || reviewed?.source_kind !== 'builder_local_trial'
+            || reviewed?.candidate?.id !== trial.delivery.candidate_id
+            || reviewed?.candidate?.digest !== trial.placement.result_ref.digest) throw new Error('Changelog Candidate differs from the admitted Trial')
+          await fs.writeFile(path.join(output, 'reviewed-local-candidate.json'), JSON.stringify(reviewed, null, 2) + '\n', 'utf8')
+          await preview.screenshot({ path: path.join(output, 'beta-changelog.png'), fullPage: true })
+          const accepted = preview.waitForResponse(response => new URL(response.url()).pathname.endsWith('/accept-trial'), { timeout: 600000 })
+          await panel.getByRole('button', { name: /Accept into Workspace|Принять в Workspace/i }).click()
+          const reply = await accepted
+          const result = await reply.json()
+          await fs.writeFile(path.join(output, 'workspace-acceptance.json'), JSON.stringify({ status: reply.status(), result }, null, 2) + '\n', 'utf8')
+          if (!reply.ok() || result.ok !== true || result.runtime_selection?.source !== 'stable_installation') throw new Error('Workspace acceptance not confirmed')
+          await panel.locator('.component-update-state[data-stage="stable"]').waitFor({ timeout: 60000 })
+          await preview.screenshot({ path: path.join(output, 'workspace-changelog.png'), fullPage: true })
+          await panel.locator('.component-updates-panel__tools button').last().click()
+          const stableRead = preview.waitForResponse(response => response.request().postData()?.includes(`${trial.scenario}_skill:`)
+            && response.headers()['x-adaos-runtime-source'] !== 'trial', { timeout: 60000 })
+          await preview.reload({ waitUntil: 'domcontentloaded' })
+          const stableReply = await stableRead
+          if (!stableReply.ok() || (await stableReply.json()).ok !== true) throw new Error('Workspace execution failed after reload')
+          await preview.locator('[data-webui-widget-id="books_list"]').waitFor({ timeout: 60000 })
+          await expect(preview.locator('.scenario-changelog-btn')).toHaveCount(0)
+          await preview.screenshot({ path: path.join(output, 'workspace-wide.png'), fullPage: true })
+          await preview.setViewportSize({ width: 390, height: 844 })
+          await preview.screenshot({ path: path.join(output, 'workspace-compact.png'), fullPage: true })
+          const fits = await preview.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)
+          if (!fits) throw new Error('Workspace compact layout overflows')
+          report.checks.push({ profile, check: 'beta_changelog_workspace_acceptance_and_reload', passed: true })
+        }
         await preview.close()
       }
       if (process.env.ADAOS_E2E_PREPARE_TRIAL) {
