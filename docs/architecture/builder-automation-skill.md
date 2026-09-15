@@ -47,6 +47,21 @@ busy/terminal/input flags, summary/error, and the stable steps `queued`,
 Session files and full Skill Factory task evidence remain service state and are
 not copied into the Web UI document.
 
+## Stage-Bound Context
+
+The first Automation packet is prepared before the successful start transition.
+Its requested execution phase must therefore be explicit, not inferred from the
+still-active Prototype presentation. Retain the observed phase separately; context
+construction grants no execution permission and does not advance the workflow.
+The existing start gate still requires the exact accepted Prototype and Change.
+
+Automation uses implemented resources. The earlier mock binding is retained only
+as Prototype provenance, not as an Automation data policy. Every Automation packet
+and its model-facing projection carry the bounded SQLite migration/configuration
+contract, without installation records, setting values or secret bindings. Audit
+the retained model prompt as well as the packet; a correct provider answer cannot
+qualify a run whose input prescribed the wrong stage.
+
 ## Model Selection And Accounting
 
 Prototype and Automation have separate model preferences. Codex selection is

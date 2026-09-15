@@ -98,6 +98,34 @@ def test_spatial_context_reports_structure_abi_constraints_data_and_authority(
     assert packet["facets"]["data_policy"]["selected_mode"] == "mock"
 
 
+def test_requested_automation_context_precedes_transition_without_reusing_mock_mode(service):
+    from adaos.services.skill_factory_worker import context_packet_prompt_projection
+
+    _plan(service, "widget:recipe-title")
+    prototype = service.build_context_packet("scenario", "recipes")
+    automation = service.build_context_packet("scenario", "recipes", execution_phase="automation", persist=True)
+    assert automation["facets"]["execution_authority"]["phase"] == "automation"
+    assert automation["facets"]["execution_authority"]["observed_phase"] == "prototype"
+    policy = automation["facets"]["data_policy"]
+    assert policy["execution_mode"] == "implemented_resources"
+    assert "selected_mode" not in policy
+    assert policy["prototype_binding"]["selected_mode"] == "mock"
+    assert policy["local_release_lifecycle"]["manifest_field"] == "skill.yaml:data_lifecycle"
+    assert "local_release_lifecycle" not in prototype["facets"]["data_policy"]
+    assert automation["digest"] != prototype["digest"]
+    assert service.describe("scenario", "recipes")["active_phase"] == "prototype"
+    projected = context_packet_prompt_projection(automation)
+    assert projected["facets"]["data_policy"]["local_release_lifecycle"] == policy["local_release_lifecycle"]
+    assert projected["facets"]["data_policy"]["execution_mode"] == "implemented_resources"
+    assert projected["facets"]["execution_authority"]["observed_phase"] == "prototype"
+
+
+def test_unknown_context_phase_is_rejected(service):
+    _plan(service, "widget:recipe-title")
+    with pytest.raises(BuilderWorkflowError, match="execution context phase"):
+        service.build_context_packet("scenario", "recipes", execution_phase="publication")
+
+
 def test_missing_semantic_target_fails_before_model_submission(
     service: BuilderWorkflowService,
 ) -> None:

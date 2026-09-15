@@ -26,8 +26,11 @@ Target: [Typed Content Generation](content-generation.md).
   have local contract coverage for owner isolation, digest-bound media, byte/pixel
   bounds, stable retries, invalid output and missing usage. Root modality, scoped
   image fingerprints and regional relay accounting have local tests. Remaining:
-  concurrent/restart Root admission, deployed capability/model qualification,
-  subscription presentation, SDK discoverability and About browser round trip.
+  concurrent/restart Root admission, subscription presentation and About browser
+  round trip. Deployed `gpt-image-1` qualified through verified Builder ingress and
+  exact Pending Actions browser approval: one 1024x1024 PNG, reported modality
+  usage, identical terminal reads/retry with no new generation. Public SDK discovery
+  now advertises the draft contract, not general model availability or asset apply.
 - [x] `[should]` CG-05: Publish reusable form-generation guidance and SDK/ABI
   discoverability for Builder; test an unrelated schema and out-of-scope prompt
   without injecting application-specific rules into Core.

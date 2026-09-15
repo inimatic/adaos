@@ -42,6 +42,12 @@ def automation_data_contract() -> dict[str, Any]:
         "declaration": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": []},
         "database_fields": {"path": "relative SQLite filename under this skill's SDK data root",
             "migrations": "full ordered list of {version: positive integer, name: string, statements: SQL string[]}"},
+        "initialization_contract": {
+            "call": "adaos.sdk.data.lifecycle.ensure_database(path) before opening the declared SQLite file; requires storage.relational.",
+            "async": "Async handlers use a_ensure_database(path).",
+            "behavior": "Reads the active skill.yaml chain and uses the same Core checksum ledger as Beta migration. Initializes an empty store or verifies an already migrated one. Existing installed data with pending migrations is rejected; DEV synthetic stores can migrate in place.",
+            "boundary": "Do not implement another ledger or duplicate migrations in handlers. A mismatched ledger is a blocker, never a reason to clear history or ignore an exception.",
+        },
         "configuration_contract": {
             "manifest": "configuration.schema is a JSON Schema for the non-secret values object; configuration.defaults must satisfy it.",
             "read": "adaos.sdk.data.configuration.read() -> {revision, values}; requires configuration.read.",

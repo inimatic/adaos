@@ -397,6 +397,11 @@ Exit/remaining work: Admit contracts by shape/operation/authority before optiona
 - [ ] `[must]` Qualify process-constraint review and subsequent Automation handoff
   on the retained application increments; do not count discarded UI bindings as
   evidence that a privacy, preservation or stage restriction was satisfied.
+- [ ] `[must]` Qualify the first Automation packet before and after the stage
+  transition: explicit requested phase, separate observed phase, Prototype-only
+  mock provenance, and the actual model-facing data/configuration contract.
+  Reading List cycle 1 exposed the pre-transition inference defect. A packet
+  coverage flag alone did not detect it; the affected run remains diagnostic.
 
 - [x] `[must]` Preserve reference punctuation and original source offsets during
   deterministic clause extraction; do not infer UI operations from URL path words.

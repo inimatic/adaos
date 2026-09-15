@@ -1279,3 +1279,22 @@ not Automation, migration or delivery acceptance. Both private Stable records
 remain unchanged. The next Automation brief names the existing schema, accepted
 UI, public discovery API, forward migrations and typed settings boundary without
 including installation records, settings values or secrets.
+
+### 2026-09-15: Automation Input And SQLite Initialization Boundary
+
+The first Reading List Automation task received accepted Prototype 005, but its
+pre-transition context still described Prototype/mock execution and omitted the
+release contract. Two model attempts and worker checks completed; the result is
+diagnostic, not delivery evidence. Its separate migration ledger demonstrated a
+real context/SDK gap. Context construction now takes the requested phase without
+advancing workflow, retains the observed phase separately, and labels mock data
+as Prototype provenance. Runtime SQLite initialization now shares the fenced
+copy's checksum executor; it refuses pending migrations on installed nonempty
+data. Both requirements are discoverable and part of the model-facing capsule.
+
+Image generation qualified through verified DEV Builder ingress, exact browser
+Pending Action approval and the deployed Root: `gpt-image-1`, 1024x1024 PNG,
+61 text input tokens and 272 image output tokens, identical terminal retry/read.
+Evidence: `reading-list-migrations-20260915/image-01-approved`. This does not
+qualify About editing/cropping, broader model availability, monetary pricing or
+restart/concurrent admission. No application source asset was applied.

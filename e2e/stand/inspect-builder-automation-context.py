@@ -36,6 +36,8 @@ def inspect_admitted_input(input_dir: Path) -> dict:
     handoff = documents.get("prototype-resource-handoff.json", {})
     bindings = documents.get("implementation-bindings.json", {})
     rules = bindings.get("binding_rules", {})
+    facets = packet.get("context_packet", {}).get("facets", {})
+    policy = facets.get("data_policy", {})
     normalize = lambda text: text.replace("\r\n", "\n").strip()
     model_attempts = []
     for path in sorted((input_dir / "model-attempts").glob("*.prompt.md")):
@@ -52,6 +54,8 @@ def inspect_admitted_input(input_dir: Path) -> dict:
                 and receipt.get("prompt_sha256") == digest and receipt.get("prompt_bytes") == len(raw),
                 "full_brief_present": bool(brief) and normalize(brief) in normalize(actual),
                 "current_iteration_present": not iteration or normalize(iteration) in normalize(actual),
+                "data_lifecycle_contract_present": "adaos.skill.data_lifecycle.v1" in actual
+                and "adaos_schema_migrations" in actual and "configuration_contract" in actual,
                 "verification_ownership_explicit": "independent acceptance owns browser journeys" in actual
                 and "Explicitly mark checks not executed" in actual,
             },
@@ -64,6 +68,10 @@ def inspect_admitted_input(input_dir: Path) -> dict:
         "production_seeds_empty": bool(handoff.get("resources"))
         and all(not item.get("bundle", {}).get("seed") for item in handoff.get("resources", [])),
         "create_initialization_contract": bool(rules.get("creation")),
+        "automation_stage_context": facets.get("execution_authority", {}).get("phase") == "automation",
+        "implementation_data_policy": policy.get("execution_mode") == "implemented_resources"
+        and "selected_mode" not in policy,
+        "migration_contract_present": policy.get("local_release_lifecycle", {}).get("manifest_field") == "skill.yaml:data_lifecycle",
         "verification_ownership_explicit": "independent acceptance owns browser journeys" in prompt
         and "Explicitly mark checks not executed" in prompt,
     }

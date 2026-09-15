@@ -186,6 +186,10 @@ Project/Application identity collapse.
   Failed preparation now has exact-contract SDK cancellation back to the
   unchanged Stable, with durable recovery fencing and retained private evidence.
   This is not post-adoption rollback or loss-confirmed Beta replacement.
+  The scoped SQLite initialization SDK now shares Beta's checksum executor:
+  empty creation, retry, legacy DEV migration, installed-upgrade refusal and
+  transactional rollback have synthetic coverage. Its use by generated Reading
+  List code and the full two-cycle live proof remain open.
 - [ ] `[must]` `APP1-16` Automatically select the node's own Builder Beta after
   each completed local development cycle, including installed Stable upgrades,
   without a second Applications permission. Project the pre-release flag from

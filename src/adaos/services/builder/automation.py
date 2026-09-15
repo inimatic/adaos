@@ -6877,6 +6877,7 @@ class BuilderAutomationService:
         context_packet = workflow_service.build_context_packet(
             kind,
             project_id,
+            execution_phase="automation",
             allowed_paths=[
                 *sparse_paths,
                 "prompt_state.json",

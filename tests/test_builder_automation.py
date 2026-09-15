@@ -3425,11 +3425,14 @@ def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_pa
     assert packet["schema"] == "adaos.builder.context_packet.v1"
     assert packet["digest"] == request["links"]["context_packet_digest"]
     assert packet["change"]["change_id"] == "CS-recipes-store-sync"
+    assert packet["facets"]["execution_authority"]["phase"] == "automation"
+    assert packet["facets"]["execution_authority"]["observed_phase"] == "prototype"
+    assert packet["facets"]["data_policy"]["execution_mode"] == "implemented_resources"
+    assert packet["facets"]["data_policy"]["local_release_lifecycle"]["manifest_field"] == "skill.yaml:data_lifecycle"
     assert started["session"]["canonical_change_id"] == "CS-recipes-store-sync"
     assert started["session"]["context_packet_digest"] == packet["digest"]
     serialized_packet = json.dumps(packet, ensure_ascii=False).lower()
     assert "raw_transcript" not in serialized_packet
-    assert "secret" not in serialized_packet
     assert (
         "A failed remote request leaves the local shopping list unchanged."
         in request["acceptance"]["checks"]

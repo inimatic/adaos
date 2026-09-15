@@ -1295,7 +1295,7 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
             common.update(
                 {
                     key: facet.get(key)
-                    for key in ("allowed_paths", "actor", "phase")
+                    for key in ("allowed_paths", "actor", "phase", "observed_phase")
                     if facet.get(key) not in (None, "", [], {})
                 }
             )
@@ -1321,6 +1321,11 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
                 if authoring.get(key) not in (None, "", [], {})
             }
         elif facet_name == "data_policy":
+            if facet.get("execution_mode"):
+                common["execution_mode"] = facet["execution_mode"]
+            if isinstance(facet.get("prototype_binding"), Mapping):
+                common["prototype_binding"] = {key: facet["prototype_binding"].get(key)
+                                                for key in ("selected_profile_id", "selected_mode")}
             if isinstance(facet.get("local_release_lifecycle"), Mapping):
                 common["local_release_lifecycle"] = copy.deepcopy(facet["local_release_lifecycle"])
             mapping = dict(facet.get("implementation_mapping") or {})

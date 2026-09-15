@@ -56,6 +56,54 @@ def _backup(source: Path, target: Path) -> None:
         os.fsync(stream.fileno())
 
 
+def initialize_sqlite_schema(path: Path, migrations: Sequence[RelationalMigration], *, development: bool = False) -> dict:
+    """Bootstrap an empty store or verify its exact ledger; installed upgrades require cutover."""
+    ordered = sorted(migrations, key=lambda item: item.version)
+    if len({item.version for item in ordered}) != len(ordered) or any("sqlite" not in item.dialects for item in ordered):
+        raise ValueError("Migration versions must be unique and support SQLite")
+    with closing(sqlite3.connect(path, isolation_level=None, timeout=5)) as connection:
+        return _apply_migrations(connection, ordered, allow_existing=development)
+
+
+def _apply_migrations(connection: sqlite3.Connection, ordered: Sequence[RelationalMigration], *, allow_existing: bool) -> dict:
+    connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 16 * 1024 * 1024)
+    connection.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, 1024 * 1024)
+    connection.execute("PRAGMA foreign_keys=ON")
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        history = dict(connection.execute("SELECT version, checksum FROM adaos_schema_migrations")) if "adaos_schema_migrations" in tables else {}
+        declared = {item.version: item.checksum for item in ordered}
+        if any(declared.get(version) != checksum for version, checksum in history.items()):
+            raise ValueError("Migration history differs from the immutable full migration chain")
+        pending = [item for item in ordered if item.version not in history]
+        if pending and history and min(item.version for item in pending) < max(history):
+            raise ValueError("Cannot insert a migration before the installed schema version")
+        if pending and tables - {"adaos_schema_migrations", "sqlite_sequence"} and not allow_existing:
+            raise ValueError("Existing installed data requires the fenced Beta migration, not runtime initialization")
+        connection.execute("CREATE TABLE IF NOT EXISTS adaos_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL)")
+        started = time.monotonic()
+        connection.set_progress_handler(lambda: int(time.monotonic() - started > 120), 10000)
+        for item in pending:
+            connection.set_authorizer(SQLiteDataTransition._authorize)
+            try:
+                for statement in item.statements:
+                    connection.execute(statement)
+            finally:
+                connection.set_authorizer(None)
+            connection.execute("INSERT INTO adaos_schema_migrations (version,name,checksum) VALUES (?,?,?)", (item.version, item.name, item.checksum))
+        if pending:
+            _integrity(connection)
+        connection.commit()
+        return {"schema_version": max(declared, default=0), "applied_versions": [item.version for item in pending]}
+    except BaseException:
+        connection.rollback()
+        raise
+    finally:
+        connection.set_authorizer(None)
+        connection.set_progress_handler(None, 0)
+
+
 class SQLiteDataTransition:
     def __init__(self, private_root: Path):
         self.root = private_root.resolve()
@@ -90,33 +138,9 @@ class SQLiteDataTransition:
         def build(target):
             _backup(snapshot, target)
             with closing(sqlite3.connect(target, isolation_level=None)) as connection:
-                connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 16 * 1024 * 1024)
-                connection.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, 1024 * 1024)
                 page_size = connection.execute("PRAGMA page_size").fetchone()[0]
                 connection.execute(f"PRAGMA max_page_count={512 * 1024 * 1024 // page_size}")
-                connection.execute("PRAGMA foreign_keys=ON")
-                connection.execute("BEGIN IMMEDIATE")
-                connection.execute("CREATE TABLE IF NOT EXISTS adaos_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL)")
-                history = dict(connection.execute("SELECT version, checksum FROM adaos_schema_migrations"))
-                declared = {item.version: item.checksum for item in ordered}
-                if any(declared.get(version) != checksum for version, checksum in history.items()):
-                    raise ValueError("Migration history differs from the immutable full migration chain")
-                started = time.monotonic()
-                connection.set_progress_handler(lambda: int(time.monotonic() - started > 120), 10000)
-                for item in ordered:
-                    if item.version in history:
-                        continue
-                    if history and item.version < max(history):
-                        raise ValueError("Cannot insert a migration before the installed schema version")
-                    connection.set_authorizer(self._authorize)
-                    try:
-                        for statement in item.statements:
-                            connection.execute(statement)
-                    finally:
-                        connection.set_authorizer(None)
-                    connection.execute("INSERT INTO adaos_schema_migrations VALUES (?,?,?)", (item.version, item.name, item.checksum))
-                _integrity(connection)
-                connection.commit()
+                _apply_migrations(connection, ordered, allow_existing=True)
         return self._build(destination, identity, build)
 
     @staticmethod

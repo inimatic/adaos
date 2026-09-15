@@ -82,6 +82,8 @@ def test_sdk_resource_and_persistent_data_contracts_are_discoverable():
         ("adaos.sdk.resources.operate", "adaos.sdk.resources.operate"),
         ("adaos.sdk.access.caller", "adaos.sdk.access.caller"),
         ("adaos.sdk.access.require", "adaos.sdk.access.require"),
+        ("adaos.sdk.data.lifecycle.ensure_database", "adaos.sdk.data.lifecycle.ensure_database"),
+        ("adaos.sdk.llm.images.generate", "adaos.sdk.llm.images.generate"),
     ):
         result = search_descriptors(query, descriptor_ids=["sdk_metadata"], limit=6)
         assert result["items"][0]["item_id"] == expected

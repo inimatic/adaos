@@ -952,6 +952,14 @@ evidence replaces the nonexistent Stable-migration proof. Synthetic fixtures mus
 silently installed as production data. Application user data never enters a
 published package or another subnet's installation.
 
+For declared SQLite stores, `adaos.sdk.data.lifecycle.ensure_database(path)`
+uses the active manifest's full migration chain and the same Core checksum ledger
+as Beta preparation. It requires `storage.relational` and must run before the
+application opens that database. Empty installs initialize once; installed stores
+with pending migrations fail closed and require fenced Beta preparation. DEV
+synthetic stores may migrate in place. Handlers must not duplicate migration SQL
+or maintain a second ledger. Async handlers use `a_ensure_database(path)`.
+
 Exact-digest Beta-to-Stable promotion preserves data identity and does not rerun
 migration merely because the channel label changed. Rebuilding a derived Trial
 runtime/root or replaying the same release activation must not reseed its

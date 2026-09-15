@@ -4562,18 +4562,23 @@ class BuilderWorkflowService:
         conversation_context: Mapping[str, Any] | None = None,
         pending_action_refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None = None,
         execution_scope: Mapping[str, Any] | None = None,
+        execution_phase: str | None = None,
         run_purpose: str = "iteration",
         required_facets: list[str] | tuple[str, ...] | None = None,
         enforce_context_coverage: bool = False,
         persist: bool = False,
     ) -> dict[str, Any]:
-        """Build a bounded, stable-digested execution context for one Change."""
+        """Build context for the requested stage, without granting or transitioning it."""
 
         kind = _kind(object_type)
         project_id = _project_id(object_id)
         with _LOCK:
             state = self._read_state(kind, project_id)
             workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            observed_phase = str(workflow.get("active_phase") or "prototype")
+            phase = execution_phase if execution_phase is not None else observed_phase
+            if phase not in {"prototype", "automation"}:
+                raise BuilderWorkflowError("invalid execution context phase")
             change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
             if change is None:
                 raise BuilderWorkflowError("an active Change is required to build a context packet")
@@ -4742,10 +4747,16 @@ class BuilderWorkflowService:
                 "profiles": data_binding.get("profiles") or [],
                 "implementation_mapping": implementation_mapping_report(data_binding),
             }
-            if str(workflow.get("active_phase") or "") == "automation":
+            if phase == "automation":
                 from adaos.services.applications.data_lifecycle import automation_data_contract
 
-                data_policy["local_release_lifecycle"] = automation_data_contract()
+                data_policy = {
+                    "status": "present",
+                    "execution_mode": "implemented_resources",
+                    "prototype_binding": {key: data_policy[key] for key in
+                                          ("selected_profile_id", "selected_mode", "implementation_mapping")},
+                    "local_release_lifecycle": automation_data_contract(),
+                }
             workflow_inspection = _mapping(
                 self._workflow_inspection(kind, project_id).get("project")
             )
@@ -5182,7 +5193,8 @@ class BuilderWorkflowService:
                     "status": "present" if selected_paths else "missing",
                     "allowed_paths": selected_paths,
                     "actor": "builder",
-                    "phase": str(workflow.get("active_phase") or "prototype"),
+                    "phase": phase,
+                    "observed_phase": observed_phase,
                 },
             }
             required = list(

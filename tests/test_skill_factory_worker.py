@@ -4635,8 +4635,11 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     assert "Previous Automation" not in prompt
     assert "workflow.json" in prompt
     assert "irrelevant.full.catalog" not in prompt
-    # Includes reference grammar and validation ownership, not application examples.
-    assert len(prompt.encode("utf-8")) < 9_500
+    # Keep the original narrative budget; account separately for the bounded
+    # clarification grammar, whose exact inclusion is asserted above.
+    clarification_bytes = len(json.dumps(development_feedback_model_rules()["clarification_questions"],
+                                        separators=(",", ":")).encode("utf-8"))
+    assert len(prompt.encode("utf-8")) - clarification_bytes < 9_500
     assert [item["id"] for item in packet["prompt_rule_capsules"]] == [
         "adaos.builder.execution_boundary.v1",
         "adaos.skill.sdk_boundary.v1",
