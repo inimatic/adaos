@@ -1270,6 +1270,45 @@ def _shared_dotenv_path() -> str:
     return str(env.get("ADAOS_SHARED_DOTENV_PATH") or "").strip()
 
 
+def _core_update_source_mode() -> str:
+    explicit = str(os.getenv("ADAOS_CORE_UPDATE_SOURCE_MODE") or "").strip()
+    if explicit:
+        return explicit
+    if env_bool("ADAOS_DEV_ALLOW_CORE_UPDATE"):
+        return "git-first"
+    if (
+        env_bool("ADAOS_AUTOSTART_MANAGED")
+        or env_bool("ADAOS_SUPERVISOR_ENABLED")
+        or str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
+    ):
+        return "archive-first"
+    return "git-first"
+
+
+def _core_update_source_archive_url() -> str:
+    return str(
+        os.getenv("ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_URL")
+        or os.getenv("ADAOS_CORE_UPDATE_ARCHIVE_URL")
+        or ""
+    ).strip()
+
+
+def _core_update_source_archive_url_template() -> str:
+    return str(
+        os.getenv("ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_URL_TEMPLATE")
+        or os.getenv("ADAOS_CORE_UPDATE_ARCHIVE_URL_TEMPLATE")
+        or ""
+    ).strip()
+
+
+def _core_update_source_archive_sha256() -> str:
+    return str(
+        os.getenv("ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_SHA256")
+        or os.getenv("ADAOS_CORE_UPDATE_ARCHIVE_SHA256")
+        or ""
+    ).strip()
+
+
 def _format_update_command(template: str, plan: dict[str, Any]) -> str:
     repo_root = _repo_root()
     control_python = current_control_python(repo_root)
@@ -1286,6 +1325,12 @@ def _format_update_command(template: str, plan: dict[str, Any]) -> str:
         "python": str(control_python),
         "repo_root": str(repo_root or ""),
         "source_repo_root": str(repo_root or ""),
+        "source_mode": str(plan.get("source_mode") or _core_update_source_mode()),
+        "source_archive_url": str(plan.get("source_archive_url") or _core_update_source_archive_url()),
+        "source_archive_url_template": str(
+            plan.get("source_archive_url_template") or _core_update_source_archive_url_template()
+        ),
+        "source_archive_sha256": str(plan.get("source_archive_sha256") or _core_update_source_archive_sha256()),
         "shared_dotenv_path": _shared_dotenv_path(),
     }
     fields = {field_name for _, field_name, _, _ in Formatter().parse(template) if field_name}
@@ -1304,6 +1349,10 @@ def _default_update_command_template() -> str:
         ' --base-dir "{base_dir}"'
         ' --repo-root "{repo_root}"'
         ' --source-repo-root "{source_repo_root}"'
+        ' --source-mode "{source_mode}"'
+        ' --source-archive-url "{source_archive_url}"'
+        ' --source-archive-url-template "{source_archive_url_template}"'
+        ' --source-archive-sha256 "{source_archive_sha256}"'
         ' --shared-dotenv-path "{shared_dotenv_path}"'
         ' --prepare-lease-path "{prepare_lease_path}"'
         ' --prepare-lease-token "{prepare_lease_token}"'
@@ -1329,6 +1378,10 @@ def _plan_with_slot_context(plan: dict[str, Any]) -> dict[str, Any]:
     payload["inactive_slot_dir"] = str(slot_dir(payload["target_slot"]))
     payload.setdefault("prepare_lease_path", "")
     payload.setdefault("prepare_lease_token", "")
+    payload.setdefault("source_mode", _core_update_source_mode())
+    payload.setdefault("source_archive_url", _core_update_source_archive_url())
+    payload.setdefault("source_archive_url_template", _core_update_source_archive_url_template())
+    payload.setdefault("source_archive_sha256", _core_update_source_archive_sha256())
     if payload["active_slot"]:
         payload["active_slot_dir"] = str(slot_dir(payload["active_slot"]))
     else:
@@ -1369,6 +1422,10 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
             base_dir=str(_base_dir()),
             repo_root=str(repo_root or ""),
             source_repo_root=str(repo_root or ""),
+            source_mode=str(slot_plan.get("source_mode") or ""),
+            source_archive_url=str(slot_plan.get("source_archive_url") or ""),
+            source_archive_url_template=str(slot_plan.get("source_archive_url_template") or ""),
+            source_archive_sha256=str(slot_plan.get("source_archive_sha256") or ""),
             shared_dotenv_path=_shared_dotenv_path(),
             target_rev=str(slot_plan.get("target_rev") or ""),
             target_version=str(slot_plan.get("target_version") or ""),

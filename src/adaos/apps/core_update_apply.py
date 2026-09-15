@@ -9,9 +9,13 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import tomllib
+import urllib.parse
+import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -110,6 +114,22 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--base-dir", default="")
     parser.add_argument("--repo-root", default="")
     parser.add_argument("--source-repo-root", default="")
+    parser.add_argument("--source-mode", default=os.getenv("ADAOS_CORE_UPDATE_SOURCE_MODE", "auto"))
+    parser.add_argument(
+        "--source-archive-url",
+        default=os.getenv("ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_URL", os.getenv("ADAOS_CORE_UPDATE_ARCHIVE_URL", "")),
+    )
+    parser.add_argument(
+        "--source-archive-url-template",
+        default=os.getenv(
+            "ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_URL_TEMPLATE",
+            os.getenv("ADAOS_CORE_UPDATE_ARCHIVE_URL_TEMPLATE", ""),
+        ),
+    )
+    parser.add_argument(
+        "--source-archive-sha256",
+        default=os.getenv("ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_SHA256", os.getenv("ADAOS_CORE_UPDATE_ARCHIVE_SHA256", "")),
+    )
     parser.add_argument("--shared-dotenv-path", default="")
     parser.add_argument("--repo-url", default=os.getenv("ADAOS_CORE_UPDATE_REPO_URL", "https://github.com/inimatic/adaos.git"))
     parser.add_argument("--prepare-lease-path", default="")
@@ -1280,6 +1300,246 @@ def _clone_repo(repo_url: str, target_rev: str, target_version: str, checkout_di
     _checkout_target_version(checkout_dir, target_rev=target_rev, target_version=target_version)
 
 
+def _source_mode_token(source_mode: str) -> str:
+    token = str(source_mode or "").strip().lower().replace("_", "-")
+    if token in {"", "auto", "default"}:
+        if str(os.getenv("ADAOS_DEV_ALLOW_CORE_UPDATE") or "").strip().lower() in {"1", "true", "yes", "on"}:
+            return "git-first"
+        if (
+            str(os.getenv("ADAOS_AUTOSTART_MANAGED") or "").strip().lower() in {"1", "true", "yes", "on"}
+            or str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
+            or str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
+        ):
+            return "archive-first"
+        return "git-first"
+    if token in {"archive", "archives", "archive-first", "artifact", "artifact-first"}:
+        return "archive-first"
+    if token in {"archive-only", "artifact-only"}:
+        return "archive-only"
+    if token in {"git", "repo", "repository", "git-first", "local", "local-first"}:
+        return "git-first"
+    return token
+
+
+def _archive_ref(target_rev: str, target_version: str) -> str:
+    version = str(target_version or "").strip()
+    if _is_probably_git_sha(version):
+        return version
+    rev = str(target_rev or "").strip()
+    return rev or version
+
+
+def _format_source_archive_url_template(
+    template: str,
+    *,
+    repo_url: str,
+    target_rev: str,
+    target_version: str,
+) -> str:
+    raw = str(template or "").strip()
+    if not raw:
+        return ""
+    ref = _archive_ref(target_rev, target_version)
+    values = {
+        "repo_url": str(repo_url or "").strip(),
+        "target_rev": str(target_rev or "").strip(),
+        "target_version": str(target_version or "").strip(),
+        "archive_ref": ref,
+        "ref": ref,
+    }
+    try:
+        return raw.format(**values)
+    except Exception:
+        return raw
+
+
+def _github_archive_url_from_repo(repo_url: str, *, target_rev: str, target_version: str) -> str:
+    ref = _archive_ref(target_rev, target_version)
+    if not ref:
+        return ""
+    raw = str(repo_url or "").strip()
+    if not raw:
+        return ""
+    owner_repo = ""
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.netloc.lower() == "github.com":
+        owner_repo = parsed.path.strip("/")
+    elif raw.startswith("git@github.com:"):
+        owner_repo = raw.split(":", 1)[1].strip("/")
+    if owner_repo.endswith(".git"):
+        owner_repo = owner_repo[:-4]
+    parts = [part for part in owner_repo.split("/") if part]
+    if len(parts) < 2:
+        return ""
+    owner = urllib.parse.quote(parts[0], safe="")
+    repo = urllib.parse.quote(parts[1], safe="")
+    encoded_ref = urllib.parse.quote(ref, safe="")
+    return f"https://codeload.github.com/{owner}/{repo}/tar.gz/{encoded_ref}"
+
+
+def _source_archive_candidates(
+    *,
+    repo_url: str,
+    target_rev: str,
+    target_version: str,
+    source_archive_url: str = "",
+    source_archive_url_template: str = "",
+) -> list[str]:
+    candidates = [
+        _format_source_archive_url_template(
+            source_archive_url,
+            repo_url=repo_url,
+            target_rev=target_rev,
+            target_version=target_version,
+        ),
+        _format_source_archive_url_template(
+            source_archive_url_template,
+            repo_url=repo_url,
+            target_rev=target_rev,
+            target_version=target_version,
+        ),
+        _github_archive_url_from_repo(repo_url, target_rev=target_rev, target_version=target_version),
+    ]
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        url = str(candidate or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        result.append(url)
+    return result
+
+
+def _download_source_archive(url: str, destination: Path) -> dict[str, object]:
+    source = str(url or "").strip()
+    if not source:
+        raise RuntimeError("source archive URL is empty")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    started_at = time.time()
+    parsed = urllib.parse.urlparse(source)
+    if parsed.scheme in {"http", "https"}:
+        try:
+            timeout_s = env_float("ADAOS_CORE_UPDATE_ARCHIVE_DOWNLOAD_TIMEOUT_SEC", 120.0, minimum=1.0)
+            request = urllib.request.Request(
+                source,
+                headers={"User-Agent": "AdaOS core updater"},
+            )
+            authorization = str(os.getenv("ADAOS_CORE_UPDATE_ARCHIVE_AUTHORIZATION") or "").strip()
+            token = str(os.getenv("ADAOS_CORE_UPDATE_ARCHIVE_TOKEN") or "").strip()
+            if authorization:
+                request.add_header("Authorization", authorization)
+            elif token:
+                request.add_header("Authorization", f"Bearer {token}")
+            with urllib.request.urlopen(request, timeout=timeout_s) as response, destination.open("wb") as handle:
+                shutil.copyfileobj(response, handle)
+        except Exception as exc:
+            raise RuntimeError(f"failed to download source archive {source}: {_bounded_exception_summary(exc)}") from exc
+    else:
+        if parsed.scheme == "file":
+            local_path = Path(urllib.request.url2pathname(parsed.path))
+        else:
+            local_path = Path(source).expanduser()
+        if not local_path.exists():
+            raise RuntimeError(f"source archive does not exist: {local_path}")
+        shutil.copyfile(local_path, destination)
+    digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+    return {
+        "url": source,
+        "archive_path": str(destination),
+        "size_bytes": destination.stat().st_size,
+        "sha256": digest,
+        "elapsed_s": round(time.time() - started_at, 3),
+    }
+
+
+def _verify_source_archive_sha256(archive_path: Path, expected_sha256: str) -> str:
+    expected = str(expected_sha256 or "").strip().lower()
+    digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    if expected and digest.lower() != expected:
+        raise RuntimeError(f"source archive sha256 mismatch: expected {expected}, got {digest}")
+    return digest
+
+
+def _ensure_archive_member_safe(root: Path, member_name: str, *, link_target: str = "") -> None:
+    name = str(member_name or "")
+    if not name:
+        return
+    target = (root / name).resolve()
+    root_resolved = root.resolve()
+    if target != root_resolved and root_resolved not in target.parents:
+        raise RuntimeError(f"unsafe archive member path: {name}")
+    if link_target:
+        link = Path(str(link_target))
+        if link.is_absolute() or any(part == ".." for part in link.parts):
+            raise RuntimeError(f"unsafe archive link target for {name}: {link_target}")
+
+
+def _extract_source_archive(archive_path: Path, extract_dir: Path) -> None:
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    if zipfile.is_zipfile(archive_path):
+        with zipfile.ZipFile(archive_path) as zf:
+            for info in zf.infolist():
+                _ensure_archive_member_safe(extract_dir, info.filename)
+            zf.extractall(extract_dir)
+        return
+    try:
+        with tarfile.open(archive_path, mode="r:*") as tf:
+            for member in tf.getmembers():
+                _ensure_archive_member_safe(
+                    extract_dir,
+                    member.name,
+                    link_target=member.linkname if member.issym() or member.islnk() else "",
+                )
+            tf.extractall(extract_dir)
+        return
+    except tarfile.TarError as exc:
+        raise RuntimeError(f"unsupported or invalid source archive: {archive_path}") from exc
+
+
+def _archive_checkout_root(extract_dir: Path) -> Path:
+    children = [child for child in extract_dir.iterdir() if child.name not in {".", ".."}]
+    if len(children) == 1 and children[0].is_dir():
+        child = children[0]
+        if (child / "pyproject.toml").exists() or (child / "src" / "adaos").exists():
+            return child
+    return extract_dir
+
+
+def _prepare_archive_checkout(
+    *,
+    archive_url: str,
+    checkout_dir: Path,
+    target_rev: str,
+    target_version: str,
+    expected_sha256: str = "",
+) -> dict[str, object]:
+    archive_parent = checkout_dir.parent / f".{checkout_dir.name}-archive-{os.getpid()}-{time.time_ns()}"
+    archive_path = archive_parent / "source.archive"
+    extract_dir = archive_parent / "extract"
+    try:
+        download = _download_source_archive(archive_url, archive_path)
+        digest = _verify_source_archive_sha256(archive_path, expected_sha256)
+        _extract_source_archive(archive_path, extract_dir)
+        source_root = _archive_checkout_root(extract_dir)
+        if checkout_dir.exists():
+            _force_remove_tree(checkout_dir)
+        shutil.move(str(source_root), str(checkout_dir))
+        _strip_repo_vcs_metadata(checkout_dir)
+        return {
+            "url": str(archive_url or "").strip(),
+            "state": "succeeded",
+            "target_rev": str(target_rev or "").strip(),
+            "target_version": str(target_version or "").strip(),
+            "archive_sha256": digest,
+            "archive_size_bytes": download.get("size_bytes"),
+            "download_elapsed_s": download.get("elapsed_s"),
+            "verification": "sha256" if str(expected_sha256 or "").strip() else "archive_ref",
+        }
+    finally:
+        shutil.rmtree(archive_parent, ignore_errors=True)
+
+
 def _bounded_exception_summary(exc: Exception, *, max_chars: int = 1200) -> str:
     if isinstance(exc, shutil.Error):
         failures = exc.args[0] if exc.args and isinstance(exc.args[0], list) else []
@@ -1406,12 +1666,64 @@ def _prepare_checkout_repo(
     repo_url: str,
     target_rev: str,
     target_version: str,
+    source_mode: str = "auto",
+    source_archive_url: str = "",
+    source_archive_url_template: str = "",
+    source_archive_sha256: str = "",
 ) -> tuple[str, dict[str, object]]:
     git_available = bool(shutil.which("git"))
     source_exists = source_repo_dir is not None and source_repo_dir.exists()
     source_is_git = _is_git_repo(source_repo_dir)
     local_error: Exception | None = None
+    archive_error: Exception | None = None
     attempts: list[dict[str, object]] = []
+    mode = _source_mode_token(source_mode)
+
+    if mode in {"archive-first", "archive-only"}:
+        archive_candidates = _source_archive_candidates(
+            repo_url=repo_url,
+            target_rev=target_rev,
+            target_version=target_version,
+            source_archive_url=source_archive_url,
+            source_archive_url_template=source_archive_url_template,
+        )
+        if archive_candidates:
+            for archive_url in archive_candidates:
+                try:
+                    archive_checkout = _prepare_archive_checkout(
+                        archive_url=archive_url,
+                        checkout_dir=checkout_dir,
+                        target_rev=target_rev,
+                        target_version=target_version,
+                        expected_sha256=source_archive_sha256,
+                    )
+                    attempts.append({"source": "source_archive", **archive_checkout})
+                    return "source_archive", {"kind": "source_archive", "source_mode": mode, "attempts": attempts}
+                except Exception as exc:
+                    archive_error = exc
+                    attempts.append(
+                        {
+                            "source": "source_archive",
+                            "state": "failed",
+                            "url": archive_url,
+                            "error": _bounded_exception_summary(exc),
+                        }
+                    )
+                    _clear_failed_checkout(checkout_dir, stage="source archive preparation")
+        else:
+            archive_error = RuntimeError("no source archive URL is configured or derivable")
+            attempts.append(
+                {
+                    "source": "source_archive",
+                    "state": "skipped",
+                    "reason": "no_source_archive_url",
+                }
+            )
+        if mode == "archive-only":
+            raise RuntimeError(
+                "failed to prepare source archive: "
+                + (_bounded_exception_summary(archive_error) if archive_error is not None else "no archive attempt ran")
+            )
 
     if source_exists and source_is_git and source_repo_dir is not None:
         if not _local_repo_contains_target(source_repo_dir, target_version):
@@ -1469,6 +1781,12 @@ def _prepare_checkout_repo(
                 raise RuntimeError(
                     f"failed to prepare requested target_version {target_version or '<unspecified>'}: "
                     f"local source repo failed ({_bounded_exception_summary(local_error)}); "
+                    f"remote repo clone failed ({_bounded_exception_summary(exc)})"
+                ) from exc
+            if archive_error is not None:
+                raise RuntimeError(
+                    f"failed to prepare requested target_version {target_version or '<unspecified>'}: "
+                    f"source archive failed ({_bounded_exception_summary(archive_error)}); "
                     f"remote repo clone failed ({_bounded_exception_summary(exc)})"
                 ) from exc
             raise
@@ -1607,6 +1925,9 @@ def _checkout_build_version(repo_dir: Path, *, source_history: Mapping[str, obje
         return explicit
     base = _checkout_base_version(repo_dir)
     history = source_history if isinstance(source_history, Mapping) else {}
+    history_commit = str(history.get("git_commit") or "").strip()
+    if str(history.get("identity_mode") or "").strip().lower() == "archive_target_version" and _is_probably_git_sha(history_commit):
+        return f"{base}+g{history_commit[:7]}"
     if bool(history.get("was_shallow")) and str(history.get("fetch_mode") or "").strip().lower() == "skipped":
         short_sha = _git_text(repo_dir, "rev-parse", "--short", "HEAD")
         return f"{base}+g{short_sha}" if short_sha else base
@@ -1735,6 +2056,10 @@ def prepare_slot(
     base_dir: str | os.PathLike[str] = "",
     repo_root: str | os.PathLike[str] = "",
     source_repo_root: str | os.PathLike[str] = "",
+    source_mode: str = "auto",
+    source_archive_url: str = "",
+    source_archive_url_template: str = "",
+    source_archive_sha256: str = "",
     shared_dotenv_path: str | os.PathLike[str] = "",
     target_rev: str = "",
     target_version: str = "",
@@ -1765,6 +2090,10 @@ def prepare_slot(
     repo_root_dir = Path(str(repo_root or "")).expanduser().resolve() if str(repo_root or "").strip() else None
     target_rev = str(target_rev or "").strip()
     target_version = str(target_version or "").strip()
+    source_mode = _source_mode_token(source_mode)
+    source_archive_url = str(source_archive_url or "").strip()
+    source_archive_url_template = str(source_archive_url_template or "").strip()
+    source_archive_sha256 = str(source_archive_sha256 or "").strip()
     if repo_url is None:
         repo_url = str(os.getenv("ADAOS_CORE_UPDATE_REPO_URL", "https://github.com/inimatic/adaos.git")).strip()
     else:
@@ -1778,10 +2107,15 @@ def prepare_slot(
         resolved_target_version = target_version
         target_resolution = "pinned_commit"
     elif target_rev and repo_url:
-        resolved_target_version = _resolve_branch_head(repo_url, target_rev)
-        if resolved_target_version:
-            target_version = resolved_target_version
-            target_resolution = "remote_branch_head"
+        try:
+            resolved_target_version = _resolve_branch_head(repo_url, target_rev)
+            if resolved_target_version:
+                target_version = resolved_target_version
+                target_resolution = "remote_branch_head"
+        except Exception:
+            if source_mode not in {"archive-first", "archive-only"}:
+                raise
+            target_resolution = "archive_ref"
     source_repo_dir = Path(str(source_repo_root or "")).expanduser().resolve() if str(source_repo_root or "").strip() else None
     shared_dotenv = str(shared_dotenv_path or "").strip()
     tmp_dir = Path(tempfile.mkdtemp(prefix=f"adaos-core-{slot_name.lower()}-", dir=str(slot_dir.parent)))
@@ -1803,6 +2137,10 @@ def prepare_slot(
             repo_url=repo_url,
             target_rev=target_rev,
             target_version=target_version,
+            source_mode=source_mode,
+            source_archive_url=source_archive_url,
+            source_archive_url_template=source_archive_url_template,
+            source_archive_sha256=source_archive_sha256,
         )
         if isinstance(checkout_result, tuple):
             source_kind, source_checkout = checkout_result
@@ -1817,6 +2155,14 @@ def prepare_slot(
             source_kind=source_kind,
         )
         source_history = _ensure_complete_history_for_build_identity(checkout_tmp, target_version=target_version)
+        if source_kind == "source_archive":
+            source_history = {
+                **dict(source_history),
+                "source_kind": "source_archive",
+                "fetch_mode": "not_applicable",
+                "identity_mode": "archive_target_version",
+                "git_commit": target_version if _is_probably_git_sha(target_version) else "",
+            }
         _write_prepare_lease_progress(
             prepare_lease_path,
             prepare_lease_token,
@@ -1851,8 +2197,14 @@ def prepare_slot(
         original_venv_dir = venv_tmp.resolve()
         final_py = _venv_python(final_venv_dir)
         git_commit = _git_text(checkout_tmp, "rev-parse", "HEAD")
+        if not git_commit and source_kind == "source_archive" and _is_probably_git_sha(target_version):
+            git_commit = target_version
         git_short_commit = _git_text(checkout_tmp, "rev-parse", "--short", "HEAD")
+        if not git_short_commit and git_commit:
+            git_short_commit = git_commit[:7]
         git_branch = _git_text(checkout_tmp, "rev-parse", "--abbrev-ref", "HEAD")
+        if not git_branch and source_kind == "source_archive":
+            git_branch = target_rev
         git_subject = _git_text(checkout_tmp, "show", "-s", "--format=%s", "HEAD")
         build_version = _checkout_build_version(checkout_tmp, source_history=source_history)
         base_version = _checkout_base_version(checkout_tmp)
@@ -1879,7 +2231,11 @@ def prepare_slot(
             "root_repo_root": str(repo_root_dir) if repo_root_dir is not None else "",
             "source_kind": source_kind,
             "source_checkout": source_checkout,
+            "source_mode": source_mode,
             "source_history": source_history,
+            "source_archive_url": source_archive_url,
+            "source_archive_url_template": source_archive_url_template,
+            "source_archive_sha256": source_archive_sha256,
             "source_repo_root": str(source_repo_dir) if source_repo_dir is not None else "",
             "repo_url": repo_url,
             "repo_dir": str(final_repo_dir),
@@ -1978,6 +2334,10 @@ def _prepare_slot(args: argparse.Namespace) -> dict[str, object]:
         base_dir=args.base_dir,
         repo_root=args.repo_root,
         source_repo_root=args.source_repo_root,
+        source_mode=args.source_mode,
+        source_archive_url=args.source_archive_url,
+        source_archive_url_template=args.source_archive_url_template,
+        source_archive_sha256=args.source_archive_sha256,
         shared_dotenv_path=args.shared_dotenv_path,
         target_rev=args.target_rev,
         target_version=args.target_version,

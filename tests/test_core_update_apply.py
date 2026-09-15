@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 from pathlib import Path
@@ -1128,6 +1130,26 @@ def test_complete_history_for_build_identity_skips_unshallow_for_pinned_target(
     assert shallow_path.exists()
 
 
+def test_checkout_build_version_uses_archive_target_identity(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("ADAOS_BUILD_VERSION", raising=False)
+
+    build_version = mod._checkout_build_version(
+        tmp_path,
+        source_history={
+            "identity_mode": "archive_target_version",
+            "git_commit": "f7d14e92e38bb6b37f9068c2ee894de61710b92e",
+        },
+    )
+
+    assert build_version == "0.1.0+gf7d14e9"
+
+
 def test_complete_history_for_build_identity_rejects_still_shallow_checkout(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1311,6 +1333,65 @@ def test_validate_checkout_target_version_accepts_short_sha_prefix(monkeypatch, 
         target_version="d7d79d5",
         source_label="local source repo",
     )
+
+
+def test_prepare_checkout_repo_uses_source_archive_before_git(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    source_root = tmp_path / "archive-root" / "adaos-f7d14e9"
+    (source_root / "src" / "adaos" / "apps").mkdir(parents=True)
+    (source_root / "pyproject.toml").write_text('[project]\nname = "adaos"\nversion = "0.1.0"\n', encoding="utf-8")
+    (source_root / "src" / "adaos" / "apps" / "autostart_runner.py").write_text("# candidate\n", encoding="utf-8")
+    (source_root / ".git").mkdir()
+    (source_root / ".git" / "config").write_text("must be stripped\n", encoding="utf-8")
+    archive_path = tmp_path / "adaos.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        archive.add(source_root, arcname=source_root.name)
+    archive_sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+
+    checkout_dir = tmp_path / "checkout"
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
+    monkeypatch.setattr(
+        mod,
+        "_clone_repo",
+        lambda *_args, **_kwargs: pytest.fail("archive-first must not clone git when archive succeeds"),
+    )
+
+    source_kind, diagnostics = mod._prepare_checkout_repo(
+        checkout_dir=checkout_dir,
+        source_repo_dir=None,
+        repo_url="https://github.com/inimatic/adaos.git",
+        target_rev="rev2026",
+        target_version="f7d14e92e38bb6b37f9068c2ee894de61710b92e",
+        source_mode="archive-first",
+        source_archive_url=str(archive_path),
+        source_archive_sha256=archive_sha256,
+    )
+
+    assert source_kind == "source_archive"
+    assert diagnostics["kind"] == "source_archive"
+    assert diagnostics["source_mode"] == "archive-first"
+    assert diagnostics["attempts"][0]["state"] == "succeeded"
+    assert diagnostics["attempts"][0]["archive_sha256"] == archive_sha256
+    assert (checkout_dir / "pyproject.toml").exists()
+    assert (checkout_dir / "src" / "adaos" / "apps" / "autostart_runner.py").exists()
+    assert not (checkout_dir / ".git").exists()
+
+
+def test_prepare_checkout_repo_archive_only_fails_without_archive_url(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+
+    with pytest.raises(RuntimeError, match="failed to prepare source archive"):
+        mod._prepare_checkout_repo(
+            checkout_dir=tmp_path / "checkout",
+            source_repo_dir=None,
+            repo_url="",
+            target_rev="rev2026",
+            target_version="f7d14e92e38bb6b37f9068c2ee894de61710b92e",
+            source_mode="archive-only",
+        )
 
 
 def test_prepare_checkout_repo_falls_back_to_remote_when_local_source_misses_target_sha(
