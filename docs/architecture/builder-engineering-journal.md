@@ -1042,3 +1042,27 @@ Real Reading List data has not been migrated or replaced. Inspection confirmed
 that the current native Trial only admits empty data and the older activation
 engine requires reversible migrations: both require the planned exclusive
 cutover/snapshot integration, not removal of their safety checks.
+
+### 2026-09-15: Application Channel Execution Prerequisite
+
+RuntimeSelection now persists one local Application channel and atomically
+advances existing Webspace projections. Native skill handlers retain a shared
+SQLite read lease for their actual execution; a channel writer cannot pass a
+still-running handler, including after its waiting caller times out. Concurrent
+readers and a separate-process reader are covered. DEV tools are not redirected
+to a production Beta. HTTP execution conflicts do not trigger member fallback.
+
+This qualifies selected-Application native tool admission, not full lifecycle
+cutover. Background service drain, unplaced legacy installation admission,
+stale-UI generation checks, all-room refresh, forward data migration and config
+adoption remain open in APP1-13 through APP1-15. The local Reading List remains
+on its existing Stable selection; its Trial/Stable business data was not changed.
+
+Qualification: 138 focused core/runtime/API tests pass; local API reading of the
+existing Stable succeeds after restart. Browser requalification in
+`workbench-refinement-20260915/channel-preview-04` passes all six desktop/mobile
+checks. A hot-path review found an unnecessary scan of 429 catalog definitions.
+Reading only persisted channel records, without caching admission state, reduces
+the local 30-call lease probe median from 175.32ms to 4.84ms. Native HTTP reads
+still took 2.6-5.4s in the loaded API, also observed on DEV calls before this
+change; total handler/import latency is not declared fixed by this probe.

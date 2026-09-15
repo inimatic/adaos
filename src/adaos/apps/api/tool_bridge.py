@@ -1810,10 +1810,11 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
     # Authorization precedes cached results as well as new execution.
     from adaos.services.applications.runtime_selection import selected_trial
     from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
+    from adaos.services.applications.runtime_channel import RuntimeChannelConflict
 
     webspace = _resolve_tool_webspace_id(body.arguments or {}, context=body.context)
     try:
-        trial_runtime = await asyncio.to_thread(selected_trial, ctx, webspace, "skill", body.tool.partition(":")[0])
+        trial_runtime = None if body.dev else await asyncio.to_thread(selected_trial, ctx, webspace, "skill", body.tool.partition(":")[0])
         if trial_runtime is not None:
             if body.dev:
                 raise TrialRuntimeUnavailable("A production Trial selection cannot execute DEV tools")
@@ -1824,7 +1825,7 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
             response.headers["X-AdaOS-Runtime-Source"] = "trial"
             response.headers["X-AdaOS-Release-Digest"] = trial_runtime.release_digest
             response.headers["X-AdaOS-Package-Digest"] = context["runtime_selection"]["package_digest"]
-    except (TrialRuntimeUnavailable, FileNotFoundError) as exc:
+    except (TrialRuntimeUnavailable, FileNotFoundError, RuntimeChannelConflict) as exc:
         raise HTTPException(status_code=409, detail={"error": "trial_runtime_unavailable", "message": str(exc)}) from exc
     await _authorize_scoped_tool_call(body, ctx, trial_runtime)
     await asyncio.to_thread(_reject_unavailable_trial_execution, body, ctx)
@@ -1893,6 +1894,7 @@ def _reject_unavailable_trial_execution(body: ToolCall, ctx: AgentContext) -> No
 
 
 async def _call_tool_impl(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx), *, trial_runtime=None):
+    from adaos.services.applications.runtime_channel import RuntimeChannelConflict
     call_started_at = time.perf_counter()
     # Разбираем "<skill_name>:<public_tool_name>"
     if ":" not in body.tool:
@@ -2115,6 +2117,9 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
             )
     except CallerAccessDenied as exc:
         raise HTTPException(status_code=403, detail={"error": "caller_access_denied", "reason": str(exc)}) from exc
+    except RuntimeChannelConflict as exc:
+        raise HTTPException(status_code=409, detail={"error": "application_runtime_inactive",
+            "message": str(exc), "retryable": False}) from exc
     except (FileNotFoundError, RuntimeError, KeyError) as e:
         if trial_runtime is not None:
             raise HTTPException(status_code=409, detail={"error": "trial_execution_failed", "message": str(e), "retryable": False}) from e

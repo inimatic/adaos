@@ -153,6 +153,14 @@ Project/Application identity collapse.
   Reconcile all Webspaces for that installation; reject parallel verification
   Beta, stale-tab/API execution and old background workers after cutover.
   Consume Artifact Pipeline `AP4-20`, not a UI-only hide/show implementation.
+  Implemented: one atomic local channel with revisioned Webspace projections;
+  native skill-call read leases span actual execution across threads/processes,
+  including a caller timeout. New rooms cannot silently choose another channel.
+  Inactive tool calls fail without member fallback; DEV remains independent.
+  Remaining: lifecycle/background service drain, unplaced legacy installations,
+  explicit stale-UI generation admission, all-room projection refresh and the
+  combined crash-recoverable data/configuration cutover. Do not treat the tool
+  lease alone as completion of `AP4-20` or permission to reseed live data.
 - [ ] `[must]` `APP1-14` Integrate forward-migrated Workspace snapshot data into
   each new Beta from the accepted Stable baseline, not the previous Beta, and
   preserve Beta writes on Stable acceptance (`Keep data=true`). Consume

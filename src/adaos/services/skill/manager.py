@@ -3444,21 +3444,24 @@ class SkillManager:
             else _admit_skill_tool_yjs_work(name, target_tool, payload, tool_spec)
         )
         if not bool(admission.get("allowed", True)):
+            from adaos.services.applications.runtime_selection import application_execution
+
             event = _skill_quarantine_event(name=name, tool=target_tool, payload=payload, admission=admission)
-            _append_skill_quarantine_log(skill_memory_path, event)
-            hook_status = _invoke_skill_quarantine_hook(
-                ctx=ctx,
-                name=name,
-                tools=tools,
-                blocked_tool=target_tool,
-                skill_dir=skill_dir,
-                skill_env_path=skill_env_path,
-                skill_memory_path=skill_memory_path,
-                secrets_path=slot_data_root / "files" / "secrets.json",
-                extra_paths=extra_paths,
-                event=event,
-                admission=admission,
-            )
+            with application_execution(ctx, name):
+                _append_skill_quarantine_log(skill_memory_path, event)
+                hook_status = _invoke_skill_quarantine_hook(
+                    ctx=ctx,
+                    name=name,
+                    tools=tools,
+                    blocked_tool=target_tool,
+                    skill_dir=skill_dir,
+                    skill_env_path=skill_env_path,
+                    skill_memory_path=skill_memory_path,
+                    secrets_path=slot_data_root / "files" / "secrets.json",
+                    extra_paths=extra_paths,
+                    event=event,
+                    admission=admission,
+                )
             if bool(hook_status.get("called")):
                 _append_skill_quarantine_log(
                     skill_memory_path,
@@ -3489,7 +3492,9 @@ class SkillManager:
         ctx.secrets = SecretsService(SkillSecretsBackend(slot_data_root / "files" / "secrets.json"), ctx.caps)
 
         def _call_tool() -> Any:
-            with use_ctx(ctx):
+            from adaos.services.applications.runtime_selection import application_execution
+
+            with use_ctx(ctx), application_execution(ctx, name):
                 result = execute_tool(
                     skill_dir,
                     module=module,
@@ -3497,7 +3502,9 @@ class SkillManager:
                     payload=payload,
                     extra_paths=extra_paths,
                 )
-                return _resolve_sync_tool_result(result)
+                result = _resolve_sync_tool_result(result)
+                self._persist_skill_env(env, slot)
+                return result
 
         try:
             if not ctx.skill_ctx.set(name, skill_dir):
@@ -3540,7 +3547,6 @@ class SkillManager:
             else:
                 os.environ["ADAOS_SKILL_MEMORY_PATH"] = prev_memory
 
-        self._persist_skill_env(env, slot)
         return result
 
     def run_dev_tool(

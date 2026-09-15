@@ -355,8 +355,13 @@ runtime_selection:
 ```
 
 Compare-and-swap revision protects selection from concurrent user and automatic
-update operations. Startup reconciliation re-resolves missing or stale derived
-runtime roots from immutable release evidence.
+update operations. Webspace records are projections of one local Application
+channel, not independent activation authorities. Switching an existing projection
+atomically advances every existing projection for that Application. A new
+Webspace may join the current channel but cannot silently select a different one.
+Conflicting legacy projections require explicit reconciliation. Startup
+reconciliation re-resolves missing or stale derived runtime roots from immutable
+release evidence.
 
 Selection is exclusive, not a second installation or a second desktop icon.
 All Webspaces addressing the same local Application installation/data scope
@@ -370,6 +375,14 @@ The switch fences the previous generation's application commands, subscriptions
 and background workers before admitting the new one. Hiding a desktop icon
 alone is not execution isolation; stale tabs and direct API calls cannot keep
 the deselected version active or silently fall back to it.
+
+Native tool execution holds a cross-process read lease until the actual handler
+(including an awaited result) finishes. Channel replacement requires exclusive
+admission. An HTTP or caller timeout must not release an executing handler's
+lease. Contention returns a retryable cutover conflict, not a forced switch;
+an inactive runtime invocation returns a structured conflict without retrying it
+on another member. The same boundary must cover service workers and the complete
+data/configuration transaction before the lifecycle contract is qualified.
 
 ### Desktop Placement Ownership
 

@@ -27,6 +27,7 @@ class TrialPaths(PathProvider):
     def __init__(self, owner: AgentContext, root: Path):
         super().__init__(root / ".runtime")
         self.root = root
+        self.runtime_channel_ref = f"trial:{root.name}"
         self.package_dir = Path(owner.paths.package_path())
         self.subnet_id = owner.paths.subnet_id
 

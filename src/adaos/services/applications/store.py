@@ -289,6 +289,14 @@ class ApplicationStore:
         return f"{webspace_id}:{application_id}"
 
     def get_runtime_selection(self, webspace_id: str, application_id: str) -> RuntimeSelection:
+        from .runtime_channel import ApplicationRuntimeChannel
+
+        channel = ApplicationRuntimeChannel(self.state_dir, application_id).read()
+        if channel is not None:
+            selected = next((item for item in channel if item.webspace_id == webspace_id), None)
+            if selected is None:
+                raise FileNotFoundError(f"RuntimeSelection not found: {webspace_id}:{application_id}")
+            return selected
         identity = self._selection_identity(webspace_id, application_id)
         path = self._current_path("runtime_selections", identity)
         if not path.is_file():
@@ -299,12 +307,23 @@ class ApplicationStore:
         return value
 
     def list_runtime_selections(self) -> tuple[RuntimeSelection, ...]:
-        return tuple(sorted(self._list_current("runtime_selections", RuntimeSelection.from_mapping), key=lambda item: (item.webspace_id, item.application_id)))
+        from .runtime_channel import ApplicationRuntimeChannel
+
+        channels = ApplicationRuntimeChannel.list_selections(self.state_dir)
+        application_ids = {item.application_id for item in channels}
+        values = [item for item in self._list_current("runtime_selections", RuntimeSelection.from_mapping)
+                  if item.application_id not in application_ids] + list(channels)
+        return tuple(sorted(values, key=lambda item: (item.webspace_id, item.application_id)))
 
     def save_runtime_selection(self, value: RuntimeSelection, *, expected_revision: int) -> RuntimeSelection:
+        from .runtime_channel import ApplicationRuntimeChannel
+
         self.get_application(value.application_id)
-        identity = self._selection_identity(value.webspace_id, value.application_id)
-        return self._save_revisioned("runtime_selections", identity, value, expected_revision=expected_revision, loader=RuntimeSelection.from_mapping)
+        with mutation_lock(self.lock_path):
+            legacy = tuple(item for item in self._list_current("runtime_selections", RuntimeSelection.from_mapping)
+                           if item.application_id == value.application_id)
+            return ApplicationRuntimeChannel(self.state_dir, value.application_id).select(
+                value, expected_revision=expected_revision, legacy=legacy)
 
     def get_operation(self, operation_id: str) -> ApplicationOperation:
         path = self._current_path("operations", operation_id)

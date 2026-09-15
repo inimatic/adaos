@@ -299,7 +299,7 @@ def test_rollout_health_counts_distinct_subnets_and_halts(service: ApplicationSe
     assert resumed["status"] == "active"
 
 
-def test_runtime_selection_is_webspace_scoped_and_compare_and_swap(service: ApplicationService) -> None:
+def test_runtime_selection_projection_is_compare_and_swap(service: ApplicationService) -> None:
     release = service.register_release(_release())
 
     first = service.select_runtime(
@@ -321,6 +321,24 @@ def test_runtime_selection_is_webspace_scoped_and_compare_and_swap(service: Appl
             release_digest=release.release_digest, runtime_root_ref="workspace", expected_revision=1,
             actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply",
         )
+
+
+def test_runtime_channel_switch_updates_all_existing_webspaces(service, monkeypatch):
+    release = service.register_release(_release())
+    common = dict(application_id="app_recipes", release_digest=release.release_digest,
+                  actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply")
+    for webspace in ("desktop", "office"):
+        service.select_runtime(webspace_id=webspace, source="local_trial",
+            runtime_root_ref="trial:candidate.recipes.1.0.0", expected_revision=0, **common)
+    service.select_runtime(webspace_id="desktop", source="stable_installation",
+                           runtime_root_ref="workspace", expected_revision=1, **common)
+    assert service.store.get_runtime_selection("office", "app_recipes").runtime_root_ref == "workspace"
+    assert service.store.get_runtime_selection("office", "app_recipes").revision == 2
+    monkeypatch.setattr(service.store, "list_applications", lambda: pytest.fail("Runtime reads must not scan the entire catalog"))
+    assert len(service.store.list_runtime_selections()) == 2
+    with pytest.raises(ApplicationRevisionConflict):
+        service.select_runtime(webspace_id="office", source="local_trial",
+            runtime_root_ref="trial:candidate.recipes.1.0.0", expected_revision=1, **common)
 
 
 def test_install_update_snapshot_and_remove_are_reviewed_durable_operations(tmp_path: Path) -> None:

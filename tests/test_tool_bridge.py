@@ -549,7 +549,8 @@ def test_call_tool_prepares_workspace_runtime_before_single_mutation(monkeypatch
     assert calls == ["prepare", "run"]
 
 
-def test_call_tool_does_not_repeat_or_proxy_failed_mutation(monkeypatch) -> None:
+@pytest.mark.parametrize("channel_conflict", [False, True])
+def test_call_tool_does_not_repeat_or_proxy_failed_mutation(monkeypatch, channel_conflict) -> None:
     calls: list[str] = []
 
     class _FakeSkillManager:
@@ -558,6 +559,9 @@ def test_call_tool_does_not_repeat_or_proxy_failed_mutation(monkeypatch) -> None
 
         def run_tool(self, *_args, **_kwargs):
             calls.append("run")
+            if channel_conflict:
+                from adaos.services.applications.runtime_channel import RuntimeChannelConflict
+                raise RuntimeChannelConflict("Application runtime is inactive")
             raise RuntimeError("write failed")
 
     monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
@@ -587,7 +591,7 @@ def test_call_tool_does_not_repeat_or_proxy_failed_mutation(monkeypatch) -> None
         )
 
     assert excinfo.value.status_code == 409
-    assert excinfo.value.detail["error"] == "tool_execution_failed_no_retry"
+    assert excinfo.value.detail["error"] == ("application_runtime_inactive" if channel_conflict else "tool_execution_failed_no_retry")
     assert excinfo.value.detail["retryable"] is False
     assert calls == ["run"]
 
