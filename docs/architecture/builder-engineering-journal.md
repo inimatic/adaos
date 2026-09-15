@@ -1008,3 +1008,10 @@ are explicitly at risk on the next Beta; retention and loss acknowledgement
 precede reseeding, and auto-update cannot silently reset records. Replaying an
 existing activation or rebuilding its runtime is not a new Beta and preserves
 data. Acceptance keeps Beta data and establishes the next Stable baseline.
+
+Workspace-to-Beta configuration/secret continuity is a separate requirement:
+new Beta business-data baselines must not reset settings or credentials.
+Canonical architecture and `APP1-15` distinguish versioned configuration,
+approved local credential bindings and business records; secrets do not enter
+model context or immutable publication artifacts. Implementation is authorized
+for the discussed Builder, lifecycle/data and About/image-generation work.

@@ -923,6 +923,30 @@ updates may not authorize this lossy restore. An uncertain outcome remains
 fenced for reconciliation, not blind re-execution. Snapshot rollback is an
 exceptional recovery action, not a second active channel.
 
+### Parameters And Secrets Across Channels
+
+Application configuration and credential bindings are not disposable Beta
+fixtures or business records to reseed on every candidate. Inherit the local
+installation's approved settings and declared secret bindings from Workspace
+when entering Beta. Persist them outside immutable packages and derived runtime
+trees. Retain compatible Beta configuration overrides across subsequent Betas;
+schema changes require an explicit algorithmic configuration migration or a
+visible unresolved-field decision, never silently reverting to defaults.
+
+Resolve secrets through the existing local secret service with Application,
+component and caller scope; inherit access only to declared, already approved
+bindings. Do not copy plaintext into Candidate source, manifests, artifacts,
+LLM context or diagnostics. New required credentials/capabilities require normal
+user admission. Revocation and rotation remain effective; rollback must not
+resurrect a revoked credential from an old snapshot.
+
+Stable acceptance adopts reviewed configuration and credential bindings along
+with data. Keep the previous compatible configuration for snapshot recovery,
+but not a second active installation. Parameters, secrets and business-data
+generation have separate evidence and retention policies: resetting Beta data
+from Stable is not permission to reset settings or credentials. The initial
+implementation and restart/update qualification remain open under `APP1-15`.
+
 ## Publisher Identity and Authority
 
 The existing subnet identity is the initial publisher principal:

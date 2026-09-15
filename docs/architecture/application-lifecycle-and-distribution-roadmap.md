@@ -151,6 +151,13 @@ Project/Application identity collapse.
   loss confirmation for snapshot rollback. Never publish user data or infer a
   reset/rollback approval from the channel toggle. Show Beta's data-loss risk
   and gate Beta-to-Beta reseeding after writes, including automatic updates.
+- [ ] `[must]` `APP1-15` Inherit declared Workspace configuration and scoped
+  credential bindings in Beta without copying plaintext into packages or model
+  context. Retain compatible overrides across Beta updates/runtime rebuilds;
+  migrate configuration explicitly, adopt it on Stable acceptance, and preserve
+  rotation/revocation and least-privilege checks across rollback. Qualify
+  settings, secrets, restart, schema changes and cross-Application denial
+  independently from business-data reseeding.
 
 **Exit proof:** two Applications sharing one component install and remove
 without premature package/data deletion; an incompatible version is rejected;
