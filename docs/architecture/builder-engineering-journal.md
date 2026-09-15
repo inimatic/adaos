@@ -1522,3 +1522,16 @@ recomputes current completion obligations. First admission without such a
 retained input keeps the existing live-generation checks. Changed acceptance or
 corrupted inputs cannot authorize reuse. The 19 focused tests pass; live retry
 and expanded post-delete selection checks remain outstanding.
+
+Live iteration 4 reused the prior exact handoff and passed workspace preparation.
+It then returned an unnecessary question without attempting tools: the model
+inferred that a structured final response prohibited working tool calls. There
+was no corresponding tool or network error. Actual input audit 05 retains the
+complete brief, correction, accepted 006 and admitted resource file. The outcome
+instructions/schema now explicitly distinguish ordinary tool-enabled work from
+the final message format, and require an observed tool error before claiming
+execution is unavailable. All 16 outcome tests pass. Resolve this controlled TEST
+question through native clarification, not by disabling structured outcomes or
+treating a model misconception as a new user design decision. The official
+[Codex non-interactive contract](https://developers.openai.com/codex/noninteractive#create-structured-outputs-with-a-schema)
+defines the schema for the final response.

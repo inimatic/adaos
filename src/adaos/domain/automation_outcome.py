@@ -16,6 +16,7 @@ from adaos.domain.development_feedback import (
 
 OUTCOME_SCHEMA = {
     "type": "object",
+    "description": "Final assistant response only, after normal tool-enabled work or a necessary stop. This schema does not disable tools or working messages.",
     "additionalProperties": False,
     "properties": {
         "status": {"type": "string", "enum": ["completed", "needs_input", "blocked"]},
@@ -40,7 +41,14 @@ OUTCOME_SCHEMA = {
 
 OUTCOME_INSTRUCTION = """## Required task outcome
 
-The runner requests a structured final response. Choose `completed` only when
+The runner requests a structured FINAL response, not a JSON-only working turn.
+Use the available tools normally to inspect and edit admitted source. Working
+messages and tool calls remain enabled; only the last assistant message must
+match the outcome schema. Do not stop or ask to switch modes merely because a
+final response format is configured. Attempt the relevant admitted tool before
+claiming that tool work is unavailable; report an actual tool failure as a
+platform blocker, not as a missing user permission that was already granted.
+Choose `completed` only when
 the candidate is ready for independent validation, `needs_input` when a necessary
 user decision is unanswered, or `blocked` for a platform/contract blocker.
 `completed` is not acceptance and must not claim unexecuted checks passed.

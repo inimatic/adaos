@@ -112,3 +112,10 @@ def test_recovery_cannot_bypass_unresolved_outcome_even_with_old_passed_checks(t
         runs_root=tmp_path / "runs")
     with pytest.raises(ValueError):
         worker.recover_validated_run("task.blocked")
+def test_final_schema_does_not_instruct_the_model_to_abandon_tool_work():
+    from adaos.domain.automation_outcome import OUTCOME_INSTRUCTION, OUTCOME_SCHEMA
+    assert "only the last assistant message" in OUTCOME_INSTRUCTION
+    assert "Use the available tools normally" in OUTCOME_INSTRUCTION
+    assert "Attempt the relevant admitted tool" in OUTCOME_INSTRUCTION
+    assert "does not disable tools" in OUTCOME_SCHEMA["description"]
+
