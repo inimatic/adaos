@@ -1298,3 +1298,19 @@ Pending Action approval and the deployed Root: `gpt-image-1`, 1024x1024 PNG,
 Evidence: `reading-list-migrations-20260915/image-01-approved`. This does not
 qualify About editing/cropping, broader model availability, monetary pricing or
 restart/concurrent admission. No application source asset was applied.
+
+### 2026-09-15: Native Checkpoint Correction And Retained Input Audit
+
+The first correction attempt stopped before submission: the workbench hid its
+Automation opener in `trial_ready`, although the existing service admits a
+correction by invalidating the previous checkpoint. The DEV scenario now exposes
+that authorized path, separates first-start/follow-up forms, and retains pending
+clarification blocking. All 23 scenario tests pass. The next browser attempt
+started iteration 1 through the native form; no API restart was needed.
+
+Retained `automation-context-02.json` confirms the actual model prompt includes
+both complete briefs, accepted revision 005, Automation execution policy, and
+the shared migration/configuration contract. This is input evidence, not a
+semantic or implementation acceptance. Existing DEV records are E2E-marked and
+distinct from the two privately retained Stable records. The old DEV fixture's
+separate migration ledger is not silently rewritten into Core history.

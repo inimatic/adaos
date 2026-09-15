@@ -113,6 +113,11 @@ Owner/dependencies: Builder workflow + Client.
 - [x] `[must]` Restore reviewed README generation through the generic content
   SDK; implementation and usage evidence are tracked in
     [CG-01--CG-05](content-generation-roadmap.md), not duplicated here.
+- [x] `[must]` Keep the native Automation correction form reachable after an
+  implementation checkpoint. Derive visibility from admitted retry/candidate
+  invalidation commands, hide the first-start form when unavailable, and retain
+  clarification blocking. The owned Reading List browser follow-up qualifies
+  this path without changing workflow admission or accepting delivery.
 
 Implementation boundary: Conversation and governed status projections exist; a worker's completed state is not independent Automation acceptance. A human-authored DEV Builder design specimen covers current work, separate decisions, history, context and existing Dev Tickets. Its local state transitions are not live workflow implementation or model-generation evidence.
 
