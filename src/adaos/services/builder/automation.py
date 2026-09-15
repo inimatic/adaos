@@ -3706,7 +3706,7 @@ class BuilderAutomationService:
         with _LOCK:
             session = self.get_session(object_type, object_id)
             if not session:
-                raise ValueError("automation_session_not_found")
+                return {"pending": False, "questions": [], "can_resume": False}
             session = self.refresh_session(session)
             if (session.get("last_failure") or {}).get("failure_class") != "user_input_required":
                 return {"pending": False, "questions": [], "can_resume": False}
@@ -3755,6 +3755,17 @@ class BuilderAutomationService:
 
                 BuilderClarificationService(self.state_dir).complete(source, interaction_id=interaction_id,
                     expected_generation=expected_generation, continuation_task_id=task_id)
+                task = self.factory.read_task(task_id)
+                if task.get("status") == "queued":
+                    workflow = self._workflow().describe(object_type, object_id)
+                    governed = workflow.get("governed") or {}
+                    head = (workflow.get("automation") or {}).get("head_task_id")
+                    if head != task_id:
+                        event = "automation_started" if governed.get("state") == "automation_ready" else "automation_iteration_started"
+                        self._workflow().transition(object_type, object_id, event, actor="builder.automation",
+                            metadata={"confirmed": True, "task_id": task_id, "change_id": session.get("change_id"),
+                                      "run_id": session.get("change_id"), "context_packet_digest": session.get("context_packet_digest")})
+                    self._launch_worker(session["session_id"])
                 return {"ok": True, "duplicate": True, "session": session, "automation": self.project_session(session)}
             return self.submit_turn(text="Continue after explicit user clarification.", object_type=object_type,
                 object_id=object_id, expected_session_id=session["session_id"], expected_iteration=session["iteration"],
@@ -6717,8 +6728,11 @@ class BuilderAutomationService:
             except KeyError:
                 retained = None
             if retained:
-                if retained.get("links", {}).get("clarification_continuation") != clarification_receipt:
+                retained_links = (retained.get("realize_request") or {}).get("links", {})
+                if retained_links.get("clarification_continuation") != clarification_receipt:
                     raise ValueError("Retained clarification task binding mismatch")
+                if isinstance(session, dict):
+                    session["context_packet_digest"] = retained_links.get("context_packet_digest")
                 return {"ok": True, "duplicate": True, "task": retained}
         kind = str(session["object_type"])
         project_id = str(session["object_id"])

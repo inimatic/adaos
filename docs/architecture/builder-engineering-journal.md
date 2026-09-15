@@ -1170,3 +1170,30 @@ empty data. No real credential or Reading List record was used by these tests.
 The combined focused suite passes 164 tests before the follow-on purpose-change
 regression. Full managed Reading List cycles, clarification, About/images,
 delegated grants and legacy secret import remain unfinished.
+
+### 2026-09-15: Automation Question Batches
+
+Codex can now emit a bounded required-question batch using its existing typed
+feedback envelope. Only a batch free of other blocking platform findings becomes
+`user_input_required`; candidate application remains blocked. The canonical
+conversation store retains questions and partial answers with exact
+Project/Change/Run, Prototype acceptance and owner binding. The SDK exposes
+read, answer and explicit continuation; retry cannot bypass unanswered questions.
+Continuation reuses a response-scoped task identity and retains its source Run.
+The DEV Builder Inputs surface uses a wrapping table and an answer modal, with
+EN/RU labels and a separate continuation action.
+
+Twelve local clarification tests include a worker round trip: two questions,
+saved answers, same-Change continuation and duplicate continuation without a
+third model execution. The model's second input contains both exact answers.
+The broader Automation regression exposed an outdated fixture that started
+without a Prototype: it now creates and explicitly accepts a legacy revision,
+without weakening production admission. Strict acceptance tests remain separate.
+The DEV control skill passes 105 tests; the scenario's old Process-tree
+expectation was updated to the accepted process menu. Real-model/browser
+clarification and the two Reading List migration cycles are still open.
+
+Before the live cycle, the private Reading List baseline was rechecked: both
+Stable records are unchanged. No record content was included in the artifact or
+LLM prompt. API restarts are coordinated by this task while parallel development
+continues in the shared working tree.

@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -108,3 +109,60 @@ def test_question_ids_and_unknown_fields_fail_closed():
         normalize_clarification_questions([question, question])
     with pytest.raises(ValueError, match="fields"):
         normalize_clarification_questions([{**question, "answer": "guessed"}])
+
+
+def test_worker_questions_pause_and_resume_same_change_once(batch, tmp_path):
+    from test_builder_automation import _service
+    from adaos.services.skill_factory_worker import CodexRunResult
+
+    _questions, fixture_session = batch
+    questions = fixture_session["last_failure"]["details"]["clarification_questions"]
+    automation = _service(tmp_path)
+    create_worker = automation.worker_factory
+    calls = []
+
+    def worker_factory():
+        worker = create_worker()
+        executor = worker.executor
+
+        def execute(**kwargs):
+            calls.append(kwargs["prompt"])
+            if len(calls) == 1:
+                payload = {"schema": "adaos.development_feedback_output.v1", "items": [{
+                    "category": "insufficient_context", "summary": "Two required ownership and retention decisions",
+                    "blocking": True, "impact": ["correctness"], "target_refs": ["scenario:recipes"],
+                    "details": "User decisions are required before implementing data deletion.",
+                    "recommendation": "Answer the questions, then continue.", "clarification_questions": questions,
+                }]}
+                return CodexRunResult(returncode=0, final_message="```adaos-development-feedback\n" + json.dumps(payload) + "\n```")
+            return executor(**kwargs)
+
+        worker.executor = execute
+        return worker
+
+    automation.worker_factory = worker_factory
+    automation.start_from_execute(object_type="scenario", object_id="recipes", implementation_brief="Implement the accepted interface.")
+    state = automation.clarification_state(object_type="scenario", object_id="recipes")
+    assert state["pending"] and len(state["questions"]) == 2
+    session = automation.get_session("scenario", "recipes")
+    assert session["last_failure"]["failure_class"] == "user_input_required"
+    source_run = session["current_task_id"]
+    change = session["canonical_change_id"]
+    with pytest.raises(ValueError, match="clarification"):
+        automation.submit_turn(text="Retry", object_type="scenario", object_id="recipes")
+    with pytest.raises(ValueError, match="clarification"):
+        automation.retry_failed(object_type="scenario", object_id="recipes")
+    answered = automation.answer_clarification(object_type="scenario", object_id="recipes", interaction_id=state["interaction_id"],
+        expected_generation=state["generation"], answers={"scope": "Local owner", "retention": "30 days"}, idempotency_key="answers")["clarification"]
+    resumed = automation.resume_clarification(object_type="scenario", object_id="recipes", interaction_id=state["interaction_id"],
+        expected_generation=answered["generation"], confirmed=True)
+    assert resumed["ok"]
+    duplicate = automation.resume_clarification(object_type="scenario", object_id="recipes", interaction_id=state["interaction_id"],
+        expected_generation=answered["generation"], confirmed=True)
+    assert duplicate["duplicate"]
+    current = automation.get_session("scenario", "recipes")
+    assert current["status"] == "completed"
+    assert current["canonical_change_id"] == change
+    assert current["clarification_continuation"]["source_run_id"] == source_run
+    assert len(calls) == 2
+    assert "30 days" in calls[1] and "Local owner" in calls[1]

@@ -1129,6 +1129,27 @@ question set and candidate. An obsolete answer is not silently applied to a
 new Change. Optional preferences cannot block continuation. This does not
 mandate questionnaires for already-clear small requests.
 
+Automation uses the canonical conversation interaction/response store for a
+model question batch. The batch is bound to Project, canonical Change, source
+Run, iteration, accepted Prototype digest and exact question-set digest. Its
+owner is the verified local user, not an actor supplied by the model or a UI
+field. Saving partial answers and retrying a lost acknowledgement are
+idempotent; neither action starts Codex. Explicit continuation admits the exact
+completed response, keeps the same Change and links source Run, response and
+continuation Run. A task already queued for that response is reused, including
+recovery after the session acknowledgement was interrupted.
+
+The Codex feedback envelope may carry at most eight identified required
+questions under blocking `insufficient_context`. These are necessary user
+decisions, not routine implementation choices or optional UX preferences. A
+missing platform/SDK capability remains Development Feedback: a mixed batch
+cannot disguise that blocker as something the user's answer would solve. The
+underlying model attempt is terminal and metered even when the Builder process
+waits for input; it is not a running model session. Questions and answers are
+retained without silently truncating text. Secret values and private production
+records must never be requested through this channel. Intake's smaller
+material-clarification budget is independent of this Automation batch bound.
+
 Informal application discussion and formal Change conversation are distinct
 scopes with stable conversation identities and separate drafts/history. A menu
 may select the scope, while message commands remain explicit actions. Discussing

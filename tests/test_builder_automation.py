@@ -113,7 +113,7 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
         yaml.safe_dump({"id": "recipes", "version": "0.1.0", "depends": []}, sort_keys=False),
         encoding="utf-8",
     )
-    (scenario / "webui.json").write_text(json.dumps({"schema": "adaos.webui.v1"}), encoding="utf-8")
+    (scenario / "webui.json").write_text(json.dumps({"schema": "adaos.webui.v1", "ui": {}}), encoding="utf-8")
     _write_project_manifest(tmp_path / "dev")
 
     class _DeveloperService:
@@ -160,7 +160,7 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
             executor=fake_codex,
         )
 
-    return BuilderAutomationService(
+    service = BuilderAutomationService(
         state_dir=tmp_path / "state",
         repo_root=repo_root,
         dev_skills_root=dev_skills,
@@ -171,6 +171,12 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
         background=False,
         materialize_on_completion=False,
     )
+    # Automation tests start from an explicitly accepted legacy prototype.
+    # Strict evidence admission is exercised separately by the workflow tests.
+    service._workflow().snapshot_current_prototype("scenario", "recipes")
+    service._workflow().transition("scenario", "recipes", "stabilize_prototype",
+        metadata={"confirmed": True, "revision": "001"}, actor="test.owner")
+    return service
 
 
 def test_automation_resolves_project_to_its_primary_component(tmp_path, monkeypatch) -> None:
@@ -284,8 +290,8 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert started["ok"] is True
     status = service.status(object_type="scenario", object_id="recipes")
     assert status["session"]["status"] == "completed"
-    assert status["session"]["source_prototype_version"] == "0.1.0"
-    assert status["automation"]["source_prototype_version"] == "0.1.0"
+    assert status["session"]["source_prototype_version"] == "UI 001"
+    assert status["automation"]["source_prototype_version"] == "UI 001"
     assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.18.1"
     assert status["session"]["created_artifacts"] == []
     task = next(
@@ -3460,7 +3466,7 @@ def test_automation_rejects_change_set_before_prototype_approval(tmp_path: Path)
         },
     )
 
-    with pytest.raises(ValueError, match="Prototype approval gate"):
+    with pytest.raises(ValueError, match="Prototype revision must be accepted"):
         service.start_from_execute(
             object_type="scenario",
             object_id="recipes",

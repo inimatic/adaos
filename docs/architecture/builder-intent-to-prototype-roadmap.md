@@ -177,6 +177,12 @@ integration, not closure of the remaining interaction/continuation obligations.
 - [ ] `[must]` Persist clarification drafts per Project/Change/question set;
   reject stale continuation and resume only after required answers and explicit
   consent. Batch rendering alone does not implement durable continuations.
+- [x] `[must]` Implement the Automation prerequisite on canonical conversation
+  interactions: exact Project/Change/Run/accepted-digest binding, durable partial
+  answers, verified owner, idempotent answers and one continuation task per
+  response; keep platform blockers distinct from user decisions. Local worker
+  integration proves question batch -> answers -> same-Change continuation,
+  while browser interruption and real-model qualification remain open above.
 - [x] `[should]` Restore the full wrapping application title, clarify revision
   labeling and model component selection, development settings, Preview link/QR,
   informal discussion, platform-request consent and public README editing.
