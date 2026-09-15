@@ -11,6 +11,23 @@ from adaos.services.builder_intent import (
 from adaos.services.ui_capabilities import selected_ui_capabilities
 
 
+@pytest.mark.parametrize("statement", [
+    "Reference: https://example.test/api/search?sort=title&filter=open. Search items by title.",
+    "Документация: https://example.test/api/search. Поиск по названию.",
+    "Reference: scenario:project.search.v2. Search items by title.",
+])
+def test_reference_punctuation_and_words_are_not_operations(statement):
+    from adaos.services.builder_intent import _clauses
+
+    clauses = _clauses(statement)
+    assert len(clauses) == 2
+    assert all(statement[start:end] == clause for clause, start, end in clauses)
+    brief = compile_prototype_brief(statement)
+    assert [item["kind"] for item in brief["operations"]] == ["search"]
+    assert len(brief["residual_requirements"]) == 1
+    assert brief["residual_requirements"][0]["statement"] == clauses[0][0]
+
+
 def test_intent_capture_is_exact_content_addressed_evidence() -> None:
     statement = "Покажи заявки и позволь назначить ответственного."
 

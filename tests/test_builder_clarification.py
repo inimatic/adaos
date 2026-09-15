@@ -148,6 +148,12 @@ def test_worker_questions_pause_and_resume_same_change_once(batch, tmp_path):
     assert session["last_failure"]["failure_class"] == "user_input_required"
     source_run = session["current_task_id"]
     change = session["canonical_change_id"]
+    projected = automation.project_session(session)
+    assert projected["status"] == "awaiting_input"
+    assert projected["phase"] == "clarification"
+    assert projected["run_status"] == "failed" and projected["run_terminal"]
+    assert not projected["terminal"] and not projected["busy"] and not projected["can_submit"]
+    assert projected["error"] is None
     with pytest.raises(ValueError, match="clarification"):
         automation.submit_turn(text="Retry", object_type="scenario", object_id="recipes")
     with pytest.raises(ValueError, match="clarification"):
@@ -166,3 +172,22 @@ def test_worker_questions_pause_and_resume_same_change_once(batch, tmp_path):
     assert current["clarification_continuation"]["source_run_id"] == source_run
     assert len(calls) == 2
     assert "30 days" in calls[1] and "Local owner" in calls[1]
+
+
+def test_canonical_change_switch_rejects_stale_question_form(batch, tmp_path, monkeypatch):
+    from test_builder_automation import _service
+
+    questions, session = batch
+    automation = _service(tmp_path)
+    first = questions.project(session)
+    monkeypatch.setattr(type(automation), "get_session", lambda *_args: session)
+    monkeypatch.setattr(type(automation), "refresh_session", lambda _self, value: value)
+    monkeypatch.setattr(type(automation), "_workflow", lambda _self: SimpleNamespace(describe=lambda *_args: {
+        "change_set": {"change_set_id": "successor", "status": "in_progress"}}))
+    assert not automation.clarification_state(object_type="scenario", object_id="sample")["pending"]
+    with pytest.raises(ValueError, match="Change"):
+        automation.answer_clarification(object_type="scenario", object_id="sample", interaction_id=first["interaction_id"],
+            expected_generation=first["generation"], answers={"scope": "Owner"}, idempotency_key="late")
+    with pytest.raises(ValueError, match="Change"):
+        automation.resume_clarification(object_type="scenario", object_id="sample", interaction_id=first["interaction_id"],
+            expected_generation=first["generation"], confirmed=True)

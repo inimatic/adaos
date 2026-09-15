@@ -3700,6 +3700,13 @@ class BuilderAutomationService:
             "automation": self.project_session(session),
         }
 
+    def _clarification_matches_change(self, session: Mapping[str, Any]) -> bool:
+        workflow = self._workflow().describe(session["object_type"], session["object_id"])
+        change = workflow.get("change_set") or {}
+        return bool(change.get("change_set_id")
+                    and change["change_set_id"] == (session.get("canonical_change_id") or session.get("change_set_id"))
+                    and change.get("status") not in {"published", "rejected", "superseded"})
+
     def clarification_state(self, *, object_type: str, object_id: str) -> dict[str, Any]:
         from adaos.services.builder.clarification import BuilderClarificationService
 
@@ -3708,7 +3715,8 @@ class BuilderAutomationService:
             if not session:
                 return {"pending": False, "questions": [], "can_resume": False}
             session = self.refresh_session(session)
-            if (session.get("last_failure") or {}).get("failure_class") != "user_input_required":
+            if ((session.get("last_failure") or {}).get("failure_class") != "user_input_required"
+                    or not self._clarification_matches_change(session)):
                 return {"pending": False, "questions": [], "can_resume": False}
             return {"pending": True, **BuilderClarificationService(self.state_dir).project(session)}
 
@@ -3720,6 +3728,8 @@ class BuilderAutomationService:
             if not session:
                 raise ValueError("automation_session_not_found")
             session = self.refresh_session(session)
+            if not self._clarification_matches_change(session):
+                raise ValueError("Clarification belongs to another or closed Change")
             result = BuilderClarificationService(self.state_dir).answer(session, **answer)
             return {"ok": True, "clarification": result}
 
@@ -3738,6 +3748,8 @@ class BuilderAutomationService:
                 raise PermissionError("Clarification requires its verified owner")
             if not session or confirmed is not True:
                 raise ValueError("Current Automation and explicit continuation consent are required")
+            if not self._clarification_matches_change(session):
+                raise ValueError("Clarification belongs to another or closed Change")
             binding = record["metadata"].get("binding") or {}
             if (binding.get("object_type"), binding.get("object_id"), binding.get("change_id")) != (
                 session.get("object_type"), session.get("object_id"), session.get("canonical_change_id") or session.get("change_set_id")
@@ -5401,16 +5413,19 @@ class BuilderAutomationService:
         )
         error = str(failure.get("error") or failure.get("message") or task.get("error") or "").strip() or None
         clarification = session.get("clarification") if failure.get("failure_class") == "user_input_required" else None
+        awaiting_input = bool(clarification) and clarification.get("status") != "completed"
         return {
             "schema": AUTOMATION_PROJECTION_SCHEMA,
             "stage": "automation",
             "session_id": str(session.get("session_id") or "") or None,
-            "status": status,
-            "waiting_for_input": bool(clarification),
+            "status": "awaiting_input" if awaiting_input else status,
+            "run_status": status,
+            "run_terminal": status in _TERMINAL_STATUSES,
+            "waiting_for_input": awaiting_input,
             "clarification": copy.deepcopy(clarification),
-            "phase": BuilderAutomationService._phase_for_status(status),
+            "phase": "clarification" if awaiting_input else BuilderAutomationService._phase_for_status(status),
             "busy": status in _ACTIVE_STATUSES,
-            "terminal": status in _TERMINAL_STATUSES,
+            "terminal": not awaiting_input and status in _TERMINAL_STATUSES,
             "can_submit": not bool(clarification) and status
             in {"waiting_for_core", "completed", "failed", "cancelled", "expired"},
             "webspace_id": str(session.get("webspace_id") or "desktop"),
@@ -5428,7 +5443,7 @@ class BuilderAutomationService:
             "change_set_id": str(session.get("change_set_id") or "").strip() or None,
             "change_id": str(session.get("change_id") or "").strip() or None,
             "result_branch": str(result.get("branch") or forge.get("branch") or "").strip() or None,
-            "steps": BuilderAutomationService._step_projection(status),
+            "steps": BuilderAutomationService._step_projection("in_progress" if awaiting_input else status),
             "progress": dict(progress) if progress else None,
             "summary": str(result.get("summary") or result.get("message") or "").strip() or None,
             "budget_usage": budget_usage,
@@ -5439,12 +5454,14 @@ class BuilderAutomationService:
                 "aprobation_ready": bool(aprobation.get("ok")),
                 "mode": str(aprobation.get("mode") or "").strip() or None,
             },
-            "error": error,
+            "error": None if awaiting_input else error,
             "failure_id": str(failure.get("failure_id") or "").strip() or None,
             "failure_stage": str(failure.get("stage") or "").strip() or None,
             "retryable": bool(failure.get("retryable")) if failure else None,
             "links": dict(session.get("links")) if isinstance(session.get("links"), Mapping) else {},
             "diagnostic_hint": (
+                "Ответьте на вопросы и явно подтвердите продолжение Автоматизации."
+                if awaiting_input else
                 "Исправьте причину и отправьте уточнение в Автоматизации, чтобы запустить новую итерацию."
                 if error
                 else None

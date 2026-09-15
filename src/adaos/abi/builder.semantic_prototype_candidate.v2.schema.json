@@ -35,7 +35,8 @@
       "items": { "$ref": "#/$defs/representativeState" }
     },
     "requirement_bindings": {
-      "type": "array", "maxItems": 64,
+      "type": "array", "maxItems": 256,
+      "description": "Evidence links accumulated across accepted source turns, not additional UI components. Multiple requirements may refer to the same semantic nodes.",
       "items": { "$ref": "#/$defs/requirementBinding" }
     },
     "automation_requirements": {

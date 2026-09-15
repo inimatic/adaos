@@ -1197,3 +1197,25 @@ Before the live cycle, the private Reading List baseline was rechecked: both
 Stable records are unchanged. No record content was included in the artifact or
 LLM prompt. API restarts are coordinated by this task while parallel development
 continues in the shared working tree.
+
+### 2026-09-15: Released-Application Increment Admission
+
+The first Reading List increment was submitted once through DEV Builder chat.
+The exact model input retains all 1,568 prompt characters; the chat projection
+is abbreviated. E2E initially assumed an empty selection/search and compared
+that abbreviation with the full input. The stand now supports read-only attachment
+to a retained intent and explicitly checks successor Change identity.
+
+GPT-5 low completed the initial provider job in 138,288 ms with 19,242 input
+and 9,699 output tokens, including 5,696 reasoning tokens. A repair corrected
+structural findings but did not pass coverage. The accumulated Brief contained
+119 required refs against a 64-binding/32-gap ceiling, including false URL-word
+operations. Stable data and accepted Prototype 002 were not changed by this failure.
+
+Reference tokenization now preserves complete spans; evidence capacity is bounded
+separately from UI components with pre-submission admission. Complete repair output
+is retained for a subsequent distinct bounded repair, without weakening validation.
+Automation projects required questions as awaiting input while preserving the
+terminal worker receipt; stale Change answers/continuations are refused.
+Core intent/semantic/clarification/SDK tests and ten focused DEV repair tests pass.
+Managed cycle completion and all installed-data migration evidence remain open.

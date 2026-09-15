@@ -98,7 +98,7 @@ export async function exerciseCreation({ page, widget, command, capture, closeMo
     const state = await widget('design-conversation-side-task').locator('ada-chat-widget')
       .evaluate(el => window.ng.getComponent(el).pageState.getSnapshot())
     assert.equal(state.selectedProjectId, id)
-    assert.equal(state.workbench.prototype_revision, '002')
+    assert.equal(state.workbench.prototype_revision, process.env.ADAOS_E2E_ACCEPTED_REVISION || '002')
     const intent = { id, brief: automationBrief, followup, requested_model: settings.codex_model,
       requested_effort: settings.codex_effort, previous_task_id: state.workbench.automation_task_id,
       created_at: new Date().toISOString() }
@@ -139,47 +139,27 @@ export async function exerciseCreation({ page, widget, command, capture, closeMo
     })
     assert.equal(before.state.selectedProjectId, id)
     assert.equal(before.state.workbench?.object_id, id)
-    assert.equal(before.state.workflowActivePhase, 'prototype')
+    const newChange = process.env.ADAOS_E2E_NEW_CHANGE === '1'
+    if (newChange) {
+      assert.equal(before.state.workbench.publication?.status, 'published', 'A successor cycle must start from a published TEST')
+    } else {
+      assert.equal(before.state.workflowActivePhase, 'prototype')
+    }
     const baseRevision = process.env.ADAOS_E2E_BASE_REVISION || null
     assert.equal(before.state.workbench.prototype_revision || null, baseRevision,
       'The current revision must match the explicitly requested new or follow-up operation')
     assert.ok(before.state.builderThreadId.includes(id))
     const intent = { id, prompt, thread_id: before.state.builderThreadId, conversation_id: before.state.builderConversationId,
-      created_at: new Date().toISOString(), automation_authorized: false, base_revision: baseRevision }
+      created_at: new Date().toISOString(), automation_authorized: false, base_revision: baseRevision,
+      new_change: newChange, previous_change_id: before.state.workbench.change_id }
     const marker = await fs.open(path.join(process.env.ADAOS_E2E_OUTPUT, 'prototype-intent.json'), 'wx')
     await marker.writeFile(JSON.stringify(intent, null, 2) + '\n', 'utf8')
     await marker.close()
     await chat.locator('textarea').fill(prompt)
     await chat.locator('textarea').press('Control+Enter')
     console.log(JSON.stringify({ prototype: 'submitted-once', id }))
-    await page.waitForFunction(({ id, prompt }) => {
-      const element = document.querySelector('[data-webui-widget-id="design-conversation-side-task"] ada-chat-widget')
-      const instance = element && window.ng?.getComponent(element)
-      return instance?.messages?.some(message => message.text === prompt || message.content === prompt)
-    }, { id, prompt }, { timeout: 30000 })
     await capture('prototype-request')
-    const deadline = Date.now() + 15 * 60 * 1000
-    while (Date.now() < deadline) {
-      const current = await chat.locator('ada-chat-widget').evaluate(el => {
-        const instance = window.ng.getComponent(el)
-        return { state: instance.pageState.getSnapshot(), messages: instance.messages }
-      })
-      await fs.writeFile(path.join(process.env.ADAOS_E2E_OUTPUT, 'prototype-observation.json'), JSON.stringify(current, null, 2) + '\n', 'utf8')
-      const failure = current.messages?.find(message =>
-        ['failed', 'interrupted'].includes(message.progress_status) && Number(message.ts) * 1000 >= Date.parse(intent.created_at))
-      if (failure) {
-        report.prototype_failure = { id: failure.id, job_id: failure.progress_group_id, text: failure.text }
-        await capture('prototype-failed')
-        throw new Error(`Prototype request failed: ${failure.progress_group_id}; retained diagnostic, no automatic resubmission`)
-      }
-      if (current.state.workbench?.object_id === id && current.state.workbench?.prototype_revision
-        && current.state.workbench.prototype_revision !== baseRevision) {
-        record('prototype_generated_via_native_chat', { revision: current.state.workbench.prototype_revision })
-        await capture('prototype-result')
-        return
-      }
-      await new Promise(resolve => setTimeout(resolve, 2000))
-    }
-    throw new Error('Prototype observation deadline reached; inspect existing request, do not automatically resend')
+    const { observePrototype } = await import('./builder-prototype-observation.mjs')
+    await observePrototype({ chat, intent, output: process.env.ADAOS_E2E_OUTPUT, record, capture })
   }
 }

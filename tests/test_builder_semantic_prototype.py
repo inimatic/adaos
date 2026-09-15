@@ -20,6 +20,19 @@ from adaos.services.builder.workflow import BuilderWorkflowError
 from adaos.services.builder_intent import compile_prototype_brief
 
 
+def test_evidence_capacity_is_independent_of_ui_component_capacity():
+    brief = compile_prototype_brief("Show items.")
+    brief["residual_requirements"] = [{"id": f"residual:{i}", "statement": f"Accepted constraint {i}"} for i in range(119)]
+    semantic_prototype_provider_contract(version="v2", brief=brief)
+    contract = semantic_prototype_candidate_contract(version="v2")
+    assert contract["properties"]["requirement_bindings"]["maxItems"] == 256
+    assert contract["properties"]["resources"]["maxItems"] == 8
+    assert contract["properties"]["views"]["maxItems"] == 16
+    brief["residual_requirements"] *= 3
+    with pytest.raises(BuilderWorkflowError, match="split the Change before generation"):
+        semantic_prototype_provider_contract(version="v2", brief=brief)
+
+
 def _text(key: str, en: str, ru: str) -> dict[str, str]:
     return {"key": key, "en": en, "ru": ru}
 

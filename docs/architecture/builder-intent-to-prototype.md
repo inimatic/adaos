@@ -40,6 +40,15 @@ application recipes or cumulative renderer prompts.
   scope.
 - Context includes only authoritative stage-relevant information. Inspect both
   model input and output before changing budgets or requesting repair.
+- Reference URLs and typed identifiers are indivisible source spans, not UI
+  operations inferred from words in a path. Verify evidence capacity before
+  submission: traceability links may outnumber visible controls across multiple
+  accepted turns. Their bounded capacity is independent of UI complexity limits;
+  impossible contracts require Change decomposition before spending model tokens.
+- A full structural repair may be followed by an independently bounded binding
+  repair. Preserve its candidate and exact input identity, revalidate everything,
+  and stop on repeated scope or no progress. Reconnecting an E2E observer never
+  resends the user's prompt or starts a second provider job.
 - Qualification separates first result, repairs, runtime behavior, human
   acceptance and installed delivery. One weighted score cannot hide a hard
   authority/task failure.

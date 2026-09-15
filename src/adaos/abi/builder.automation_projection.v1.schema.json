@@ -27,6 +27,8 @@
     "terminal": { "type": "boolean" },
     "can_submit": { "type": "boolean" },
     "waiting_for_input": { "type": "boolean" },
+    "run_status": { "type": "string", "minLength": 1 },
+    "run_terminal": { "type": "boolean" },
     "clarification": { "type": ["object", "null"] },
     "webspace_id": { "type": "string", "minLength": 1 },
     "project": {

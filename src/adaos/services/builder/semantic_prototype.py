@@ -838,6 +838,9 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             contract["$defs"]["view"] = {"anyOf": [collection, record]}
         if brief is not None:
             inventory = prototype_requirement_inventory(brief)
+            capacity = contract["properties"]["requirement_bindings"]["maxItems"]
+            if len(inventory) > capacity:
+                _fail(f"Prototype Brief has {len(inventory)} evidence references, exceeding the single-request capacity {capacity}; split the Change before generation")
             for name, allowed in (
                 ("requirementBinding", [item["id"] for item in inventory]),
                 ("capabilityGap", [item["id"] for item in inventory]),

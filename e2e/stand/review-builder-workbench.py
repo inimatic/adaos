@@ -22,7 +22,10 @@ def main():
     parser.add_argument("--exercise-test", help="Create one new workbench_test_* application through the UI")
     parser.add_argument("--resume-created", type=Path, help="Prior report proving this stand created the TEST application")
     parser.add_argument("--prototype-prompt", type=Path, help="Submit one explicit prompt through the created TEST application's chat")
+    parser.add_argument("--observe-prototype", type=Path, help="Observe an already submitted intent without resending it")
     parser.add_argument("--base-revision", help="Expected current revision for one deliberate follow-up")
+    parser.add_argument("--new-change", action="store_true", help="Ask the owned released TEST for a successor Change through chat")
+    parser.add_argument("--accepted-revision", default="002", help="Exact expected Prototype revision for Automation")
     parser.add_argument("--open-preview", action="store_true", help="Open the selected owned TEST preview through Builder")
     parser.add_argument("--verify-existing-preview", action="store_true", help="Open an existing owned TEST and verify the Result target")
     parser.add_argument("--automation-brief", type=Path, help="Start one explicitly accepted owned TEST through the native form")
@@ -38,6 +41,11 @@ def main():
            "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub),
            "ADAOS_E2E_OUTPUT": str(args.output.resolve())}
     env["ADAOS_E2E_CODEX_MODEL"] = args.codex_model
+    env["ADAOS_E2E_ACCEPTED_REVISION"] = args.accepted_revision
+    if args.new_change:
+        if not args.resume_created or not args.prototype_prompt or not args.base_revision:
+            parser.error("A successor Change requires provenance, an explicit prompt and exact base revision")
+        env["ADAOS_E2E_NEW_CHANGE"] = "1"
     if args.accept_trial:
         if not args.open_trial or args.refinement:
             parser.error("Acceptance requires an exact Trial receipt and no competing refinement")
@@ -56,6 +64,14 @@ def main():
         if args.exercise_test or not receipt["id"].startswith("workbench_test_") or receipt["result"]["project"]["created_by"] != "builder.user":
             parser.error("Read-only selection requires an owned TEST receipt and no exercise")
         env["ADAOS_E2E_SELECT_CREATED"] = json.dumps(receipt, ensure_ascii=False)
+    if args.observe_prototype:
+        import json
+        if not args.select_created or not args.inspect or args.prototype_prompt:
+            parser.error("Observation requires inspect-only owned TEST selection and no new prompt")
+        intent = json.loads(args.observe_prototype.read_text(encoding="utf-8"))
+        if intent["id"] != receipt["id"] or intent.get("automation_authorized") is not False:
+            parser.error("Observation must match an exact prototype-only intent")
+        env["ADAOS_E2E_OBSERVE_PROTOTYPE"] = json.dumps(intent, ensure_ascii=False)
     if args.trial_evidence:
         import hashlib
         import json

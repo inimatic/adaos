@@ -54,3 +54,16 @@ def test_background_result_keeps_queued_acknowledgement() -> None:
         object_id="recipes",
         webspace_id="desktop",
     ) == queued
+
+
+def test_foreground_questions_are_not_reported_as_execution_failure():
+    class Questions(_Service):
+        def projection(self, **kwargs):
+            result = super().projection(**kwargs)
+            result["automation"].update(status="awaiting_input", waiting_for_input=True)
+            return result
+
+    result = automation._foreground_result(Questions(background=False, status="failed"), {"ok": True},
+        object_type="scenario", object_id="sample", webspace_id="desktop")
+    assert result["ok"] and result["status"] == "automation_awaiting_input"
+    assert result["session"]["status"] == "failed"

@@ -18,6 +18,7 @@ try {
     if (exerciseId && profile !== 'wide') continue
     if (process.env.ADAOS_E2E_PREPARE_TRIAL && profile !== 'wide') continue
     if (process.env.ADAOS_E2E_ACCEPT_TRIAL && profile !== 'wide') continue
+    if (process.env.ADAOS_E2E_OBSERVE_PROTOTYPE && profile !== 'wide') continue
     const context = await browser.newContext({ viewport, locale: 'ru-RU', colorScheme: 'dark' })
     await context.addInitScript(({ hub, token }) => {
       window.__ADAOS_DEBUG__ = true
@@ -84,8 +85,9 @@ try {
       await page.goto('http://127.0.0.1:8100/?intent=webspace.open&zone=lo&subnet_id=sn_6acf0c01&webspace_id=desktop-dev&space_kind=development&expected_scenario_id=builder&try_local_hub=1', { waitUntil: 'domcontentloaded', timeout: 60000 })
       await widget('design-current-work').waitFor({ timeout: 60000 })
       if ((await (await initialResponse).json()).ok !== true) throw new Error('Initial workbench read failed')
-      if (process.env.ADAOS_E2E_SELECT_CREATED) {
-        const selected = JSON.parse(process.env.ADAOS_E2E_SELECT_CREATED)
+      const selectedReceipt = process.env.ADAOS_E2E_SELECT_CREATED || process.env.ADAOS_E2E_CREATED_TEST
+      if (selectedReceipt) {
+        const selected = JSON.parse(selectedReceipt)
         await command('applications').click()
         await widget('project-picker-table').locator('input').first().fill(selected.title)
         await widget('project-picker-table').getByText(selected.title, { exact: true }).click()
@@ -108,6 +110,13 @@ try {
       }) })
       await capture('initial')
       report.checks.push({ profile, check: 'live_workbench_render', passed: true })
+      if (process.env.ADAOS_E2E_OBSERVE_PROTOTYPE) {
+        const { observePrototype } = await import('./builder-prototype-observation.mjs')
+        await observePrototype({ chat: widget('design-conversation-side-task'),
+          intent: JSON.parse(process.env.ADAOS_E2E_OBSERVE_PROTOTYPE), output, capture,
+          record: (check, details) => report.checks.push({ profile, check, passed: true, ...details }) })
+        continue
+      }
       await command('specimens').click()
       const processMenu = page.locator('ion-popover').filter({ visible: true }).last()
       const stages = processMenu.getByRole('menuitemradio')
@@ -367,7 +376,9 @@ try {
         await widget('project-picker-table').waitFor()
         await widget('project-picker-sample').waitFor()
         await widget('project-picker-archived').waitFor()
-        await widget('project-picker-table').getByText('Builder', { exact: true }).waitFor({ timeout: 30000 })
+        const retainedTitle = selectedReceipt ? JSON.parse(selectedReceipt).title : 'Builder'
+        await widget('project-picker-table').locator('input').first().fill(retainedTitle)
+        await widget('project-picker-table').getByText(retainedTitle, { exact: true }).waitFor({ timeout: 30000 })
         await capture('picker')
         report.checks.push({ profile, check: 'retained_table_and_filters', passed: true })
         await closeModal()

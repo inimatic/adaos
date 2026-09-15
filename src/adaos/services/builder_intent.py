@@ -244,10 +244,18 @@ def _knowledge(
 
 def _clauses(statement: str) -> list[tuple[str, int, int]]:
     result: list[tuple[str, int, int]] = []
+    # Reference punctuation is not sentence punctuation. Keep original offsets
+    # so extracted evidence still points into the exact unmodified statement.
+    boundary_text = list(statement)
+    for reference in _REF_PATTERN.finditer(statement):
+        end = reference.end()
+        while end > reference.start() and statement[end - 1] in ".!?;":
+            end -= 1
+        boundary_text[reference.start():end] = "x" * (end - reference.start())
     # A wrapped sentence is still one source clause. Excluding newlines here
     # silently discarded every unfinished line before its continuation.
-    for match in re.finditer(r"[^.!?;]+(?:[.!?;]|$)", statement):
-        raw = match.group(0)
+    for match in re.finditer(r"[^.!?;]+(?:[.!?;]|$)", "".join(boundary_text)):
+        raw = statement[match.start():match.end()]
         leading = len(raw) - len(raw.lstrip(" \t\r\n,;:-"))
         value = raw.strip(" \t\r\n,;:-.!?")
         if value:
@@ -284,6 +292,7 @@ def _operation_mentions(
     clause: str, exclusion_spans: list[tuple[int, int]]
 ) -> list[tuple[str, re.Match[str]]]:
     candidates: list[tuple[int, int, int, str, re.Match[str]]] = []
+    exclusion_spans = [*exclusion_spans, *(match.span() for match in _REF_PATTERN.finditer(clause))]
     state_nouns = [match.span() for match in _QUERY_STATE_NOUN_PATTERN.finditer(clause)]
     for priority, (kind, pattern) in enumerate(_OPERATION_PATTERNS):
         for match in pattern.finditer(clause):

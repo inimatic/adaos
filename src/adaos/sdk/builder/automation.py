@@ -48,6 +48,9 @@ def _foreground_result(
         merged["session"] = dict(session)
     if projection is not None:
         merged["automation"] = dict(projection)
+        if projection.get("waiting_for_input"):
+            merged.update(ok=True, status="automation_awaiting_input")
+            return merged
     final_status = str((session or {}).get("status") or "").strip()
     if final_status:
         merged["status"] = f"automation_{final_status}"

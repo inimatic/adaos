@@ -385,6 +385,14 @@ Exit/remaining work: Admit contracts by shape/operation/authority before optiona
 
 ### BIP-10
 
+- [x] `[must]` Preserve reference punctuation and original source offsets during
+  deterministic clause extraction; do not infer UI operations from URL path words.
+- [ ] `[must]` Qualify accumulated multi-turn context capacity on a released
+  application: distinguish lexical hints from admitted behavior and execution
+  constraints; retain every source without requiring invented UI for metadata.
+  Traceability capacity preflight and bounded repair continuation are prerequisites,
+  not proof of resolved intent interpretation.
+
 - [ ] `[must]` **Brief Interpretation And Requirement Provenance**. Status: `partial`.
 
 Owner/dependencies: Core intent/Brief + Builder review.
