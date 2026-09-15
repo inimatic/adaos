@@ -152,6 +152,19 @@ evidence. Do not extend connection timeouts to hide an unavailable endpoint,
 unsupported model, deterministic validation failure or duplicated context.
 An observer expiring does not authorize another paid model submission.
 
+An admitted MCP configuration is not a ready tool catalog. For the isolated
+Codex executor, compose the initial tool catalog only after configured servers
+initialize or reach their existing startup deadlines. Optional failures remain
+optional; a required-server failure must stop before inference. This barrier
+must not increase connection/tool deadlines or turn failed discovery into success.
+The CLI adapter uses `mcp_optional_startup_grace_ms=0`, as defined by the
+[official MCP configuration contract](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+The task context distinguishes permitted routes from observed callable tools,
+uses tool search for deferred tools, and requests MCP only for missing contracts
+or explicitly required validation. Prefetched authoritative contracts must not
+cause redundant discovery. An initially hidden tool does not establish a Root
+outage, and no model should inspect bearer values to compensate.
+
 The editable component set is read from the owning `adaos.project.v1`
 manifest. Runtime skill requirements and retained publications do not expand
 that set, and Automation/worker contracts use `companion_skill_ids` without a

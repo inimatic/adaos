@@ -1,5 +1,25 @@
 # AdaOS Stand E2E
 
+## Offline Codex Catalog Probe
+
+`probe-codex-mcp-catalog.py` uses the installed CLI, the real worker MCP argument
+adapter and synthetic loopback MCP/provider endpoints. It captures the first
+tool catalog before inference; no Root task lease, provider credit or installed
+application is used. Each isolated CLI home lives under repository `.tmp/`.
+
+```powershell
+.venv/Scripts/python.exe -X utf8 e2e/stand/probe-codex-mcp-catalog.py --output e2e/artifacts/builder/mcp-catalog-check
+```
+
+Use a new output directory. The stand verifies fast startup, the legacy grace
+race, delayed admission and preserved optional/required startup deadlines. CLI
+exit `1` is intentional: the fake provider rejects the request after capture,
+or required MCP startup fails before that request. The stand itself returns
+`0` only when the observed catalog and request count match each case. This is
+not a live Root availability or paid-model accuracy check.
+
+## Deployment Acceptance
+
 This directory contains the executable post-deploy acceptance vertical slice:
 
 - `adaos.e2e.stand` probes Root and Hub contracts and always writes an evidence

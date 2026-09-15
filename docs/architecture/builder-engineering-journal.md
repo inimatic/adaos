@@ -1644,3 +1644,21 @@ tampering, links, unsafe content and legacy candidates. A new local source
 receipt is not proof of portable About resources in a remotely installed release;
 CG-06 retains that separate boundary. Existing Reading List candidates are not
 rewritten or promoted again for this prerequisite.
+
+### 2026-09-16: Separate MCP Discovery from Model Latency
+
+`mcp-catalog-20260916-02` reproduces a CLI catalog race without provider inference
+or a live Root lease. On installed Codex `0.154.0-alpha.6.2`, a synthetic 3-second
+`tools/list` with the legacy 1-second grace is absent from the initial tool-search
+sources. The worker adapter now waits for catalog initialization within the
+existing startup deadline: the same delayed server is advertised. A fast server
+adds no fixed delay. Separate cases prove optional timeout still permits the
+model request and required timeout prevents it. All five cases pass; no execution,
+connection or tool timeout was increased.
+
+Context now states that configuration is not readiness, directs deferred-tool
+search, and avoids a ceremonial call when admitted local contracts suffice.
+This proves a failure mechanism and its correction, not the exact historical
+cause of Reading List's MCP message; live scoped discovery remains a separate
+qualification. Retained historical stderr contains no transport failure, so do
+not relabel that observation as a Root/proxy outage.

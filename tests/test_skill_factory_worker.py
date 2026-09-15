@@ -2402,7 +2402,8 @@ def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_pat
     assert len(failure["details"]["development_feedback_refs"]) == 1
     assert len(model_calls) == (2 if during_repair else 1)
     if during_repair:
-        assert "Do not execute tests or validation" in model_calls[-1]
+        assert "Do not execute tests, validation, status or diff commands" in model_calls[-1]
+        assert "the trusted worker reruns checks" in model_calls[-1]
 
 
 def test_worker_links_final_validator_feedback_to_failed_task(
@@ -4011,6 +4012,10 @@ def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
     executor = SubprocessCodexExecutor(repo_root=tmp_path / "repo")
     config_args = executor._root_mcp_config_args(private_profile)
     environment = executor._execution_environment(root_mcp=private_profile)
+    assert "mcp_optional_startup_grace_ms=0" in config_args
+    assert "mcp_servers.adaos_task_root.required=false" in config_args
+    assert executor._root_mcp_config_args(None) == []
+    assert executor._root_mcp_config_args({"enabled": False}) == []
     assert any(
         arg.endswith(
             "mcp_servers.adaos_task_root.url=\"http://127.0.0.1:8778/v1/root/mcp/task/task.lease\""
@@ -4045,6 +4050,8 @@ def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
     assert "_bearer_token_value" not in packet["root_mcp"]
     assert "lease-secret-value" not in prompt
     assert "Task-scoped Root MCP route" in prompt
+    assert "not proof of successful CLI discovery" in prompt
+    assert "does not require a ceremonial call" in prompt
 
 
 def test_codex_prompt_budget_blocks_oversized_instruction_before_launch() -> None:
