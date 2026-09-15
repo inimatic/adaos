@@ -9,7 +9,9 @@ from typing import Any, Mapping
 
 import yaml
 
+from adaos.sdk.developer import compositions as project_compositions
 from adaos.services.agent_context import get_ctx
+from adaos.services.application_registry_projection import ApplicationRegistryProjection
 from adaos.services.builder.workbench import safe_source_webspace_id
 from adaos.services.runtime_paths import current_state_dir
 
@@ -203,6 +205,24 @@ class BuilderProjectCatalogService:
         source = safe_source_webspace_id(source_webspace_id)
         return self.state_dir / "builder" / "workbench" / "bindings" / f"{source}.json"
 
+    def _project_registry(self, parent: Path) -> list[tuple[Path, Path | None, dict[str, Any]]]:
+        registry = ApplicationRegistryProjection(self.state_dir)
+        if not registry.development_projects_ready(parent):
+            registry.rebuild_development_projects(
+                parent,
+                parser=project_compositions._parse_project,
+                schema_bytes=project_compositions._schema_path().read_bytes(),
+            )
+        rows = registry.list_development_projects(limit=5000)
+        return [
+            (
+                Path(str(item.get("source_path") or parent / str(item.get("id") or ""))).resolve(),
+                Path(str(item.get("source_path") or parent / str(item.get("id") or ""))).resolve() / "project.yaml",
+                dict(item),
+            )
+            for item in rows
+        ]
+
     def list_projects(
         self,
         *,
@@ -235,12 +255,17 @@ class BuilderProjectCatalogService:
                 continue
             if not parent.is_dir():
                 continue
-            roots = sorted(
-                (entry for entry in parent.iterdir() if entry.is_dir() and not entry.name.startswith((".", "_"))),
-                key=lambda entry: entry.name.casefold(),
-            )
-            for root in roots:
-                manifest_path, manifest = _manifest(root, current_kind)
+            if current_kind == "project":
+                roots = self._project_registry(parent)
+            else:
+                roots = [
+                    (entry, *_manifest(entry, current_kind))
+                    for entry in sorted(
+                        (entry for entry in parent.iterdir() if entry.is_dir() and not entry.name.startswith((".", "_"))),
+                        key=lambda entry: entry.name.casefold(),
+                    )
+                ]
+            for root, manifest_path, manifest in roots:
                 project_id = str(manifest.get("id") or manifest.get("name") or root.name).strip()
                 if not project_id or project_id.startswith((".", "_")):
                     continue

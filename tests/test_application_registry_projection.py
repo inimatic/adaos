@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+from pathlib import Path
+import sqlite3
+
+import pytest
+import yaml
+
+from adaos.sdk.developer import compositions
+from adaos.services.application_registry_projection import ApplicationRegistryProjection
+
+
+def _project(project_id: str, component_ref: str = "scenario:demo") -> dict:
+    return {
+        "schema": "adaos.project.v1",
+        "kind": "project",
+        "id": project_id,
+        "version": "0.1.0",
+        "profiles": ["adaos.demo.v1"],
+        "components": {
+            "owned": [{"ref": component_ref, "role": "primary"}],
+            "dependencies": [],
+        },
+        "entrypoints": [
+            {
+                "id": "main",
+                "presentation": component_ref,
+                "default": True,
+                "bindings": {},
+            }
+        ],
+        "catalog": {
+            "title": f"{project_id} title",
+            "description": "Projection smoke",
+            "categories": ["demo"],
+            "tags": ["registry"],
+        },
+        "publication": {"stage": "alpha", "visibility": "unlisted", "channel": "stable"},
+        "install": {"default": False, "features": []},
+        "lifecycle": {
+            "uninstall": {
+                "components": "retain",
+                "runtime_data": "retain",
+                "source_artifacts": "retain",
+            }
+        },
+    }
+
+
+def _write_project(root: Path, value: dict) -> None:
+    project_root = root / value["id"]
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / "project.yaml").write_text(
+        yaml.safe_dump(value, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _rebuild(service: ApplicationRegistryProjection, projects_root: Path) -> dict:
+    return service.rebuild_development_projects(
+        projects_root,
+        parser=compositions._parse_project,
+        schema_bytes=compositions._schema_path().read_bytes(),
+    )
+
+
+def test_registry_projection_rebuilds_dev_projects_and_queries_without_manifest_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    projects = tmp_path / "projects"
+    _write_project(projects, _project("alpha", "scenario:alpha"))
+    _write_project(projects, _project("beta", "skill:beta"))
+    service = ApplicationRegistryProjection(tmp_path / "state")
+
+    result = _rebuild(service, projects)
+
+    assert result["status"] == "completed"
+    assert result["scanned"] == 2
+    assert result["indexed"] == 2
+    assert result["source_watermark"].startswith("sha256:")
+    assert service.db_path == tmp_path / "state" / "applications" / "registry.sqlite3"
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("hot query reparsed project.yaml")
+
+    monkeypatch.setattr(compositions, "_parse_project", explode)
+
+    listed = service.list_development_projects(query="beta title")
+    owners = service.project_for_component("scenario:alpha")
+
+    assert [item["id"] for item in listed] == ["beta"]
+    assert owners[0]["id"] == "alpha"
+    assert owners[0]["primary_ref"] == "scenario:alpha"
+
+
+def test_registry_projection_records_invalid_sources_without_indexing_them(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    _write_project(projects, _project("valid", "scenario:valid"))
+    broken = projects / "broken"
+    broken.mkdir(parents=True)
+    (broken / "project.yaml").write_text("schema: adaos.project.v1\nid: broken\n", encoding="utf-8")
+    service = ApplicationRegistryProjection(tmp_path / "state")
+
+    result = _rebuild(service, projects)
+
+    assert result["status"] == "completed"
+    assert result["indexed"] == 1
+    assert result["invalid"] == 1
+    assert [item["id"] for item in service.list_development_projects()] == ["valid"]
+    assert service.validation_counts() == {"invalid": 1, "valid": 1}
+
+    con = sqlite3.connect(service.db_path)
+    try:
+        statuses = dict(
+            con.execute(
+                "SELECT source_ref, validation_status FROM projection_source ORDER BY source_ref"
+            ).fetchall()
+        )
+    finally:
+        con.close()
+    assert statuses == {"project:broken": "invalid", "project:valid": "valid"}
+
+
+def test_registry_snapshot_trust_requires_closed_graceful_epoch(tmp_path: Path) -> None:
+    service = ApplicationRegistryProjection(tmp_path / "state")
+    assert service.snapshot_trust_state()["reason"] == "registry_projection_absent"
+
+    epoch = service.start_epoch(runtime_instance_id="runtime.1")
+    open_state = service.snapshot_trust_state()
+    assert not open_state["trusted_snapshot"]
+    assert open_state["reason"] == "epoch_open"
+
+    sealed = service.seal_epoch(
+        epoch["epoch_id"],
+        shutdown_request_id="shutdown.1",
+        shutdown_reason="test",
+        shutdown_scope="runtime_retire",
+    )
+    trusted = service.snapshot_trust_state()
+
+    assert sealed["seal_status"] == "complete"
+    assert trusted["trusted_snapshot"] is True
+    assert trusted["shutdown_request_id"] == "shutdown.1"

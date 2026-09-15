@@ -90,6 +90,53 @@ def _service():
     return RootDeveloperService()
 
 
+def _registry_state_dir() -> Path:
+    try:
+        ctx = require_ctx("sdk.developer.compositions")
+        return Path(ctx.paths.state_dir()).resolve()
+    except Exception:
+        return (_root_parent().parent / "state").resolve()
+
+
+def _registry_projection():
+    from adaos.services.application_registry_projection import ApplicationRegistryProjection
+
+    return ApplicationRegistryProjection(_registry_state_dir())
+
+
+def rebuild_registry_projection(
+    *, operation_id: str | None = None, cancel=None, progress=None
+) -> dict[str, Any]:
+    return _registry_projection().rebuild_development_projects(
+        _root_parent(),
+        parser=_parse_project,
+        schema_bytes=_schema_path().read_bytes(),
+        operation_id=operation_id,
+        cancel=cancel,
+        progress=progress,
+    )
+
+
+def _ensure_registry_projection():
+    registry = _registry_projection()
+    parent = _root_parent()
+    if not registry.development_projects_ready(parent):
+        registry.rebuild_development_projects(
+            parent,
+            parser=_parse_project,
+            schema_bytes=_schema_path().read_bytes(),
+        )
+    return registry
+
+
+def _upsert_registry_projection(project: Mapping[str, Any], manifest_path: Path) -> None:
+    _registry_projection().upsert_development_project(
+        project,
+        manifest_path=manifest_path,
+        schema_bytes=_schema_path().read_bytes(),
+    )
+
+
 def resolve_root(project_id: str, *, required: bool = True) -> Path:
     parent = _root_parent()
     root = (parent / _project_id(project_id)).resolve()
@@ -466,67 +513,11 @@ def get(project_id: str) -> dict[str, Any]:
 def list_projects(
     *, profile: str | None = None, query: str | None = None, limit: int = 500
 ) -> list[dict[str, Any]]:
-    parent = _root_parent()
-    if not parent.is_dir():
-        return []
-    result: list[dict[str, Any]] = []
-    maximum = max(1, min(int(limit), 5000))
-    needle = str(query or "").strip().casefold()
-    for manifest_path in sorted(
-        parent.glob("*/project.yaml"), key=lambda item: item.parent.name.lower()
-    ):
-        project = _read(manifest_path)
-        if profile and str(profile) not in set(project.get("profiles") or []):
-            continue
-        searchable = " ".join(
-            str(value or "")
-            for value in (
-                project["id"],
-                project["catalog"].get("title"),
-                project["catalog"].get("description"),
-            )
-        ).casefold()
-        if needle and needle not in searchable:
-            continue
-        primary = next(
-            (
-                item
-                for item in project["components"]["owned"]
-                if item["role"] == "primary"
-            ),
-            {},
-        )
-        item = {
-            **project,
-            "id": project["id"],
-            "ref": f"project:{project['id']}",
-            "version": project["version"],
-            "title": project["catalog"]["title"],
-            "description": project["catalog"]["description"],
-            "profiles": list(project["profiles"]),
-            "categories": list(project["catalog"]["categories"]),
-            "tags": list(project["catalog"]["tags"]),
-            "publication": dict(project.get("publication") or {}),
-            "install": dict(project.get("install") or {}),
-            "stage": str((project.get("publication") or {}).get("stage") or "alpha"),
-            "visibility": str(
-                (project.get("publication") or {}).get("visibility") or "unlisted"
-            ),
-            "default_install": bool(
-                (project.get("install") or {}).get("default") is True
-            ),
-            "primary_ref": primary.get("ref"),
-            "source_path": str(manifest_path.parent.resolve()),
-            "manifest_digest": _manifest_digest(project),
-        }
-        for field in ("title_i18n", "description_i18n"):
-            value = project["catalog"].get(field)
-            if isinstance(value, Mapping):
-                item[field] = dict(value)
-        result.append(item)
-        if len(result) >= maximum:
-            break
-    return result
+    return _ensure_registry_projection().list_development_projects(
+        profile=profile,
+        query=query,
+        limit=limit,
+    )
 
 
 def create(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -536,7 +527,7 @@ def create(value: Mapping[str, Any]) -> dict[str, Any]:
     if root.exists():
         raise ProjectCompositionError(f"project:{payload['id']} already exists")
     _write(manifest_path, payload)
-    _update_ownership_index(payload, deleted=False)
+    _upsert_registry_projection(payload, manifest_path)
     return get(str(payload["id"]))
 
 
@@ -578,7 +569,7 @@ def delete(
     if root.parent != parent or root == parent:
         raise ProjectCompositionError("refusing to remove Project outside DEV root")
     shutil.rmtree(root)
-    _update_ownership_index(current, deleted=True)
+    _registry_projection().remove_development_project(token)
     return {
         "ok": True,
         "project_id": token,
@@ -615,8 +606,9 @@ def replace(
     }
     if str(payload.get("id") or "") != token:
         raise ProjectCompositionError("replacement cannot change project id")
-    _write(resolve_root(token) / "project.yaml", payload)
-    _update_ownership_index(payload, deleted=False)
+    manifest_path = resolve_root(token) / "project.yaml"
+    _write(manifest_path, payload)
+    _upsert_registry_projection(payload, manifest_path)
     return get(token)
 
 
@@ -886,7 +878,7 @@ def create_for_existing_component(
         raise ProjectCompositionError(
             f"{component_ref} was not found in DEV space"
         ) from exc
-    owner = project_for_component(component_ref)
+    owner = project_for_component(component_ref, refresh=True)
     if owner is not None:
         raise ProjectCompositionError(
             f"{component_ref} is already owned by {owner['ref']}"
@@ -954,7 +946,7 @@ def ensure_owned_component(
     owned = [dict(item) for item in project["components"]["owned"]]
     if any(str(item.get("ref") or "") == ref for item in owned):
         return {"ok": True, "idempotent": True, "project": project}
-    owner = project_for_component(ref)
+    owner = project_for_component(ref, refresh=True)
     if owner is not None and str(owner.get("id") or "") != str(project["id"]):
         raise ProjectCompositionError(f"{ref} is already owned by {owner['ref']}")
     replacement = {
@@ -1088,11 +1080,13 @@ def create_research_direction(
     }
 
 
-def project_for_component(component_ref: str) -> dict[str, Any] | None:
-    index = _component_ownership_index()
+def project_for_component(component_ref: str, *, refresh: bool = False) -> dict[str, Any] | None:
+    if refresh:
+        rebuild_registry_projection()
+    registry = _ensure_registry_projection()
     matches = [
-        str(project_id)
-        for project_id in dict(index.get("owners") or {}).get(component_ref, [])
+        dict(project)
+        for project in registry.project_for_component(str(component_ref or "").strip())
     ]
     if not matches:
         return None
@@ -1100,7 +1094,7 @@ def project_for_component(component_ref: str) -> dict[str, Any] | None:
         raise ProjectCompositionError(
             f"component {component_ref} is owned by multiple local Projects"
         )
-    return get(matches[0])
+    return matches[0]
 
 
 def prepare_candidate(
@@ -1216,6 +1210,7 @@ __all__ = [
     "normalized_definition",
     "prepare_candidate",
     "project_for_component",
+    "rebuild_registry_projection",
     "release_versions",
     "resolve_presentation",
     "resolve_root",

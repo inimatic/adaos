@@ -460,10 +460,10 @@ Priority tags:
 **Outcome:** architecture, owners, and non-goals are explicit.
 
 - [x] `[must]` `APREG0-01` Publish this target architecture and roadmap.
-- [ ] `[must]` `APREG0-02` Record implementation issues for projection schema,
+- [x] `[must]` `APREG0-02` Record implementation issues for projection schema,
   startup integration, shutdown seal, background validation, permission
   indexes, and Yjs redaction tests.
-- [ ] `[must]` `APREG0-03` Route existing Application catalog/list/search
+- [x] `[must]` `APREG0-03` Route existing Application catalog/list/search
   hot-path scans to this projection owner.
 
 **Exit proof:** planning pages route Application registry projection and
@@ -474,16 +474,16 @@ startup snapshot decisions here.
 **Outcome:** a private SQLite read model can answer Application catalog and
 inventory queries without scanning manifests.
 
-- [ ] `[must]` `APREG1-01` Add `state/applications/registry.sqlite3` schema
+- [x] `[must]` `APREG1-01` Add `state/applications/registry.sqlite3` schema
   with epoch, source, Application, component, entrypoint, validation, and
   journal tables.
-- [ ] `[must]` `APREG1-02` Add deterministic projection row digests and source
+- [x] `[must]` `APREG1-02` Add deterministic projection row digests and source
   watermarks.
 - [ ] `[must]` `APREG1-03` Add query APIs for list/search/detail preflight,
   component reverse lookup, installed summaries, and release/channel pointers.
-- [ ] `[must]` `APREG1-04` Add rebuild command and service operation with
+- [x] `[must]` `APREG1-04` Add rebuild command and service operation with
   bounded progress, cancellation, and journal records.
-- [ ] `[should]` `APREG1-05` Add FTS5-backed text search with deterministic
+- [x] `[should]` `APREG1-05` Add FTS5-backed text search with deterministic
   fallback when FTS5 is unavailable.
 
 **Exit proof:** query tests prove no per-request `project.yaml` scan for common

@@ -118,30 +118,11 @@ def _list_project_records(
     profile: str | None,
     limit: int,
 ) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    maximum = max(1, min(int(limit), 5000))
-    root = service._dev_projects_root()
-    if not root.is_dir():
-        return result
-    for manifest in sorted(root.glob("*/project.yaml"), key=lambda item: item.parent.name.lower()):
-        try:
-            project = compositions.get(manifest.parent.name)
-        except Exception as exc:
-            result.append(
-                {
-                    "id": manifest.parent.name,
-                    "status": "invalid",
-                    "source_path": str(manifest.parent.resolve()),
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
-        else:
-            if profile and profile not in set(project.get("profiles") or []):
-                continue
-            result.append({**project, "status": "ready"})
-        if len(result) >= maximum:
-            break
-    return result
+    _ = service
+    return [
+        {**project, "status": "ready"}
+        for project in compositions.list_projects(profile=profile, limit=limit)
+    ]
 
 
 @app.command("list")
@@ -156,6 +137,29 @@ def list_projects(
         limit=limit,
     )
     _echo(projects, json_output=json_output)
+
+
+@app.command("registry-rebuild")
+def registry_rebuild(
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Rebuild the private SQLite Application registry projection for DEV Projects."""
+
+    result = compositions.rebuild_registry_projection()
+    if json_output:
+        _echo(result, json_output=True)
+        return
+    typer.echo(
+        " ".join(
+            str(item)
+            for item in (
+                result.get("status"),
+                f"scanned={result.get('scanned', 0)}",
+                f"indexed={result.get('indexed', 0)}",
+                f"invalid={result.get('invalid', 0)}",
+            )
+        )
+    )
 
 
 @app.command("create")

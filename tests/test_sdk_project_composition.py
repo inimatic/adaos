@@ -179,7 +179,7 @@ def test_project_read_cache_isolated_and_reuses_validation(project_space, monkey
     assert validated == ["cached_project"]
 
 
-def test_project_catalog_detects_same_size_mtime_external_edit_and_removal(project_space):
+def test_project_catalog_projection_rebuild_admits_external_edit_and_removal(project_space):
     compositions.create(_project("edited_project", "edited_skill"))
     path = project_space["projects"] / "edited_project" / "project.yaml"
     before = compositions.list_projects()[0]
@@ -191,14 +191,21 @@ def test_project_catalog_detects_same_size_mtime_external_edit_and_removal(proje
     path.write_bytes(changed)
     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
+    assert compositions.list_projects(query="New Research") == []
+    assert compositions.list_projects(query="TLP Research")[0]["manifest_digest"] == before["manifest_digest"]
+
+    rebuild = compositions.rebuild_registry_projection()
+    assert rebuild["indexed"] == 1
     after = compositions.list_projects(query="New Research")[0]
     assert after["catalog"]["title"] == "New Research"
     assert after["manifest_digest"] != before["manifest_digest"]
     assert compositions.list_projects(query="TLP Research") == []
     path.unlink()
-    assert compositions.list_projects() == []
     with pytest.raises(compositions.ProjectCompositionNotFound):
         compositions.get("edited_project")
+    assert compositions.list_projects() != []
+    assert compositions.rebuild_registry_projection()["indexed"] == 0
+    assert compositions.list_projects() == []
 
 
 def test_project_read_cache_invalidates_on_schema_change(project_space, tmp_path, monkeypatch):
@@ -336,7 +343,7 @@ def test_project_can_adopt_an_existing_unowned_builder_component(project_space) 
     )
 
 
-def test_project_component_lookup_uses_persistent_ownership_index(
+def test_project_component_lookup_uses_registry_projection(
     project_space, monkeypatch
 ) -> None:
     _scenario(project_space["scenarios"], "kanban_demo")
@@ -346,13 +353,13 @@ def test_project_component_lookup_uses_persistent_ownership_index(
         component_id="kanban_demo",
     )
 
-    index_path = project_space["projects"] / ".component-ownership.v1.json"
-    assert index_path.is_file()
+    registry_path = project_space["state"] / "applications" / "registry.sqlite3"
+    assert registry_path.is_file()
 
-    def unexpected_rebuild(*_args, **_kwargs) -> dict:
-        raise AssertionError("current ownership index was rebuilt")
+    def unexpected_manifest_parse(*_args, **_kwargs) -> dict:
+        raise AssertionError("component lookup reparsed project.yaml")
 
-    monkeypatch.setattr(compositions, "_rebuild_ownership_index", unexpected_rebuild)
+    monkeypatch.setattr(compositions, "_parse_project", unexpected_manifest_parse)
 
     assert compositions.project_for_component("scenario:kanban_demo")["ref"] == (
         "project:kanban_demo"
@@ -379,12 +386,13 @@ def test_project_component_lookup_rebuilds_after_external_manifest_change(
         yaml.safe_dump(external, sort_keys=False), encoding="utf-8"
     )
 
-    assert compositions.project_for_component("scenario:external_demo")["ref"] == (
+    assert compositions.project_for_component("scenario:external_demo") is None
+    assert compositions.project_for_component("scenario:external_demo", refresh=True)["ref"] == (
         "project:external_owner"
     )
 
 
-def test_project_replace_updates_component_ownership_index(project_space) -> None:
+def test_project_replace_updates_component_registry_projection(project_space) -> None:
     _skill(project_space["skills"], "candidate_skill")
     _skill(project_space["skills"], "replacement_skill")
     created = compositions.create(_project("candidate_project", "candidate_skill"))

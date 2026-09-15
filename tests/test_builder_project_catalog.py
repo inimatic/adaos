@@ -186,6 +186,71 @@ def test_project_catalog_includes_composition_projects(tmp_path: Path) -> None:
     assert item["current"] is True
 
 
+def test_project_catalog_reuses_registry_projection_for_project_queries(
+    tmp_path: Path, monkeypatch
+) -> None:
+    projects = tmp_path / "projects"
+    root = projects / "fast_search"
+    root.mkdir(parents=True)
+    (root / "project.yaml").write_text(
+        "\n".join(
+            [
+                "schema: adaos.project.v1",
+                "kind: project",
+                "id: fast_search",
+                "version: 0.1.0",
+                "profiles: []",
+                "components:",
+                "  owned:",
+                "    - ref: scenario:fast_search",
+                "      role: primary",
+                "  dependencies: []",
+                "entrypoints:",
+                "  - id: main",
+                "    presentation: scenario:fast_search",
+                "    default: true",
+                "    bindings: {}",
+                "catalog:",
+                "  title: Fast Search",
+                "  description: Indexed Project",
+                "  categories: []",
+                "  tags: []",
+                "publication:",
+                "  stage: alpha",
+                "  visibility: unlisted",
+                "  channel: stable",
+                "install:",
+                "  default: false",
+                "  features: []",
+                "lifecycle:",
+                "  uninstall:",
+                "    components: retain",
+                "    runtime_data: retain",
+                "    source_artifacts: retain",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    service = BuilderProjectCatalogService(
+        skills_root=tmp_path / "skills",
+        scenarios_root=tmp_path / "scenarios",
+        state_dir=tmp_path / "state",
+        projects_root=projects,
+    )
+    assert service.list_projects(kind="project", query="Fast")[0]["object_id"] == "fast_search"
+
+    def fail_project_manifest_read(path: Path, *args, **kwargs):
+        if path.name == "project.yaml":
+            raise AssertionError("project catalog reparsed project.yaml")
+        return original_read_text(path, *args, **kwargs)
+
+    original_read_text = Path.read_text
+    monkeypatch.setattr(Path, "read_text", fail_project_manifest_read)
+
+    assert service.list_projects(kind="project", query="Indexed")[0]["object_id"] == "fast_search"
+
+
 def test_project_catalog_hides_archived_projects_unless_requested(tmp_path: Path) -> None:
     scenarios = tmp_path / "scenarios"
     project = scenarios / "archived_scene"
