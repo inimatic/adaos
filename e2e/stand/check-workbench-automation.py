@@ -22,11 +22,15 @@ def main():
     parser.add_argument("--start", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resume", type=Path, help="Verify retained records after an independently performed restart")
+    parser.add_argument("--cleanup-only", action="store_true", help="Remove only retained owned records, without claiming restart evidence")
     parser.add_argument("--browser", action="store_true", help="Run independent desktop/mobile interactions")
     parser.add_argument("--discovery", action="store_true", help="Qualify an explicit public API query and import, without sending library contents")
+    parser.add_argument("--rating-and-order", action="store_true", help="Qualify the accepted successor rating and shared default ordering")
     parser.add_argument("--trial", type=Path, help="Exact admitted local Trial receipt")
     parser.add_argument("--stable", action="store_true", help="Verify this Trial's retained writes after native Stable acceptance")
     args = parser.parse_args()
+    if args.cleanup_only and (not args.resume or args.trial or args.browser):
+        parser.error("Cleanup requires a retained DEV HTTP report only")
     if args.stable and (not args.trial or not args.resume or args.browser):
         parser.error("Stable adoption review requires an exact Trial and its retained HTTP writes")
     load_dotenv()
@@ -68,6 +72,7 @@ def main():
             "ADAOS_E2E_SCENARIO_ID": identifier, "ADAOS_E2E_TASK_ID": task,
             "ADAOS_E2E_SOURCE_SHA256": source_digest, "ADAOS_E2E_OUTPUT": str(output)}
         environment.update(ADAOS_E2E_WEBSPACE=webspace, ADAOS_E2E_TRIAL="1" if trial else "0")
+        environment["ADAOS_E2E_RATING_AND_ORDER"] = "1" if args.rating_and_order else "0"
         if trial:
             environment["ADAOS_E2E_RELEASE_DIGEST"] = trial["placement"]["runtime_selection"]["release_digest"]
         script = Path(__file__).with_name("browser") / "workbench-test-automation.mjs"
@@ -87,12 +92,15 @@ def main():
     report = {"scope": "Independent DEV-owner HTTP acceptance; no delegated-user or delivery claim",
               "scenario": identifier, "task": task, "source_sha256": source_digest,
               "checks": [], "calls": [], "records": [], "passed": False}
+    report["rating_and_order"] = args.rating_and_order
+    if args.cleanup_only:
+        report["scope"] = "Cleanup of exactly retained DEV E2E records; not restart evidence"
     if trial:
         report.update(scope=("Native Stable adoption of retained Beta writes" if args.stable
                              else "Independent local Trial-owner HTTP acceptance; not external distribution"),
                       trial=trial["placement"]["runtime_selection"], dev_database_before=dev_before)
 
-    def call(tool, *, rejected=False, **values):
+    def call(tool, *, rejected=False, rejection_probe=False, **values):
         started = perf_counter()
         response = client.post(hub + "/api/tools/call", json={"tool": identifier + "_skill:" + tool,
             "arguments": {"webspace_id": webspace, **values}}, timeout=30)
@@ -108,8 +116,12 @@ def main():
             else:
                 assert response.headers.get("X-AdaOS-Runtime-Source") == "trial"
                 assert response.headers.get("X-AdaOS-Release-Digest") == report["trial"]["release_digest"]
+        refused = response.status_code in (400, 409, 422) or (response.ok and (body.get("ok") is False or body.get("result", {}).get("ok") is False))
+        if rejection_probe:
+            assert refused or (response.ok and body.get("ok") is not False), "Rejection probe encountered an infrastructure error"
+            return refused, None if refused else body.get("result", body)
         if rejected:
-            assert response.status_code in (400, 409, 422) or (response.ok and (body.get("ok") is False or body.get("result", {}).get("ok") is False)), f"{tool}: expected rejection, HTTP {response.status_code}"
+            assert refused, f"{tool}: expected rejection, HTTP {response.status_code}"
             return body
         assert response.ok and body.get("ok") is not False, f"{tool}: HTTP {response.status_code} rejected"
         result = body.get("result", body)
@@ -125,17 +137,29 @@ def main():
         report["records"] = [row for row in report["records"] if row["id"] != book["id"]] + [book]
         return book
 
+    def form_values(book, **changes):
+        return {key: changes.get(key, book.get(key)) for key in (
+            "title", "author", "status", "note", "source_work_key", "publication_year", "cover_id", "rating")}
+
     try:
         if args.resume:
             previous = json.loads(args.resume.read_text(encoding="utf-8"))
-            assert previous["scenario"] == identifier and previous["task"] == task
-            assert previous["source_sha256"] == source_digest and previous["records"]
+            assert previous["scenario"] == identifier and previous["records"]
+            if args.cleanup_only:
+                marker = previous.get("marker", "")
+                assert args.resume.resolve().is_relative_to(root / "e2e/artifacts/builder")
+                assert not previous.get("trial") and marker.startswith("E2E-HTTP-")
+                assert all(marker in row.get("title", "") for row in previous["records"])
+                report["source_task"] = previous["task"]
+            else:
+                assert previous["task"] == task and previous["source_sha256"] == source_digest
             report["parent"] = str(args.resume.resolve())
             report["records"] = previous["records"]
             for expected in previous["records"]:
                 actual = call("get_book", id=expected["id"])["item"]
-                check("restart-preserves:" + expected["id"], actual == expected)
-            if previous.get("settings_written"):
+                assert actual == expected, "Retained record changed; do not delete another actor's edit"
+                check(("cleanup-verifies:" if args.cleanup_only else "restart-preserves:") + expected["id"], actual == expected)
+            if previous.get("settings_written") and not args.cleanup_only:
                 expected_settings = previous["settings_written"]
                 actual_settings = call("read_settings")["item"]
                 if args.stable:
@@ -152,7 +176,8 @@ def main():
             if trial:
                 check("installed-read-succeeds-without-exporting-records", isinstance(initial, list))
             else:
-                check("dev-has-only-owned-e2e-records", all("E2E-" in str(row.get("title", "")) for row in initial))
+                check("dev-read-succeeds-without-modifying-existing-records", isinstance(initial, list))
+                report["initial_record_count"] = len(initial)
             denied = requests.post(hub + "/api/tools/call", json={"tool": identifier + "_skill:create_book",
                 "arguments": {"webspace_id": webspace, "values": {"title": "Must not create"}}}, timeout=30)
             check("unauthenticated-ingress-denied", denied.status_code in (401, 403))
@@ -198,6 +223,43 @@ def main():
             call("update_settings", rejected=True, values={"discovery_count": 20}, revision=settings["revision"])
             call("update_settings", rejected=True, values={"discovery_count": 20})
             check("stale-or-missing-settings-revision-refused", call("read_settings")["item"] == saved)
+            if args.rating_and_order:
+                check("legacy-record-has-no-rating", minimal.get("rating") is None)
+                rated = remember(call("update_book", id=changed["id"], revision=changed["revision"], values=form_values(changed, rating=5)))
+                check("rating-persists", rated.get("rating") == 5 and call("get_book", id=rated["id"])["item"] == rated)
+                for invalid in (True, False, 0, 6, 1.5):
+                    call("update_book", rejected=True, id=rated["id"], revision=rated["revision"], values=form_values(rated, rating=invalid))
+                    call("create_book", rejected=True, values={"title": marker + " invalid rating", "rating": invalid})
+                check("invalid-rating-does-not-mutate", call("get_book", id=rated["id"])["item"] == rated
+                      and not any(row["title"] == marker + " invalid rating" for row in call("list_books", search=marker)["items"]))
+                cleared = remember(call("update_book", id=rated["id"], revision=rated["revision"], values=form_values(rated, rating=None)))
+                check("rating-clears-without-losing-other-fields", cleared.get("rating") is None
+                      and all(cleared.get(key) == value for key, value in rated.items() if key not in {"rating", "revision", "updated_at"}))
+                rated = remember(call("update_book", id=cleared["id"], revision=cleared["revision"], values=form_values(cleared, rating=3)))
+                check("rating-does-not-change-another-record", call("get_book", id=minimal["id"])["item"] == minimal)
+                alphabetical = call("update_settings", values={"default_order": "title_alpha"}, revision=saved["revision"])["item"]
+                rows = call("list_books", search=marker)["items"]
+                check("shared-title-order-affects-query", len(rows) >= 2 and [row["title"] for row in rows]
+                      == sorted((row["title"] for row in rows), key=str.casefold))
+                newest = call("update_settings", values={"default_order": "newest_first"}, revision=alphabetical["revision"])["item"]
+                rows = call("list_books", search=marker)["items"]
+                check("shared-newest-order-affects-query", [row["id"] for row in rows] == [rated["id"], minimal["id"]])
+                check("default-order-is-repeatable", [row["id"] for row in rows]
+                      == [row["id"] for row in call("list_books", search=marker)["items"]])
+                check("adding-order-preserves-existing-settings", all(newest.get(key) == value for key, value in desired.items()))
+                for invalid in ("unknown", "", True, False, None, 1, [], {}):
+                    call("update_settings", rejected=True, values={"default_order": invalid}, revision=newest["revision"])
+                call("update_settings", rejected=True, values={"default_order": "title_alpha"}, revision=saved["revision"])
+                check("invalid-or-stale-order-preserves-settings", call("read_settings")["item"] == newest)
+                report["settings_written"] = {**desired, "default_order": "newest_first", "revision": newest["revision"]}
+                refused, unexpected = call("create_book", rejection_probe=True, values={"title": marker})
+                check("preserves-published-title-only-duplicate-policy", refused)
+                if unexpected:
+                    # Remove only the extra synthetic record admitted by the regression.
+                    call("delete_book", id=unexpected["id"], revision=unexpected["revision"])
+                call("update_book", rejected=True, id=rated["id"], revision=rated["revision"],
+                     values=form_values(rated, title=minimal["title"], author=None))
+                check("duplicate-update-preserves-record", call("get_book", id=rated["id"])["item"] == rated)
             if args.discovery:
                 discovered = call("search_open_library", query="The Time Machine", limit=10)["items"]
                 check("public-discovery-is-bounded-and-nonempty", 0 < len(discovered) <= 10)

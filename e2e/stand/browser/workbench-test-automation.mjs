@@ -20,8 +20,9 @@ const widgets = [...objects(JSON.parse(raw))].filter(item => item.id && item.typ
 const specification = id => widgets.find(item => item.id === id)
 const webspace = process.env.ADAOS_E2E_WEBSPACE || 'desktop-dev-dev'
 const trial = process.env.ADAOS_E2E_TRIAL === '1'
+const ratingAndOrder = process.env.ADAOS_E2E_RATING_AND_ORDER === '1'
 const report = { scope: 'Independent live Automation browser review, not Prototype or delivery', scenario, task,
-  source_sha256: source, samples: [], passed: false }
+  source_sha256: source, rating_and_order: ratingAndOrder, samples: [], passed: false }
 if (trial) report.scope = 'Independent local Trial desktop/browser review, not external distribution'
 const screenshots = output.replace(/\.json$/, '')
 await fs.mkdir(screenshots, { recursive: true })
@@ -63,6 +64,9 @@ try {
       await widget(navigation?.id || 'books_list').waitFor({ timeout: 60000 })
       await reveal('books_list')
       await widget('books_list').waitFor({ timeout: 60000 })
+      const rendered = await widget('books_list').evaluate(element => window.ng?.getComponent(element)?.widget?.dataSource)
+      assert.equal(rendered?.kind, 'skill', 'Open Automation through Builder before running mutation checks; Prototype is not execution evidence')
+      assert.equal(rendered?.name, specification('books_list')?.dataSource?.name)
     }
     const close = async () => {
       const modal = page.locator('ion-modal.show-modal').last()
@@ -161,8 +165,14 @@ try {
       await expect(field('book_editor', 'title').locator('input')).toHaveValue(marker, { timeout: 30000 })
       await field('book_editor', 'title').locator('input').fill(marker + '-updated')
       await field('book_editor', 'note').locator('textarea').fill('Изменено\nЕще строка')
+      if (ratingAndOrder) {
+        const choices = field('book_editor', 'rating').getByRole('radio')
+        await expect(choices).toHaveCount(5)
+        await choices.last().check()
+      }
       await capture('editor')
-      await mutate('update_book', () => widget('book_editor').getByRole('button', { name: /^сохранить изменения$/i }).click())
+      const savedBook = await mutate('update_book', () => widget('book_editor').getByRole('button', { name: /^сохранить изменения$/i }).click())
+      if (ratingAndOrder) assert.equal(savedBook.rating, 5)
       await widget('books_list').getByText(marker + '-updated', { exact: true }).waitFor()
       await page.reload({ waitUntil: 'domcontentloaded' })
       await page.locator('[data-webui-widget-id]').first().waitFor({ timeout: 60000 })
@@ -172,6 +182,23 @@ try {
       await widget('books_list').getByText(marker + '-updated', { exact: true }).click()
       await widget('book_details').getByText('Изменено', { exact: false }).waitFor()
       check('reload-preserves-edit-and-multiline-note')
+      if (ratingAndOrder) {
+        await widget('book_details').getByRole('button').first().click()
+        const rating = field('book_editor', 'rating')
+        await expect(rating.getByRole('radio').last()).toBeChecked()
+        const count = mutations()
+        await rating.getByRole('button', { name: /clear selection|очистить выбор/i }).click()
+        await expect(rating.locator('input[type="radio"]:checked')).toHaveCount(0)
+        assert.equal(mutations(), count, 'Clearing a choice is only a draft edit')
+        const cleared = await mutate('update_book', () => widget('book_editor').getByRole('button', { name: /^сохранить изменения$/i }).click())
+        assert.equal(cleared.id, savedBook.id)
+        assert.equal(cleared.rating, null)
+        await widget('book_details').getByRole('button').first().click()
+        await expect(field('book_editor', 'title').locator('input')).toHaveValue(marker + '-updated')
+        await expect(field('book_editor', 'rating').locator('input[type="radio"]:checked')).toHaveCount(0)
+        await close()
+        check('optional-rating-persists-clears-and-reopens')
+      }
       const search = widget('queries-books_list').locator('input').first()
       await search.fill('Наблюдатель')
       await widget('books_list').getByText(marker + '-updated', { exact: true }).waitFor()
@@ -193,6 +220,15 @@ try {
       })
       await widget('books_list').getByText(marker + '-updated', { exact: true }).waitFor({ state: 'hidden' })
       check('delete-refreshes-list')
+      await expect(widget('book_details').getByText(marker + '-updated', { exact: true })).toHaveCount(0)
+      await expect.poll(async () => {
+        const actions = widget('book_details').getByRole('button')
+        for (let index = 0; index < await actions.count(); index++) {
+          if (await actions.nth(index).isVisible() && await actions.nth(index).isEnabled()) return false
+        }
+        return true
+      }).toBe(true)
+      check('deleted-selection-cannot-be-edited-again')
       await capture('completed')
       await reveal('settings_list')
       await widget('settings_list').locator('tbody tr').filter({ has: page.locator('td') }).first().click()
@@ -200,6 +236,13 @@ try {
       await preferred.waitFor()
       const radios = preferred.getByRole('radio')
       const radioChoice = await radios.count() > 0
+      let nextOrder
+      if (ratingAndOrder) {
+        const choices = field('settings_editor', 'default_order').getByRole('radio')
+        await expect(choices).toHaveCount(2)
+        nextOrder = await choices.first().isChecked() ? 1 : 0
+        await choices.nth(nextOrder).check()
+      }
       let nextValue
       if (radioChoice) {
         assert.equal(await radios.count(), 2, 'Both supported presentation modes are selectable')
@@ -223,6 +266,10 @@ try {
       if (radioChoice) await expect(reopened.getByRole('radio').nth(nextValue)).toBeChecked()
       else await expect(reopened.locator('select')).toHaveValue(nextValue)
       check('settings-edit-persists-after-reload')
+      if (ratingAndOrder) {
+        await expect(field('settings_editor', 'default_order').getByRole('radio').nth(nextOrder)).toBeChecked()
+        check('default-order-setting-persists-after-reload')
+      }
       await capture('settings')
       await close()
       if (trial) {

@@ -1591,3 +1591,15 @@ The model also reported optional task Root MCP tools absent from its tool
 discovery. The advertised local lease passed admission, and needed binding
 contracts were already retained locally; this is not evidence of a provider
 timeout. Keep the discovery issue open for an actual CLI/transport inspection.
+
+Native `cycle-2/automation-correction-05` resumed the retained failed candidate
+with phase-specific repair context and completed without regenerating Prototype
+006. The retained input audit 09 and manual prompt review confirm the original
+acceptance, bounded correction and ordered-step/test-isolation requirements.
+The repair regression subset passes. Independent `acceptance-03/browser-01`
+passes both 1440px and 390px layouts, including post-delete disabled actions,
+rating edits and settings persistence. `migrations-01` passes the real Core
+executor from fresh, prior-version and ledgerless synthetic databases; published
+migration checksums are unchanged. Expanded HTTP/restart and second Beta/Stable
+acceptance remain separate gates. Cleanup of previous HTTP fixtures verifies
+each exact retained record before deletion and does not count as restart proof.

@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--creation", type=Path, required=True)
     parser.add_argument("--start", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--compare-stable", action="store_true", help="Verify all published migration checksums remain unchanged; never read installed records")
     args = parser.parse_args()
     load_dotenv()
     root = Path.cwd().resolve()
@@ -49,6 +50,15 @@ def main():
               "manifest_sha256": hashlib.sha256(raw).hexdigest(), "databases": [], "passed": False}
     try:
         assert chains, "A declared lifecycle is required for this migration qualification"
+        if args.compare_stable:
+            stable_raw = (root / f".adaos/workspace/skills/{identifier}_skill/skill.yaml").read_bytes()
+            stable = declared_databases(yaml.safe_load(stable_raw.decode("utf-8")))
+            for name, old_chain in stable.items():
+                assert name in chains, "A published data store disappeared"
+                target = {item.version: item.checksum for item in chains[name]}
+                assert all(target.get(item.version) == item.checksum for item in old_chain), "A published migration changed"
+            report["stable_history"] = {"manifest_sha256": hashlib.sha256(stable_raw).hexdigest(),
+                "checksums_preserved": True, "versions": {name: [item.version for item in chain] for name, chain in stable.items()}}
         (root / ".tmp").mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="migration-proof-", dir=root / ".tmp") as temporary:
             for index, (name, chain) in enumerate(chains.items()):
