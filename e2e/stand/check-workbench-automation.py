@@ -23,6 +23,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resume", type=Path, help="Verify retained records after an independently performed restart")
     parser.add_argument("--cleanup-only", action="store_true", help="Remove only retained owned records, without claiming restart evidence")
+    parser.add_argument("--observe-only", action="store_true", help="Read records/settings without mutations or exporting private values")
     parser.add_argument("--browser", action="store_true", help="Run independent desktop/mobile interactions")
     parser.add_argument("--discovery", action="store_true", help="Qualify an explicit public API query and import, without sending library contents")
     parser.add_argument("--rating-and-order", action="store_true", help="Qualify the accepted successor rating and shared default ordering")
@@ -31,8 +32,10 @@ def main():
     args = parser.parse_args()
     if args.cleanup_only and (not args.resume or args.trial or args.browser):
         parser.error("Cleanup requires a retained DEV HTTP report only")
-    if args.stable and (not args.trial or not args.resume or args.browser):
-        parser.error("Stable adoption review requires an exact Trial and its retained HTTP writes")
+    if args.observe_only and (args.resume or args.cleanup_only or args.browser or args.discovery):
+        parser.error("Read-only observation cannot be combined with mutation or browser checks")
+    if args.stable and (not args.trial or not (args.resume or args.observe_only) or args.browser):
+        parser.error("Stable review requires an exact Trial and either observation or retained HTTP writes")
     load_dotenv()
     root = Path.cwd()
     output = args.output.resolve()
@@ -99,6 +102,10 @@ def main():
         report.update(scope=("Native Stable adoption of retained Beta writes" if args.stable
                              else "Independent local Trial-owner HTTP acceptance; not external distribution"),
                       trial=trial["placement"]["runtime_selection"], dev_database_before=dev_before)
+    if args.observe_only:
+        report["scope"] = "Read-only runtime observation; not mutation acceptance or data-adoption proof"
+    if args.stable:
+        report["runtime_selection"] = selection.to_dict()
 
     def call(tool, *, rejected=False, rejection_probe=False, **values):
         started = perf_counter()
@@ -142,7 +149,13 @@ def main():
             "title", "author", "status", "note", "source_work_key", "publication_year", "cover_id", "rating")}
 
     try:
-        if args.resume:
+        if args.observe_only:
+            items = call("list_books")["items"]
+            settings = call("read_settings")["item"]
+            check("read-records-without-export", isinstance(items, list))
+            check("read-settings-without-export", isinstance(settings, dict))
+            report["record_count"] = len(items)
+        elif args.resume:
             previous = json.loads(args.resume.read_text(encoding="utf-8"))
             assert previous["scenario"] == identifier and previous["records"]
             if args.cleanup_only:

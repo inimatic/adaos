@@ -1662,3 +1662,17 @@ This proves a failure mechanism and its correction, not the exact historical
 cause of Reading List's MCP message; live scoped discovery remains a separate
 qualification. Retained historical stderr contains no transport failure, so do
 not relabel that observation as a Root/proxy outage.
+
+### 2026-09-16: Restart Qualification After the Second Increment
+
+The full Automation worker and Root MCP bridge regression suite passes (162
+tests). Its slowest individual case took 10.62 seconds; this run does not prove
+all build latency issues closed. After the batched API restart, the exact second
+Stable release passes a read-only HTTP observation. Private comparisons retain
+all three user records and three settings without exposing their values.
+
+`check-workbench-automation.py --observe-only` provides repeatable restart smoke
+without generating or deleting fixtures. It deliberately does not count as
+mutation acceptance or migration/adoption proof. Reading List has no credential
+slots, so this live result is not evidence of credential migration. About and
+portable image resources remain CG-06 work.
