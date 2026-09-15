@@ -19,6 +19,7 @@ try {
     if (process.env.ADAOS_E2E_PREPARE_TRIAL && profile !== 'wide') continue
     if (process.env.ADAOS_E2E_ACCEPT_TRIAL && profile !== 'wide') continue
     if (process.env.ADAOS_E2E_OBSERVE_PROTOTYPE && profile !== 'wide') continue
+    if (process.env.ADAOS_E2E_ANSWER_CLARIFICATION && profile !== 'wide') continue
     const context = await browser.newContext({ viewport, locale: 'ru-RU', colorScheme: 'dark' })
     await context.addInitScript(({ hub, token }) => {
       window.__ADAOS_DEBUG__ = true
@@ -110,6 +111,12 @@ try {
       }) })
       await capture('initial')
       report.checks.push({ profile, check: 'live_workbench_render', passed: true })
+      if (process.env.ADAOS_E2E_ANSWER_CLARIFICATION) {
+        const { reviewClarification } = await import('./builder-clarification-review.mjs')
+        await reviewClarification({ page, widget, capture, report, output,
+          intent: JSON.parse(process.env.ADAOS_E2E_ANSWER_CLARIFICATION) })
+        continue
+      }
       if (process.env.ADAOS_E2E_OBSERVE_PROTOTYPE) {
         const { observePrototype } = await import('./builder-prototype-observation.mjs')
         await observePrototype({ chat: widget('design-conversation-side-task'),

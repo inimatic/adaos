@@ -1448,3 +1448,22 @@ cannot enter validation or recovery; required questions stop first and repair
 turns. Raw responses and input schemas remain retained. The full independent
 live clarification/continuation proof and second release cycle remain open.
 Official contract: https://developers.openai.com/codex/noninteractive#create-structured-outputs-with-a-schema.
+
+The repeated native iteration returned `needs_input` in one model turn without
+an interactive-tool error. Its actual input and response remain in
+`automation-input-audit-02.json` and the task journal. Browser review exposed one
+Builder declaration error (`disabledIf` instead of supported `enabledIf`). DEV
+Builder checkpoint 0.2.149 fixes the button and action guard; 25 scenario tests
+pass. The answer was saved without starting Codex, survived page reload and then
+continued through the exact Required actions network approval. Evidence:
+`cycle-2/clarification-02` (answer/reload) and `clarification-03` (continuation).
+The continued task is `task.clarification.0dacca8b95bfc9c6321372d553b7e403`, in the
+same `builder_change_c99f684c`; input audit 03 verifies the verbatim question and
+answer. The delegate answered for this controlled TEST, not a claimed new human
+decision. Wider clarification coverage remains open.
+
+Observed non-blocking UX debt: selecting the waiting application in the picker
+tries to select an unavailable Automation Preview, producing an error toast
+while the valid Prototype remains available. Collect this for the next Builder
+fix batch; explicit unavailable-target selection must still fail truthfully.
+The second Automation and full data-adoption acceptance are still in progress.

@@ -188,12 +188,13 @@ integration, not closure of the remaining interaction/continuation obligations.
   response; keep platform blockers distinct from user decisions. Local worker
   integration proves question batch -> answers -> same-Change continuation,
   while browser interruption and real-model qualification remain open above.
-- [ ] `[must]` Qualify the enforced Codex outcome on the real question/answer
-  journey, including first-turn and repair-turn suspension, malformed outcomes,
-  explicit continuation and recovery without source application. The 2026-09-15
-  Reading List run exposed a prose question incorrectly entering automatic code
-  repair. The schema adapter and local regressions are implemented; live proof
-  remains required before closing the durable clarification gate.
+- [x] `[must]` Enforce the Codex outcome before validation and qualify one real
+  question -> native answer -> browser reload -> explicit continuation in the
+  same Change. Local regressions cover first/repair-turn suspension, malformed
+  outcomes and recovery refusal. Reading List `cycle-2/clarification-03` proves
+  the live path, including exact Required actions network approval; input audit
+  03 retains the exact resolved question and answer. Wider interruption/partial
+  batch coverage and completed continuation acceptance remain in the open gate.
 - [x] `[should]` Restore the full wrapping application title, clarify revision
   labeling and model component selection, development settings, Preview link/QR,
   informal discussion, platform-request consent and public README editing.

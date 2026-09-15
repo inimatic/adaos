@@ -33,9 +33,13 @@ def main():
     parser.add_argument("--verify-existing-preview", action="store_true", help="Open an existing owned TEST and verify the Result target")
     parser.add_argument("--automation-brief", type=Path, help="Start one explicitly accepted owned TEST through the native form")
     parser.add_argument("--automation-followup", action="store_true", help="Use the existing Automation iteration form")
+    parser.add_argument("--answer-clarification", type=Path, help="Answer an exact owned TEST question batch and explicitly continue through the UI")
+    parser.add_argument("--resume-clarification-review", type=Path, help="Resume only after a retained successful answer/reload review")
     parser.add_argument("--codex-model", default="gpt-5.5")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.resume_clarification_review and not args.answer_clarification:
+        parser.error("A clarification review is required")
     if (args.browser_evidence or args.migration_evidence or args.resume_trial_admission) and not args.trial_evidence:
         parser.error("Independent evidence overrides require Trial review")
     if args.inspect and args.exercise_test:
@@ -79,6 +83,24 @@ def main():
         if intent["id"] != receipt["id"] or intent.get("automation_authorized") is not False:
             parser.error("Observation must match an exact prototype-only intent")
         env["ADAOS_E2E_OBSERVE_PROTOTYPE"] = json.dumps(intent, ensure_ascii=False)
+    if args.answer_clarification:
+        import json
+        if (not args.inspect or not args.select_created or args.observe_prototype or args.refinement
+                or args.trial_evidence or args.open_trial or args.verify_existing_preview):
+            parser.error("Clarification requires an exclusive owned TEST selection")
+        intent = json.loads(args.answer_clarification.read_text(encoding="utf-8"))
+        if intent.get("application_id") != receipt["id"] or not intent.get("source_run_id") or not intent.get("change_id"):
+            parser.error("Clarification requires exact Application/Change/Run provenance")
+        if not isinstance(intent.get("answers"), list) or not 1 <= len(intent["answers"]) <= 8:
+            parser.error("Explicit answers to 1..8 identified questions are required")
+        if args.resume_clarification_review:
+            previous = json.loads(args.resume_clarification_review.read_text(encoding="utf-8"))
+            if not any(row.get("check") == "native_clarification_answers_survive_reload_without_resume"
+                       and row.get("passed") is True and row.get("source_run_id") == intent["source_run_id"]
+                       for row in previous.get("checks", [])):
+                parser.error("Resume needs the exact successful answer/reload evidence")
+            intent["previous_review"] = str(args.resume_clarification_review.resolve())
+        env["ADAOS_E2E_ANSWER_CLARIFICATION"] = json.dumps(intent, ensure_ascii=False)
     if args.trial_evidence:
         import hashlib
         import json
