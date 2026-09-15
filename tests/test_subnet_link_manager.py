@@ -745,6 +745,10 @@ def test_member_infrastate_projection_carries_core_slot_version() -> None:
     )
 
     assert projection["summary"]["subtitle"] == "slot B | 0.1.0 | 16fcc7a"
+    assert projection["summary"]["label"] == "Core update"
+    assert projection["summary"]["label_i18n"] == {"key": "infrastate.text.core_update"}
+    assert projection["summary"]["value"] == "succeeded"
+    assert projection["summary"]["value_i18n"] == {"key": "infrastate.state.succeeded"}
     assert projection["summary"]["selected_node_id"] == "member-1"
     assert projection["slots_meta"]["active_slot"] == "B"
     assert projection["build_meta"]["runtime_build_version"] == "0.1.0+1.16fcc7a"

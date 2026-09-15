@@ -14,6 +14,24 @@ import yaml
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
 
+def _with_infrastate_catalog_i18n(entry: Mapping[str, Any]) -> dict[str, Any]:
+    data = dict(entry)
+    local_id = str(data.get("node_local_id") or data.get("remote_id") or data.get("id") or "").strip().lower()
+    title = str(data.get("title") or "").strip().lower()
+    origin = str(data.get("origin") or data.get("source") or "").strip().lower()
+    data_source = data.get("dataSource") if isinstance(data.get("dataSource"), Mapping) else {}
+    data_path = str(data_source.get("path") or "").strip().lower()
+    is_infrastate = (
+        "infrastate" in local_id
+        or "infrastate" in origin
+        or "/infrastate/" in data_path
+        or title == "infra state"
+    )
+    if is_infrastate and not isinstance(data.get("title_i18n"), Mapping):
+        data["title_i18n"] = {"key": "infrastate.text.infra_state"}
+    return data
+
+
 @dataclass(frozen=True, slots=True)
 class WebspaceSkillCatalogOperations:
     apply_node_context_to_ui: Any
@@ -633,6 +651,7 @@ class WebspaceSkillCatalogService:
                     ),
                     node_id=node_id,
                 )
+                entry = _with_infrastate_catalog_i18n(entry)
                 decl["apps"].append(entry)
                 app_id = str(entry.get("id") or "").strip()
                 if app_id:
@@ -659,6 +678,7 @@ class WebspaceSkillCatalogService:
                     ),
                     node_id=node_id,
                 )
+                entry = _with_infrastate_catalog_i18n(entry)
                 decl["widgets"].append(entry)
                 widget_id = str(entry.get("id") or "").strip()
                 if widget_id:

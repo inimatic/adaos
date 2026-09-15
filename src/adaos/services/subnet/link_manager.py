@@ -611,6 +611,12 @@ def _member_lifecycle_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _infrastate_state_i18n_key(value: Any) -> str:
+    token = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    token = "".join(ch for ch in token if ch.isalnum() or ch == "_").strip("_")
+    return f"infrastate.state.{token or 'unknown'}"
+
+
 def _member_infrastate_projection(node_id: str, *, node_names: list[str], snapshot: dict[str, Any], captured_at: float) -> dict[str, Any]:
     node_key = str(node_id or "").strip()
     snap = snapshot if isinstance(snapshot, dict) else {}
@@ -622,10 +628,13 @@ def _member_infrastate_projection(node_id: str, *, node_names: list[str], snapsh
     lifecycle = _member_lifecycle_payload(snap)
     subtitle = _core_slot_summary_subtitle(slots_payload, build, active_slot=str(slots_payload.get("active_slot") or ""))
     label = next((str(item or "").strip() for item in node_names if str(item or "").strip()), node_key or "member")
+    state = str(status.get("state") or lifecycle.get("node_state") or "connected")
     return {
         "summary": {
-            "label": "Infra State",
-            "value": str(status.get("state") or lifecycle.get("node_state") or "connected"),
+            "label": "Core update",
+            "label_i18n": {"key": "infrastate.text.core_update"},
+            "value": state,
+            "value_i18n": {"key": _infrastate_state_i18n_key(state)},
             "subtitle": subtitle,
             "description": str(status.get("message") or "remote member snapshot"),
             "updated_at": captured,
