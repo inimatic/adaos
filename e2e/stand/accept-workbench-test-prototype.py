@@ -46,6 +46,7 @@ def main():
     parser.add_argument("--interactions", required=True, type=Path)
     parser.add_argument("--visual", required=True, type=Path)
     parser.add_argument("--revision", required=True)
+    parser.add_argument("--additional-interactions", action="append", type=Path, default=[])
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     load_dotenv()
@@ -65,6 +66,14 @@ def main():
         parser.error("Browser evidence is stale")
     if not crud_coverage(json.loads(raw), browser["samples"]):
         parser.error("Both widths must cover the explicitly qualified scalar CRUD path")
+    for path in args.additional_interactions:
+        extra = json.loads(path.read_text(encoding="utf-8"))
+        provenance = json.loads((path.parent / "ui-creation-checkpoint.json").read_text(encoding="utf-8"))
+        if (extra.get("scenario") != identifier or extra.get("passed") is not True
+                or provenance["provenance"]["source_sha256"] != hashlib.sha256(raw).hexdigest()
+                or {row["layout"] for row in extra.get("samples", [])} != {"wide", "compact"}
+                or any(row.get("failure") or row.get("errors") for row in extra["samples"])):
+            parser.error("Additional interaction evidence is stale, failed or incomplete")
     visual_report = json.loads(args.visual.read_text(encoding="utf-8"))
     visual = visual_report.get("samples")
     visual_source = json.loads((args.visual.parent / "ui-creation-checkpoint.json").read_text(encoding="utf-8"))
@@ -90,6 +99,8 @@ def main():
     reviewer = {"id": "agent:codex-independent-test-review", "kind": "agent", "delegated_by": "user:local"}
     checks = [{"id": kind, "status": "passed", "evidence_refs": [str(args.interactions.resolve())]}
               for kind in ["render.ready", "resource.query", "resource.filter", "resource.create", "resource.update", "resource.delete"]]
+    next(row for row in checks if row["id"] == "resource.update")["evidence_refs"].extend(
+        str(path.resolve()) for path in args.additional_interactions)
     result = workflow.accept_prototype("scenario", identifier, reviewer=reviewer, behavior_checks=checks,
         visual_checks=visuals, actor=reviewer["id"], expected_generation=current.get("generation"),
         acceptance_id=f"acceptance:workbench:{identifier}:{args.revision}")

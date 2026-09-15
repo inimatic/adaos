@@ -575,6 +575,13 @@ declared locale rather than changing a user's browser preference implicitly.
 
 ## Automation Event Contracts
 
+- [x] `[must]` Allow clearing an optional radio choice without inventing a
+  domain-specific sentinel option. Keep required/disabled/in-flight controls
+  protected, preserve explicit null on submission, and localize the clear action.
+  Focused form suite: 41 passing tests. Native Prototype review at 1440/390 px
+  qualifies select/save/reopen and clear/save/reopen on the same record.
+  No new widget or application-specific Client logic is needed.
+
 - [x] `[must]` Align item.details named-command sequencing with command bars:
   read/selection/open-editor actions sharing `on=click:<command>` run in order,
   stop on false/throw and reject repeated clicks while pending. Honor enabledIf,

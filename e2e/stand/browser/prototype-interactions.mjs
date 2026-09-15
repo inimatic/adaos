@@ -29,6 +29,7 @@ const forms = [
     (modal.schema?.widgets || []).filter(widget => widget.type === 'ui.form').map(widget => ({ widget, modalId }))),
 ]
 const requestedFieldType = process.env.ADAOS_E2E_FIELD_TYPE || ''
+const requestedFieldId = process.env.ADAOS_E2E_FIELD_ID || ''
 if (requestedFieldType && !['shortText', 'longText', 'date', 'time', 'number', 'integer', 'dropdown', 'singleChoice'].includes(requestedFieldType)) {
   throw new Error(`Unsupported interaction field type: ${requestedFieldType}`)
 }
@@ -42,7 +43,7 @@ const url = new URL(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/'
 for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo', subnet_id: subnet,
   webspace_id: preview.webspace_id, space_kind: 'development', expected_scenario_id: scenario, try_local_hub: '1' })) url.searchParams.set(key, value)
 const browser = await chromium.launch({ headless: true })
-const report = { scenario, checkpoint: checkpointPath, requestedFieldType, samples: [], passed: false }
+const report = { scenario, checkpoint: checkpointPath, requestedFieldType, requestedFieldId, samples: [], passed: false }
 try {
   for (const [layout, viewport] of Object.entries({ wide: { width: 1440, height: 1000 }, compact: { width: 390, height: 844 } })) {
     const context = await browser.newContext({ viewport })
@@ -124,7 +125,9 @@ try {
       for (const { widget, modalId } of forms) {
         const update = widget.actions?.find(action => action.type === 'resourceOperation' && action.params?.operation_id === 'update')
         const editableField = field => update?.params?.payload?.[field.id] === `$event.values.${field.id}` && !field.visibleIf && !field.readOnly
-        const field = requestedFieldType
+        const field = requestedFieldId
+          ? widget.inputs.fields?.find(field => field.id === requestedFieldId && editableField(field))
+          : requestedFieldType
           ? widget.inputs.fields?.find(field => field.type === requestedFieldType && editableField(field))
           : widget.inputs.fields?.find(field => ['shortText', 'longText'].includes(field.type) && editableField(field))
             || widget.inputs.fields?.find(field => ['date', 'time', 'number', 'integer', 'dropdown', 'singleChoice'].includes(field.type) && editableField(field))
@@ -322,6 +325,29 @@ try {
         }
         await expectValue(marker)
         sample.checks.push({ editor: widget.id, resource: update.target, field: field.id, fieldType: field.type, status: 'passed', task: 'select/edit/save/reopen', surface: modalId ? 'overlay' : 'inline' })
+        if (process.env.ADAOS_E2E_CLEAR_OPTIONAL_CHOICE === '1') {
+          if (field.type !== 'singleChoice' || field.required || !modalId) throw new Error('An optional modal radio field is required')
+          const before = sample.mutations.length
+          await container.getByRole('button', { name: /Clear selection|Очистить выбор/, exact: true }).click()
+          await expectValue(null)
+          if (sample.mutations.length !== before) throw new Error('Clearing a draft unexpectedly submitted it')
+          const clearedReply = operationResponse()
+          await button.click()
+          if (update.confirmation) await page.locator('ion-alert').last().locator('button').last().click()
+          const cleared = await clearedReply
+          if (!cleared.ok() || (await cleared.json()).ok === false) throw new Error('Clearing the optional choice was rejected')
+          if (sample.mutations.at(-1)?.record !== mutation.record || sample.mutations.at(-1)?.payload[field.id] !== null) {
+            throw new Error('Clearing the optional choice targeted a different record or did not send null')
+          }
+          await expect(page.locator('ion-modal').filter({ has: form })).toHaveCount(0)
+          await opener.click()
+          await expect.poll(() => form.evaluate((element, id) =>
+            window.ng?.getComponent(element.querySelector('ada-form-widget'))?.recordValues?.[id], field.id)).toBeNull()
+          await expect(container.locator('input[type=radio]:checked')).toHaveCount(0)
+          await expect.poll(async () => { const value = await readValue(); return value == null || value === '' }).toBe(true)
+          sample.checks.push({ editor: widget.id, resource: update.target, field: field.id,
+            status: 'passed', task: 'optional-choice/clear/save/reopen' })
+        }
         if (uploadProof) {
           const download = page.waitForEvent('download')
           void download.catch(() => {})
@@ -431,6 +457,10 @@ try {
   }
 } finally { await browser.close() }
 report.passed = report.samples.length === 2 && report.samples.every(sample => !sample.failure && !sample.errors.length)
+if (requestedFieldId) report.passed &&= report.samples.every(sample => sample.checks.some(check =>
+  check.field === requestedFieldId && check.status === 'passed' && check.task === 'select/edit/save/reopen'))
+if (process.env.ADAOS_E2E_CLEAR_OPTIONAL_CHOICE === '1') report.passed &&= report.samples.every(sample => sample.checks.some(check =>
+  check.status === 'passed' && check.task === 'optional-choice/clear/save/reopen'))
 await fs.writeFile(path.join(output, 'review.json'), JSON.stringify(report, null, 2) + '\n', 'utf8')
 console.log(JSON.stringify(report))
 if (!report.passed) process.exitCode = 1

@@ -67,9 +67,11 @@ def main():
                 expected_schema = schema(fresh)
                 transition = SQLiteDataTransition(private)
                 ordered = sorted(chain, key=lambda item: item.version)
-                for mode in ("declared-prior-version", "synthetic-legacy-without-ledger"):
+                prior_versions = [(f"declared-prior-version-{count}", count)
+                                  for count in range(1, len(ordered))]
+                for mode, count in [*prior_versions, ("synthetic-legacy-without-ledger", 1)]:
                     base = private / (mode + ".db")
-                    initialize_sqlite_schema(base, ordered[:1])
+                    initialize_sqlite_schema(base, ordered[:count])
                     if mode == "synthetic-legacy-without-ledger":
                         # This is a newly created disposable fixture, never an installed store.
                         with closing(sqlite3.connect(base)) as connection:

@@ -18,6 +18,8 @@ def main():
     parser.add_argument("--preview", required=True, type=Path)
     parser.add_argument("--probe", choices=("review", "interactions"), default="review")
     parser.add_argument("--separate-crud", action="store_true")
+    parser.add_argument("--field-id", help="Qualify an explicit field in the retained Prototype")
+    parser.add_argument("--clear-optional-choice", action="store_true")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     load_dotenv()
@@ -64,6 +66,10 @@ def main():
                    "ADAOS_E2E_OUTPUT": str(args.output.resolve())}
     if args.separate_crud:
         environment["ADAOS_E2E_SEPARATE_CRUD"] = "1"
+    if args.field_id:
+        environment["ADAOS_E2E_FIELD_ID"] = args.field_id
+    if args.clear_optional_choice:
+        environment["ADAOS_E2E_CLEAR_OPTIONAL_CHOICE"] = "1"
     script = Path(__file__).with_name("browser") / f"prototype-{args.probe}.mjs"
     raise SystemExit(subprocess.run(["node", str(script)], env=environment).returncode)
 

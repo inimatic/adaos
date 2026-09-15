@@ -1413,3 +1413,19 @@ label a classifier patch a general context solution. Retained input digests,
 requirement counts and actual primary/repair usage are audited by
 `inspect-builder-prototype-context.py` without rewriting model input or exporting
 installed records. The second cycle remains incomplete.
+
+The native failed-job replay subsequently accepted the retained, checksum-verified
+merged response as Prototype 006 with zero incremental tokens. No source was
+manually repaired and no further model generation was submitted. Wide/compact
+visual and CRUD review passed. Optional radio choices exposed a generic Client
+gap: no clear action after selection. Client 16aae45 adds an explicit null draft
+action, with 41 form tests and a native rating/clear/save/reopen proof. An empty
+editor representation is not the stored value; the probe checks the loaded null
+record and absence of a selected radio independently.
+
+Evidence: `cycle-2/visual-006`, `interactions-006`, `rating-006-02` and
+`acceptance-006.json`. The second Automation brief keeps both historical SQL
+migrations immutable and asks one explicit ownership clarification before edits.
+This tests the real question/answer/continuation path, not inferred ambiguity.
+The independent migration probe now covers every prior declared schema version,
+not only the first, plus a synthetic ledgerless legacy schema and exact replay.
