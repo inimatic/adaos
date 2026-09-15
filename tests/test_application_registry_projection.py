@@ -179,6 +179,31 @@ def test_registry_projection_rebuilds_dev_projects_and_queries_without_manifest_
     assert owners[0]["primary_ref"] == "scenario:alpha"
 
 
+def test_registry_projection_rebuild_reuses_unchanged_sources_without_manifest_parse(
+    tmp_path: Path,
+) -> None:
+    projects = tmp_path / "projects"
+    _write_project(projects, _project("cached", "scenario:cached"))
+    service = ApplicationRegistryProjection(tmp_path / "state")
+    _rebuild(service, projects)
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("unchanged project.yaml should not be parsed")
+
+    result = service.rebuild_development_projects(
+        projects,
+        parser=explode,
+        schema_bytes=compositions._schema_path().read_bytes(),
+    )
+
+    assert result["status"] == "completed"
+    assert result["scanned"] == 1
+    assert result["indexed"] == 1
+    assert result["reused"] == 1
+    assert result["changed"] == 0
+    assert service.project_for_component("scenario:cached")[0]["id"] == "cached"
+
+
 def test_registry_projection_records_invalid_sources_without_indexing_them(tmp_path: Path) -> None:
     projects = tmp_path / "projects"
     _write_project(projects, _project("valid", "scenario:valid"))

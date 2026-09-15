@@ -531,7 +531,7 @@ handoff.
 
 **Outcome:** changed sources are parsed and validated off the hot path.
 
-- [ ] `[must]` `APREG4-01` Add source scanner that records source identity,
+- [x] `[must]` `APREG4-01` Add source scanner that records source identity,
   digest, mtime, size, and schema version without full validation when
   unchanged.
 - [ ] `[must]` `APREG4-02` Parse and validate only changed sources, prioritizing

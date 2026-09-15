@@ -609,6 +609,37 @@ class ApplicationRegistryProjection:
             ).fetchone()
         return bool(journal and journal["status"] == "completed")
 
+    def _development_project_rebuild_cache(self) -> dict[str, dict[str, Any]]:
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT ps.source_id, ps.content_digest, ps.schema_digest,
+                       ps.validation_status, ps.payload_json AS source_payload_json,
+                       ai.payload_digest AS application_payload_digest,
+                       ai.payload_json AS application_payload_json
+                FROM projection_source ps
+                LEFT JOIN application_index ai
+                  ON ai.source_kind=? AND ai.source_id=ps.source_id
+                WHERE ps.source_kind=?
+                """,
+                (DEVELOPMENT_PROJECT_SOURCE_KIND, DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND),
+            ).fetchall()
+        cache: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            source_payload = _load_json(row["source_payload_json"], {})
+            application_payload = _load_json(row["application_payload_json"], None)
+            cache[str(row["source_id"])] = {
+                "content_digest": row["content_digest"],
+                "schema_digest": row["schema_digest"],
+                "validation_status": row["validation_status"],
+                "source": source_payload if isinstance(source_payload, Mapping) else {},
+                "application": (
+                    application_payload if isinstance(application_payload, Mapping) else None
+                ),
+                "payload_digest": row["application_payload_digest"],
+            }
+        return cache
+
     def rebuild_development_projects(
         self,
         projects_root: Path,
@@ -636,6 +667,9 @@ class ApplicationRegistryProjection:
         source_rows: list[dict[str, Any]] = []
         validation_rows: list[dict[str, Any]] = []
         scanned = 0
+        reused = 0
+        changed = 0
+        cached_sources = self._development_project_rebuild_cache()
         if root.is_dir():
             manifests = sorted(root.glob("*/project.yaml"), key=lambda item: item.parent.name.casefold())
         else:
@@ -650,7 +684,13 @@ class ApplicationRegistryProjection:
                     source_rows=source_rows,
                     rows=rows,
                     validation_rows=validation_rows,
-                    payload={"root": str(root), "scanned": scanned, "indexed": len(rows)},
+                    payload={
+                        "root": str(root),
+                        "scanned": scanned,
+                        "indexed": len(rows),
+                        "reused": reused,
+                        "changed": changed,
+                    },
                 )
             scanned += 1
             source_id = _source_identity(DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND, manifest_path)
@@ -659,6 +699,51 @@ class ApplicationRegistryProjection:
                 stat = manifest_path.stat()
                 raw = manifest_path.read_bytes()
                 source_digest = _digest_bytes(raw)
+                cached = cached_sources.get(source_id)
+                if (
+                    cached is not None
+                    and cached.get("source")
+                    and cached.get("content_digest") == source_digest
+                    and cached.get("schema_digest") == schema_digest
+                ):
+                    source_payload = dict(cached.get("source") or {})
+                    source_payload.update(
+                        {
+                            "mtime_ns": int(stat.st_mtime_ns),
+                            "ctime_ns": int(stat.st_ctime_ns),
+                            "size_bytes": int(stat.st_size),
+                            "observed_at": observed_at,
+                        }
+                    )
+                    if str(cached.get("validation_status") or "") == "valid":
+                        cached_application = cached.get("application")
+                        cached_payload_digest = str(cached.get("payload_digest") or "").strip()
+                        if isinstance(cached_application, Mapping) and cached_payload_digest:
+                            rows.append(
+                                {
+                                    "project": dict(cached_application),
+                                    "payload": dict(cached_application),
+                                    "source_id": source_id,
+                                    "source_digest": source_digest,
+                                    "payload_digest": cached_payload_digest,
+                                }
+                            )
+                            source_payload["payload_digest"] = cached_payload_digest
+                            source_payload["parse_status"] = "parsed"
+                            source_payload["validation_status"] = "valid"
+                            source_payload["error"] = None
+                            source_rows.append(source_payload)
+                            reused += 1
+                            if progress is not None:
+                                progress({"operation_id": op_id, "scanned": scanned, "indexed": len(rows)})
+                            continue
+                    elif source_payload:
+                        source_rows.append(source_payload)
+                        reused += 1
+                        if progress is not None:
+                            progress({"operation_id": op_id, "scanned": scanned, "indexed": len(rows)})
+                        continue
+                changed += 1
                 project = dict(parser(raw, schema_bytes))
                 project_id = str(project.get("id") or manifest_path.parent.name).strip()
                 row_payload = _project_row(project, source_path=manifest_path)
@@ -754,7 +839,13 @@ class ApplicationRegistryProjection:
             source_rows=source_rows,
             rows=rows,
             validation_rows=validation_rows,
-            payload={"root": str(root), "scanned": scanned, "indexed": len(rows)},
+            payload={
+                "root": str(root),
+                "scanned": scanned,
+                "indexed": len(rows),
+                "reused": reused,
+                "changed": changed,
+            },
         )
 
     def upsert_development_project(
