@@ -14,7 +14,9 @@ import shutil
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -105,8 +107,12 @@ def _schema_path() -> Path:
 
 
 def validate(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _validate_project(value, _schema_path().read_bytes())
+
+
+def _validate_project(value: Mapping[str, Any], schema_bytes: bytes) -> dict[str, Any]:
     payload = dict(value)
-    schema = json.loads(_schema_path().read_text(encoding="utf-8"))
+    schema = json.loads(schema_bytes)
     errors = sorted(
         Draft202012Validator(schema).iter_errors(payload),
         key=lambda item: list(item.absolute_path),
@@ -251,16 +257,32 @@ def normalized_definition(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _parse_project(raw: bytes, schema_bytes: bytes) -> dict[str, Any]:
+    value = yaml.load(
+        raw.decode("utf-8-sig"), Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    ) or {}
+    if not isinstance(value, Mapping):
+        raise ProjectCompositionError("Project manifest must be an object")
+    return _validate_project(value, schema_bytes)
+
+
+@lru_cache(maxsize=1024)
+def _cached_project(raw: bytes, schema_bytes: bytes) -> dict[str, Any]:
+    return _parse_project(raw, schema_bytes)
+
+
 def _read(path: Path) -> dict[str, Any]:
     try:
-        value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
-    except (OSError, yaml.YAMLError) as exc:
+        # Read actual bytes on every request: external edits (even same size and
+        # mtime), deletions and ABI changes must invalidate the derived catalog.
+        raw, schema_bytes = path.read_bytes(), _schema_path().read_bytes()
+        if len(raw) <= 65536 and len(schema_bytes) <= 65536:
+            return deepcopy(_cached_project(raw, schema_bytes))
+        return _parse_project(raw, schema_bytes)
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise ProjectCompositionError(
             f"failed to read Project manifest: {exc}"
         ) from exc
-    if not isinstance(value, Mapping):
-        raise ProjectCompositionError("Project manifest must be an object")
-    return validate(value)
 
 
 def _manifest_digest(payload: Mapping[str, Any]) -> str:

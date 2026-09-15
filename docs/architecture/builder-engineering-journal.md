@@ -1130,3 +1130,21 @@ This is not the two live managed Reading List cycles. Credential binding,
 operator recovery/rollback, Beta-to-Beta loss consent, clarification and About/
 image-output integration remain open. Temporary agent working files must use
 Git-ignored `.tmp/`; this durable instruction now lives in root `AGENTS.md`.
+
+### 2026-09-15: Project Catalog Parse Cost
+
+The first read-only Reading List browser baseline failed while the project
+picker was still loading. The unchanged retry passed all six desktop/mobile
+checks. Live tool logs showed catalog calls taking 15-19s; worker profiling
+identified repeated parsing and schema validation of 425 project manifests,
+not a missing Project or model/network timeout. Instrumented execution spent
+about 8s in the Python YAML parser and 1.7s in schema validation.
+
+Manifest reads now use the available safe C loader and a bounded content-keyed
+parse/validation cache. Every read still checks actual manifest and schema
+bytes, including same-size/same-mtime external edits; returned values are deep
+copies. Large inputs bypass the cache. Regressions cover rename/search/digest,
+deletion, schema changes, caller mutation, malformed UTF-8 and unsafe YAML tags
+with both safe loaders. The same profiled worker probe measured 3.39s cold,
+0.88s and 0.70s warm. These are local worker results, not a deployed HTTP/browser
+latency claim; the loaded browser recheck remains open under BIP-03.

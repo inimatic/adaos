@@ -308,6 +308,13 @@ Owner/dependencies: Core runtime + Client + Root telemetry.
 
 Implementation boundary: Runtime lock profiling and the path-promotion fix are retained; browser fan-out/post-save stalls remain. Live qualification of the loaded fix remains required.
 
+- [x] `[must]` Remove repeated manifest parsing/validation from the catalog hot
+  path without stale-title caching. Use a bounded cache keyed by current file
+  and schema bytes; isolate returned objects and keep deletion/error checks live.
+  Local worker profiling and manifest/SDK regressions qualify this mechanism.
+- [ ] `[must]` Requalify cold/warm Select project browser latency after loading
+  the catalog fix; do not infer full HTTP/browser performance from worker timings.
+
 Exit/remaining work: Measure the loaded fix on cold/warm browser journeys; separate queueing, import lock, execution, invalidation, readiness and Root phases. Reconcile billed/normalized cost and exact environment digests; do not mask stalls with larger timeouts.
 
 ### BIP-04

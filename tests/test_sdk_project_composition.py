@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -154,6 +155,93 @@ def test_project_search_filters_before_limit_and_matches_unicode(project_space):
     assert [item["id"] for item in compositions.list_projects(query="ПРИМЕР", limit=1)] == ["zzz"]
     assert [item["id"] for item in compositions.list_projects(query="20260911-uid", limit=1)] == ["zzz"]
     assert compositions.list_projects(query="not present", limit=1) == []
+
+
+def test_project_read_cache_isolated_and_reuses_validation(project_space, monkeypatch):
+    compositions.create(_project("cached_project", "cached_skill"))
+    path = project_space["projects"] / "cached_project" / "project.yaml"
+    compositions._cached_project.cache_clear()
+    validated = []
+    validate = compositions._validate_project
+
+    def count_validation(value, schema_bytes):
+        validated.append(value["id"])
+        return validate(value, schema_bytes)
+
+    monkeypatch.setattr(compositions, "_validate_project", count_validation)
+    first = compositions._read(path)
+    first["catalog"]["title"] = "Must not escape this caller"
+    first["components"]["owned"].clear()
+    second = compositions._read(path)
+
+    assert second["catalog"]["title"] == "TLP Research"
+    assert second["components"]["owned"][0]["ref"] == "skill:cached_skill"
+    assert validated == ["cached_project"]
+
+
+def test_project_catalog_detects_same_size_mtime_external_edit_and_removal(project_space):
+    compositions.create(_project("edited_project", "edited_skill"))
+    path = project_space["projects"] / "edited_project" / "project.yaml"
+    before = compositions.list_projects()[0]
+    stat = path.stat()
+    raw = path.read_bytes()
+    changed = raw.replace(b"TLP Research", b"New Research")
+    assert len(changed) == len(raw)
+    assert changed != raw
+    path.write_bytes(changed)
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+    after = compositions.list_projects(query="New Research")[0]
+    assert after["catalog"]["title"] == "New Research"
+    assert after["manifest_digest"] != before["manifest_digest"]
+    assert compositions.list_projects(query="TLP Research") == []
+    path.unlink()
+    assert compositions.list_projects() == []
+    with pytest.raises(compositions.ProjectCompositionNotFound):
+        compositions.get("edited_project")
+
+
+def test_project_read_cache_invalidates_on_schema_change(project_space, tmp_path, monkeypatch):
+    compositions.create(_project("schema_project", "schema_skill"))
+    path = project_space["projects"] / "schema_project" / "project.yaml"
+    schema_path = tmp_path / "project-schema.json"
+    original_schema = compositions._schema_path().read_bytes()
+    schema_path.write_bytes(original_schema)
+    monkeypatch.setattr(compositions, "_schema_path", lambda: schema_path)
+    assert compositions._read(path)["id"] == "schema_project"
+
+    schema = json.loads(original_schema)
+    schema["properties"]["id"] = {"const": "different_project"}
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    with pytest.raises(compositions.ProjectCompositionError, match="manifest invalid at id"):
+        compositions._read(path)
+    schema_path.write_bytes(original_schema)
+    assert compositions._read(path)["id"] == "schema_project"
+
+
+@pytest.mark.parametrize("python_loader", [False, True])
+@pytest.mark.parametrize("raw", [b"[", b"[item]", b"\xff", b"!!python/tuple [1, 2]"])
+def test_project_read_rejects_invalid_or_unsafe_yaml_after_cache_hit(
+    project_space, monkeypatch, python_loader, raw
+):
+    if python_loader:
+        monkeypatch.delattr(yaml, "CSafeLoader", raising=False)
+    compositions.create(_project("invalidated_project", "invalidated_skill"))
+    path = project_space["projects"] / "invalidated_project" / "project.yaml"
+    assert compositions._read(path)["id"] == "invalidated_project"
+    path.write_bytes(raw)
+    with pytest.raises(compositions.ProjectCompositionError):
+        compositions._read(path)
+
+
+def test_project_read_does_not_cache_large_manifests(project_space):
+    value = _project("large_project", "large_skill")
+    compositions.create(value)
+    path = project_space["projects"] / "large_project" / "project.yaml"
+    path.write_bytes(path.read_bytes() + b"\n#" + b"x" * 65536)
+    compositions._cached_project.cache_clear()
+    assert compositions._read(path)["catalog"]["description"] == value["catalog"]["description"]
+    assert compositions._cached_project.cache_info().currsize == 0
 
 
 def test_project_delete_requires_exact_snapshot_and_primary_ownership(
