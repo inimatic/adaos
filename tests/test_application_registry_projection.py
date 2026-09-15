@@ -155,7 +155,7 @@ def test_registry_projection_rebuilds_dev_projects_and_queries_without_manifest_
 ) -> None:
     projects = tmp_path / "projects"
     _write_project(projects, _project("alpha", "scenario:alpha"))
-    _write_project(projects, _project("beta", "skill:beta"))
+    _write_project(projects, _project("beta", "scenario:beta"))
     service = ApplicationRegistryProjection(tmp_path / "state")
 
     result = _rebuild(service, projects)
