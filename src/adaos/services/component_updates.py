@@ -314,12 +314,13 @@ class ComponentUpdateService:
             result = current
         return result
 
-    def reconcile_local_trials(self, webspace_id: str) -> int:
+    def reconcile_local_trials(self, webspace_id: str, *, application_id: str | None = None) -> int:
         from adaos.sdk.builder import applications, lifecycle, workflow
         from adaos.services.applications.store import ApplicationStore
 
         store = ApplicationStore(Path(self.state_dir or current_state_dir()))
-        selections = [item for item in store.list_runtime_selections() if item.webspace_id == webspace_id]
+        selections = [item for item in store.list_runtime_selections() if item.webspace_id == webspace_id
+                      and (application_id is None or item.application_id == application_id)]
         if not selections:
             return 0
         publisher = applications._local_subnet_ref()

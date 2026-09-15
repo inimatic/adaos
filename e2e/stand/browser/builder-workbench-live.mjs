@@ -300,6 +300,18 @@ try {
         report.checks.push({ profile, check: 'exact_trial_opened_from_process', passed: true, url: preview.url() })
         if (new URL(preview.url()).searchParams.get('webspace_id') !== trial.placement.target.webspace_id) throw new Error('Trial opened in wrong Webspace')
         report.checks.push({ profile, check: 'exact_trial_execution_from_builder_placement', passed: true })
+        const chrome = await preview.evaluate(() => {
+          const app = window.ng?.getComponent(document.querySelector('app-root'))
+          const projection = value => ({ component: value?.component, version: value?.version,
+            source: value?.sourceAuthority, stage: value?.releaseStage,
+            updateStage: value?.componentUpdate?.stage, candidate: value?.componentUpdate?.candidate?.id })
+          const item = app?.findScenarioCatalogItem?.(app.currentScenario)
+          return { scenario: app?.currentScenario, ownerChrome: app?.showOwnerChrome,
+            badge: { id: app?.currentScenarioBadge?.id, stage: app?.currentScenarioBadge?.releaseStage },
+            catalog: projection(item?._adaos), page: projection(app?.currentRuntimePageMetadata?.()),
+            catalogStage: item?.release_stage, changelogPresent: !!document.querySelector('.scenario-changelog-btn') }
+        })
+        await fs.writeFile(path.join(output, `${profile}-trial-chrome.json`), JSON.stringify(chrome, null, 2) + '\n', 'utf8')
         if (process.env.ADAOS_E2E_ACCEPT_TRIAL) {
           await preview.locator('.scenario-changelog-btn').click()
           const panel = preview.locator('.component-updates-panel')

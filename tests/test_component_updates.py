@@ -36,6 +36,9 @@ def test_missing_dev_or_stale_selection_does_not_hide_other_trial_notices(tmp_pa
     monkeypatch.setattr(ComponentUpdateService, "record_aprobation", lambda self, **kwargs: recorded.append(kwargs) or {"ok": True})
     assert service.reconcile_local_trials("desktop") == 1
     assert recorded[0]["component_id"] == "active"
+    recorded.clear()
+    assert service.reconcile_local_trials("desktop", application_id="missing-dev") == 0
+    assert recorded == []
 
 
 def _aprobation(

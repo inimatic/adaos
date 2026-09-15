@@ -423,6 +423,13 @@ exact Candidate, migration, data/configuration inheritance and exclusive runtime
 cutover. This is not automatic Stable acceptance, a switch to unfinished DEV,
 or consent to destroy writes made in an older Beta.
 
+Before rematerializing affected rooms, that lifecycle command reconciles the
+selected release's changelog notice. Acceptance must not depend on the user
+opening the global notifications panel first. An older accepted notice cannot
+classify a newly selected Beta as Stable. Client header fallback must prefer
+the current catalog release over stale page metadata; explicit DEV Preview
+materialization remains a separate presentation authority, never a Beta route.
+
 Applications owns user-selected external stable/prerelease update intent and
 update policy. Local Workspace publication and external registry distribution
 are separate operations; a local Beta does not imply public beta discovery,

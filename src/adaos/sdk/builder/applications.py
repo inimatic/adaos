@@ -226,8 +226,15 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
 
 
 def _refresh_application_placements(application_id: str) -> dict[str, Any]:
+    from adaos.services.component_updates import ComponentUpdateService
+
     rooms = sorted({item.webspace_id for item in _application_service().store.list_runtime_selections()
                     if item.application_id == application_id})
+    updates = ComponentUpdateService(state_dir=_state_dir())
+    # Page metadata must observe the selected release before materialization.
+    # Opening the notifications panel is not a prerequisite for Beta acceptance.
+    for room in rooms:
+        updates.reconcile_local_trials(room, application_id=application_id)
     return {"ok": True, "webspaces": {room: refresh_placement(room) for room in rooms}}
 
 

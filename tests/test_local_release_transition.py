@@ -90,22 +90,42 @@ def setup(tmp_path):
 
 
 def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup, monkeypatch):
-    from adaos.sdk.builder import applications
+    from adaos.sdk.builder import applications, workflow
     from adaos.sdk.developer import projects
+    from adaos.services.component_updates import ComponentUpdateService
     from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
 
     owner, service, old, new, activations, lock = setup
     monkeypatch.setattr(applications, "_ctx", lambda: owner)
     monkeypatch.setattr(applications, "publisher_context", lambda: {"publisher_ref": "subnet:home"})
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:home")
+    monkeypatch.setattr(workflow, "get_state", lambda *_: {"delivery": {
+        "candidate_id": "candidate-sample", "package_digest": new.components[0].digest,
+        "release_digest": new.release_digest, "status": "trial"}})
     monkeypatch.setattr(projects, "get_candidate", lambda _: {"candidate": {"release_digest": new.release_digest, "validation_evidence": [{"status": "passed"}]}})
     monkeypatch.setattr(WebspaceRelationshipRegistry, "from_context", lambda: SimpleNamespace(resolve_production_host=lambda value: value))
     monkeypatch.setattr(NativeTrialRuntime, "ready_manager", lambda *_: object())
+    updates = ComponentUpdateService(owner.paths.state_dir())
+    updates.record_aprobation(component_type="scenario", component_id="sample", aprobation={
+        "source_kind": "builder_local_trial", "trial": {"candidate_id": "previous-candidate",
+        "candidate_digest": old.components[0].digest, "release_digest": old.release_digest,
+        "version": old.version, "status": "published"}})
     refreshes = []
-    monkeypatch.setattr(applications, "refresh_placement", lambda value: refreshes.append(value) or {"ok": True})
+    def refresh(value):
+        notice = ComponentUpdateService(owner.paths.state_dir()).current_component_metadata("scenario", "sample")
+        assert notice["stage"] == "beta"
+        assert notice["candidate"]["id"] == "candidate-sample"
+        assert notice["candidate"]["release_digest"] == new.release_digest
+        refreshes.append(value)
+        return {"ok": True}
+    monkeypatch.setattr(applications, "refresh_placement", refresh)
     result = applications.place_local_trial("candidate-sample", webspace_id="desktop", actor_ref="user:owner")
     assert result["ok"] and result["data_transition"]["completed"]
     assert service.list_models()[0]["use_prerelease"]
     assert not service.list_models()[0]["prerelease_following"]
+    notices = updates._read()
+    applications.place_local_trial("candidate-sample", webspace_id="desktop", actor_ref="user:owner")
+    assert updates._read() == notices
     runtime = NativeTrialRuntime.resolve(owner, "candidate-sample", new.release_digest)
     binding = bind_local_data_lifecycle(owner, runtime, new)
     assert rows(binding.components[0].beta_root / "entries.sqlite") == [(1, "private stable")]
@@ -126,7 +146,7 @@ def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup,
     assert not service.list_models()[0]["use_prerelease"]
     assert bind_local_data_lifecycle(owner, runtime, new).stable_digest == old.release_digest
     assert promote_with_local_data(owner, "candidate-sample", publish)["ok"]
-    assert len(calls) == 1 and refreshes == ["desktop"]
+    assert len(calls) == 1 and refreshes == ["desktop", "desktop"]
     private_metadata = (runtime.root / ".adaos/data-transition.json").read_text(encoding="utf-8")
     assert "private stable" not in private_metadata and "private beta" not in private_metadata
 
@@ -159,6 +179,7 @@ def test_foreign_publisher_cannot_place_local_beta(setup, monkeypatch):
 
 def test_sdk_recovery_verifies_stable_identity_before_unfencing(setup, monkeypatch):
     from adaos.sdk.builder import applications
+    from adaos.services.component_updates import ComponentUpdateService
     from adaos.services.applications.runtime_channel import RuntimeChannelConflict
 
     owner, service, old, new, _activations, lock = setup
@@ -168,6 +189,7 @@ def test_sdk_recovery_verifies_stable_identity_before_unfencing(setup, monkeypat
         lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": False})
     monkeypatch.setattr(applications, "_ctx", lambda: owner)
     monkeypatch.setattr(applications, "refresh_placement", lambda _: {"ok": True})
+    monkeypatch.setattr(ComponentUpdateService, "reconcile_local_trials", lambda *_, **__: 0)
     atomic_write_json(owner.paths.workspace_dir() / ".adaos/workspace.lock.json", lock(new).to_dict())
     with pytest.raises(ValueError, match="Stable code/installation changed"):
         applications.abort_local_trial_preparation("candidate-sample", release_digest=new.release_digest, actor_ref="user:owner")

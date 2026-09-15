@@ -1603,3 +1603,15 @@ executor from fresh, prior-version and ledgerless synthetic databases; published
 migration checksums are unchanged. Expanded HTTP/restart and second Beta/Stable
 acceptance remain separate gates. Cleanup of previous HTTP fixtures verifies
 each exact retained record before deletion and does not count as restart proof.
+
+Second-cycle HTTP/restart and exclusive Beta preparation passed. The three
+current private Stable records survived the third migration; both prior settings
+were inherited with one additive setting. Exact Trial HTTP and wide/compact
+browser execution also passed, including desktop return/reopen and unchanged DEV.
+Stable acceptance then stopped before its command: the header lacked changelog.
+`cycle-2/beta-chrome-01` proves the catalog said Beta while page metadata retained
+the previous Stable Candidate. A release notice was only reconciled when the
+notifications API was opened. The lifecycle now updates scoped notices before
+room refresh; Client prefers catalog release metadata over the stale page,
+preserving explicit DEV materialization. Local replay is idempotent. Requalify
+the same Candidate without reseeding Beta or generating another version.
