@@ -61,6 +61,12 @@ def main():
     if args.open_trial:
         import json
         trial = json.loads(args.open_trial.read_text(encoding="utf-8"))
+        if trial.get("builder_placement"):
+            placement = trial["builder_placement"]
+            trial = {"passed": trial["passed"], "scenario": placement["scenario_id"],
+                     "placement": placement, "delivery": {
+                         "candidate_id": placement["result_ref"]["id"],
+                         "release_digest": trial["placement"]["runtime_selection"]["release_digest"]}}
         if not args.select_created or not args.inspect or args.trial_evidence or trial.get("passed") is not True or trial["scenario"] != receipt["id"]:
             parser.error("Exact TEST Trial receipt and inspect-only selection required")
         env["ADAOS_E2E_OPEN_TRIAL"] = json.dumps(trial, ensure_ascii=False)

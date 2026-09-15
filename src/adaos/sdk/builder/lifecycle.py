@@ -109,6 +109,15 @@ def prepare_trial(
         )
     )
     change_ids = [item for item in change_ids if item]
+    source_webspace = str(source_webspace_id or "desktop").strip() or "desktop"
+    trial_webspace = str(target_webspace_id or "").strip()
+    from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
+
+    topology = WebspaceRelationshipRegistry.from_context()
+    production = topology.resolve_production_host(trial_webspace or source_webspace)
+    if trial_webspace and trial_webspace != production:
+        raise ValueError("Trial target must be a production Webspace, not Preview")
+    trial_webspace = production
     started: dict[str, Any] | None = None
     if delivery_status == "checkpoint":
         started = workflow.transition(
@@ -130,14 +139,6 @@ def prepare_trial(
         "automation_task_id": automation_state.get("head_task_id"),
         "change_id": change.get("change_id") or change.get("change_set_id"),
     }
-    source_webspace = str(source_webspace_id or "desktop").strip() or "desktop"
-    trial_webspace = str(target_webspace_id or "").strip()
-    if not trial_webspace:
-        try:
-            trial_webspace = preview.dev_webspace_id(source_webspace)
-        except Exception:
-            trial_webspace = ""
-    trial_webspace = trial_webspace or source_webspace
     scope = navigation.runtime_scope()
     try:
         stale_candidate = str(delivery.get("replaces_candidate_id") or "").strip()
@@ -157,7 +158,7 @@ def prepare_trial(
                 change_ids=change_ids,
                 validation_evidence=validation_evidence,
                 target_webspace_id=trial_webspace,
-                target_space_kind="development",
+                target_space_kind="workspace",
                 target_zone=str(scope.get("zone") or "").strip() or None,
                 target_subnet_id=str(scope.get("subnet_id") or "").strip() or None,
                 idempotency_key=idempotency_key,
@@ -169,7 +170,7 @@ def prepare_trial(
                 object_id,
                 validation_evidence=validation_evidence,
                 target_webspace_id=trial_webspace,
-                target_space_kind="development",
+                target_space_kind="workspace",
                 target_zone=str(scope.get("zone") or "").strip() or None,
                 target_subnet_id=str(scope.get("subnet_id") or "").strip() or None,
                 idempotency_key=idempotency_key,
@@ -181,7 +182,7 @@ def prepare_trial(
                 change_ids=change_ids,
                 validation_evidence=validation_evidence,
                 target_webspace_id=trial_webspace,
-                target_space_kind="development",
+                target_space_kind="workspace",
                 target_zone=str(scope.get("zone") or "").strip() or None,
                 target_subnet_id=str(scope.get("subnet_id") or "").strip() or None,
                 idempotency_key=idempotency_key,
@@ -251,6 +252,12 @@ def prepare_trial(
     )
     completed_workflow = _mapping(completed.get("workflow"))
     activation = _mapping(result.get("trial_activation"))
+    if object_type == "scenario" and activation:
+        from adaos.sdk.builder.applications import place_local_trial
+
+        admitted = place_local_trial(candidate_id, webspace_id=trial_webspace, actor_ref=actor)
+        activation = admitted["trial_activation"]
+        result = dict(result) | admitted
     activation_target = _mapping(activation.get("target"))
     if object_type == "scenario" and activation:
         placed = workflow.record_project_placement(
@@ -268,7 +275,7 @@ def prepare_trial(
                     "zone": activation_target.get("zone"),
                     "subnet_id": activation_target.get("subnet_id"),
                     "webspace_id": activation_target.get("webspace_id") or trial_webspace,
-                    "space_kind": activation_target.get("space_kind") or "development",
+                    "space_kind": activation_target.get("space_kind") or "workspace",
                 },
                 "scenario_id": activation_target.get("scenario_id") or object_id,
                 "data_mode": activation.get("data_mode") or "empty",

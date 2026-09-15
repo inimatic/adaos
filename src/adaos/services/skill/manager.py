@@ -2551,6 +2551,9 @@ class SkillManager:
         target_slot_meta["lifecycle"] = dict(lifecycle)
         env.write_version_metadata(target_version, metadata)
         self._prune_runtime_history(env=env, current_version=target_version, previous_version=previous_active_version)
+        if getattr(self.ctx, "authority_state_dir", None) is not None:
+            # A candidate-local runtime is not an installed node capability.
+            return target_slot
         try:
             install_skill_in_capacity(name, target_version, active=True)
             try:

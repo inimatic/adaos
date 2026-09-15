@@ -8,7 +8,19 @@ from typing import Any, Mapping
 
 
 _LOCK = threading.Lock()
-_RUNTIME_DECLARATIONS: dict[str, dict[str, Any]] = {}
+_RUNTIME_DECLARATIONS: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def _runtime_scope() -> str:
+    from adaos.services.agent_context import get_ctx
+
+    try:
+        ctx = get_ctx()
+        if getattr(ctx, "authority_state_dir", None) is not None:
+            return str(Path(ctx.paths.state_dir()).resolve())
+    except RuntimeError:
+        pass
+    return ""
 
 
 def _append_receiver(patterns: list[str], value: Any) -> None:
@@ -103,7 +115,7 @@ def load_runtime_skill_declarations(
         "loaded_at": time.time(),
     }
     with _LOCK:
-        _RUNTIME_DECLARATIONS[name] = record
+        _RUNTIME_DECLARATIONS[(_runtime_scope(), name)] = record
     return dict(record)
 
 
@@ -112,7 +124,7 @@ def runtime_stream_receiver_patterns(skill_name: str) -> tuple[str, ...] | None:
 
     name = str(skill_name or "").strip()
     with _LOCK:
-        record = _RUNTIME_DECLARATIONS.get(name)
+        record = _RUNTIME_DECLARATIONS.get((_runtime_scope(), name))
         if record is None:
             return None
         return tuple(record.get("receiver_patterns") or ())
@@ -122,18 +134,22 @@ def runtime_skill_declarations_snapshot(skill_name: str | None = None) -> dict[s
     token = str(skill_name or "").strip()
     with _LOCK:
         if token:
-            record = _RUNTIME_DECLARATIONS.get(token)
+            record = _RUNTIME_DECLARATIONS.get((_runtime_scope(), token))
             return dict(record) if record is not None else {}
-        return {name: dict(record) for name, record in _RUNTIME_DECLARATIONS.items()}
+        scope = _runtime_scope()
+        return {name: dict(record) for (root, name), record in _RUNTIME_DECLARATIONS.items() if root == scope}
 
 
 def clear_runtime_skill_declarations(skill_name: str | None = None) -> None:
     token = str(skill_name or "").strip()
     with _LOCK:
         if token:
-            _RUNTIME_DECLARATIONS.pop(token, None)
+            _RUNTIME_DECLARATIONS.pop((_runtime_scope(), token), None)
         else:
-            _RUNTIME_DECLARATIONS.clear()
+            scope = _runtime_scope()
+            for key in list(_RUNTIME_DECLARATIONS):
+                if key[0] == scope:
+                    _RUNTIME_DECLARATIONS.pop(key)
 
 
 __all__ = [

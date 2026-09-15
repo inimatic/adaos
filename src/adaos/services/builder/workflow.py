@@ -2417,11 +2417,8 @@ class BuilderWorkflowService:
             and delivery_status == "accepted",
             "can_preview_prototype": object_type in {"project", "scenario"},
             "can_preview_automation": object_type == "scenario" and automation_previewable,
-            "can_preview_trial": object_type == "scenario"
-            and delivery_status in {"trial", "accepted", "published"}
-            and bool(str(_mapping(workflow.get("delivery")).get("candidate_id") or "").strip()),
-            "can_preview_publication": object_type == "scenario"
-            and str(_mapping(workflow.get("publication")).get("status") or "") == "published",
+            "can_preview_trial": False,
+            "can_preview_publication": False,
             "can_plan_change_set": mutable
             and (not change or change_set_status in _CHANGE_SET_TERMINAL_STATES),
             "can_update_change_set": mutable
@@ -3043,15 +3040,12 @@ class BuilderWorkflowService:
         subnet_id = str(target.get("subnet_id") or runtime_scope.get("subnet_id") or "").strip()
         if not zone or not subnet_id:
             raise BuilderWorkflowError("ProjectPlacement navigation requires zone and subnet identity")
-        result_ref = _mapping(placement.get("result_ref"))
         destination = navigation.webspace_destination(
             zone=zone,
             subnet_id=subnet_id,
             webspace_id=str(target.get("webspace_id") or ""),
-            space_kind=str(target.get("space_kind") or ("trial" if kind == "trial" else "workspace")),
+            space_kind="workspace",
             expected_scenario_id=str(placement.get("scenario_id") or object_id).strip() or None,
-            expected_revision=str(result_ref.get("version") or "").strip() or None,
-            preview_stage="publication" if kind == "stable" else "trial",
         )
         return {
             "schema": "adaos.builder.placement_navigation.v1",

@@ -23,6 +23,9 @@ from adaos.apps.api import tool_bridge as tool_bridge_module
 
 @pytest.fixture(autouse=True)
 def _reset_tool_bridge_runtime_guards(monkeypatch) -> None:
+    from adaos.services.applications import runtime_selection
+
+    monkeypatch.setattr(runtime_selection, "selected_trial", lambda *args: None)
     monkeypatch.setattr(tool_bridge_module, "_existing_trial_preview_target", lambda *args: None)
     if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LAST_SYNC_AT"):
         tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
@@ -434,7 +437,7 @@ def test_tool_idempotency_separates_verified_callers_even_with_spoofed_argument_
     from adaos.services.policy.caller import current_caller
 
     calls = []
-    async def execute(*_args):
+    async def execute(*_args, **_kwargs):
         caller = current_caller()
         calls.append(caller.ref())
         if caller.kind == "session":
@@ -468,7 +471,7 @@ def test_tool_idempotency_does_not_coalesce_concurrent_distinct_callers(monkeypa
     async def check():
         entered = []
         both_entered = asyncio.Event()
-        async def execute(*_args):
+        async def execute(*_args, **_kwargs):
             identity = current_caller().ref()
             entered.append(identity)
             if len(entered) == 2:

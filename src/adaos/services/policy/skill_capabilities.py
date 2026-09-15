@@ -34,7 +34,8 @@ def _manifest_path(current_skill: Any) -> Path:
 
 
 def _profile_path(ctx: Any) -> Path:
-    return (Path(ctx.paths.state_dir()).resolve() / "capabilities" / "skill_grants.json").resolve()
+    authority = getattr(ctx, "authority_state_dir", None)
+    return (Path(authority or ctx.paths.state_dir()).resolve() / "capabilities" / "skill_grants.json").resolve()
 
 
 def _validate_profile(value: Any) -> Mapping[str, Any]:

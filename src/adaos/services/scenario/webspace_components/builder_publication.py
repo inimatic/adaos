@@ -484,6 +484,8 @@ class WebspaceBuilderPublicationService:
         if not requested_scenario:
             raise ValueError("scenario_id is required")
         preview_stage_token = str(preview_stage or "").strip().lower()
+        if preview_stage_token in {"trial", "publication"}:
+            raise ValueError("Preview is DEV-only; use production placement navigation")
 
         source_webspace_id = str(
             (event_payload or {}).get("source_webspace_id") or ""

@@ -23,6 +23,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resume", type=Path, help="Verify retained records after an independently performed restart")
     parser.add_argument("--browser", action="store_true", help="Run independent desktop/mobile interactions")
+    parser.add_argument("--trial", type=Path, help="Exact admitted local Trial receipt")
     args = parser.parse_args()
     load_dotenv()
     root = Path.cwd()
@@ -41,6 +42,15 @@ def main():
     webui = root / f".adaos/dev/sn_6acf0c01/scenarios/{identifier}/webui.json"
     source_digest = hashlib.sha256(webui.read_bytes()).hexdigest()
     hub = "http://127.0.0.1:8778"
+    webspace = "desktop-dev-dev"
+    trial = None
+    dev_database = root / f".adaos/dev/sn_6acf0c01/skills/.runtime/{identifier}_skill/v0.1/data/reading_list.sqlite3"
+    if args.trial:
+        trial = json.loads(args.trial.read_text(encoding="utf-8"))
+        assert trial["passed"] and trial["builder_placement"]["scenario_id"] == identifier
+        assert trial["builder_placement"]["target"]["space_kind"] == "workspace"
+        webspace = trial["builder_placement"]["target"]["webspace_id"]
+        dev_before = hashlib.sha256(dev_database.read_bytes()).hexdigest()
     if args.browser:
         if args.resume:
             parser.error("Browser review and restart verification are separate phases")
@@ -48,21 +58,40 @@ def main():
             "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub),
             "ADAOS_E2E_SCENARIO_ID": identifier, "ADAOS_E2E_TASK_ID": task,
             "ADAOS_E2E_SOURCE_SHA256": source_digest, "ADAOS_E2E_OUTPUT": str(output)}
+        environment.update(ADAOS_E2E_WEBSPACE=webspace, ADAOS_E2E_TRIAL="1" if trial else "0")
+        if trial:
+            environment["ADAOS_E2E_RELEASE_DIGEST"] = trial["placement"]["runtime_selection"]["release_digest"]
         script = Path(__file__).with_name("browser") / "workbench-test-automation.mjs"
-        raise SystemExit(subprocess.run(["node", str(script)], env=environment).returncode)
+        code = subprocess.run(["node", str(script)], env=environment).returncode
+        if trial and output.is_file():
+            browser_report = json.loads(output.read_text(encoding="utf-8"))
+            browser_report["dev_database_before"] = dev_before
+            browser_report["dev_database_after"] = hashlib.sha256(dev_database.read_bytes()).hexdigest()
+            browser_report["dev_unchanged"] = browser_report["dev_database_after"] == dev_before
+            browser_report["passed"] = bool(browser_report["passed"] and browser_report["dev_unchanged"])
+            _write_json(output, browser_report)
+            if not browser_report["passed"]:
+                code = 1
+        raise SystemExit(code)
     client = requests.Session()
     client.headers["X-AdaOS-Token"] = resolve_control_token(base_url=hub)
     report = {"scope": "Independent DEV-owner HTTP acceptance; no delegated-user or delivery claim",
               "scenario": identifier, "task": task, "source_sha256": source_digest,
               "checks": [], "calls": [], "records": [], "passed": False}
+    if trial:
+        report.update(scope="Independent local Trial-owner HTTP acceptance; not external distribution",
+                      trial=trial["placement"]["runtime_selection"], dev_database_before=dev_before)
 
     def call(tool, *, rejected=False, **values):
         started = perf_counter()
         response = client.post(hub + "/api/tools/call", json={"tool": identifier + "_skill:" + tool,
-            "arguments": {"webspace_id": "desktop-dev-dev", **values}}, timeout=30)
+            "arguments": {"webspace_id": webspace, **values}}, timeout=30)
         body = response.json()
         report["calls"].append({"tool": tool, "arguments": values, "status": response.status_code,
                                 "elapsed_ms": round((perf_counter() - started) * 1000, 2), "response": body})
+        if trial and response.ok:
+            assert response.headers.get("X-AdaOS-Runtime-Source") == "trial"
+            assert response.headers.get("X-AdaOS-Release-Digest") == report["trial"]["release_digest"]
         if rejected:
             assert response.status_code in (400, 422) or (response.ok and (body.get("ok") is False or body.get("result", {}).get("ok") is False)), body
             return body
@@ -98,7 +127,7 @@ def main():
             initial = call("list_books")["items"]
             check("fresh-runtime-has-no-prototype-seeds", initial == [])
             denied = requests.post(hub + "/api/tools/call", json={"tool": identifier + "_skill:create_book",
-                "arguments": {"webspace_id": "desktop-dev-dev", "values": {"title": "Must not create"}}}, timeout=30)
+                "arguments": {"webspace_id": webspace, "values": {"title": "Must not create"}}}, timeout=30)
             check("unauthenticated-ingress-denied", denied.status_code in (401, 403))
             marker = "E2E-HTTP-" + uuid4().hex[:8]
             report["marker"] = marker
@@ -138,6 +167,10 @@ def main():
     except Exception as exc:
         report["failure"] = {"type": type(exc).__name__, "message": str(exc)}
     finally:
+        if trial:
+            report["dev_database_after"] = hashlib.sha256(dev_database.read_bytes()).hexdigest()
+            report["dev_unchanged"] = report["dev_database_after"] == dev_before
+            report["passed"] = report["passed"] and report["dev_unchanged"]
         client.close()
         _write_json(output, report)
     raise SystemExit(0 if report["passed"] else 1)

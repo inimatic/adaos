@@ -142,6 +142,20 @@ class WebspaceResolutionService:
             or str(ui_map.get("current_scenario") or "web_desktop").strip()
             or "web_desktop"
         )
+        from adaos.services.applications.runtime_selection import selected_trial, trial_launcher_entries
+
+        trial = selected_trial(runtime.ctx, webspace_id, "scenario", scenario_id)
+        if trial is not None:
+            source = trial.verified_source(trial.component("scenario", scenario_id))
+            import json
+
+            scenario_content_override = json.loads((source / "webui.json").read_text(encoding="utf-8"))
+            skill_decls_override = runtime._collect_skill_decls_from_root(trial.root / "skills")
+            skill_decls_fingerprint_override = runtime._last_skill_decls_fingerprint
+            materialization_identity = dict(materialization_identity or {}) | {
+                "webspace_id": webspace_id, "scenario_id": scenario_id,
+                "revision": trial.candidate_id, "source_fingerprint": f"trial:{trial.release_digest}",
+            }
         scenarios_ui = operations.mapping_get(ui_map, "scenarios") or {}
         scenario_ui_entry = operations.read_node_scoped_scenario_entry(scenarios_ui, scenario_id)
         scenario_ui_application = operations.coerce_dict(scenario_ui_entry.get("application") or {})
@@ -190,7 +204,7 @@ class WebspaceResolutionService:
             scenario_app_ui, base_catalog, registry_entry = operations.extract_scenario_sections_from_content(
                 scenario_content_override
             )
-            scenario_source = "builder_preview_override"
+            scenario_source = "application_trial" if trial is not None else "builder_preview_override"
             legacy_fallback = False
         else:
             scenario_app_ui, base_catalog, registry_entry, scenario_source, legacy_fallback = operations.resolve_scenario_sections_in_doc(
@@ -203,6 +217,7 @@ class WebspaceResolutionService:
         if metadata:
             metadata = dict(metadata)
         metadata["scenario_source"] = scenario_source
+        metadata["trial_apps"] = trial_launcher_entries(runtime.ctx, webspace_id)
         metadata["legacy_scenario_fallback"] = legacy_fallback
         metadata["materialization"] = operations.scenario_materialization_contract(
             scenario_id,
@@ -322,6 +337,13 @@ class WebspaceResolutionService:
             scenario_dir = operations.scenarios_loader.scenario_root_for_space(scenario_id, scenario_space)
         except Exception:
             scenario_dir = None
+        if inputs.scenario_source == "application_trial":
+            from adaos.services.applications.runtime_selection import selected_trial
+
+            selected = selected_trial(runtime.ctx, inputs.webspace_id, "scenario", scenario_id)
+            if selected is None:
+                raise ValueError("Selected Trial disappeared before resource materialization")
+            scenario_dir = selected.verified_source(selected.component("scenario", scenario_id))
         for key, value in raw_scenario_resources.items():
             token = str(key or "").strip()
             if token:
@@ -516,6 +538,11 @@ class WebspaceResolutionService:
         ]
 
         extra_apps: List[Dict[str, Any]] = []
+        for trial_app in inputs.metadata.get("trial_apps", []):
+            extra_apps.append(operations.apply_node_display_to_entry(
+                operations.mark_entry(trial_app, source=f"scenario:{trial_app['scenario_id']}", dev=False),
+                local_display, node_id=operations.local_node_id()))
+            auto_app_ids.add(trial_app["id"])
         for sid, title in inputs.desktop_scenarios:
             if sid == scenario_id:
                 continue

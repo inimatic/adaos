@@ -48,6 +48,15 @@ def _pair_preview(target, source="preview-owner"):
     WebspaceRelationshipRegistry().ensure(source, purpose=BUILDER_PROJECT_PREVIEW, legacy_target_webspace_id=target)
 
 
+@pytest.fixture(autouse=True)
+def no_application_selection(monkeypatch):
+    from adaos.services.applications import runtime_selection
+
+    monkeypatch.setattr(runtime_selection, "selected_trial", lambda *args: None)
+    monkeypatch.setattr(runtime_selection, "trial_launcher_entries", lambda *args: [])
+    monkeypatch.setattr(runtime_selection, "selection_snapshot", lambda *args: [])
+
+
 def _clear_member_snapshot_task_state() -> None:
     state = webspace_runtime_module._RUNTIME.tasks  # noqa: SLF001
     state.clear_tasks(state.MEMBER_SNAPSHOT, cancel=True)
@@ -5529,152 +5538,17 @@ def test_builder_trial_preview_reads_exact_runtime_activation(monkeypatch, tmp_p
     }
 
 
-@pytest.mark.parametrize("rebuild_fails", [False, True])
-def test_builder_trial_apply_uses_candidate_preflight_and_exact_skill_snapshot(
-    monkeypatch,
-    tmp_path: Path,
-    rebuild_fails: bool,
-) -> None:
-    from adaos.services.builder.workbench import BuilderWorkbenchService
+@pytest.mark.parametrize("stage", ["trial", "publication"])
+def test_builder_preview_rejects_delivery_before_topology_or_materialization(monkeypatch, stage):
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Delivery must not enter Preview resolution")
 
-    webspace_id = "phase2-exact-trial-preview"
-    _pair_preview(webspace_id)
-    ensure_workspace(webspace_id)
-    set_workspace_manifest(
-        webspace_id,
-        display_name="DEV: Exact Trial",
-        kind="dev",
-        source_mode="dev",
-        home_scenario="recipes",
-    )
-    state_dir = tmp_path / "state"
-    workspace = tmp_path / "workspace"
-    installed_scenario = workspace / "scenarios" / "recipes"
-    installed_scenario.mkdir(parents=True)
-    trial_workspace = workspace.parent / "trials" / "candidate-1"
-    trial_scenario = trial_workspace / "scenarios" / "recipes"
-    trial_scenario.mkdir(parents=True)
-    (trial_scenario / "scenario.yaml").write_text(
-        "id: recipes\nversion: 0.2.0\nui:\n  manifest: webui.json\n",
-        encoding="utf-8",
-    )
-    (trial_scenario / "webui.json").write_text(
-        json.dumps(
-            {
-                "schema": "adaos.webui.v1",
-                "ui": {
-                    "application": {
-                        "desktop": {"pageSchema": {"title": "Exact candidate"}}
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    (trial_workspace / "skills" / "candidate_skill").mkdir(parents=True)
-    records = state_dir / "artifact_pipeline" / "trial-activations"
-    records.mkdir(parents=True)
-    release_digest = "sha256:" + "a" * 64
-    (records / "candidate-1.json").write_text(
-        json.dumps(
-            {
-                "schema": "adaos.trial.activation.v1",
-                "status": "active",
-                "candidate_ref": {
-                    "candidate_id": "candidate-1",
-                    "release_digest": release_digest,
-                },
-                "release_ref": {"version": "0.2.0", "digest": release_digest},
-                "target": {"scenario_id": "recipes", "webspace_id": webspace_id},
-                "runtime_binding": {
-                    "kind": "isolated_trial_workspace",
-                    "authority": "immutable_candidate",
-                    "path": str(trial_workspace),
-                },
-                "updated_at": "2026-08-06T00:00:00+00:00",
-            }
-        ),
-        encoding="utf-8",
-    )
-    rebuild_calls: list[dict[str, object]] = []
-
-    async def _fake_rebuild(*args, **kwargs):  # noqa: ARG001
-        target = BuilderWorkbenchService.from_context().existing_preview_target(webspace_id)
-        assert target["stage"] == "trial" and target["candidate_id"] == "candidate-1"
-        assert target["release_digest"] == release_digest
-        rebuild_calls.append(dict(kwargs))
-        if rebuild_fails:
-            raise RuntimeError("rebuild interrupted")
-        return {"ok": True, "accepted": True}
-
-    def _exact_skills(self, skills_root: Path):
-        assert skills_root == trial_workspace / "skills"
-        self._last_skill_decls_fingerprint = "sha256:trial-skills"
-        return [
-            {
-                "skill": "candidate_skill",
-                "source_authority": "immutable_trial_workspace",
-            }
-        ]
-
-    monkeypatch.setattr("adaos.services.runtime_paths.current_state_dir", lambda: state_dir)
-    monkeypatch.setattr(
-        webspace_runtime_module.scenarios_loader,
-        "scenario_root_for_space",
-        lambda scenario_id, space: installed_scenario,
-    )
-    monkeypatch.setattr(
-        webspace_runtime_module,
-        "_preflight_validated_scenario",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("Trial preview must not preflight DEV source")
-        ),
-    )
-    monkeypatch.setattr(
-        webspace_runtime_module.WebspaceScenarioRuntime,
-        "_collect_skill_decls_from_root",
-        _exact_skills,
-    )
-    monkeypatch.setattr(
-        webspace_runtime_module,
-        "rebuild_webspace_from_sources",
-        _fake_rebuild,
-    )
-
-    if rebuild_fails:
-        with pytest.raises(RuntimeError, match="rebuild interrupted"):
-            asyncio.run(webspace_runtime_module.apply_builder_revision_materialization(
-                webspace_id, scenario_id="recipes", revision="0.2.0", preview_stage="trial",
-            ))
-        assert BuilderWorkbenchService.from_context().existing_preview_target(webspace_id)["candidate_id"] == "candidate-1"
-        return
-
-    result = asyncio.run(
-        webspace_runtime_module.apply_builder_revision_materialization(
-            webspace_id,
-            scenario_id="recipes",
-            revision="0.2.0",
-            preview_stage="trial",
-            source_fingerprint="dev:must-not-be-used",
-        )
-    )
-
-    assert result["accepted"] is True
-    assert result["preview_target"]["candidate_id"] == "candidate-1"
-    assert result["validation"]["source"] == "immutable_trial_workspace"
-    assert result["validation"]["candidate_id"] == "candidate-1"
-    assert rebuild_calls[0]["scenario_resolution"] == "builder_trial_candidate"
-    assert rebuild_calls[0]["skill_source_mode"] is None
-    assert rebuild_calls[0]["skill_decls_snapshot"] == [
-        {
-            "skill": "candidate_skill",
-            "source_authority": "immutable_trial_workspace",
-        }
-    ]
-    assert rebuild_calls[0]["skill_decls_fingerprint"] == "sha256:trial-skills"
-    assert rebuild_calls[0]["materialization_identity"]["source_fingerprint"] == (
-        f"trial_sha256_{'a' * 64}"
-    )
+    monkeypatch.setattr(webspace_runtime_module, "_preflight_validated_scenario", unexpected)
+    monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", unexpected)
+    with pytest.raises(ValueError, match="DEV-only"):
+        asyncio.run(webspace_runtime_module.apply_builder_revision_materialization(
+            "missing-preview", scenario_id="example", preview_stage=stage,
+        ))
 
 
 def test_builder_publication_preview_reads_verified_installed_package_when_slot_is_inactive(
@@ -6374,6 +6248,34 @@ def test_phase5_resolver_cache_reuses_same_inputs_without_leaking_mutations() ->
     assert second_debug["legacy_fallback"] is False
     assert set(second_debug["cache_keys"].keys()) >= {"scenario", "skills", "overlay"}
     assert [item["id"] for item in second.catalog["apps"]] == ["cached-app"]
+
+
+def test_trial_catalog_survives_resolution_cache_and_stays_in_selected_webspace():
+    from dataclasses import replace
+
+    webspace_runtime_module._RUNTIME.cache.clear_resolved_webspaces()
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    inputs = webspace_runtime_module.WebspaceResolverInputs(
+        webspace_id="production", scenario_id="web_desktop", source_mode="workspace",
+        scenario_application={"desktop": {"pageSchema": {"id": "desktop"}}},
+        metadata={"trial_apps": [{"id": "scenario:example", "scenario_id": "example",
+                                   "title": "Example", "release_stage": "beta"}]},
+    )
+    first = runtime.resolve_webspace(inputs)
+    assert runtime._last_resolver_debug["core_cache_bypass"] == "runtime_selection"
+    second = runtime.resolve_webspace(inputs)
+    assert runtime._last_resolver_debug["cache_hit"]
+    for resolved in (first, second):
+        assert any(row["id"] == "scenario:example" for row in resolved.catalog["apps"])
+        assert "scenario:example" in resolved.installed["apps"]
+    other = runtime.resolve_webspace(replace(inputs, webspace_id="other", metadata={}))
+    assert not any(row["id"] == "scenario:example" for row in other.catalog["apps"])
+    removed = runtime.resolve_webspace(replace(inputs, metadata={}))
+    assert "scenario:example" not in removed.installed["apps"]
+
+
+def test_selection_refresh_updates_live_room_without_reseed_policy():
+    assert webspace_runtime_module._publish_live_room_for_rebuild("runtime_selection_refresh")
 
 
 def test_resolver_reuses_scenario_core_across_webspaces_without_overlay_leakage() -> None:

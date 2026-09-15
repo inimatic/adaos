@@ -6180,6 +6180,20 @@ async def node_yjs_builder_materialize(
     return response
 
 
+@router.post("/yjs/webspaces/{webspace_id}/refresh", dependencies=[Depends(require_token)])
+async def node_yjs_refresh(webspace_id: str) -> dict[str, Any]:
+    """Reconcile derived runtime/catalog state without selecting a scenario or home."""
+    from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
+
+    target = _coerce_node_webspace_id(webspace_id)
+    if workspace_index.get_workspace(target) is None:
+        raise HTTPException(status_code=404, detail="webspace_not_found")
+    if str(load_config().role).lower() != "hub":
+        raise HTTPException(status_code=409, detail="hub_role_required")
+    return await rebuild_webspace_from_sources(target, action="runtime_selection_refresh",
+        source_of_truth="runtime_selection", reseed_from_scenario=False)
+
+
 @router.post("/yjs/webspaces/{webspace_id}/toggle-install", dependencies=[Depends(require_token)])
 async def node_yjs_toggle_install(webspace_id: str, payload: WebspaceToggleInstallRequest) -> dict[str, Any]:
     conf = load_config()

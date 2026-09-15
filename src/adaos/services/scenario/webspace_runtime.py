@@ -2678,6 +2678,7 @@ def _resolver_cache_keys(inputs: WebspaceResolverInputs) -> Dict[str, str]:
         "scenario_application": inputs.scenario_application,
         "scenario_catalog": inputs.scenario_catalog,
         "scenario_registry": inputs.scenario_registry,
+        "trial_apps": inputs.metadata.get("trial_apps", []),
     }
     skill_decls_fingerprint = str(getattr(inputs, "skill_decls_fingerprint", "") or "").strip()
     return {
@@ -3603,6 +3604,17 @@ def _load_scenario_switch_content(scenario_id: str, *, space: str) -> Dict[str, 
     return {}
 
 
+def _scenario_exists_in_webspace(scenario_id: str, *, space: str, webspace_id: str | None = None) -> bool:
+    if webspace_id:
+        from adaos.services.applications.runtime_selection import selected_trial
+
+        selected = selected_trial(get_ctx(), webspace_id, "scenario", scenario_id)
+        if selected is not None:
+            selected.verified_source(selected.component("scenario", scenario_id))
+            return True
+    return _scenario_exists_for_switch(scenario_id, space=space)
+
+
 def _scenario_exists_for_switch(scenario_id: str, *, space: str) -> bool:
     if _built_in_scenario_content(scenario_id):
         return True
@@ -3612,11 +3624,11 @@ def _scenario_exists_for_switch(scenario_id: str, *, space: str) -> bool:
         return False
 
 
-def _scenario_exists_for_source_mode(scenario_id: str | None, *, source_mode: str) -> bool | None:
+def _scenario_exists_for_source_mode(scenario_id: str | None, *, source_mode: str, webspace_id: str | None = None) -> bool | None:
     token = str(scenario_id or "").strip()
     if not token:
         return None
-    return _scenario_exists_for_switch(token, space=_scenario_loader_space(source_mode))
+    return _scenario_exists_in_webspace(token, space=_scenario_loader_space(source_mode), webspace_id=webspace_id)
 
 
 def _build_webspace_validation(
@@ -3625,10 +3637,11 @@ def _build_webspace_validation(
     stored_home_scenario: str | None,
     effective_home_scenario: str,
     current_scenario: str | None,
+    webspace_id: str | None = None,
 ) -> dict[str, Any]:
     stored_home_exists = _scenario_exists_for_source_mode(stored_home_scenario, source_mode=source_mode)
     effective_home_exists = bool(_scenario_exists_for_source_mode(effective_home_scenario, source_mode=source_mode))
-    current_exists = _scenario_exists_for_source_mode(current_scenario, source_mode=source_mode)
+    current_exists = _scenario_exists_for_source_mode(current_scenario, source_mode=source_mode, webspace_id=webspace_id)
 
     degraded = False
     reason = None
@@ -3674,6 +3687,7 @@ def _with_webspace_validation(
             stored_home_scenario=stored_home_scenario,
             effective_home_scenario=effective_home_scenario,
             current_scenario=current_scenario,
+            webspace_id=payload.get("id"),
         )
     )
     return payload
@@ -3684,9 +3698,10 @@ def _preflight_validated_scenario(
     *,
     source_mode: str,
     resolution: str,
+    webspace_id: str | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     requested = str(scenario_id or "").strip() or None
-    requested_exists = _scenario_exists_for_source_mode(requested, source_mode=source_mode)
+    requested_exists = _scenario_exists_for_source_mode(requested, source_mode=source_mode, webspace_id=webspace_id)
     if requested and requested_exists:
         return requested, resolution, {
             "requested_scenario_id": requested,
@@ -3851,11 +3866,21 @@ def _scenario_switch_materialization_identity(
         source_mode=source_mode,
     )
     skill_fingerprint = _skill_sources_fingerprint_for_materialization(source_mode)
+    from adaos.services.applications.runtime_selection import selected_trial, selection_snapshot
+
+    ctx = get_ctx()
+    selections = selection_snapshot(ctx, target_webspace)
+    selected = selected_trial(ctx, target_webspace, "scenario", target_scenario)
+    if selected is not None:
+        source_fingerprint = f"trial:{selected.release_digest}"
+    if selections:
+        skill_fingerprint += f":selections:{_fingerprint_json_like(selections)}"
     return canonical_materialization_identity(
         webspace_id=target_webspace,
         scenario_id=target_scenario,
         source_fingerprint=source_fingerprint,
         policy_fingerprint=f"skills:{skill_fingerprint}" if skill_fingerprint else None,
+        revision=selected.candidate_id if selected is not None else None,
     )
 
 
@@ -3907,6 +3932,8 @@ def _publish_live_room_during_rebuild_enabled() -> bool:
 
 def _publish_live_room_for_rebuild(action: str) -> bool:
     action_token = str(action or "").strip().lower()
+    if action_token == "runtime_selection_refresh":
+        return True
     if action_token == "scenario_switch_rebuild":
         return False
     if action_token == "builder_revision_apply":
@@ -5281,7 +5308,7 @@ class WebspaceScenarioRuntime:
         # the same generated scenario do not repeat the expensive merge.
         shared_core_eligible = not any(
             bool(value) for value in _coerce_dict(inputs.live_state or {}).values()
-        )
+        ) and not inputs.metadata.get("trial_apps")
         if shared_core_eligible:
             core_inputs = replace(
                 inputs,
@@ -5302,7 +5329,7 @@ class WebspaceScenarioRuntime:
         else:
             resolved = self._resolve_webspace_uncached(inputs)
             resolver_debug["core_cache_hit"] = False
-            resolver_debug["core_cache_bypass"] = "live_state"
+            resolver_debug["core_cache_bypass"] = "runtime_selection" if inputs.metadata.get("trial_apps") else "live_state"
 
         _remember_resolved_outputs(resolver_fingerprint, resolved)
         resolver_debug["resolved_page"] = _debug_page_signature_from_application(resolved.application)
@@ -6002,6 +6029,7 @@ def _webspace_info_from_row(
         current_scenario = _workspace_manifest_current_scenario(row)
     validation = _build_webspace_validation(
         source_mode=row.effective_source_mode,
+        webspace_id=row.workspace_id,
         stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
         effective_home_scenario=row.effective_home_scenario,
         current_scenario=current_scenario,
@@ -6037,6 +6065,7 @@ def _describe_webspace_manifest_state_sync(
     current_scenario = _workspace_manifest_current_scenario(row)
     validation = _build_webspace_validation(
         source_mode=row.effective_source_mode,
+        webspace_id=row.workspace_id,
         stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
         effective_home_scenario=row.effective_home_scenario,
         current_scenario=current_scenario,
@@ -7565,6 +7594,7 @@ async def reload_webspace_from_scenario(
         scenario_id,
         source_mode=state.source_mode,
         resolution=scenario_resolution,
+        webspace_id=webspace_id,
     )
     if not scenario_id:
         return {
@@ -7791,7 +7821,7 @@ async def restore_webspace_from_snapshot(webspace_id: str) -> dict[str, Any]:
     )
 
 
-def _scenario_switch_operations() -> ScenarioSwitchOperations:
+def _scenario_switch_operations(webspace_id: str | None = None) -> ScenarioSwitchOperations:
     return ScenarioSwitchOperations(
         task_state=_RUNTIME.tasks,
         log=_log,
@@ -7805,7 +7835,8 @@ def _scenario_switch_operations() -> ScenarioSwitchOperations:
         copy_timing_map=_copy_timing_map,
         derive_phase_timings=_derive_phase_timings,
         finalize_timing_map=_finalize_timing_map,
-        scenario_exists_for_switch=_scenario_exists_for_switch,
+        scenario_exists_for_switch=lambda scenario_id, *, space: _scenario_exists_in_webspace(
+            scenario_id, space=space, webspace_id=webspace_id),
         set_rebuild_status=_set_webspace_rebuild_status,
         set_rebuild_status_if_current=_set_webspace_rebuild_status_if_current,
         sync_webspace_listing_target=_sync_webspace_listing_target,
@@ -7829,7 +7860,7 @@ async def switch_webspace_scenario(
     request_client: str | None = None,
 ) -> dict[str, Any]:
     return await _RUNTIME.scenario_switching.switch(
-        _scenario_switch_operations(),
+        _scenario_switch_operations(webspace_id),
         webspace_id,
         scenario_id,
         set_home=set_home,

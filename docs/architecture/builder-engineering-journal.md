@@ -834,3 +834,43 @@ installed channel selection to Applications thereafter. Preview is DEV-only.
 Reading List's retained immutable Candidate is the repair target; its source
 must not be regenerated, manually patched or promoted to stable to make a beta
 launcher appear. Native isolated execution and desktop qualification remain open.
+
+The retained Candidate now executes through the native skill engine in its own
+Trial runtime/data context. Package/lock/release verification precedes execution;
+original policy and caller authority are retained, declarations are scoped, and
+Trial activation does not publish Workspace-installed capabilities. Native
+`empty` data is admitted; other data modes and remote forwarding fail closed.
+This is a bounded local executor, not general sandbox or consumer qualification.
+
+The desktop defect had two additional causes: shared-core materialization
+dropped selection-specific catalog metadata, and the skill's Project publication
+path still assigned a Preview target. Builder's native `publish_project` command
+now reconciles the existing production host and live catalog even when replaying
+an already prepared Trial. `trial-builder-delivery-03` proves the same Candidate
+is reused. `trial-browser-03` passes desktop/mobile CRUD; `trial-http-02` passes
+15 checks and `trial-restart-01` proves persistence after a real API restart.
+The DEV database digest remains `60315dd6423639f09f3c65e5940147701c3afda79d51cc5f8ddd446775902487`.
+
+`trial-builder-navigation-05` passes opening the exact beta from Process on both
+widths with Trial execution headers. Placement links no longer misuse Preview
+stage or UI revision fields. `dev-preview-restored-01` restores the old Preview
+to Automation; it is not a second Trial host. Reading List source and the three
+Workspace Builder baseline files remain unchanged. DEV Builder checkpoint
+`0.2.138` retains source snapshot `sha256:61028e1cf7f01087782cc035bc2199622929f5febe49f1b98eb303022237c6a9`.
+The combined Core run passes 388 tests (`trial-core-tests-01.xml`); the SDK-only
+Builder skill suite passes 104 tests.
+
+Failed attempts remain evidence, not rewritten successes: runtime-02 failed on
+an evidence-shape mismatch (its initial report had an incorrect passed flag),
+browser-01/02 caught the missing catalog entry, delivery-01 exposed a wrong
+test assumption about catalog response fields, and navigation-03/04 exposed
+premature browser assertions, stale Preview link parameters, cold-start response
+latency and an ID search against displayed table columns. The successful stand
+waits for observed tool responses and selects the visible application title.
+No new model generation, stable promotion or external distribution was used.
+
+Final `trial-browser-04` passes both widths with mutation response release
+identity assertions, return-home/reopen interactions, and an unchanged DEV
+database digest. The last screen is the production desktop with the Reading
+List BETA launcher. `trial-builder-delivery-03` is the final native Builder
+command replay after the last Core restart. Source remained unchanged throughout.

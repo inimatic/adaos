@@ -142,6 +142,130 @@ def publisher_context() -> dict[str, Any]:
     }
 
 
+def production_webspace_id(webspace_id: str) -> str:
+    from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
+
+    return WebspaceRelationshipRegistry.from_context().resolve_production_host(webspace_id)
+
+
+def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) -> dict[str, Any]:
+    """Expose an existing local Candidate before first Workspace publication."""
+    import json
+
+    from adaos.domain.application import ApplicationRelease
+    from adaos.domain.artifact_release import ProjectRelease
+    from adaos.sdk.developer import projects
+    from adaos.services.applications.trial_runtime import NativeTrialRuntime
+    from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+    from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
+
+    if not actor_ref.strip():
+        raise ValueError("Trial placement requires an actor")
+    host = WebspaceRelationshipRegistry.from_context().resolve_production_host(webspace_id)
+    if host != webspace_id:
+        raise ValueError("Trial placement must target the production Webspace, not Preview")
+    publisher = publisher_context()
+    candidate = projects.get_candidate(candidate_id)["candidate"]
+    runtime = NativeTrialRuntime.resolve(_ctx(), candidate_id, candidate["release_digest"])
+    release_path = runtime.root / ".adaos/releases" / f"{runtime.release_digest.split(':')[1]}.json"
+    release = ProjectRelease.from_mapping(json.loads(release_path.read_text(encoding="utf-8"))).seal()
+    if release.release_digest != runtime.release_digest:
+        raise ValueError("Candidate release digest mismatch")
+    service = _application_service()
+    project_id = release.project_id
+    if (Path(_ctx().paths.workspace_dir()) / "projects" / project_id / "project.yaml").is_file():
+        raise ValueError("Installed Application channel selection belongs to Applications")
+    try:
+        application = service.store.get_application(project_id)
+    except FileNotFoundError:
+        # Adopt existing composition metadata; this never creates application source.
+        from adaos.sdk.developer import compositions
+
+        project = compositions.get(project_id)
+        catalog = project.get("catalog") or {}
+        create_application(project_id, title=str(catalog.get("title") or project_id),
+                                    summary=str(catalog.get("description") or ""), visibility="private",
+                                    actor_ref=actor_ref, subnet_ref=publisher["publisher_ref"],
+                                    capability="applications.develop", expected_revision=0,
+                                    idempotency_key=f"trial-adopt:{project_id}")
+        application = service.store.get_application(project_id)
+    _admit_builder_mutation("create_trial", project_id, subnet_ref=publisher["publisher_ref"],
+                            capability="applications.develop")
+    try:
+        selection = service.store.get_runtime_selection(webspace_id, application.application_id)
+    except FileNotFoundError:
+        selection = None
+    if selection and selection.source != "local_trial":
+        raise ValueError("Builder must not overwrite installed channel selection")
+    envelope = ApplicationRelease(application_id=application.application_id,
+                                  publisher_ref=application.publisher_ref, project_release=release,
+                                  accepted_candidate_id=candidate_id,
+                                  acceptance_evidence=tuple(candidate["validation_evidence"]),
+                                  provenance_refs=(release.release_digest,), lifecycle="trial")
+    service.register_release(envelope)
+    try:
+        for package in runtime.packages:
+            if package.kind == "skill":
+                runtime.ready_manager(package.artifact_id)
+    except (ValueError, FileNotFoundError, RuntimeError, KeyError):
+        runtime.manager(prepare=True)
+    for package in runtime.packages:
+        if package.kind == "skill":
+            runtime.ready_manager(package.artifact_id)
+    if not (selection and selection.runtime_root_ref == f"trial:{candidate_id}"
+            and selection.release_digest == release.release_digest):
+        selection = service.select_runtime(webspace_id=webspace_id, application_id=application.application_id,
+            source="local_trial", release_digest=release.release_digest, runtime_root_ref=f"trial:{candidate_id}",
+            expected_revision=selection.revision if selection else 0, actor_ref=actor_ref,
+            subnet_ref=publisher["publisher_ref"], capability="applications.apply")
+    activations = TrialActivationStore(_state_dir() / "artifact_pipeline/trial-activations")
+    activation = activations.load(candidate_id)
+    target = dict(activation["target"]) | {"webspace_id": webspace_id, "space_kind": "workspace"}
+    activation = activations.update(candidate_id, target=target)
+    refresh = refresh_placement(webspace_id)
+    return {"ok": True, "runtime_selection": selection.to_dict(), "trial_activation": activation,
+            "runtime_refresh": refresh}
+
+
+def refresh_placement(webspace_id: str) -> dict[str, Any]:
+    """Refresh derived room state through its owner, without changing navigation."""
+    import requests
+
+    from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
+
+    base = resolve_control_base_url(prefer_local=True)
+    with requests.Session() as session:
+        session.trust_env = False
+        response = session.post(f"{base.rstrip('/')}/api/node/yjs/webspaces/{webspace_id}/refresh",
+            headers={"X-AdaOS-Token": resolve_control_token(base_url=base)}, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        if not result.get("ok"):
+            raise ValueError("Trial selection retained, but owner runtime refresh failed")
+        return result
+
+
+def open_trial_placement(candidate_id: str, *, webspace_id: str, scenario_id: str) -> dict[str, Any]:
+    """Ask the running room owner to open an already admitted production Trial."""
+    import requests
+
+    from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
+    from adaos.services.applications.runtime_selection import selected_trial
+
+    runtime = selected_trial(_ctx(), webspace_id, "scenario", scenario_id)
+    if runtime is None or runtime.candidate_id != candidate_id:
+        raise ValueError("Trial placement is not the selected Application release")
+    base = resolve_control_base_url(prefer_local=True)
+    with requests.Session() as session:
+        session.trust_env = False
+        response = session.post(f"{base.rstrip('/')}/api/node/yjs/webspaces/{webspace_id}/scenario",
+            headers={"X-AdaOS-Token": resolve_control_token(base_url=base)},
+            json={"scenario_id": scenario_id, "set_home": False,
+                  "request_source": "builder.trial.placement", "wait_for_rebuild": False}, timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+
 def _create_application_effect(
     application_id: str,
     *,
@@ -837,6 +961,10 @@ def list_development_operations(application_id: str | None = None) -> list[dict[
 
 
 __all__ = [
+    "production_webspace_id",
+    "place_local_trial",
+    "refresh_placement",
+    "open_trial_placement",
     "create_application",
     "create_trial",
     "decide_trial",

@@ -172,6 +172,25 @@ class WebspaceRelationshipRegistry:
             return current
         return incoming.source_webspace_id
 
+    def resolve_production_host(self, webspace_id: Any) -> str:
+        """Walk registered ownership only; never infer topology from an ID suffix."""
+        from adaos.services.workspaces import index
+
+        current = _workspace_id(webspace_id)
+        seen = set()
+        while current not in seen:
+            seen.add(current)
+            row = index.get_workspace(current)
+            if row is None:
+                raise ValueError("Trial placement requires an existing production Webspace")
+            incoming = self.get_incoming(current)
+            if incoming is None:
+                if row.is_dev:
+                    raise ValueError("development Webspace has no registered production owner")
+                return current
+            current = incoming.source_webspace_id
+        raise ValueError("cyclic Webspace ownership")
+
     def claim_builder_self_host(self, webspace_id: Any, *, scenario_id: Any) -> str:
         """Promote the current Builder preview into the single allowed host level.
 

@@ -367,6 +367,25 @@ not by inventing a Webspace or stripping suffixes from its ID. An explicit targe
 must be an existing production Webspace. A missing, detached or inadmissible Trial
 returns an unavailable-runtime error; it must never fall back to DEV or stable.
 
+Placement reconciliation is part of the Builder command, including replay of
+an already prepared Candidate. It must reconcile the running Webspace owner's
+catalog and live room, not only persist a placement record. Failure to refresh
+must remain observable and retryable without rebuilding the Candidate. Shared
+scenario materialization caches must not discard or share Webspace-specific
+RuntimeSelections. Production placement links carry no Preview stage or UI
+revision inferred from the Application release version.
+
+The local native executor uses the existing skill engine with Candidate-local
+runtime slots, data, state and declarations. Original node policy and caller
+grants remain authoritative; activation must not advertise these skills as
+Workspace-installed capabilities. Package, release and WorkspaceLock identities
+are checked before execution, and execution responses identify the selected
+release/package. An unavailable Trial must not break other desktop launchers.
+The currently qualified local data mode is `empty`; other modes, delegated
+consumer execution and remote-node forwarding require their own admission and
+acceptance. This is not an additional OS sandbox or a replacement for deferred
+Root Guard hardening.
+
 ### TrialAccessGrant
 
 A Trial access link is a revocable capability, not a discoverable beta listing.

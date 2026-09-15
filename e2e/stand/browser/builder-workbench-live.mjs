@@ -1,4 +1,5 @@
 import { chromium } from 'playwright'
+import { expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -85,7 +86,7 @@ try {
       if (process.env.ADAOS_E2E_SELECT_CREATED) {
         const selected = JSON.parse(process.env.ADAOS_E2E_SELECT_CREATED)
         await command('applications').click()
-        await widget('project-picker-table').locator('input').first().fill(selected.id)
+        await widget('project-picker-table').locator('input').first().fill(selected.title)
         await widget('project-picker-table').getByText(selected.title, { exact: true }).click()
         await waitForProjection(selected.id)
         await widget('design-workbench-header').getByText(selected.title, { exact: true }).first().waitFor()
@@ -111,10 +112,12 @@ try {
         const trialCalls = []
         context.on('response', async response => {
           if (!response.request().postData()?.includes(`${trial.scenario}_skill:`)) return
-          trialCalls.push({ status: response.status(), response: await response.json().catch(() => null) })
+          trialCalls.push({ status: response.status(), headers: {
+            source: response.headers()['x-adaos-runtime-source'],
+            release: response.headers()['x-adaos-release-digest'] }, response: await response.json().catch(() => null) })
         })
         await command('specimens').click()
-        const node = widget('process-tree').locator('.tree-widget__node').filter({ hasText: 'Beta in desktop-dev-dev' })
+        const node = widget('process-tree').locator('.tree-widget__node').filter({ hasText: `Beta in ${trial.placement.target.webspace_id}` })
         await node.waitFor({ timeout: 30000 })
         const response = page.waitForResponse(response => response.request().postData()?.includes('builder_sdk_control_skill:get_project_placement_navigation'), { timeout: 90000 })
         void response.catch(() => {})
@@ -126,14 +129,23 @@ try {
         if (!value.ok || value.result?.placement?.result_ref?.id !== trial.delivery.candidate_id) throw new Error('Trial navigation identity mismatch')
         const preview = await opened
         await preview.locator('[data-webui-widget-id="books_list"]').waitFor({ timeout: 60000 })
-        await preview.getByText(/The selected Trial runtime is not available|Среда исполнения выбранного Trial недоступна/).first().waitFor({ timeout: 60000 })
-        if (!trialCalls.length || trialCalls.some(call => call.status !== 409 || call.response?.detail?.error !== 'trial_runtime_unavailable')) {
-          throw new Error('Trial must deny unavailable execution instead of reading DEV')
+        await expect.poll(() => trialCalls.length, { timeout: 60000 }).toBeGreaterThan(0)
+        await fs.writeFile(path.join(output, `${profile}-trial-execution.json`), JSON.stringify({
+          url: preview.url(), calls: trialCalls }, null, 2) + '\n', 'utf8')
+        await preview.screenshot({ path: path.join(output, `${profile}-trial.png`), fullPage: true, animations: 'disabled' })
+        await preview.waitForFunction(() => {
+          const list = document.querySelector('[data-webui-widget-id="books_list"]')
+          return list && !/Loading|Загрузка/.test(list.textContent)
+        }, null, { timeout: 60000 })
+        if (!trialCalls.length || trialCalls.some(call => call.status !== 200 || call.response?.ok !== true
+          || call.headers.source !== 'trial' || call.headers.release !== trial.delivery.release_digest)) {
+          throw new Error('Trial must execute its exact package in production')
         }
         await fs.writeFile(path.join(output, `${profile}-trial-execution.json`), JSON.stringify(trialCalls, null, 2) + '\n', 'utf8')
         await preview.screenshot({ path: path.join(output, `${profile}-trial.png`), fullPage: true, animations: 'disabled' })
         report.checks.push({ profile, check: 'exact_trial_opened_from_process', passed: true, url: preview.url() })
-        report.checks.push({ profile, check: 'trial_execution_explicitly_unavailable_not_accepted', passed: true })
+        if (new URL(preview.url()).searchParams.get('webspace_id') !== trial.placement.target.webspace_id) throw new Error('Trial opened in wrong Webspace')
+        report.checks.push({ profile, check: 'exact_trial_execution_from_builder_placement', passed: true })
         await preview.close()
       }
       if (process.env.ADAOS_E2E_PREPARE_TRIAL) {

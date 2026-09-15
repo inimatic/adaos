@@ -8,8 +8,11 @@ const { ADAOS_E2E_HUB_URL: hub, ADAOS_E2E_HUB_TOKEN: token, ADAOS_E2E_SCENARIO_I
 assert.equal(process.env.ENV_TYPE, 'dev')
 assert.match(scenario, /^workbench_test_[a-z0-9_]+$/)
 assert.ok(task && source && hub && token && output)
+const webspace = process.env.ADAOS_E2E_WEBSPACE || 'desktop-dev-dev'
+const trial = process.env.ADAOS_E2E_TRIAL === '1'
 const report = { scope: 'Independent live Automation browser review, not Prototype or delivery', scenario, task,
   source_sha256: source, samples: [], passed: false }
+if (trial) report.scope = 'Independent local Trial desktop/browser review, not external distribution'
 const screenshots = output.replace(/\.json$/, '')
 await fs.mkdir(screenshots, { recursive: true })
 const browser = await chromium.launch({ headless: true })
@@ -18,15 +21,15 @@ try {
     const sample = { layout, viewport, checks: [], errors: [], calls: [], passed: false }
     report.samples.push(sample)
     const context = await browser.newContext({ viewport, locale: 'ru-RU', colorScheme: 'dark' })
-    await context.addInitScript(({ hub, token }) => {
+    await context.addInitScript(({ hub, token, webspace }) => {
       window.__ADAOS_DEBUG__ = true
       window.__ADAOS_BASE__ = hub
       window.__ADAOS_TOKEN__ = token
       for (const [key, value] of Object.entries({ adaos_device_id: 'workbench-automation-review', adaos_lang: 'ru',
-        adaos_webspace_id: 'desktop-dev-dev', adaos_hub_base: hub, adaos_local_hub_base: hub,
+        adaos_webspace_id: webspace, adaos_hub_base: hub, adaos_local_hub_base: hub,
         adaos_hub_token: token, adaos_try_local_hub: '1', adaos_local_subnet_id: 'sn_6acf0c01',
         adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo' })) localStorage.setItem(key, value)
-    }, { hub, token })
+    }, { hub, token, webspace })
     const page = await context.newPage()
     page.setDefaultTimeout(20000)
     page.on('pageerror', error => sample.errors.push(error.message))
@@ -58,13 +61,30 @@ try {
       const response = await pending
       const body = await response.json()
       assert.ok(response.ok() && body.ok !== false && body.result?.ok !== false, JSON.stringify(body))
+      if (trial) {
+        assert.equal(response.headers()['x-adaos-runtime-source'], 'trial')
+        assert.equal(response.headers()['x-adaos-release-digest'], process.env.ADAOS_E2E_RELEASE_DIGEST)
+      }
       return body.result || body
     }
     const mutations = () => sample.calls.filter(row => /create_book|update_book|delete_book/.test(row.body.tool || row.body.name || '')).length
     const marker = `E2E-BROWSER-${layout}-${Date.now()}`
     try {
-      await page.goto(`http://127.0.0.1:8100/?intent=webspace.open&zone=lo&subnet_id=sn_6acf0c01&webspace_id=desktop-dev-dev&space_kind=development&expected_scenario_id=${scenario}&try_local_hub=1`,
+      if (trial) {
+        const switched = await context.request.post(`${hub}/api/node/yjs/webspaces/${webspace}/scenario`, {
+          headers: { 'X-AdaOS-Token': token }, data: { scenario_id: 'web_desktop', set_home: false } })
+        assert.ok(switched.ok())
+      }
+      await page.goto(`http://127.0.0.1:8100/?intent=webspace.open&zone=lo&subnet_id=sn_6acf0c01&webspace_id=${webspace}&space_kind=${trial ? 'workspace' : 'development'}&expected_scenario_id=${trial ? 'web_desktop' : scenario}&try_local_hub=1`,
         { waitUntil: 'domcontentloaded', timeout: 60000 })
+      if (trial) {
+        const tile = page.locator('.tile').filter({ hasText: 'Reading List [TEST]' }).first()
+        await tile.waitFor({ timeout: 60000 })
+        await expect(tile.locator('.release-review-badge')).toHaveText(/BETA/i)
+        await capture('desktop-beta')
+        await tile.click()
+        check('production-desktop-beta-launcher')
+      }
       await widget('books_list').waitFor({ timeout: 60000 })
       await capture('initial')
       await widget('open-book_create').getByRole('button').click()
@@ -131,6 +151,20 @@ try {
       await widget('books_list').getByText(marker + '-updated', { exact: true }).waitFor({ state: 'hidden' })
       check('delete-refreshes-list')
       await capture('completed')
+      if (trial) {
+        const home = () => page.locator('ion-header ion-buttons ion-button')
+          .filter({ has: page.locator('ion-icon[name="close-outline"]'), visible: true }).first()
+        const tile = page.locator('.tile').filter({ hasText: 'Reading List [TEST]' }).first()
+        await home().click()
+        await tile.waitFor({ timeout: 60000 })
+        await expect(tile.locator('.release-review-badge')).toHaveText(/BETA/i)
+        await tile.click()
+        await widget('books_list').waitFor({ timeout: 60000 })
+        check('return-home-and-reopen-beta')
+        await home().click()
+        await tile.waitFor({ timeout: 60000 })
+        await capture('desktop-final')
+      }
       assert.deepEqual(sample.errors, [])
       sample.passed = true
     } catch (error) {

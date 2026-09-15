@@ -1,6 +1,21 @@
 from __future__ import annotations
 
 from adaos.sdk.builder import lifecycle
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def production_host(monkeypatch):
+    from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
+    from adaos.sdk.builder import applications
+
+    monkeypatch.setattr(WebspaceRelationshipRegistry, "resolve_production_host", lambda self, value: value)
+    def place(candidate_id, *, webspace_id, actor_ref):
+        return {"ok": True, "trial_activation": {
+            "activation_id": f"trial:{candidate_id}", "data_mode": "empty",
+            "target": {"webspace_id": webspace_id, "space_kind": "workspace"},
+        }}
+    monkeypatch.setattr(applications, "place_local_trial", place)
 
 
 def _checkpoint_state() -> dict:
@@ -17,6 +32,17 @@ def _checkpoint_state() -> dict:
             "member_change_ids": ["change-1"],
         },
     }
+
+
+def test_prepare_trial_rejects_preview_target_before_starting_workflow(monkeypatch):
+    from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
+
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *args: _checkpoint_state())
+    monkeypatch.setattr(lifecycle.workflow, "transition", lambda *args, **kwargs: pytest.fail("Invalid target must not start work"))
+    monkeypatch.setattr(WebspaceRelationshipRegistry, "resolve_production_host", lambda *args: "desktop")
+    with pytest.raises(ValueError, match="production"):
+        lifecycle.prepare_trial("scenario", "example", actor="user:test", idempotency_key="trial",
+                                target_webspace_id="desktop-dev")
 
 
 def test_prepare_trial_uses_one_waiting_then_result_transition(monkeypatch) -> None:

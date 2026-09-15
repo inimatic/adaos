@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import os
 from pathlib import Path
+from pathlib import Path
 import threading
 import time
 from typing import Any
@@ -61,7 +62,8 @@ def current_subnet_id(ctx: AgentContext | None = None) -> str:
 
 def personalization_access_store(ctx: AgentContext | None = None) -> PersonalizationAccessStore:
     resolved = _ctx(ctx)
-    return PersonalizationAccessStore(_state_dir(resolved) / "personalization" / "access.v0.json")
+    authority = getattr(resolved, "authority_state_dir", None)
+    return PersonalizationAccessStore(Path(authority or _state_dir(resolved)) / "personalization" / "access.v0.json")
 
 
 def deny_browser_session(session_id: str) -> dict[str, Any] | None:

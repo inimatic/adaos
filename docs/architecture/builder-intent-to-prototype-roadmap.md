@@ -544,17 +544,31 @@ Implementation boundary: Local Trial/promotion mechanisms and historical Equipme
   Preview-based denial is a containment fix, not the target delivery route.
   An unavailable informer is not functional Trial acceptance.
   Evidence: `trial-navigation-02`, `trial-boundary-before/after`, and 264 Core
-  boundary/recovery/materialization tests. Candidate-owned execution remains open.
-- [ ] `[must]` Remove Trial/Publication from Preview routing. Before the first
-  Workspace release, Builder admits and places local beta on the existing
-  production desktop through RuntimeSelection. Afterwards preserve Applications'
-  stable/prerelease intent. Qualify launcher discovery, open, reopen and return
-  home without overwriting the home scenario or creating another Webspace.
+  boundary/recovery/materialization tests. See the qualified local executor
+  slice below; delegated and distributed execution remain open.
+- [x] `[must]` Before first Workspace publication, Builder's publication command
+  reconciles the local beta RuntimeSelection and the running production desktop
+  catalog, including replay without another activation. Trial/Publication no
+  longer enter the Preview materialization/selection API.
+  Evidence: `trial-builder-delivery-02`, `trial-browser-03`; native desktop and
+  mobile CRUD use the same retained Reading List Candidate.
+- [x] `[must]` Qualify local beta navigation from Builder Process and desktop,
+  return home and reopen on desktop/mobile. Evidence: `trial-builder-navigation-05`
+  and `trial-browser-04`; exact Trial execution headers and unchanged DEV data.
+- [ ] `[must]` Qualify the installed-Application path without overwriting
+  Applications' stable/prerelease intent. No new Webspace or home-scenario
+  replacement is permitted.
+- [x] `[must]` Admit local `empty` Trial data to native skill execution with its
+  own context, declarations, runtime slots and store, using original node policy.
+  Verify package/lock/release identity; preserve DEV data across Trial writes and
+  an API restart. Evidence: `trial-http-02` (15 checks), `trial-restart-01`,
+  `trial-browser-03` (desktop/mobile CRUD). No application-specific executor.
 - [ ] `[must]` Admit the immutable Candidate to the existing skill engine with
-  its own prepared runtime, mutable data, declarations and SDK context. Record
-  executed package/lock/data-root/caller identity; prove DEV/stable records and
-  sources unchanged. Do not implement a TEST-specific executor or bypass the
-  guard simply because the package and UI are present.
+  all supported data modes and delegated caller scopes. Record executed
+  package/lock/data-root/caller identity; prove DEV/stable records and sources
+  unchanged. Qualify same-named installed skills, external dependencies,
+  long-running services, expiry/revocation and recovery. Unsupported data modes
+  and remote forwarding fail closed; local owner CRUD is not this broader proof.
 
 Exit/remaining work: Qualify the resumed TEST Trial against its release lock, then source publication, consumer install/update, retained records, real reader/writer use, human EN/RU compact/wide review and live projection identity. Cover node-status/recovery failures. This is blocked non-deferred work, not waived or silently deferred.
 
