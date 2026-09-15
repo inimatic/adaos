@@ -874,3 +874,32 @@ identity assertions, return-home/reopen interactions, and an unchanged DEV
 database digest. The last screen is the production desktop with the Reading
 List BETA launcher. `trial-builder-delivery-03` is the final native Builder
 command replay after the last Core restart. Source remained unchanged throughout.
+
+### 2026-09-15: Empty Catalog Availability Regression
+
+User review found a gap in desktop acceptance: successful Trial CRUD did not
+prove the Client allowed stateful interactions without a `Limited` warning.
+`trial-availability-before-01` reproduces the desktop-to-beta transition on both
+widths: WS/YWS and materialization are fresh, but two Client widget-data guards
+reject `catalog_widgets=0`. The catalog branch is present and valid; page widgets
+are declared inline. Header/action gating and uploaded diagnostics now check
+branch presence without demanding catalog entries. No application-specific
+exception, Trial source change, network change or API restart is involved.
+
+The strengthened browser stand records availability diagnostics and requires
+fresh stateful access at desktop, beta open/reload, return-home and reopen.
+`trial-availability-after-01` overlapped the dev-server rebuild on desktop;
+its compact run passed after the updated bundle loaded. The failed desktop
+sample remains evidence, not a passing result. Three new positive empty-catalog
+unit cases failed before the fix; missing-branch rejection remained correct.
+The expanded 340-spec combined run exposed three navigation-state failures;
+the unchanged YDoc suite passes 155/155 in isolation. Cross-suite navigation
+isolation is recorded as Client test debt, not hidden by a green aggregate claim.
+
+Final `trial-availability-after-02` passes all 22 checks per width, including
+six availability checkpoints with `state=ready`, fresh widget data and
+`disable-stateful=no`. Trial mutation responses retain the exact release digest;
+the DEV database and Reading List source hashes are unchanged. Desktop and
+mobile screenshots were inspected. The focused AppComponent, diagnostics and
+availability-flags suites pass 185/185; YDoc passes 155/155 separately. Client
+commit `b78014c` contains only the catalog guard correction and its regressions.

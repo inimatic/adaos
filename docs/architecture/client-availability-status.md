@@ -123,6 +123,15 @@ client may request one snapshot for the current webspace, expected scenario,
 sync state, and materialization fingerprint. An unchanged gap must not create
 periodic or transaction-driven snapshot traffic.
 
+Widget-data readiness distinguishes missing branches from empty collections.
+`data.catalog.widgets=[]` is a valid materialized catalog: a scenario can define
+its page widgets inline without publishing reusable widget declarations. Neither
+the header/action gate nor uploaded diagnostics may infer broken sync from a
+zero catalog count, including when installed desktop widgets remain in the
+webspace overlay. An absent catalog branch still blocks readiness; this rule
+does not waive provider freshness, materialization identity, page or node-data
+checks. Catalog counts remain diagnostic evidence, not liveness requirements.
+
 ## Mobile Rule
 
 The mobile header has room for at most one compact availability affordance.
@@ -204,6 +213,10 @@ Update stages:
   route, media, RTC runtime, direct recovery, and link upgrade.
 - [x] `[must]` Keep Yjs runtime/materialization evidence separate from generic
   link health.
+- [x] `[must]` Accept a present empty widget catalog in both header/action
+  gating and uploaded diagnostics. Qualify production desktop -> local beta ->
+  reload -> desktop on desktop/mobile, including fresh sync and enabled stateful
+  actions, not only successful skill calls.
 - [x] `[must]` Add a browser `AvailabilitySummary` projection that combines
   semantic channel state, Yjs state, sidecar/root route state, update state, and
   member aggregate evidence.
@@ -231,6 +244,9 @@ Update stages:
   active member availability totals while keeping raw inventory evidence.
 - [ ] `[should]` Add full tests for summary state selection: direct, relay,
   recovering, blocked, offline, and Yjs-stale cases.
+- [ ] `[should]` Isolate browser navigation intent state between AppComponent
+  and YDoc spec suites. Their combined run must match isolated runs for URL
+  startup selection, failed target preparation, and authenticated subnet checks.
 - [x] `[should]` Add focused tests for staged updates, limitations, and member
   lifecycle exclusion.
 - [ ] `[should]` Add Infrastate device/member actions to revoke, disable,

@@ -46,6 +46,19 @@ try {
       await modal.waitFor({ state: 'hidden' })
     }
     const check = name => sample.checks.push({ id: name, status: 'passed' })
+    const availability = async name => {
+      const chip = page.locator('.availability-chip').first()
+      try {
+        await expect(chip).toHaveAttribute('data-state', 'ready', { timeout: 30000 })
+        await expect(chip).toHaveAttribute('title', /disable-stateful=no/)
+        await expect(chip).toHaveAttribute('title', /widget-data=ready/)
+        check(`availability:${name}`)
+      } finally {
+        sample.availability ??= []
+        sample.availability.push({ phase: name, state: await chip.getAttribute('data-state'),
+          diagnostics: await chip.getAttribute('title') })
+      }
+    }
     const capture = async name => {
       const geometry = await page.evaluate(() => ({ viewport: innerWidth, width: document.documentElement.scrollWidth }))
       assert.ok(geometry.width <= geometry.viewport + 1, `Document overflow: ${name}`)
@@ -81,11 +94,13 @@ try {
         const tile = page.locator('.tile').filter({ hasText: 'Reading List [TEST]' }).first()
         await tile.waitFor({ timeout: 60000 })
         await expect(tile.locator('.release-review-badge')).toHaveText(/BETA/i)
+        await availability('desktop')
         await capture('desktop-beta')
         await tile.click()
         check('production-desktop-beta-launcher')
       }
       await widget('books_list').waitFor({ timeout: 60000 })
+      if (trial) await availability('beta-open')
       await capture('initial')
       await widget('open-book_create').getByRole('button').click()
       await field('book_create', 'title').locator('input').waitFor()
@@ -126,6 +141,7 @@ try {
       await widget('books_list').getByText(marker + '-updated', { exact: true }).waitFor()
       await page.reload({ waitUntil: 'domcontentloaded' })
       await widget('books_list').getByText(marker + '-updated', { exact: true }).waitFor({ timeout: 60000 })
+      if (trial) await availability('beta-reload')
       await widget('books_list').getByText(marker + '-updated', { exact: true }).click()
       await widget('book_details').getByText('Изменено', { exact: false }).waitFor()
       check('reload-preserves-edit-and-multiline-note')
@@ -158,11 +174,14 @@ try {
         await home().click()
         await tile.waitFor({ timeout: 60000 })
         await expect(tile.locator('.release-review-badge')).toHaveText(/BETA/i)
+        await availability('return-home')
         await tile.click()
         await widget('books_list').waitFor({ timeout: 60000 })
+        await availability('beta-reopen')
         check('return-home-and-reopen-beta')
         await home().click()
         await tile.waitFor({ timeout: 60000 })
+        await availability('desktop-final')
         await capture('desktop-final')
       }
       assert.deepEqual(sample.errors, [])
