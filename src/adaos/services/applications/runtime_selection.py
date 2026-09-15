@@ -49,7 +49,9 @@ def application_execution(ctx: AgentContext, skill_name: str):
     store = ApplicationStore(state_dir)
     selected = {}
     selections = store.list_runtime_selections()
-    for selection in selections:
+    # Newly introduced skills are fenced too, before the new release is selected.
+    guarded_selections = (*selections, *ApplicationRuntimeChannel.list_selections(state_dir, include_pending=True))
+    for selection in guarded_selections:
         if selection.application_id in selected:
             continue
         release = store.get_release(selection.application_id, selection.release_digest)

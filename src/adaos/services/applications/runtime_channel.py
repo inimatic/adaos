@@ -88,7 +88,7 @@ class ApplicationRuntimeChannel:
             return self._decode(row[0])
 
     @classmethod
-    def list_selections(cls, state_dir: Path) -> tuple[RuntimeSelection, ...]:
+    def list_selections(cls, state_dir: Path, *, include_pending: bool = False) -> tuple[RuntimeSelection, ...]:
         values = []
         root = Path(state_dir) / "applications/runtime_channels"
         for path in root.glob("*.sqlite3"):
@@ -104,6 +104,12 @@ class ApplicationRuntimeChannel:
                     if channel.path.name != path.name:
                         raise RuntimeChannelConflict("Application channel path identity mismatch")
                     values.extend(channel._decode(row[0]))
+                    if include_pending and connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transitions'").fetchone():
+                        for (document,) in connection.execute("SELECT document FROM transitions WHERE completed=0"):
+                            target = RuntimeSelection.from_mapping(json.loads(document)["intent"]["target"])
+                            if target.application_id != identity:
+                                raise RuntimeChannelConflict("Transition target owner differs from its channel")
+                            values.append(target)
             except sqlite3.OperationalError as exc:
                 if getattr(exc, "sqlite_errorcode", None) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
                     raise RuntimeChannelConflict("Application channel is changing; retry when it is idle") from exc
@@ -117,6 +123,7 @@ class ApplicationRuntimeChannel:
         with self._connection() as connection:
             self._initialize(connection, legacy)
             connection.execute("BEGIN EXCLUSIVE")
+            self._assert_available(connection)
             values = self._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
             current = next((item for item in values if item.webspace_id == value.webspace_id), None)
             observed = current.revision if current else 0
@@ -145,8 +152,15 @@ class ApplicationRuntimeChannel:
         with self._connection() as connection:
             self._initialize(connection, legacy)
             connection.execute("BEGIN")
+            self._assert_available(connection)
             values = self._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
             if not values or any(item.runtime_root_ref != runtime_root_ref or item.release_digest != release_digest for item in values):
                 raise RuntimeChannelConflict("This Application runtime is inactive; reopen the selected channel")
             yield
             connection.rollback()
+
+    @staticmethod
+    def _assert_available(connection: sqlite3.Connection) -> None:
+        exists = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transitions'").fetchone()
+        if exists and connection.execute("SELECT 1 FROM transitions WHERE completed=0 LIMIT 1").fetchone():
+            raise RuntimeChannelConflict("Application transition requires completion or recovery; runtime is fenced")

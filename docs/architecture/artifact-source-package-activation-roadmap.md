@@ -655,6 +655,12 @@ data preservation. Those mechanisms remain open under `AP4-20`/`AP4-21`.
   direct calls and background workers; retain Stable files only as inactive
   recovery material. Reconcile interruption without dual execution or silent
   fallback. A separately running verification Beta is prohibited.
+  Implemented prerequisite: a durable per-Application transition journal fences
+  native execution and ordinary channel selection across interruption. Completed
+  effects retain receipts; an unknown effect resumes with its original scoped
+  idempotency key. Target-only skills are fenced before activation. Channel
+  projection and journal completion commit atomically. Lifecycle integration,
+  service-worker drain and operator recovery remain open.
 - [ ] `[must]` `AP4-21` Execute the exact forward migration on a consistent local
   Stable snapshot for every new Beta, never using prior Beta working data as
   the migration baseline. Record source/target schemas and data generation, and
@@ -664,6 +670,12 @@ data preservation. Those mechanisms remain open under `AP4-20`/`AP4-21`.
   and snapshot restoration. After new writes, restoration or reseeding a new
   Beta requires explicit loss acknowledgement. Same-release replay does not
   reseed data. Backward migration remains `APD-11`, not a gate here.
+  Implemented prerequisite: private SQLite backup/staging includes WAL commits,
+  pins the full algorithmic migration chain, validates integrity/foreign keys,
+  and recovers interrupted snapshot finalization without recapturing new data.
+  Synthetic two-cycle tests preserve Stable and Beta writes. Immutable owner
+  binding, attachments/other providers, configuration integration and the live
+  two-cycle Builder proof remain open; do not equate adapter tests with delivery.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 candidate publication regressions in

@@ -157,6 +157,8 @@ Project/Application identity collapse.
   native skill-call read leases span actual execution across threads/processes,
   including a caller timeout. New rooms cannot silently choose another channel.
   Inactive tool calls fail without member fallback; DEV remains independent.
+  A durable transition journal now retains the native-call fence after process
+  interruption and includes newly introduced target components before selection.
   Remaining: lifecycle/background service drain, unplaced legacy installations,
   explicit stale-UI generation admission, all-room projection refresh and the
   combined crash-recoverable data/configuration cutover. Do not treat the tool
@@ -168,6 +170,10 @@ Project/Application identity collapse.
   loss confirmation for snapshot rollback. Never publish user data or infer a
   reset/rollback approval from the channel toggle. Show Beta's data-loss risk
   and gate Beta-to-Beta reseeding after writes, including automatic updates.
+  Local prerequisite: checksum-pinned SQLite snapshots, forward staging and
+  installation pass two synthetic incremental cycles including Beta-created
+  records. Snapshot-finalization interruption is reconciled without reseeding.
+  This adapter is not yet wired into Builder publication; the task remains open.
 - [ ] `[must]` `APP1-15` Inherit declared Workspace configuration and scoped
   credential bindings in Beta without copying plaintext into packages or model
   context. Retain compatible overrides across Beta updates/runtime rebuilds;

@@ -1066,3 +1066,24 @@ Reading only persisted channel records, without caching admission state, reduces
 the local 30-call lease probe median from 175.32ms to 4.84ms. Native HTTP reads
 still took 2.6-5.4s in the loaded API, also observed on DEV calls before this
 change; total handler/import latency is not declared fixed by this probe.
+
+### 2026-09-15: Published Baseline And Data-Cutover Primitives
+
+At the user's request, Client `6e53b5d` and Core `e6f28983f` were pushed;
+the core gitlink and `.sha` pin match. Yjs store tests passed (49), as did
+Client PageData tests (123). DEV Builder `0.2.143` was uploaded through native
+`adaos dev project push builder --bump none`, retaining the existing immutable
+release identity. This is source publication, not a completed migration release.
+
+Reading List Stable contains two user records. A consistent, local-only baseline
+was captured under `.adaos/recovery/reading-list-20260915/`; the generic
+`e2e/stand/sqlite-data-proof.py` reports counts and unchanged-field invariants,
+not record contents. No real data was migrated, reset or supplied to an LLM.
+
+The new Application transition journal and private SQLite staging adapter cover
+durable fencing, exact-intent replay, committed WAL data, full migration-history
+checksums, SQL transaction/attachment escape rejection, two synthetic forward
+cycles with Beta-created records, and interrupted snapshot finalization. Their
+local tests are mechanism evidence only. The live Reading List lifecycle, scoped
+runtime settings/secrets, clarification and About/image-output integration are
+still unqualified; APP1-13 through APP1-15 and AP4-20/AP4-21 remain open.
