@@ -832,6 +832,13 @@ selection. Unavailable future stages are disabled with an explicit reason.
 Automation requires acceptance of the exact Prototype even for utility-oriented
 applications; no implicit UI-less bypass is admitted. Historical inspection
 retains its own evidence and never inherits acceptance from another revision.
+Repeated Automation within the same acceptance must consume its already admitted
+handoff, not reconstruct requirements from a subsequently edited Preview store.
+Bind reuse to the session, earlier Run, exact acceptance and component set, and
+verify retained Core/model-input digests before execution. Recompute current
+iteration obligations separately. Without a verifiable admitted snapshot, the
+first-handoff freshness checks still apply; a changed acceptance requires a new
+handoff. Disposable demonstration records are never installation seeds.
 Full provenance, branches and run history remain available as details:
 
 ```text

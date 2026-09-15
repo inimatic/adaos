@@ -7087,6 +7087,12 @@ class BuilderAutomationService:
                 ]
             }
         subnet_id = _builder_subnet_id(session)
+        from adaos.services.builder.retained_resource_handoff import select_retained_handoff
+
+        resource_handoff_reference = select_retained_handoff(
+            Path(self.runs_root), session, target={"type": kind, "id": project_id},
+            companion_skill_ids=companions,
+        )
         if request_mcp.get("enabled") is not False and subnet_id:
             request_mcp.setdefault("subnet_id", subnet_id)
             request_mcp.setdefault("bound_target_id", f"hub:{subnet_id}")
@@ -7151,6 +7157,7 @@ class BuilderAutomationService:
             },
             "links": {
                 "automation_session_id": session.get("session_id"),
+                "prototype_resource_handoff_reference": resource_handoff_reference,
                 "clarification_continuation": copy.deepcopy(clarification_receipt) or None,
                 "webspace_id": session.get("webspace_id"),
                 "iteration": session.get("iteration"),

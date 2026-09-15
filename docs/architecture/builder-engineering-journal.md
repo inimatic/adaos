@@ -1502,3 +1502,23 @@ published-history checks remain independent E2E evidence, not yet a generic
 worker guarantee. A generated repair also changed an existing title-only
 duplicate rule to satisfy its fixture. Collect independent regression results
 and correct through Builder, never by manually editing the application.
+
+The corrected independent probe uses the existing whole-form book update
+contract, not an invented patch-only API. Native Open Preview resolves the
+completed Automation to its exact task at wide/compact widths. Earlier browser
+probes had opened the still-materialized Prototype and mutated only disposable
+demo data. The stand now verifies the rendered skill data source before any
+mutation. Automation browser checks subsequently passed CRUD, optional rating
+and settings in both layouts (16 checks each). HTTP then identified invalid
+ordering silently becoming a default; final acceptance remains blocked.
+
+The native correction failed before any model call because the worker reread
+those changed live Prototype records against the old acceptance generation.
+For a follow-up, Builder now binds the exact previously admitted resource
+handoff from the same session and acceptance. Worker verifies the source task,
+iteration, component set, complete acceptance, Core packet, actual first-model
+input receipt and file digests, as well as empty installation seeds. It still
+recomputes current completion obligations. First admission without such a
+retained input keeps the existing live-generation checks. Changed acceptance or
+corrupted inputs cannot authorize reuse. The 19 focused tests pass; live retry
+and expanded post-delete selection checks remain outstanding.

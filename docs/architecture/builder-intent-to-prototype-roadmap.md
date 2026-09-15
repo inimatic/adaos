@@ -653,6 +653,12 @@ Implementation boundary: Local Trial/promotion mechanisms and historical Equipme
   history and synthetic fixtures for every supported prior schema. Current
   Reading List E2E checks cover these cases outside the generic worker; keep the
   broader gate open until the worker consumes a generic fixture contract.
+- [ ] `[must]` Qualify repeated Automation against the same immutable Prototype
+  handoff after later Preview demo edits. Partial: admission and worker bind and
+  verify a previous Core/model-input snapshot in the same session/acceptance;
+  19 focused tests cover identity and tampering. Live continuation and broader
+  first-admission snapshot lifecycle remain open. Never weaken live freshness
+  checks to reconstruct an older acceptance from current mutable records.
 - [ ] `[must]` Bind Beta review to `AP4-21` migration/data evidence and preserve
   Beta writes on acceptance (`Keep data=true`); distinguish immutable code from
   mutable working data. Qualify explicit recovery-point/loss confirmation for

@@ -5622,12 +5622,22 @@ class LocalSkillFactoryWorker:
         target_type = str(target.get("type") or "skill").strip().lower()
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
         companions = self._companion_skill_ids(assignment)
-        handoff = self._prototype_resource_implementation_handoff(
-            target_type=target_type,
-            target_id=target_id,
-            companion_skill_ids=companions,
-            context_packet=context_packet,
-        )
+        links = dict(request.get("links") or {})
+        reference = links.get("prototype_resource_handoff_reference")
+        if reference:
+            from adaos.services.builder.retained_resource_handoff import read_retained_handoff
+
+            handoff = read_retained_handoff(self.runs_root, reference,
+                acceptance=artifacts.get("prototype_acceptance") or _prototype_acceptance_from_context(context_packet), target=target,
+                companion_skill_ids=companions,
+                session_id=str(links.get("automation_session_id") or ""), iteration=int(links.get("iteration") or 0))
+        else:
+            handoff = self._prototype_resource_implementation_handoff(
+                target_type=target_type,
+                target_id=target_id,
+                companion_skill_ids=companions,
+                context_packet=context_packet,
+            )
         if handoff is None:
             return None
         accepted = artifacts.get("prototype_acceptance")
