@@ -155,3 +155,30 @@ def test_foreign_publisher_cannot_place_local_beta(setup, monkeypatch):
     monkeypatch.setattr(applications, "_ctx", lambda: owner)
     with pytest.raises(ValueError, match="local Application publisher"):
         applications._admit_builder_mutation("create_trial", "sample", subnet_ref="subnet:guest", capability="applications.develop")
+
+
+def test_sdk_recovery_verifies_stable_identity_before_unfencing(setup, monkeypatch):
+    from adaos.sdk.builder import applications
+    from adaos.services.applications.runtime_channel import RuntimeChannelConflict
+
+    owner, service, old, new, _activations, lock = setup
+    runtime = NativeTrialRuntime._resolve_immutable(owner, "candidate-sample", new.release_digest)
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new)
+    with pytest.raises(RuntimeChannelConflict):
+        lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": False})
+    monkeypatch.setattr(applications, "_ctx", lambda: owner)
+    monkeypatch.setattr(applications, "refresh_placement", lambda _: {"ok": True})
+    atomic_write_json(owner.paths.workspace_dir() / ".adaos/workspace.lock.json", lock(new).to_dict())
+    with pytest.raises(ValueError, match="Stable code/installation changed"):
+        applications.abort_local_trial_preparation("candidate-sample", release_digest=new.release_digest, actor_ref="user:owner")
+    with pytest.raises(RuntimeChannelConflict, match="fenced"):
+        with lifecycle.channel.execution("workspace", old.release_digest):
+            pass
+    atomic_write_json(owner.paths.workspace_dir() / ".adaos/workspace.lock.json", lock(old).to_dict())
+    result = applications.abort_local_trial_preparation("candidate-sample", release_digest=new.release_digest, actor_ref="user:owner")
+    assert result["status"] == "aborted"
+    assert service.store.get_runtime_selection("desktop", "sample").release_digest == old.release_digest
+    with lifecycle.channel.execution("workspace", old.release_digest):
+        pass
+    with pytest.raises(TrialRuntimeUnavailable, match="pending or aborted"):
+        NativeTrialRuntime.resolve(owner, "candidate-sample", new.release_digest)

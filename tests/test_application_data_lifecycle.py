@@ -183,3 +183,51 @@ def test_data_declaration_is_consistent_with_both_skill_schemas():
         for path in ("../records.sqlite", "a/../b", "a//b", "/outside", "C:/outside"):
             with pytest.raises(jsonschema.ValidationError):
                 jsonschema.validate({**declaration, "databases": [{"path": path, "migrations": []}]}, schema)
+
+
+def test_failed_beta_activation_can_restore_stable_settings_without_touching_data(tmp_path):
+    state, stable, channel = seed(tmp_path)
+    lifecycle = coordinator(tmp_path, 1)
+    with pytest.raises(RuntimeChannelConflict, match="not verified"):
+        lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": False})
+    config = ApplicationConfigurationStore(state, "sample", "skill:worker")
+    assert config.read()["beta"]["active"]
+    failed_beta = (tmp_path / "beta1/data/records.sqlite").read_bytes()
+    result = lifecycle.abort_beta_preparation(verify_source=lambda _: {"ok": True})
+    assert result["aborted"] and not result["completed"]
+    assert config.read()["beta"]["active"] is False
+    assert sql(stable / "records.sqlite", "SELECT * FROM records") == [(1, "original")]
+    assert (tmp_path / "beta1/data/records.sqlite").read_bytes() == failed_beta
+    with channel.execution("workspace", DIGEST):
+        pass
+    assert lifecycle.abort_beta_preparation(verify_source=lambda _: pytest.fail("No duplicate recovery")) == result
+    with pytest.raises(RuntimeChannelConflict, match="cancelled"):
+        lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: pytest.fail("Do not reuse cancelled Candidate"))
+
+
+def test_recovery_cannot_cancel_after_stable_adoption_started(tmp_path):
+    seed(tmp_path)
+    lifecycle = coordinator(tmp_path, 1)
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    with pytest.raises(RuntimeChannelConflict):
+        lifecycle.accept_beta(webspace_id="desktop", publish=lambda _: {"ok": False})
+    with pytest.raises(RuntimeChannelConflict, match="adoption has started"):
+        lifecycle.abort_beta_preparation(verify_source=lambda _: pytest.fail("Recover publication instead"))
+
+
+def test_beta_does_not_silently_inherit_credentials_for_a_changed_purpose(tmp_path):
+    from adaos.services.applications.configuration import ConfigurationConflict
+    state, stable, _channel = seed(tmp_path)
+    previous = manifest(0)
+    previous["configuration"] = {**CONFIG, "credentials": {"token": {"purpose": "Original explicit purpose"}}}
+    target = manifest(1)
+    target["configuration"] = {**CONFIG, "credentials": {"token": {"purpose": "Different purpose"}}}
+    store = ApplicationConfigurationStore(state, "sample", "skill:worker")
+    store.set_stable(release_digest=DIGEST, schema=CONFIG["schema"], values=CONFIG["defaults"],
+                     credentials={"token": "credential:" + "a" * 32}, expected_revision=0)
+    lifecycle = LocalApplicationDataLifecycle(state_root=state, private_root=tmp_path, application_id="sample",
+        candidate_id="candidate", release_digest="sha256:" + "b" * 64, stable_digest=DIGEST,
+        components=(OwnedDataComponent("skill:worker", stable, tmp_path / "beta/data", stable, previous, target),))
+    with pytest.raises(ConfigurationConflict, match="purpose changed"):
+        lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: pytest.fail("Owner review required"))
+    assert store.read()["beta"] is None

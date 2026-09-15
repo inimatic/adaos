@@ -43,11 +43,21 @@ target bucket is a conflict, not permission to overwrite it. An interrupted
 transition keeps a persistent execution fence and resumes its original intent;
 retrying a completed Candidate does not reseed its data or publish again.
 
+An unfinished Stable-to-Beta preparation can be explicitly cancelled through
+`adaos.sdk.builder.applications.abort_local_trial_preparation`, with the exact
+Candidate/release and `applications.recover` admission. Core verifies the retained
+Stable code/installation, deactivates staged configuration and retains private
+failed Beta data/snapshots. Recovery remains fenced on interruption and retries
+the exact intent. An aborted operation is not completed migration evidence and
+cannot be reused. This operation cannot undo a started Stable adoption or a
+successful channel transition; recover publication or use a separately reviewed
+snapshot rollback for those cases.
+
 Settings use [Application Configuration](application-configuration.md); no
 credential value is copied as ordinary data. Initial cutover supports only
 explicit owned SQLite stores and native tools. Shared mutable stores, background
-workers, attachments, credential files, Beta-to-Beta loss-confirmed reseeding
-and operator rollback need their own qualified adapters. Do not advertise them
+workers, attachments, legacy credential files, Beta-to-Beta loss-confirmed reseeding
+and post-cutover snapshot rollback need their own qualified adapters. Do not advertise them
 as supported or silently omit their data.
 
 See [the lifecycle roadmap](../architecture/application-lifecycle-and-distribution-roadmap.md)

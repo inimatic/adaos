@@ -8,6 +8,7 @@ The journal does not claim to drain workers that bypass native execution leases.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 import hashlib
 import json
@@ -67,6 +68,8 @@ class ApplicationRuntimeTransition:
         fingerprint = hashlib.sha256(_json(intent).encode("utf-8")).hexdigest()
         with mutation_lock(self.channel.path.with_suffix(".transition.lock")):
             record = self._begin(operation_id, fingerprint, intent, values)
+            if record.get("aborted") or record.get("recovery"):
+                raise RuntimeChannelConflict("Transition was cancelled or is recovering; do not resume its effects")
             if record["completed"]:
                 return record
             for step in steps:
@@ -97,6 +100,60 @@ class ApplicationRuntimeTransition:
                 record["completed"] = True
                 connection.execute("UPDATE channel SET document=? WHERE id=1", (self.channel._encode(projected),))
                 connection.execute("UPDATE transitions SET completed=1, document=? WHERE operation_id=?", (_json(record), operation_id))
+                connection.commit()
+            return record
+
+    def abort(self, operation_id: str, *, contract_digest: str,
+              steps: Sequence[TransitionStep], source_guard: Callable = nullcontext) -> dict[str, Any]:
+        """Recover only an unfinished operation to its unchanged source channel.
+
+        The admitted coordinator must verify/restore source data, configuration
+        and code before acknowledging recovery. A failed recovery retains the
+        fence and exact replay intent. Aborted is never successful completion.
+        """
+        if not steps or any(not step.step_id for step in steps) or len({step.step_id for step in steps}) != len(steps):
+            raise ValueError("Recovery requires unique verified steps")
+        # Match publication's order: Application transition, then source writer.
+        with mutation_lock(self.channel.path.with_suffix(".transition.lock")), source_guard():
+            record = self.get(operation_id)
+            if not record or record["intent"]["contract_digest"] != contract_digest:
+                raise RuntimeChannelConflict("Recovery requires the exact retained transition contract")
+            if record["completed"]:
+                raise RuntimeChannelConflict("Completed transition requires a separate reviewed channel change")
+            intent = {"steps": [step.step_id for step in steps], "source": record["intent"]["expected"]}
+            recovery = record.get("recovery")
+            if recovery and recovery["intent"] != intent:
+                raise RuntimeChannelConflict("Retained recovery intent changed")
+            if record.get("aborted"):
+                return record
+            if recovery is None:
+                recovery = {"intent": intent, "receipts": {}, "running_step": None}
+                record["recovery"] = recovery
+                self._write(operation_id, record)
+            source = tuple(RuntimeSelection.from_mapping(item) for item in intent["source"])
+            if self.channel.read() != source:
+                raise RuntimeChannelConflict("Recovery source channel changed")
+            for step in steps:
+                # Recheck the final verifier after every recovery interruption,
+                # even if its previous acknowledgement survived the crash.
+                if step.step_id in recovery["receipts"] and step is not steps[-1]:
+                    continue
+                recovery["running_step"] = step.step_id
+                self._write(operation_id, record)
+                key = hashlib.sha256(_json([operation_id, record["fingerprint"], "abort", step.step_id]).encode("utf-8")).hexdigest()
+                receipt = dict(step.apply(key))
+                if receipt.get("ok") is not True or len(_json(receipt).encode("utf-8")) > 65536:
+                    raise RuntimeChannelConflict("Recovery is not verified; runtime remains fenced")
+                recovery["receipts"][step.step_id] = receipt
+                recovery["running_step"] = None
+                self._write(operation_id, record)
+            with self.channel._connection() as connection:
+                connection.execute("BEGIN EXCLUSIVE")
+                actual = self.channel._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
+                if actual != source:
+                    raise RuntimeChannelConflict("Recovery source channel changed")
+                record["aborted"] = True
+                connection.execute("UPDATE transitions SET document=? WHERE operation_id=? AND completed=0", (_json(record), operation_id))
                 connection.commit()
             return record
 

@@ -45,20 +45,23 @@ class NativeTrialRuntime:
     release_digest: str
     root: Path
     packages: tuple[ArtifactPackageRef, ...]
+    project_id: str = ""
 
     @classmethod
     def resolve(cls, owner: AgentContext, candidate_id: str, release_digest: str) -> "NativeTrialRuntime":
         runtime = cls._resolve_immutable(owner, candidate_id, release_digest)
         state = Path(owner.paths.state_dir())
         record = TrialActivationStore(state / "artifact_pipeline/trial-activations").load(candidate_id)
-        if record.get("data_mode") == "snapshot":
-            from .runtime_channel import ApplicationRuntimeChannel
-            from .runtime_transition import ApplicationRuntimeTransition
+        from .runtime_channel import ApplicationRuntimeChannel
+        from .runtime_transition import ApplicationRuntimeTransition
 
+        application_id = runtime.project_id
+        operation_id = f"application-beta:{application_id}:{candidate_id}"
+        transition = ApplicationRuntimeTransition(ApplicationRuntimeChannel(state, application_id)).get(operation_id)
+        if transition and not transition["completed"]:
+            raise TrialRuntimeUnavailable("Trial migration is pending or aborted; it cannot be executed as an empty Trial")
+        if record.get("data_mode") == "snapshot":
             proof = record.get("safety_evidence", {}).get("data_transition") or {}
-            application_id = str((record.get("release_ref") or {}).get("project_id") or "")
-            operation_id = f"application-beta:{application_id}:{candidate_id}"
-            transition = ApplicationRuntimeTransition(ApplicationRuntimeChannel(state, application_id)).get(operation_id)
             target = (transition or {}).get("intent", {}).get("target", {})
             if (proof.get("operation_id") != operation_id or not transition or not transition["completed"]
                     or target.get("runtime_root_ref") != f"trial:{candidate_id}"
@@ -99,7 +102,7 @@ class NativeTrialRuntime:
         release = ProjectRelease.from_mapping(json.loads(release_path.read_text(encoding="utf-8"))).seal()
         if release.release_digest != release_digest or any(item not in packages for item in release.components):
             raise TrialRuntimeUnavailable("Trial release differs from its locked packages")
-        return cls(owner, candidate_id, release_digest, root, packages)
+        return cls(owner, candidate_id, release_digest, root, packages, project_id=release.project_id)
 
     def component(self, kind: str, name: str) -> ArtifactPackageRef:
         matches = [item for item in self.packages if item.kind == kind and item.artifact_id == name]

@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from typing import Optional, Dict, Any, Iterable
 from cryptography.fernet import InvalidToken
+from contextlib import contextmanager
+from adaos.services.artifact_pipeline.storage import mutation_lock
 from adaos.services.crypto.vault import load_or_create_master, fernet_from_key
 from adaos.ports.secrets import Secrets, SecretScope
 from adaos.services.fs.safe_io import ensure_dir, read_text, write_text_atomic
@@ -28,9 +30,19 @@ class FileVault(Secrets):
         try:
             raw = read_text(str(self.vault_path), self.fs)
             data = json.loads(raw)
-            return data if isinstance(data, dict) else {"profile": {}, "global": {}}
+            if not isinstance(data, dict) or any(not isinstance(bucket, dict) for bucket in data.values()):
+                raise ValueError("invalid vault shape")
+            return data
         except Exception:
-            return {"profile": {}, "global": {}}
+            raise PermissionError("vault could not be read; refusing to replace existing secrets") from None
+
+    @contextmanager
+    def _mutation(self):
+        self.fs.require_write(str(self.vault_path))
+        lock = self.vault_path.with_suffix(".lock")
+        self.fs.require_write(str(lock))
+        with mutation_lock(lock):
+            yield
 
     def _save(self, data: Dict[str, Any]) -> None:
         ensure_dir(str(self.vault_path.parent), self.fs)
@@ -46,10 +58,11 @@ class FileVault(Secrets):
             raise PermissionError("vault decryption failed")
 
     def put(self, key: str, value: str, *, scope: SecretScope = "profile", meta: Optional[Dict[str, Any]] = None) -> None:
-        data = self._load()
-        bucket = data.setdefault(scope, {})
-        bucket[key] = {"v": self._enc(value), "meta": meta or {}}
-        self._save(data)
+        with self._mutation():
+            data = self._load()
+            bucket = data.setdefault(scope, {})
+            bucket[key] = {"v": self._enc(value), "meta": meta or {}}
+            self._save(data)
 
     def get(self, key: str, *, default: Optional[str] = None, scope: SecretScope = "profile") -> Optional[str]:
         data = self._load()
@@ -60,11 +73,12 @@ class FileVault(Secrets):
         return self._dec(rec["v"])
 
     def delete(self, key: str, *, scope: SecretScope = "profile") -> None:
-        data = self._load()
-        bucket = data.get(scope, {})
-        if key in bucket:
-            bucket.pop(key)
-            self._save(data)
+        with self._mutation():
+            data = self._load()
+            bucket = data.get(scope, {})
+            if key in bucket:
+                bucket.pop(key)
+                self._save(data)
 
     def list(self, *, scope: SecretScope = "profile") -> list[Dict[str, Any]]:
         data = self._load()
@@ -72,18 +86,19 @@ class FileVault(Secrets):
         return [{"key": k, "meta": (bucket[k].get("meta") if isinstance(bucket[k], dict) else {})} for k in sorted(bucket.keys())]
 
     def import_items(self, items: Iterable[Dict[str, Any]], *, scope: SecretScope = "profile") -> int:
-        cnt = 0
-        data = self._load()
-        bucket = data.setdefault(scope, {})
-        for it in items:
-            k = it.get("key")
-            v = it.get("value")
-            if not k or v is None:
-                continue
-            bucket[k] = {"v": self._enc(str(v)), "meta": it.get("meta") or {}}
-            cnt += 1
-        self._save(data)
-        return cnt
+        with self._mutation():
+            cnt = 0
+            data = self._load()
+            bucket = data.setdefault(scope, {})
+            for it in items:
+                k = it.get("key")
+                v = it.get("value")
+                if not k or v is None:
+                    continue
+                bucket[k] = {"v": self._enc(str(v)), "meta": it.get("meta") or {}}
+                cnt += 1
+            self._save(data)
+            return cnt
 
     def export_items(self, *, scope: SecretScope = "profile") -> list[Dict[str, Any]]:
         data = self._load()

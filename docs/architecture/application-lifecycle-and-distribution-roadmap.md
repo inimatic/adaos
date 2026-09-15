@@ -177,6 +177,9 @@ Project/Application identity collapse.
   journal for declared SQLite stores and typed configuration. Synthetic tests
   are prerequisites, not live qualification; the two Reading List cycles,
   general storage adapters and Beta-to-Beta recovery/loss confirmation remain open.
+  Failed preparation now has exact-contract SDK cancellation back to the
+  unchanged Stable, with durable recovery fencing and retained private evidence.
+  This is not post-adoption rollback or loss-confirmed Beta replacement.
 - [ ] `[must]` `APP1-16` Automatically select the node's own Builder Beta after
   each completed local development cycle, including installed Stable upgrades,
   without a second Applications permission. Project the pre-release flag from
@@ -198,9 +201,20 @@ Project/Application identity collapse.
   schema rejection, deletion/null semantics and concurrent edits. The typed
   runtime SDK now resolves a bound composition owner implicitly, applies skill
   capability/profile checks, separates DEV and rejects pending cutovers or stale
-  schemas. It does not return or change credential bindings. Application actor/
-  purpose grants, live secret resolution/revocation and lifecycle prepare/adopt
-  integration remain open; no Reading List setting has yet been inherited live.
+  schemas. The settings facade does not expose credential bindings. The separate
+  secrets SDK now resolves declared purpose-bound slots through the existing
+  vault for the verified owner, with synthetic DEV isolation and live revocation.
+  A local Windows Keyring roundtrip/revoke probe passes. Delegated/background
+  grants, legacy plaintext import, credential retention/garbage collection and
+  live two-cycle/restart qualification remain open; no Reading List setting has
+  yet been inherited live.
+- [x] `[must]` Qualify the `APP1-14` failed-preparation recovery primitive:
+  exact Candidate/contract, unchanged Stable verification, durable interrupted
+  recovery, retained evidence and no false completed-migration admission.
+- [x] `[must]` Qualify the bounded `APP1-15` owner-only credential SDK adapter:
+  declared slots/purpose, profile denial, cross-Application isolation, synthetic
+  DEV, inherited/adopted refs and live revocation. Keep full lifecycle/UI and
+  delegated actor qualification open above.
 
 **Exit proof:** two Applications sharing one component install and remove
 without premature package/data deletion; an incompatible version is rejected;

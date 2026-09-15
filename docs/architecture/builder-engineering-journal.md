@@ -1148,3 +1148,25 @@ deletion, schema changes, caller mutation, malformed UTF-8 and unsafe YAML tags
 with both safe loaders. The same profiled worker probe measured 3.39s cold,
 0.88s and 0.70s warm. These are local worker results, not a deployed HTTP/browser
 latency claim; the loaded browser recheck remains open under BIP-03.
+
+### 2026-09-15: Failed Preparation Recovery And Runtime Credentials
+
+Pending local Beta preparation now has a bounded SDK recovery action. It checks
+the exact retained Candidate contract and unchanged Stable installation/code,
+keeps failed Beta data and snapshots private, and deactivates staged settings.
+Interrupted recovery remains fenced and resumes its exact intent. Aborted is
+distinct from completed; an aborted migration cannot authorize Trial runtime.
+Recovery and publication use the same lock order. This does not implement
+post-adoption rollback or lossy Beta-to-Beta replacement.
+
+Declared credential slots now resolve through the bootstrap-owned node vault,
+not the mutable per-skill secrets service. The verified owner, manifest/profile,
+Application/component, purpose and selected channel are checked; DEV bindings
+stay synthetic. Tests cover inherited/adopted bindings, Beta rebinding, live
+revocation, forged/copied refs, profile/actor denial and cutover fencing. A local
+Windows Keyring probe writes, reads and revokes one synthetic value successfully.
+File-vault mutations are serialized and corrupted vaults are not replaced with
+empty data. No real credential or Reading List record was used by these tests.
+The combined focused suite passes 164 tests before the follow-on purpose-change
+regression. Full managed Reading List cycles, clarification, About/images,
+delegated grants and legacy secret import remain unfinished.

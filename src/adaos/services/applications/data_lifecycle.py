@@ -8,7 +8,7 @@ an empty drain receipt must never authorize their migration.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from contextlib import closing
+from contextlib import closing, nullcontext
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 import hashlib
@@ -18,7 +18,7 @@ import sqlite3
 from adaos.domain.application import RuntimeSelection
 from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
-from .configuration import ApplicationConfigurationStore, _digest
+from .configuration import ApplicationConfigurationStore, ConfigurationConflict, _digest
 from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
 from .runtime_transition import ApplicationRuntimeTransition, TransitionStep
 from .sqlite_data_transition import SQLiteDataTransition
@@ -48,6 +48,7 @@ def automation_data_contract() -> dict[str, Any]:
             "Develop and test with synthetic records only. Never inspect/copy Workspace or Trial records, configuration values or secrets into DEV, fixtures, packages or model input.",
             "Core snapshots accepted Stable and runs the pinned chain for each new Beta; Stable acceptance adopts Beta writes. Do not implement channel copying/resetting in handlers.",
             "Use adaos.sdk.data.configuration for declared non-secret settings; DEV is isolated and lifecycle inherits/adopts real settings. Secrets are separate scoped bindings.",
+            "For new secret slots declare configuration.credentials.<name>.purpose and secrets.read/write, then use sdk.data.secrets. Values stay in the node vault; this adapter currently admits only the verified local owner, not delegated/background callers.",
             "Background services, shared mutable stores, attachments and credential files require qualified adapters; report a platform gap instead of claiming migration support."
         ],
     }
@@ -247,6 +248,11 @@ class LocalApplicationDataLifecycle:
                     continue
                 store = ApplicationConfigurationStore(self.state, self.application_id, component.component_ref)
                 record = store.read()
+                bound = (record.get("stable") or {}).get("credentials") or {}
+                previous_slots = (component.stable_manifest.get("configuration") or {}).get("credentials") or {}
+                target_slots = target.get("credentials") or {}
+                if any(not previous_slots.get(name) or previous_slots.get(name) != target_slots.get(name) for name in bound):
+                    raise ConfigurationConflict("Credential slot/purpose changed; explicit owner rebinding is required")
                 if record["stable"] is None and self.stable_digest:
                     original = component.stable_manifest.get("configuration") or {
                         "schema": {"type": "object", "additionalProperties": False}, "defaults": {}}
@@ -294,3 +300,35 @@ class LocalApplicationDataLifecycle:
 
         return self._run("stable", webspace_id, [TransitionStep("protect_and_adopt_data", transfer),
             TransitionStep("adopt_configuration", configure), TransitionStep("publish_verify", publish)])
+
+    def abort_beta_preparation(self, *, verify_source: Callable[[str], Mapping[str, Any]], source_guard: Callable = nullcontext):
+        """Cancel a failed prepare, never an accepted/published data cutover.
+
+        Failed Beta data and snapshots remain private for diagnosis. The source
+        was never overwritten by prepare; callers must verify the pinned Stable
+        code/installation before making it executable again.
+        """
+        runner = ApplicationRuntimeTransition(self.channel)
+        operation = f"application-beta:{self.application_id}:{self.candidate_id}"
+        record = runner.get(operation)
+        if (not record or record["intent"]["target"]["runtime_root_ref"] != f"trial:{self.candidate_id}"
+                or any(item["runtime_root_ref"] != "workspace" or item["release_digest"] != self.stable_digest
+                       for item in record["intent"]["expected"])):
+            raise RuntimeChannelConflict("Only a failed Stable-to-Beta preparation can be cancelled")
+        if runner.get(f"application-stable:{self.application_id}:{self.candidate_id}"):
+            raise RuntimeChannelConflict("Stable data adoption has started; recover that exact publication instead")
+
+        def configure(_key):
+            for component in self.components:
+                store = ApplicationConfigurationStore(self.state, self.application_id, component.component_ref)
+                state = store.read()
+                beta = state.get("beta")
+                if beta and beta["active"]:
+                    if beta["candidate_id"] != self.candidate_id:
+                        raise RuntimeChannelConflict("Another Candidate owns the active configuration")
+                    store.deactivate_beta(candidate_id=self.candidate_id, expected_revision=state["revision"])
+            return {"ok": True, "overrides_retained": True}
+
+        return runner.abort(operation, contract_digest=self._contract(), steps=[
+            TransitionStep("deactivate_configuration", configure), TransitionStep("verify_source", verify_source)],
+            source_guard=source_guard)

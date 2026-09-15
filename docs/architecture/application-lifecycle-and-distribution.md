@@ -986,12 +986,24 @@ LLM context or diagnostics. New required credentials/capabilities require normal
 user admission. Revocation and rotation remain effective; rollback must not
 resurrect a revoked credential from an old snapshot.
 
+The initial local adapter admits only the verified owner and explicit
+`configuration.credentials` slots with a declared purpose plus `secrets.read` /
+`secrets.write`. It uses the bootstrap-owned vault rather than the process-wide
+skill-rebound secrets service. Stable/Beta share approved opaque bindings; DEV
+has a separate synthetic namespace. New Beta values rebind without overwriting
+the old Stable credential. Revocation removes the vault value, not merely a UI
+flag; recovery must not restore it. Legacy plaintext credential import and
+delegated/background grants require separate qualification. This implements a
+bounded least-privilege boundary, not full secret lifecycle management; see the
+[OWASP secrets guidance](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html).
+
 Stable acceptance adopts reviewed configuration and credential bindings along
 with data. Keep the previous compatible configuration for snapshot recovery,
 but not a second active installation. Parameters, secrets and business-data
 generation have separate evidence and retention policies: resetting Beta data
 from Stable is not permission to reset settings or credentials. The initial
-implementation and restart/update qualification remain open under `APP1-15`.
+implementation is bounded as above; restart/update qualification remains open
+under `APP1-15`.
 
 ## Publisher Identity and Authority
 

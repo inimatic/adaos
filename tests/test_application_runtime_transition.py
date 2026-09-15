@@ -127,3 +127,71 @@ def test_new_release_components_are_fenced_before_selection_commits(tmp_path, mo
     ApplicationRuntimeTransition(channel).run("cycle1", contract_digest=DIGEST, expected=[stable], target=beta,
                                                steps=[TransitionStep("activate", activate)])
     assert ApplicationRuntimeChannel.list_selections(tmp_path, include_pending=True) == (beta,)
+
+
+def test_failed_transition_can_be_aborted_without_success_or_target_admission(tmp_path):
+    channel, stable, beta = initial(tmp_path)
+    runner = ApplicationRuntimeTransition(channel)
+    steps = [TransitionStep("migrate", lambda _: {"ok": False})]
+    with pytest.raises(RuntimeChannelConflict):
+        runner.run("cycle1", contract_digest=DIGEST, expected=[stable], target=beta, steps=steps)
+    calls = []
+
+    def restore(key):
+        calls.append(key)
+        with pytest.raises(RuntimeChannelConflict, match="fenced"):
+            with channel.execution("workspace", DIGEST):
+                pass
+        return {"ok": True}
+
+    recovery = [TransitionStep("restore", restore)]
+    result = runner.abort("cycle1", contract_digest=DIGEST, steps=recovery)
+    assert result["aborted"] and not result["completed"]
+    assert channel.read() == (stable,)
+    assert ApplicationRuntimeChannel.list_selections(tmp_path, include_pending=True) == (stable,)
+    with channel.execution("workspace", DIGEST):
+        pass
+    assert runner.abort("cycle1", contract_digest=DIGEST, steps=recovery) == result
+    assert len(calls) == 1
+    with pytest.raises(RuntimeChannelConflict, match="cancelled"):
+        runner.run("cycle1", contract_digest=DIGEST, expected=[stable], target=beta, steps=steps)
+    completed = runner.run("cycle2", contract_digest=DIGEST, expected=[stable], target=beta,
+                          steps=[TransitionStep("migrate", lambda _: {"ok": True})])
+    assert completed["completed"]
+
+
+def test_interrupted_recovery_replays_exact_step_and_keeps_fence(tmp_path):
+    channel, stable, beta = initial(tmp_path)
+    runner = ApplicationRuntimeTransition(channel)
+    steps = [TransitionStep("migrate", lambda _: {"ok": False})]
+    with pytest.raises(RuntimeChannelConflict):
+        runner.run("cycle1", contract_digest=DIGEST, expected=[stable], target=beta, steps=steps)
+    keys = []
+
+    def interrupted(key):
+        keys.append(key)
+        raise SystemExit("lost recovery acknowledgement")
+
+    with pytest.raises(SystemExit):
+        runner.abort("cycle1", contract_digest=DIGEST, steps=[TransitionStep("restore", interrupted)])
+    with pytest.raises(RuntimeChannelConflict, match="recovering"):
+        runner.run("cycle1", contract_digest=DIGEST, expected=[stable], target=beta, steps=steps)
+    with pytest.raises(RuntimeChannelConflict, match="fenced"):
+        with channel.execution("workspace", DIGEST):
+            pass
+    with pytest.raises(RuntimeChannelConflict, match="intent changed"):
+        runner.abort("cycle1", contract_digest=DIGEST, steps=[TransitionStep("skip", lambda _: {"ok": True})])
+    result = runner.abort("cycle1", contract_digest=DIGEST, steps=[TransitionStep("restore", lambda key: keys.append(key) or {"ok": True})])
+    assert result["aborted"] and keys[0] == keys[1]
+
+
+def test_recovery_rejects_wrong_contract_and_completed_transition(tmp_path):
+    channel, stable, beta = initial(tmp_path)
+    runner = ApplicationRuntimeTransition(channel)
+    runner.run("cycle1", contract_digest=DIGEST, expected=[stable], target=beta,
+               steps=[TransitionStep("migrate", lambda _: {"ok": True})])
+    steps = [TransitionStep("restore", lambda _: pytest.fail("Must not restore"))]
+    with pytest.raises(RuntimeChannelConflict, match="exact retained"):
+        runner.abort("cycle1", contract_digest="sha256:" + "b" * 64, steps=steps)
+    with pytest.raises(RuntimeChannelConflict, match="Completed"):
+        runner.abort("cycle1", contract_digest=DIGEST, steps=steps)

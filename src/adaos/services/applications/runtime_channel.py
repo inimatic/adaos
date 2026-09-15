@@ -105,8 +105,8 @@ class ApplicationRuntimeChannel:
                         raise RuntimeChannelConflict("Application channel path identity mismatch")
                     values.extend(channel._decode(row[0]))
                     if include_pending and connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transitions'").fetchone():
-                        for (document,) in connection.execute("SELECT document FROM transitions WHERE completed=0"):
-                            target = RuntimeSelection.from_mapping(json.loads(document)["intent"]["target"])
+                        for pending in cls._pending_transitions(connection):
+                            target = RuntimeSelection.from_mapping(pending["intent"]["target"])
                             if target.application_id != identity:
                                 raise RuntimeChannelConflict("Transition target owner differs from its channel")
                             values.append(target)
@@ -160,7 +160,13 @@ class ApplicationRuntimeChannel:
             connection.rollback()
 
     @staticmethod
+    def _pending_transitions(connection: sqlite3.Connection) -> tuple[dict, ...]:
+        return tuple(record for (document,) in connection.execute(
+            "SELECT document FROM transitions WHERE completed=0"
+        ) if not (record := json.loads(document)).get("aborted"))
+
+    @staticmethod
     def _assert_available(connection: sqlite3.Connection) -> None:
         exists = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transitions'").fetchone()
-        if exists and connection.execute("SELECT 1 FROM transitions WHERE completed=0 LIMIT 1").fetchone():
+        if exists and ApplicationRuntimeChannel._pending_transitions(connection):
             raise RuntimeChannelConflict("Application transition requires completion or recovery; runtime is fenced")

@@ -87,6 +87,8 @@ class AgentContext:
     execution_provider: Optional["ExecutorProvider"] = field(default=None, repr=False)
     # Isolated runtimes share verified node authority, never a copy of its grants.
     authority_state_dir: Optional[Any] = field(default=None, repr=False)
+    # Bootstrap-owned vault; unlike legacy ctx.secrets it is never rebound per skill.
+    credential_vault: Optional[Secrets] = field(default=None, repr=False)
     # Node configuration (loaded once during bootstrap and reused to avoid expensive reloads)
     config: Any = field(default=None, init=False, repr=False)
     _i18n: Optional[I18nService] = field(default=None, init=False, repr=False)

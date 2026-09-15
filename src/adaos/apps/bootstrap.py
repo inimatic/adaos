@@ -170,6 +170,7 @@ class _CtxHolder:
             kv=kv,
             sql=sql,
             secrets=secrets,
+            credential_vault=secrets_backend,
             net=net,
             updates=object(),
             git=git,

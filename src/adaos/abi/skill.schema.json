@@ -83,7 +83,18 @@
       "required": ["schema", "defaults"],
       "properties": {
         "schema": { "type": "object" },
-        "defaults": { "type": "object" }
+        "defaults": { "type": "object" },
+        "credentials": {
+          "description": "Owner-scoped secret slots resolved by sdk.data.secrets; no values or defaults in manifests.",
+          "type": "object", "maxProperties": 32,
+          "propertyNames": { "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,127}$" },
+          "additionalProperties": {
+            "type": "object", "additionalProperties": false, "required": ["purpose"],
+            "properties": {
+              "purpose": { "type": "string", "minLength": 1, "maxLength": 1000 }
+            }
+          }
+        }
       }
     },
     "name": {

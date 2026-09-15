@@ -18,6 +18,10 @@ def _active_secrets_service(ctx):
     keep their injected backend unchanged.
     """
 
+    from adaos.services.applications.runtime_credentials import ApplicationRuntimeCredentials
+
+    if ApplicationRuntimeCredentials.declared(ctx):
+        return ApplicationRuntimeCredentials(ctx)
     service = ctx.secrets
     try:
         from adaos.services.crypto.secrets_service import SecretsService
@@ -54,21 +58,29 @@ def _active_secrets_service(ctx):
 
 
 def get(name: str, default: Optional[str] = None) -> Optional[str]:
-    """Return a secret by name or the provided default when missing."""
+    """Read a secret slot or default. Declared configuration.credentials slots
+    require a verified local owner and secrets.read; values resolve from the
+    node vault, while DEV is isolated. No secret value belongs in model context.
+    """
 
     ctx = require_cap("secrets.read")
     return _active_secrets_service(ctx).get(name, default=default)
 
 
 def set(name: str, value: str) -> None:
-    """Store or update a secret value for the active skill."""
+    """Bind a new secret value for the active skill. Declared credential slots
+    keep values in the node vault and inherit/adopt bindings across Beta/Stable.
+    Requires secrets.write; Beta rebinding preserves the previous Stable value.
+    """
 
     ctx = require_cap("secrets.write")
     _active_secrets_service(ctx).put(name, value)
 
 
 def delete(name: str) -> None:
-    """Remove a stored secret value for the active skill."""
+    """Revoke the selected credential and remove its binding. A retained snapshot
+    cannot resurrect a revoked value. Requires secrets.write for declared slots.
+    """
 
     ctx = require_cap("secrets.write")
     _active_secrets_service(ctx).delete(name)
