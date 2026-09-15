@@ -823,8 +823,14 @@ DEV source
   -> .adaos/trials/<candidate-id> materialization
   -> trial-local runtime
   -> Webspace-scoped runtime binding
-  -> optional launcher placement with Trial/beta badge
+  -> production desktop launcher placement with Trial/beta badge
 ```
+
+Before the first local Workspace release, Builder owns this local beta placement.
+Once installed, Applications owns the user's stable/prerelease selection.
+Neither route uses Preview, allocates a development Webspace, changes the desktop
+home scenario or grants external distribution permission. A service-only project
+without a declared launchable entry point is exempt from launcher placement.
 
 The candidate digest, not the mutable DEV tree or `dev/.runtime`, is the
 authority. The Trial Workspace is replaceable derived state and must carry

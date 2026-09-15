@@ -823,3 +823,14 @@ and materialization suite passes all 264 tests. Screenshots were inspected;
 application localization and header are not qualified by these denial checks,
 and an empty collection message is not proof of an empty isolated Trial store.
 The three preserved Workspace Builder source digests still match the baseline.
+
+### 2026-09-15: Trial Delivery Routing Correction
+
+User review caught an architectural error in the preceding containment fix:
+Trial had been opened in DEV Preview. The denial evidence remains valid, but
+does not qualify delivery. Canonical architecture now explicitly assigns local
+beta desktop placement to Builder before first Workspace publication and
+installed channel selection to Applications thereafter. Preview is DEV-only.
+Reading List's retained immutable Candidate is the repair target; its source
+must not be regenerated, manually patched or promoted to stable to make a beta
+launcher appear. Native isolated execution and desktop qualification remain open.

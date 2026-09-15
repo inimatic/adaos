@@ -220,7 +220,6 @@ separate **Show in Preview** action selects one of these sources:
 | --- | --- | --- | --- |
 | Prototype | exact DEV `ui_revisions/NNN.json` snapshot | any retained UI revision | `proto:` |
 | Automation | single retained Builder runtime snapshot | current completed result only | `active:` |
-| Publication | workspace artifact | current published version only | `public:` |
 
 The visual tree is a provenance projection, not three independent lists:
 
@@ -235,8 +234,11 @@ explicitly inferred historical Automation node. They must never make an old
 release appear to be the output of the current Automation merely because it is
 the only retained runtime snapshot.
 
-Prototype and Automation use DEV skill declarations; Publication uses
-workspace declarations. The Automation snapshot lives outside the DEV
+Prototype and Automation use DEV skill declarations. Trial and Publication
+are delivery nodes, not Preview targets: they open through an admitted
+Application RuntimeSelection in an existing production Webspace. Builder owns
+local beta launcher placement before the first Workspace release; Applications
+owns installed stable/prerelease selection thereafter. The Automation snapshot lives outside the DEV
 artifact tree, so publication cannot accidentally package Builder runtime
 history. Materialization applies the selected scenario content as an explicit
 payload override without rewriting the scenario pointer or the selected

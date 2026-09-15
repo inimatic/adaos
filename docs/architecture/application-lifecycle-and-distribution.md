@@ -342,6 +342,31 @@ Compare-and-swap revision protects selection from concurrent user and automatic
 update operations. Startup reconciliation re-resolves missing or stale derived
 runtime roots from immutable release evidence.
 
+### Desktop Placement Ownership
+
+Preview is exclusively for DEV Prototype and Automation. Neither Trial nor
+stable uses a Preview Webspace. A local Trial is an isolated beta execution
+root selected for an existing production Webspace, without replacing its home
+scenario, copying sources into Workspace or reading DEV data.
+
+Before an Application has its first local Workspace release, Builder owns its
+local Trial placement: prepare and admit the exact Candidate, record a
+`local_trial` RuntimeSelection and expose its entry point on `web_desktop` with
+a beta badge. A prepared Candidate alone is not a runnable placement. The
+launcher is derived from the admitted selection, never a scan of Trial folders.
+Opening it resolves UI, declarations, assets, tools and data to the same release.
+
+After local Workspace publication, Applications owns stable/prerelease intent
+and update policy. Builder may prepare another Candidate but must not silently
+opt the user into beta or overwrite that selection. Local Workspace publication
+and external registry distribution are separate operations; a local beta does
+not imply public beta discovery or permission to publish externally.
+
+The production host is resolved from the registered Builder/Preview relationship,
+not by inventing a Webspace or stripping suffixes from its ID. An explicit target
+must be an existing production Webspace. A missing, detached or inadmissible Trial
+returns an unavailable-runtime error; it must never fall back to DEV or stable.
+
 ### TrialAccessGrant
 
 A Trial access link is a revocable capability, not a discoverable beta listing.

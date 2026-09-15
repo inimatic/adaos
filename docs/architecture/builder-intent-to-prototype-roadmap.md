@@ -539,13 +539,17 @@ Implementation boundary: Local Trial/promotion mechanisms and historical Equipme
 - [x] `[must]` Reconcile an exact retained placement without repeating activation
   after a stale workflow response. Changed candidate, target, runtime or safety
   evidence still fails the generation precondition; preserve the first failure.
-- [x] `[must]` Persist the exact Trial execution pin in common materialization,
-  before room publication, for placement navigation and direct owner routes.
-  Qualify no DEV/stable fallback through both HTTP routing forms, after reopen,
-  with an interrupted rebuild and on desktop/mobile. An explicit unavailable
-  informer is a denial boundary, not functional Trial acceptance.
+- [x] `[must]` Fail closed when an exact Trial has no admitted executor.
+  Qualify no DEV/stable fallback through both HTTP routing forms. The historical
+  Preview-based denial is a containment fix, not the target delivery route.
+  An unavailable informer is not functional Trial acceptance.
   Evidence: `trial-navigation-02`, `trial-boundary-before/after`, and 264 Core
   boundary/recovery/materialization tests. Candidate-owned execution remains open.
+- [ ] `[must]` Remove Trial/Publication from Preview routing. Before the first
+  Workspace release, Builder admits and places local beta on the existing
+  production desktop through RuntimeSelection. Afterwards preserve Applications'
+  stable/prerelease intent. Qualify launcher discovery, open, reopen and return
+  home without overwriting the home scenario or creating another Webspace.
 - [ ] `[must]` Admit the immutable Candidate to the existing skill engine with
   its own prepared runtime, mutable data, declarations and SDK context. Record
   executed package/lock/data-root/caller identity; prove DEV/stable records and

@@ -425,17 +425,19 @@ these checks do not constitute a distributed exactly-once submission contract.
 Trial materialization is not Trial execution. The selected candidate must bind
 UI, tool declarations, executable packages and data scope to the same immutable
 release and WorkspaceLock. Owner-side materialization receives the explicit stage
-and candidate identity; a CLI-local YDoc update is not evidence of a live preview.
+and candidate identity; a CLI-local YDoc update is not evidence of a live runtime.
 When an isolated executor is unavailable, Trial-owned tool calls fail closed
 before idempotent replay, DEV/stable resolution or cross-node fallback. Platform
 shell tools outside the candidate remain separate from application execution.
-This boundary belongs to the common materializer, including placement navigation
-and direct owner-side materialization, not only the SDK's preview-selection UI.
-Persist the exact Candidate/release pin before publishing the room or changing
-its scenario identity. Derive its owner from the registered preview relationship;
-caller metadata cannot create a relationship or nominate another owner. A failed
-rebuild retains the pin and remains unavailable, rather than enabling DEV as a
-recovery path. Reopen must use the Candidate ID, not a potentially reused version.
+This boundary belongs to Application RuntimeSelection and common materialization,
+including placement navigation and direct owner-side routes. Trial is never a
+Preview target. Before the first Workspace release, Builder places local beta on
+the production desktop; Applications owns installed channel selection thereafter.
+Persist the exact Candidate/release selection before exposing the launcher or
+room. Caller metadata cannot create a production/Preview relationship or nominate
+another owner. A failed rebuild retains the selection and remains unavailable,
+rather than enabling DEV as a recovery path. Reopen uses the Candidate ID, not a
+potentially reused version; opening an app does not replace the desktop home.
 Client runtime read and stale-value caches include materialization identity, not
 only webspace and query arguments. Missing runtime admission is an error, not a
 transport reconnect and not permission to display another stage's records.

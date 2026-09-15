@@ -831,8 +831,9 @@ Three selections remain independent:
 3. Preview target: what the paired Preview materializes.
 
 Selecting a Process item changes focus/inspection only. `Open in Preview` is an
-explicit command. The Preview indicator shows `proto:`, `active:`, or
-`public:` and the exact revision/version.
+explicit command. The Preview indicator shows `proto:` or `active:` and the
+exact revision/version. Trial and stable use production placement navigation,
+not Preview; see Desktop Placement Ownership in the Application lifecycle.
 
 ### Navigation, Materials And Delivery Axes
 
