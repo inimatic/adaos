@@ -129,14 +129,28 @@ Project/Application identity collapse.
   with a deterministic conflict plan rather than mutating another Application.
 - [x] `[must]` `APP1-08` Add pre-update snapshot identity, consistency boundary,
   retention, restore receipt, and `snapshot_restore` migration mode.
+  This qualifies snapshot primitives, not Beta data adoption or the live
+  Application channel switch; those remain open under `APP1-13`/`APP1-14`.
 - [x] `[should]` `APP1-09` Add ABI, platform, permission, migration, and release
   compatibility summaries to every plan.
 - [x] `[could]` `APP1-10` Add operator simulation for removal and retention
   outcomes before apply.
 - [ ] `[deferred]` `APP1-11` General dependency solver and side-by-side versions
   of one shared component.
-- [ ] `[deferred]` `APP1-12` General backward data migration and unattended
-  irreversible migration.
+- [ ] `[deferred]` `APP1-12` Backward data migration, including preserving
+  newer-schema writes on downgrade, and unattended irreversible migration.
+- [ ] `[must]` `APP1-13` Enforce one effective Stable/Beta selection per local
+  Application installation and one channel-specific desktop representation.
+  Reconcile all Webspaces for that installation; reject parallel verification
+  Beta, stale-tab/API execution and old background workers after cutover.
+  Consume Artifact Pipeline `AP4-20`, not a UI-only hide/show implementation.
+- [ ] `[must]` `APP1-14` Integrate forward-migrated Workspace snapshot data into
+  each new Beta from the accepted Stable baseline, not the previous Beta, and
+  preserve Beta writes on Stable acceptance (`Keep data=true`). Consume
+  `AP4-21`; expose migration evidence, protected recovery copies and explicit
+  loss confirmation for snapshot rollback. Never publish user data or infer a
+  reset/rollback approval from the channel toggle. Show Beta's data-loss risk
+  and gate Beta-to-Beta reseeding after writes, including automatic updates.
 
 **Exit proof:** two Applications sharing one component install and remove
 without premature package/data deletion; an incompatible version is rejected;
@@ -228,6 +242,8 @@ Git repository as the artifact store.
   prerelease digest and never rebuild during promotion.
 - [x] `[must]` `APP3-05` Implement `stable|prerelease` subscriptions and derive
   effective channel/release without mutating persistent user intent.
+  Subscription primitives do not qualify the Applications control or exclusive
+  runtime/data cutover; see `APP4-03`, `APP1-13` and `APP1-14`.
 - [x] `[must]` `APP3-06` Implement targeted, expiring, revocable
   `exact_release|follow_prerelease` TrialAccessGrant resolution and replay
   protection.
@@ -296,7 +312,10 @@ Builder development and consumes only public contracts.
   UI and locale-resource evidence; governed state is `automation_ready`.
 - [ ] `[must]` `APP4-03` Expose install, update, remove, stable/prerelease track,
   Trial-link install, pause/pin, and operation recovery through SDK/MCP-backed
-  actions.
+  actions. The accepted Prototype already shows the channel control; its live
+  implementation is pending. Switching replaces the existing Application
+  representation, never adds a parallel Beta. A schema-incompatible return to
+  Stable opens the snapshot recovery decision with possible data loss.
 - [ ] `[must]` `APP4-04` Show publisher display identity and technical
   fingerprint, visibility, exact effective release, permissions, dependencies,
   migration/backup state, release notes, and Development Report status.
@@ -549,6 +568,16 @@ collaboration scope expands.
   different shared dependency shape.
 - [ ] `[could]` `APP6-09` Run a longer trusted prerelease pilot with staged
   rollout and aggregate failure metrics.
+- [ ] `[must]` `APP6-10` Qualify existing Stable data -> exclusive Beta ->
+  algorithmic migration -> reviewed Stable adoption with Beta-created records.
+  Publish two successive Betas before Stable acceptance and prove that each
+  validates the full Stable migration, not a Beta-to-Beta-only path. Confirm
+  potential loss/retention of first-Beta writes and reject silent auto-reset.
+  Also cover first-release `Keep data`, rejected old tabs/direct links/workers,
+  restart during cutover/migration, preserved data on runtime rebuild, failed
+  migration before writes and explicitly confirmed snapshot restore after
+  writes. Prove one desktop representation, no repeated migration on channel
+  promotion, no silent reset and no user records in model requests or packages.
 
 **Exit proof:** every required proof in the target architecture passes without
 manual state/database edits or source changes outside Builder for Application
@@ -568,8 +597,10 @@ These tasks remain visible but do not block APP0-APP6.
   organization publisher principals, threshold stable approval, and audit.
 - [ ] `[deferred]` `APP7-05` Add multi-user Application development, trusted
   development groups, reviewable proposals, and WorkLog/ChangeSet semantics.
-- [ ] `[deferred]` `APP7-06` Add general backward migration and separately
-  governed irreversible migrations.
+- [ ] `[deferred]` `APP7-06` Add backward data migration and separately
+  governed irreversible migrations. The initial track moves forward and uses
+  explicitly acknowledged, potentially lossy snapshot recovery on downgrade;
+  it does not promise reverse transformation or merging two active datasets.
 - [ ] `[deferred]` `APP7-07` Add simultaneous side-by-side shared component
   versions and a general dependency solver.
 - [ ] `[deferred]` `APP7-08` Add public prerelease discovery, ranking, and broad

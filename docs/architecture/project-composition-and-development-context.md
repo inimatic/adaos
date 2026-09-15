@@ -86,7 +86,10 @@ The research-domain workflow remains owned by
     runtime materialized directly from mutable DEV source. Stable runs from
     `workspace/.runtime`; beta runs from an immutable, Workspace-shaped
     `.adaos/trials/<candidate-id>` projection. `alpha` is not a Workspace
-    activation stage.
+    activation stage. These are code-storage authorities, not parallel active
+    Application channels. Selecting Beta replaces Stable in the desktop and
+    execution paths for that local installation; a separate verification Beta
+    alongside running Stable is prohibited.
 
 ## Vocabulary
 
@@ -267,8 +270,11 @@ therefore exposes the complete gated Project lifecycle:
   Workspace-compatible structure. Mutable DEV source is never the stable or
   Trial runtime authority;
 - `trial-decide ... accept` records user acceptance of that exact candidate
-  as beta evidence. Rejection detaches the Trial and keeps stable Workspace
-  source and release pointers unchanged;
+  and its migration/data evidence. Rejection leaves Stable source/release
+  pointers unchanged but is not lossless data recovery: restoring a snapshot
+  after Beta writes requires explicit loss acknowledgement. Acceptance retains
+  working data under the
+  [Application data contract](application-lifecycle-and-distribution.md#data-migration-and-rollback);
 - `promote --confirm` repeats admission, reload, and health checks before
   copying the accepted Trial source into Workspace source, moving the stable
   ProjectRelease pointer, and materializing the exact package lock in the

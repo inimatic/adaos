@@ -65,7 +65,9 @@ component-scoped preview slots, for example
    root under `.adaos/trials/<candidate-id>`. It does not modify
    `workspace/.runtime`.
 5. `stable` and `prerelease` are publication channels over the same immutable
-   ApplicationRelease identity. `alpha` is not a Workspace channel.
+   ApplicationRelease identity. Each local Application installation has one
+   effective channel and one channel-specific desktop representation, never
+   concurrent Stable and Beta presentations. `alpha` is not a Workspace channel.
 6. There is one canonical prerelease line per Application. Only the current
    publisher may move it. Other subnets submit Development Reports rather than
    publishing upstream beta variants or code contributions.
@@ -96,10 +98,10 @@ component-scoped preview slots, for example
     scan receipts are explicitly deferred until the core Application path is
     proven. Existing package signature, digest, path, extraction, permission,
     and Trial-isolation checks remain mandatory.
-14. Forward migrations are supported. Every state-changing activation creates
-    or names a verified pre-update data snapshot when policy requires it.
-    General backward migration is deferred; snapshot restore is the first
-    rollback mechanism.
+14. The initial Application track develops forward migrations on synthetic
+    data and verifies them locally on a Workspace snapshot during Beta.
+    Backward data migration is deferred. Rollback restores a verified snapshot
+    and requires explicit loss acknowledgement when newer writes would be lost.
 15. Application installation and removal are aggregate operations. Shared
     components are reference-counted and are removed only when no installation
     or active runtime lease still references them.
@@ -342,6 +344,19 @@ Compare-and-swap revision protects selection from concurrent user and automatic
 update operations. Startup reconciliation re-resolves missing or stale derived
 runtime roots from immutable release evidence.
 
+Selection is exclusive, not a second installation or a second desktop icon.
+All Webspaces addressing the same local Application installation/data scope
+must resolve the same effective release. A separate verification Beta alongside
+a running Stable is prohibited, including through another Webspace or direct
+link. Retained Stable packages, sources and snapshots are inactive recovery
+material while Beta is selected. Unrelated Applications and other subnets keep
+their own selections. Synthetic DEV Preview remains a separate development path.
+
+The switch fences the previous generation's application commands, subscriptions
+and background workers before admitting the new one. Hiding a desktop icon
+alone is not execution isolation; stale tabs and direct API calls cannot keep
+the deselected version active or silently fall back to it.
+
 ### Desktop Placement Ownership
 
 Preview is exclusively for DEV Prototype and Automation. Neither Trial nor
@@ -385,6 +400,11 @@ The currently qualified local data mode is `empty`; other modes, delegated
 consumer execution and remote-node forwarding require their own admission and
 acceptance. This is not an additional OS sandbox or a replacement for deferred
 Root Guard hardening.
+
+Implementation boundary: Applications' accepted Prototype includes the
+stable/pre-release control, but its SDK-backed switching, exclusive runtime
+cutover and migrated-data continuity are not yet qualified. Existing selection
+records and a working local `empty` Trial do not close that product workflow.
 
 ### TrialAccessGrant
 
@@ -624,6 +644,10 @@ direct command obtains a bounded plan and opens `Review`; confirmation applies
 that exact plan digest. Pre-release following and automatic update are explicit
 toggles. New intent defaults to prerelease following `false` and automatic
 update `true`. `Details`, `Versions`, `Operations`, and `Reports` are peer tabs.
+The pre-release toggle selects the one effective Application version; it never
+adds a parallel Beta launcher. Turning it off requests an admitted transition,
+not an unconditional downgrade of the current data schema. A required snapshot
+restore shows its recovery point and possible newer-write loss before consent.
 
 Static scenario localization is owned by the scenario package. The scenario
 declares locale resources in `webui.json` and stores string dictionaries under
@@ -821,23 +845,83 @@ the source and target data schema and one of:
 - `snapshot_restore`, with a consistent pre-update snapshot;
 - `irreversible`, which is not admitted to unattended activation.
 
-For the initial Application track, a state-changing activation:
+### Forward Migration Through Beta
 
-1. quiesces writes or obtains a consistency boundary;
-2. creates or resolves an immutable snapshot;
-3. records schema, snapshot digest, retention, and restore procedure;
-4. runs the forward migration once;
-5. activates and verifies the new release;
-6. restores the prior runtime and complete snapshot on failure when policy
-   permits.
+Builder Automation receives versioned schemas, field semantics, relations and
+constraints, not real user records. It develops an algorithmic migration and
+invariant tests on synthetic data, including boundary cases. Ambiguous mappings
+require clarification. Migration execution has no LLM dependency and does not
+send records to Root, providers or the publisher; exported diagnostics require
+privacy review and synthetic reproduction rather than raw row/error payloads.
 
-Snapshot restore may discard writes accepted after cutover. Automatic policy
-must either prevent those writes until acceptance or disclose and require an
-attended decision. General backward data transformation remains deferred.
+When Stable exists, every newly published Beta release must prove the complete
+migration path from the declared Stable baseline to that candidate, not merely
+from the previous Beta. Local activation seeds the new Beta from its Stable data
+and reruns the complete algorithmic path for the new candidate. This includes
+Stable writes up to the cutover snapshot; while Beta is active, its retained
+Stable baseline stays inactive and unchanged. The previous Beta's working data
+is not the next migration source. An unchanged schema requires no-op/compatibility
+evidence. Unsupported Stable schemas block activation rather than silently
+starting empty. Publication distributes code and migration declarations, never
+the publisher's real data; each consumer performs this step locally.
 
-Exact-digest prerelease-to-stable promotion does not rerun migration merely
-because the channel label changed. A migration runs only when local effective
-data/runtime state changes.
+Beta is explicitly a risky working state: records created or changed only in
+Beta may be lost from the active dataset on a new Beta or snapshot rollback.
+Before replacing a Beta with admitted writes, show that the next candidate
+starts again from Stable, retain the displaced Beta data for bounded recovery,
+and require explicit loss acknowledgement. Auto-update or opting into
+pre-release is not blanket consent to silently reset those records. This is
+not a merge and does not permit Stable to run alongside Beta.
+
+For an existing Application, activation of each new Beta:
+
+1. fences the previously selected Stable or Beta execution generation and
+   establishes a consistent boundary for declared data stores and attachments;
+2. creates or resolves the verified Stable-baseline snapshot and separately
+   preserves the displaced working state, retaining schema, digest, recovery
+   procedure and retention holds for both;
+3. creates the Beta working data from the Stable snapshot and applies the exact
+   forward migration once, with a durable execution/uncertain-outcome record;
+4. verifies declared invariants and activates only Beta; Stable stays inactive;
+5. presents migration results and exceptions for local human review alongside
+   the Application behavior, binding evidence to release, migration and data
+   generation. A changed migration or source snapshot requires new evidence.
+
+Acceptance adopts the Beta working data, including admitted Beta writes, into
+the one Stable installation and establishes the next Stable data baseline.
+`Keep data` defaults to true for this acceptance, not for Beta-to-Beta reseeding;
+it is not a merge between independently writable Stable and Beta databases.
+A reset instead of preservation requires an explicit destructive decision and a retained
+recovery copy. First-release Beta without existing Workspace data can start
+empty and follows the same preservation rule. Before first Stable, initialization
+evidence replaces the nonexistent Stable-migration proof. Synthetic fixtures must not be
+silently installed as production data. Application user data never enters a
+published package or another subnet's installation.
+
+Exact-digest Beta-to-Stable promotion preserves data identity and does not rerun
+migration merely because the channel label changed. Rebuilding a derived Trial
+runtime/root or replaying the same release activation must not reseed its
+mutable working data; a distinct Beta release is the reseeding boundary. Both
+the immutable pre-transition snapshot and current Beta data are protected from
+cleanup until adoption or recovery has a durable receipt.
+
+### Snapshot Rollback
+
+The initial track moves schemas forward; all backward data migration is
+deferred. The generic artifact contract's `reversible` capability does not
+require an inverse data transformation for this track. Failure before admitting
+new writes may restore the prior runtime and complete snapshot automatically
+when its recorded recovery contract permits it. Restoring the displaced prior
+Beta after a failed Beta update is snapshot recovery, not reverse migration.
+
+After Beta has accepted writes, returning to an older Stable may require
+snapshot restore. Show the recovery point and potential loss of subsequent
+writes and require explicit confirmation before restoration; never treat the
+pre-release toggle as that consent. Retain the displaced Beta data separately
+for bounded recovery, without promising a merge or reverse migration. Automatic
+updates may not authorize this lossy restore. An uncertain outcome remains
+fenced for reconciliation, not blind re-execution. Snapshot rollback is an
+exceptional recovery action, not a second active channel.
 
 ## Publisher Identity and Authority
 

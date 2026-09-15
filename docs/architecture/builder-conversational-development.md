@@ -265,9 +265,12 @@ WorkspaceLock selection. In the single-user MVP its files are materialized in
 an isolated Workspace-shaped `.adaos/trials/<candidate-id>` root, while a
 durable activation record retains the candidate digest, target Webspace,
 runtime bindings, data mode, expiry, previous bindings, and terminal/rollback
-status. Mutable DEV source is previewed only through `dev/.runtime`; stable
-continues to run from `workspace/.runtime`. A restart rebuilds the Trial
-Workspace from the same candidate digest; the projection is not source truth.
+status. Mutable DEV source is previewed only through `dev/.runtime`. Stable
+code remains in `workspace/.runtime`, but that Application's Stable execution
+is inactive while Beta is selected. There is one effective channel and one
+channel-specific desktop representation; a parallel verification Beta is
+prohibited. A restart rebuilds Trial code/runtime from the same candidate
+digest without resetting mutable working data.
 
 `ProjectPlacement` records where a Trial or stable Release is exposed to a
 user. It binds a project result, zone/subnet/Webspace destination, host
@@ -277,9 +280,17 @@ hosts from the installed `web_desktop` scenario, but the durable contract uses
 a host capability and does not hard-code that scenario as the final model.
 
 Full data sandboxing and simultaneous versions of one shared skill are
-deferred. Safety is not deferred: Trial admits `empty`, `mock`, and proven
-`read_only` data by default; live writes require explicit approval and proven
-reversibility. A different version of a shared active skill is blocked unless
+deferred. Existing-Application Beta migrates a verified local Workspace
+snapshot; first-release Beta may start empty. Automation develops algorithmic
+forward migrations on synthetic data. Every new Beta proves Stable-to-candidate
+migration again, not only previous-Beta compatibility; Beta-only writes are at
+risk on replacement, with explicit loss acknowledgement and recovery retention.
+Beta review covers migration results and Application behavior. Acceptance keeps
+working data and establishes the next Stable baseline; backward migration is
+deferred and lossy snapshot restore requires explicit confirmation under the
+[Application data contract](application-lifecycle-and-distribution.md#data-migration-and-rollback).
+Direct live-source effects still require explicit approval and proven recovery.
+A different version of a shared active skill is blocked unless
 the runtime can prove a safe Webspace-scoped binding. Prerelease distribution
 channels and audiences are not mandatory business states. Alpha is reserved for
 disposable DEV preview if product copy needs the word; Workspace placement uses

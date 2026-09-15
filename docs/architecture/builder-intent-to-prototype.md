@@ -433,6 +433,12 @@ This boundary belongs to Application RuntimeSelection and common materialization
 including placement navigation and direct owner-side routes. Trial is never a
 Preview target. Before the first Workspace release, Builder places local beta on
 the production desktop; Applications owns installed channel selection thereafter.
+Each local Application installation has only one effective Stable or Beta
+representation. There is no parallel verification Beta; the deselected release
+cannot remain active through another Webspace, stale tab or background worker.
+Forward migration, Beta data adoption and explicitly acknowledged snapshot
+rollback follow the
+[Application data contract](application-lifecycle-and-distribution.md#data-migration-and-rollback).
 Persist the exact Candidate/release selection before exposing the launcher or
 room. Caller metadata cannot create a production/Preview relationship or nominate
 another owner. A failed rebuild retains the selection and remains unavailable,

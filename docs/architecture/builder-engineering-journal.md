@@ -982,3 +982,29 @@ the reviewed README in DEV; it does not replace the accepted Workspace `0.1.1`.
 An additional request-budget test verifies encoded image bytes count toward the
 local bound before Root's 2 MiB JSON ingress limit; no image-output qualification
 is implied.
+
+### 2026-09-15: Exclusive Application Channel And Data Continuity Decision
+
+User review fixes one effective Stable/Beta representation per local Application
+installation. A separate verification Beta alongside running Stable is forbidden.
+Architecture references that implied concurrent usability now describe separate
+code storage with exclusive execution. Applications' channel toggle is accepted
+Prototype behavior, not qualified operational switching.
+
+The earlier Reading List acceptance retained the exact code but did not adopt
+Trial records; that is a gap, not the target data policy. Read-only inspection
+found two Trial records and no Workspace records; no recovery write was made.
+Canonical Application architecture now requires synthetic-data development,
+algorithmic forward migration of a local Workspace snapshot, preserved Beta
+working data on acceptance, and explicit possible-loss consent for snapshot
+restore. Backward data migration remains deferred. Open implementation/proof
+items are `APP1-13`/`APP1-14`, `APP6-10`, `AP4-20`/`AP4-21` and BIP-28.
+This increment changes documentation only, not runtime behavior or user data.
+
+The subsequent clarification requires each newly published Beta to prove the
+full Stable-to-candidate migration again. Each local activation seeds from its
+accepted Stable baseline, not the previous Beta's working data. Beta-only writes
+are explicitly at risk on the next Beta; retention and loss acknowledgement
+precede reseeding, and auto-update cannot silently reset records. Replaying an
+existing activation or rebuilding its runtime is not a new Beta and preserves
+data. Acceptance keeps Beta data and establishes the next Stable baseline.

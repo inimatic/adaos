@@ -196,7 +196,7 @@ proof is not silently promoted to stand or production acceptance.
 | AP1 | 12/14 | validated-stand plus local workflow gate (bounded, single-zone) | deterministic package build/store/verify, CAS deduplication and bounded retention diagnostics, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, deployed binary transport, detached Ed25519 trust/admission, deterministic no-replay publication journal, immutable release binding, strict workflow/validation/adapter/role locks, separately provisioned signer/trust, and clean required-mode activation | streamed/object-store transport, multi-zone durability, publisher namespaces, and commercial entitlements remain open/deferred |
 | AP2 | 10/16 | validated-local (bounded) | exact component/dependency, project composition/dependency, permission, schema, migration, validation, and workflow adapter-binding locks; complete-set fixed-point selection; consistent bindings and reverse consumers | physical bound/shared activation semantics, lock explain UI, plan cache, publication compatibility, and stand validation |
 | AP3 | 13/14 | validated-stand plus local workflow generation proof (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, complete workflow/code generation admission, and clean package-only activation | unattended irreversible migrations remain deferred |
-| AP4 | 14/19 | validated-local plus bounded live publication evidence | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated Workspace-shaped Trial roots under `.adaos/trials`, immutable Builder task snapshot, concurrent-DEV compare-and-switch, runtime authority split, legacy layout migration, and no-alpha activation | policy-proven evidence reuse, operator visibility, current-contract external Candidate reconciliation, and broader stand validation |
+| AP4 | 14/21 | validated-local plus bounded live publication evidence | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated Workspace-shaped Trial roots under `.adaos/trials`, immutable Builder task snapshot, concurrent-DEV compare-and-switch, runtime authority split, legacy layout migration, and no-alpha activation | exclusive Application channel cutover, forward-migrated data adoption, policy-proven evidence reuse, operator visibility, current-contract external Candidate reconciliation, and broader stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
 | AP6 | 12/14 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, one fail-closed package/legacy route contract, and explicit no-op planning for an up-to-date subscription | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
 | AP7 | 15/17 | validated-stand + second-machine-core-recovered + local workflow proof (bounded), route-fix pending | source-faithful representative LLM/Codex scenario+skill proof, bounded resilience regressions, live Builder publication, external-backend clean required-mode activation, package/release/channel survival across redeploy, exact-build local A/B recovery, generation-bound second-machine core convergence, and manifest-bound workflow authoring/package/role/migration/rollback proof | candidate-before-health proxy admission, frontend/WebSocket continuity, offline browser-draft merge, plus broad production and marketplace acceptance remain open/deferred |
@@ -586,12 +586,12 @@ creates a candidate from an exact stable release, activates it below
 records acceptance or rollback evidence. A legacy Trial is recovered without
 loss, and one chat-created Project completes this path through stable release.
 
-Critical review, 2026-09-05: the previous single `AP4-11` item was not an
-implementable unit. It mixed runtime authority, physical layout, legacy
-migration, product controls, and acceptance evidence. It also left beta in the
-primary Workspace runtime, which prevented stable and Trial from remaining
-independently usable. `AP4-11` through `AP4-18` separate those concerns and
-make the non-recursive Trial layout and migration failure modes explicit.
+Implementation boundaries: `AP4-11` through `AP4-18` separate runtime authority,
+physical layout, legacy migration, product controls and evidence. Separate
+Stable/Trial storage preserves source and recovery identities; it does not
+authorize concurrent execution or two desktop versions of one Application.
+Existing checked receipts do not qualify exclusive channel cutover or migrated
+data preservation. Those mechanisms remain open under `AP4-20`/`AP4-21`.
 
 - [x] `[must]` `AP4-01` Resolve installed stable release to exact SourceRef and
   ProjectRelease before DEV creation.
@@ -650,6 +650,20 @@ make the non-recursive Trial layout and migration failure modes explicit.
   Process projection. The exact Trial is already selectable by deterministic
   chat command, but the contextual Trial action must also appear without an
   Automation-local delivery receipt.
+- [ ] `[must]` `AP4-20` Journal exclusive Application execution cutover before
+  admitting Beta. Fence the previous generation across Webspaces, stale tabs,
+  direct calls and background workers; retain Stable files only as inactive
+  recovery material. Reconcile interruption without dual execution or silent
+  fallback. A separately running verification Beta is prohibited.
+- [ ] `[must]` `AP4-21` Execute the exact forward migration on a consistent local
+  Stable snapshot for every new Beta, never using prior Beta working data as
+  the migration baseline. Record source/target schemas and data generation, and
+  check invariants before Beta admission. Preserve working data on rebuild and
+  exact-digest Stable adoption without reapplying migration. Protect declared
+  stores/attachments and both recovery copies; qualify one-shot reconciliation
+  and snapshot restoration. After new writes, restoration or reseeding a new
+  Beta requires explicit loss acknowledgement. Same-release replay does not
+  reseed data. Backward migration remains `APD-11`, not a gate here.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 candidate publication regressions in
@@ -1097,9 +1111,10 @@ active refactoring:
   must make it configuration-only when admitted.
 - [ ] `[deferred]` `APD-10` Fully unattended stateful updates and irreversible
   migrations.
-- [ ] `[deferred]` `APD-11` General backward data transformation. The first
-  Application track uses reversible migrations or verified pre-update snapshot
-  restore.
+- [ ] `[deferred]` `APD-11` Backward data transformation, including lossless
+  downgrade of Beta-created records. The initial Application track uses
+  algorithmic forward migration and verified pre-transition snapshot restore;
+  loss of subsequent writes requires explicit acknowledgement.
 - [ ] `[deferred]` `APD-12` Root Guard quarantine, malware/SBOM/dependency
   admission, isolated scanners, and signed guard receipts. Existing artifact
   signature, digest, path, extraction, permission, and Trial checks remain

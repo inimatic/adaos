@@ -567,7 +567,21 @@ Implementation boundary: Local Trial/promotion mechanisms and historical Equipme
   and `trial-browser-04`; exact Trial execution headers and unchanged DEV data.
 - [ ] `[must]` Qualify the installed-Application path without overwriting
   Applications' stable/prerelease intent. No new Webspace or home-scenario
-  replacement is permitted.
+  replacement is permitted. Consume the exclusive cutover in `AP4-20` and
+  `APP1-13`: one effective channel/desktop representation, no parallel
+  verification Beta, including through old links or background execution.
+- [ ] `[must]` Include versioned data schemas, semantics and invariants in
+  Automation context without real user records. Require algorithmic forward
+  migrations tested on synthetic data and clarification of ambiguous mappings;
+  migration execution itself must not call an LLM or export records. Every new
+  Beta must prove the complete path from Stable, not only the previous Beta.
+- [ ] `[must]` Bind Beta review to `AP4-21` migration/data evidence and preserve
+  Beta writes on acceptance (`Keep data=true`); distinguish immutable code from
+  mutable working data. Qualify explicit recovery-point/loss confirmation for
+  snapshot rollback, including cancellation and restart of that decision.
+  Also expose and qualify possible loss when a new Beta starts from Stable
+  again instead of carrying forward records entered in the preceding Beta.
+  Backward migration remains deferred under `APP1-12`/`APD-11`.
 - [x] `[must]` Admit local `empty` Trial data to native skill execution with its
   own context, declarations, runtime slots and store, using original node policy.
   Verify package/lock/release identity; preserve DEV data across Trial writes and

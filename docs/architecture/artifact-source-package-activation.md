@@ -752,6 +752,20 @@ unattended policy must either prevent such writes until acceptance or reject
 snapshot-only rollback. Exact-digest prerelease-to-stable promotion does not
 rerun migration when local data/runtime state is already on that release.
 
+For Application delivery, follow the canonical
+[forward migration and snapshot rollback contract](application-lifecycle-and-distribution.md#data-migration-and-rollback).
+An existing installation enters Beta using a verified local Workspace snapshot
+and an algorithmic forward migration developed on synthetic data. Each new
+Beta must prove the full Stable-to-candidate path and seed from Stable again,
+not from previous Beta working data. Replacing Beta-only writes requires a
+protected recovery copy and explicit possible-loss acknowledgement. Stable is
+inactive during Beta, not a concurrent verification baseline. Acceptance keeps
+Beta working data and binds migration/data evidence to the exact release;
+snapshot rollback after new writes requires explicit loss acknowledgement.
+Backward data transformation is deferred, not a prerequisite to admit this
+snapshot-based forward path. Data modes describe storage provenance, not
+permission to expose two active Application versions.
+
 Trial completion records start/end time, computed duration, health and reload
 receipts, observations, and rollback disposition. Rejection atomically detaches
 the isolated trial Workspace into bounded rollback history before the
@@ -832,10 +846,12 @@ Neither route uses Preview, allocates a development Webspace, changes the deskto
 home scenario or grants external distribution permission. A service-only project
 without a declared launchable entry point is exempt from launcher placement.
 
-The candidate digest, not the mutable DEV tree or `dev/.runtime`, is the
-authority. The Trial Workspace is replaceable derived state and must carry
-provenance for its exact beta Candidate. The primary `workspace/.runtime`
-continues to expose stable while the Trial is active. The
+The candidate digest, not the mutable DEV tree or `dev/.runtime`, is the code
+authority. Trial code/runtime projections are replaceable derived state and
+must carry provenance for their exact beta Candidate; mutable user data is
+retained independently and must survive projection rebuilds. Primary Workspace
+Stable files remain available for recovery, but that Application's Stable
+execution and desktop representation are inactive while Beta is selected. The
 durable `adaos.trial.activation.v1` record contains at minimum:
 
 - `trial_id`, project/candidate/release refs and exact package digests;
@@ -849,7 +865,8 @@ durable `adaos.trial.activation.v1` record contains at minimum:
 opened?" It binds either a TrialActivation or stable Release to a destination
 and host capability. Placement is not publication and does not mutate channel
 identity. A stable result may be published and installed but not yet placed; a
-Trial may be placed while stable remains unchanged.
+Trial may be placed while Stable source/release identity remains unchanged,
+but not alongside an active Stable placement of the same Application.
 
 The single-version runtime constraint remains fail-closed. Before Trial
 activation AdaOS compares every candidate skill binding with active reverse
@@ -858,10 +875,13 @@ of a shared active skill is rejected unless a Webspace-scoped resolver proves
 that the candidate cannot leak into another scenario. Context-aware
 multi-version resolution is deferred, but conflict detection is mandatory.
 
-For the MVP, `empty`, `mock`, and proven `read_only` modes are admitted by
-default. `real` writes require an explicit approval plus a tested reversible
-effect/rollback contract; unknown or irreversible effects are blocked. Full
-data-space isolation, simultaneous shared-skill versions, multiple prerelease
+The primitive data modes include `empty`, `mock`, and proven `read_only`.
+Existing-Application Beta uses the snapshot migration contract above; first
+installation may use `empty`. Direct `real` writes require explicit approval
+and a tested recovery contract; unknown or unrecoverable effects are blocked.
+A verified snapshot restore may satisfy data recovery without reverse migration,
+but does not undo arbitrary external effects. Full data-space isolation,
+simultaneous shared-skill versions, multiple prerelease
 lines, and advanced audience rollout policy remain deferred extension seams.
 The baseline public prerelease subscription described below is not deferred.
 
@@ -871,7 +891,10 @@ Prerelease installation follows the same package-backed route as stable
 installation, but targets an isolated `.adaos/trials/<candidate-id>` projection with prerelease
 provenance. It does not write Workspace stable source, replace
 `workspace/.runtime`, move the stable channel, or close user feedback as
-verified. Remote prerelease archives are stored by Root as immutable
+verified. This describes physical package/source isolation, not concurrent
+execution: the selected Beta replaces Stable in the Application's existing
+desktop representation and fences the deselected execution generation.
+Remote prerelease archives are stored by Root as immutable
 content-addressed artifacts. A separate `adaos-registry-beta` repository, if
 temporarily used, is a compatibility metadata/source adapter rather than
 artifact, channel, or retention authority.
@@ -880,6 +903,11 @@ When a prerelease channel moves, AdaOS may update the local Trial source and
 Trial Workspace according to the user's update policy. The update must create
 or atomically replace an exact candidate-scoped Trial root; it cannot mutate the
 stable Workspace in place.
+Each new release seeds and migrates from the local accepted Stable baseline;
+previous Beta data is retained for recovery, not implicitly used as input or
+merged. Auto-update cannot bypass possible-loss confirmation. Replaying the
+same activation or rebuilding its runtime must not reseed/reset working data.
+
 Promotion from prerelease to stable is always an explicit governed operation
 that rechecks freshness, admission, activation health, and rollback evidence.
 It moves stable metadata to the exact prerelease digest and never rebuilds the
