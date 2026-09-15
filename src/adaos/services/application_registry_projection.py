@@ -1222,13 +1222,42 @@ class ApplicationRegistryProjection:
                 LIMIT 5
                 """
             ).fetchall()
+            latest_epoch = con.execute(
+                """
+                SELECT payload_json
+                FROM projection_epoch
+                ORDER BY started_at DESC, epoch_id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            stale_rows = con.execute(
+                """
+                SELECT ai.source_kind, ai.application_id, ai.source_ref,
+                       ai.validation_status, ai.updated_at, ai.source_id
+                FROM application_index ai
+                LEFT JOIN projection_source ps ON ps.source_id=ai.source_id
+                WHERE ai.source_id IS NOT NULL AND ps.source_id IS NULL
+                ORDER BY ai.updated_at DESC, ai.source_kind, ai.application_id
+                LIMIT 50
+                """
+            ).fetchall()
             trust = self.snapshot_trust_state()
+        epoch = _load_json(latest_epoch["payload_json"], {}) if latest_epoch else None
+        seal_receipt = (
+            epoch
+            if isinstance(epoch, Mapping)
+            and str(epoch.get("state") or "") == "closed"
+            and str(epoch.get("shutdown_kind") or "") == "graceful"
+            else None
+        )
         return {
             "schema": "adaos.application.registry_projection.diagnostics.v1",
             "db_path": str(self.db_path),
             "schema_version": APPLICATION_REGISTRY_PROJECTION_SCHEMA_VERSION,
             "trusted_snapshot": trust,
             "projection_status": trust.get("projection_status", "warming"),
+            "epoch": epoch,
+            "seal_receipt": seal_receipt,
             "source_counts": [
                 {
                     "source_kind": row["source_kind"],
@@ -1245,7 +1274,31 @@ class ApplicationRegistryProjection:
                 }
                 for row in app_counts
             ],
+            "validation_counts": self.validation_counts(),
+            "stale_rows": [
+                {
+                    "source_kind": row["source_kind"],
+                    "application_id": row["application_id"],
+                    "source_ref": row["source_ref"],
+                    "validation_status": row["validation_status"],
+                    "updated_at": row["updated_at"],
+                    "source_id": row["source_id"],
+                }
+                for row in stale_rows
+            ],
             "recent_operations": [_load_json(row["payload_json"], {}) for row in latest_journal],
+            "query_sources": {
+                "development_project_list": "sqlite_projection",
+                "development_project_detail": "sqlite_projection_preflight",
+                "development_component_owner": "sqlite_projection",
+                "application_installed_summaries": "sqlite_projection",
+                "application_release_channels": "sqlite_projection",
+                "authoritative_sources": [
+                    "dev_project_manifest",
+                    "application_store_record",
+                    "federated_application_fact",
+                ],
+            },
             "query_ms": round((time.perf_counter() - started) * 1000.0, 3),
         }
 

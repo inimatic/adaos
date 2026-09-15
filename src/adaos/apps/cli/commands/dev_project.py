@@ -3,31 +3,41 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 import typer
 
 from adaos.apps.cli.commands import project as project_cli
 from adaos.services.agent_context import get_ctx
 from adaos.services.artifact_pipeline.project_build import project_source_snapshot
-from adaos.services.builder.workspace import (
-    BuilderSourceRecoveryRequired,
-    BuilderWorkspaceService,
-)
-from adaos.services.root.service import RootDeveloperService
 from adaos.services.semver import bump_version
 from adaos.sdk.developer import compositions
+
+
+if TYPE_CHECKING:
+    from adaos.services.builder.workspace import BuilderWorkspaceService
+    from adaos.services.root.service import RootDeveloperService
 
 
 app = typer.Typer(help="Manage complete Projects in the local DEV workspace.")
 
 
 def _service() -> BuilderWorkspaceService:
+    from adaos.services.builder.workspace import BuilderWorkspaceService
+
     return BuilderWorkspaceService.from_context()
 
 
 def _root_service() -> RootDeveloperService:
+    from adaos.services.root.service import RootDeveloperService
+
     return RootDeveloperService()
+
+
+def _registry_diagnostics() -> dict[str, Any]:
+    from adaos.services.application_registry_projection import ApplicationRegistryProjection
+
+    return ApplicationRegistryProjection(Path(get_ctx().paths.state_dir())).diagnostics()
 
 
 def _dev_workspace_root(service: BuilderWorkspaceService) -> Path:
@@ -157,6 +167,73 @@ def registry_rebuild(
                 f"scanned={result.get('scanned', 0)}",
                 f"indexed={result.get('indexed', 0)}",
                 f"invalid={result.get('invalid', 0)}",
+            )
+        )
+    )
+
+
+@app.command("registry-diagnostics")
+def registry_diagnostics(
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Show private Application registry projection diagnostics."""
+
+    result = _registry_diagnostics()
+    if json_output:
+        _echo(result, json_output=True)
+        return
+    trust = result.get("trusted_snapshot") if isinstance(result.get("trusted_snapshot"), Mapping) else {}
+    epoch = result.get("epoch") if isinstance(result.get("epoch"), Mapping) else {}
+    operations = result.get("recent_operations") if isinstance(result.get("recent_operations"), list) else []
+    latest_operation = operations[0] if operations and isinstance(operations[0], Mapping) else {}
+    source_counts = result.get("source_counts") if isinstance(result.get("source_counts"), list) else []
+    count_text = " ".join(
+        f"{item.get('source_kind')}:{item.get('validation_status')}={item.get('count')}"
+        for item in source_counts
+        if isinstance(item, Mapping)
+    )
+    typer.echo(
+        " ".join(
+            str(item)
+            for item in (
+                f"status={result.get('projection_status') or '-'}",
+                f"trusted={bool(trust.get('trusted_snapshot'))}",
+                f"reason={trust.get('reason') or '-'}",
+                f"db={result.get('db_path') or '-'}",
+            )
+        )
+    )
+    if epoch:
+        typer.echo(
+            " ".join(
+                str(item)
+                for item in (
+                    f"epoch={epoch.get('epoch_id') or '-'}",
+                    f"runtime={epoch.get('runtime_instance_id') or '-'}",
+                    f"seal={epoch.get('seal_status') or '-'}",
+                )
+            )
+        )
+    if latest_operation:
+        typer.echo(
+            " ".join(
+                str(item)
+                for item in (
+                    f"last_operation={latest_operation.get('action') or '-'}",
+                    f"status={latest_operation.get('status') or '-'}",
+                    f"indexed={latest_operation.get('indexed', 0)}",
+                    f"invalid={latest_operation.get('invalid', 0)}",
+                )
+            )
+        )
+    if count_text:
+        typer.echo(f"sources={count_text}")
+    typer.echo(
+        " ".join(
+            str(item)
+            for item in (
+                f"stale_rows={len(result.get('stale_rows') or [])}",
+                f"query_ms={result.get('query_ms')}",
             )
         )
     )
@@ -332,6 +409,8 @@ def materialize(
     project_id: str,
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
+    from adaos.services.builder.workspace import BuilderSourceRecoveryRequired
+
     service = _service()
     try:
         payload = service.materialize_dev_source(

@@ -612,7 +612,7 @@ only approved summary fields reach synchronized browser state.
 **Outcome:** operators and Builder can understand projection freshness without
 opening SQLite manually.
 
-- [ ] `[must]` `APREG8-01` Add API/CLI diagnostics for trust state, epoch, seal
+- [x] `[must]` `APREG8-01` Add API/CLI diagnostics for trust state, epoch, seal
   receipt, rebuild operation, validation counts, stale rows, and query source.
 - [ ] `[must]` `APREG8-02` Add timing metrics for SQLite open/query/checkpoint,
   manifest parse/validation, background queues, and startup readiness.

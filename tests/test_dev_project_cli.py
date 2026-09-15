@@ -41,6 +41,42 @@ def test_dev_project_list_uses_project_composition_registry(monkeypatch) -> None
     assert '"id": "kanban"' in result.output
 
 
+def test_dev_project_registry_diagnostics_outputs_projection_payload(monkeypatch) -> None:
+    monkeypatch.setattr(
+        dev_project,
+        "_registry_diagnostics",
+        lambda: {
+            "schema": "adaos.application.registry_projection.diagnostics.v1",
+            "projection_status": "ready",
+            "trusted_snapshot": {"trusted_snapshot": True, "reason": "trusted"},
+            "epoch": {"epoch_id": "apreg.epoch.test", "seal_status": "complete"},
+            "source_counts": [
+                {
+                    "source_kind": "dev_project_manifest",
+                    "validation_status": "valid",
+                    "count": 2,
+                }
+            ],
+            "stale_rows": [],
+            "recent_operations": [
+                {
+                    "action": "rebuild_dev_projects",
+                    "status": "completed",
+                    "indexed": 2,
+                    "invalid": 0,
+                }
+            ],
+            "query_ms": 1.5,
+        },
+    )
+
+    result = CliRunner().invoke(dev_project.app, ["registry-diagnostics", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert '"projection_status": "ready"' in result.output
+    assert '"trusted_snapshot": true' in result.output
+
+
 def test_dev_project_create_can_adopt_existing_primary_component(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 
