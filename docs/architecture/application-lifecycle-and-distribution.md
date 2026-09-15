@@ -338,6 +338,14 @@ selects the latest admitted immutable prerelease. When that exact release is
 promoted, the effective channel becomes stable without leaving the prerelease
 track; a later prerelease may be selected according to the same policy.
 
+This is an external publisher update subscription, not an approval gate for
+the node's own Builder. Local development does not implicitly join a public
+testing group. The Applications read model exposes `local_beta_active` and
+`use_prerelease = local_beta_active OR prerelease_following`; the displayed
+pre-release flag follows Builder cutover immediately, while the stored external
+subscription remains unchanged. Local Stable acceptance clears the local Beta
+state; a separately chosen external prerelease subscription remains opted in.
+
 ### RuntimeSelection
 
 `RuntimeSelection` answers which installed or Trial release is presented in a
@@ -391,18 +399,26 @@ stable uses a Preview Webspace. A local Trial is an isolated beta execution
 root selected for an existing production Webspace, without replacing its home
 scenario, copying sources into Workspace or reading DEV data.
 
-Before an Application has its first local Workspace release, Builder owns its
-local Trial placement: prepare and admit the exact Candidate, record a
+Builder owns local Trial placement for both first releases and subsequent local
+development: prepare and admit the exact Candidate, record a
 `local_trial` RuntimeSelection and expose its entry point on `web_desktop` with
 a beta badge. A prepared Candidate alone is not a runnable placement. The
 launcher is derived from the admitted selection, never a scan of Trial folders.
 Opening it resolves UI, declarations, assets, tools and data to the same release.
 
-After local Workspace publication, Applications owns stable/prerelease intent
-and update policy. Builder may prepare another Candidate but must not silently
-opt the user into beta or overwrite that selection. Local Workspace publication
-and external registry distribution are separate operations; a local beta does
-not imply public beta discovery or permission to publish externally.
+After the local Builder has completed development and prepared the Beta, its
+normal lifecycle command switches the Application to that Beta automatically,
+including when Stable is already installed. Applications reflects the selected
+version and pre-release flag without requiring a second permission or reviewed
+plan in its UI. The common lifecycle service still verifies the publisher,
+exact Candidate, migration, data/configuration inheritance and exclusive runtime
+cutover. This is not automatic Stable acceptance, a switch to unfinished DEV,
+or consent to destroy writes made in an older Beta.
+
+Applications owns user-selected external stable/prerelease update intent and
+update policy. Local Workspace publication and external registry distribution
+are separate operations; a local Beta does not imply public beta discovery,
+joining an external testing group or permission to publish externally.
 
 The production host is resolved from the registered Builder/Preview relationship,
 not by inventing a Webspace or stripping suffixes from its ID. An explicit target
@@ -423,10 +439,13 @@ grants remain authoritative; activation must not advertise these skills as
 Workspace-installed capabilities. Package, release and WorkspaceLock identities
 are checked before execution, and execution responses identify the selected
 release/package. An unavailable Trial must not break other desktop launchers.
-The currently qualified local data mode is `empty`; other modes, delegated
-consumer execution and remote-node forwarding require their own admission and
-acceptance. This is not an additional OS sandbox or a replacement for deferred
-Root Guard hardening.
+Local `snapshot` execution requires exact committed migration-journal evidence,
+not only a data-mode label. The initial adapter is limited to owned native
+request/response skills with explicitly declared SQLite stores; service workers,
+shared mutable stores, attachments and credential files need their own adapters.
+Delegated consumer execution and remote-node forwarding require independent
+admission and acceptance. This is not an additional OS sandbox or a replacement
+for deferred Root Guard hardening.
 
 Implementation boundary: Applications' accepted Prototype includes the
 stable/pre-release control, but its SDK-backed switching, exclusive runtime

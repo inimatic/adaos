@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import nullcontext
 from pathlib import Path
 
 import yaml
@@ -22,14 +23,22 @@ class ApplicationRuntimeConfiguration:
         current = self.ctx.skill_ctx.get()
         source = Path(current.path).resolve()
         native_root = (Path(self.ctx.paths.workspace_dir()) / "skills/.runtime").resolve()
-        if not source.is_relative_to(native_root):
-            raise ConfigurationConflict("Application configuration requires an admitted production runtime; DEV stays isolated")
         manifest = yaml.safe_load(Path(admitted.manifest_path).read_text(encoding="utf-8"))
         declaration = manifest.get("configuration") or {}
         schema, defaults = declaration.get("schema"), declaration.get("defaults")
         if not isinstance(schema, dict) or not isinstance(defaults, dict):
             raise ValueError("Skill must declare configuration schema and defaults")
         _validate(schema, defaults)
+        if not source.is_relative_to(native_root):
+            getter = getattr(self.ctx.paths, "dev_skills_dir", None)
+            dev = Path(getter()).resolve() if getter else None
+            if dev is None or not (source.is_relative_to(dev / current.name)
+                                   or source.is_relative_to(dev / ".runtime" / current.name)):
+                raise ConfigurationConflict("Application configuration requires an admitted runtime; DEV stays isolated")
+            # Same SDK, separate synthetic store. No installation lookup or copy
+            # of real values/credential bindings is performed in development.
+            store = ApplicationConfigurationStore(dev.parent / ".runtime/state", f"development:{current.name}", f"skill:{current.name}")
+            return None, schema, defaults, store, nullcontext()
         state = Path(getattr(self.ctx, "authority_state_dir", None) or self.ctx.paths.state_dir())
         catalog = ApplicationStore(state)
         matches = {}
@@ -55,7 +64,7 @@ class ApplicationRuntimeConfiguration:
 
     @staticmethod
     def _current(selected, schema, defaults, record):
-        candidate = selected.runtime_root_ref.removeprefix("trial:") if selected.runtime_root_ref.startswith("trial:") else None
+        candidate = selected.runtime_root_ref.removeprefix("trial:") if selected and selected.runtime_root_ref.startswith("trial:") else None
         if candidate:
             config = ApplicationConfigurationStore._beta(record, candidate)
         else:
@@ -64,7 +73,8 @@ class ApplicationRuntimeConfiguration:
             config = record.get("stable")
             if config is None:
                 return {"values": deepcopy(defaults), "credentials": {}}, None
-        if config["release_digest"] != selected.release_digest or config["schema_digest"] != _digest(schema):
+        release_digest = selected.release_digest if selected else "development:" + _digest(schema)
+        if config["release_digest"] != release_digest or config["schema_digest"] != _digest(schema):
             raise ConfigurationConflict("Runtime settings require explicit release/schema migration")
         _validate(schema, config["values"])
         return config, candidate
@@ -86,7 +96,7 @@ class ApplicationRuntimeConfiguration:
                     credentials=config["credentials"], expected_revision=expected_revision)
                 result = saved["beta"]
             else:
-                saved = store.set_stable(release_digest=selected.release_digest, schema=schema, values=values,
+                saved = store.set_stable(release_digest=selected.release_digest if selected else "development:" + _digest(schema), schema=schema, values=values,
                     credentials=config["credentials"], expected_revision=expected_revision)
                 result = saved["stable"]
             return {"revision": saved["revision"], "values": deepcopy(result["values"])}

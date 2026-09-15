@@ -32,6 +32,16 @@ class ApplicationRuntimeTransition:
     def __init__(self, channel: ApplicationRuntimeChannel):
         self.channel = channel
 
+    def get(self, operation_id: str) -> dict[str, Any] | None:
+        """Read exact transition evidence without initializing or admitting runtime."""
+        if not self.channel.path.is_file():
+            return None
+        with self.channel._connection() as connection:
+            if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transitions'").fetchone():
+                return None
+            row = connection.execute("SELECT document FROM transitions WHERE operation_id=?", (operation_id,)).fetchone()
+            return json.loads(row[0]) if row else None
+
     def run(self, operation_id: str, *, contract_digest: str,
             expected: Sequence[RuntimeSelection], target: RuntimeSelection,
             steps: Sequence[TransitionStep]) -> dict[str, Any]:

@@ -1321,6 +1321,8 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
                 if authoring.get(key) not in (None, "", [], {})
             }
         elif facet_name == "data_policy":
+            if isinstance(facet.get("local_release_lifecycle"), Mapping):
+                common["local_release_lifecycle"] = copy.deepcopy(facet["local_release_lifecycle"])
             mapping = dict(facet.get("implementation_mapping") or {})
             common["implementation_mapping"] = {
                 key: mapping.get(key)
@@ -5990,7 +5992,7 @@ class LocalSkillFactoryWorker:
             "revision": revision,
             "companion_skill_id": companion,
             "automation_requirements": copy.deepcopy(acceptance.get("automation_requirements") or []),
-            "data_policy": "empty_installation; prototype records are test evidence, not installation seeds",
+            "data_policy": "first installation starts empty; upgrades preserve admitted runtime data through core migration. Prototype records are test evidence, never installation seeds",
             "manifest_field": "resource_runtime.declarations",
             "resources": resources,
         }

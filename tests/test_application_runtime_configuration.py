@@ -141,3 +141,25 @@ def test_configuration_requires_explicit_schema_migration(setup):
     (ctx.skill_ctx.get().path / "skill.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
     with pytest.raises(ConfigurationConflict, match="explicit release/schema migration"):
         service.read()
+
+
+def test_dev_uses_same_settings_sdk_without_loading_real_installation(setup, tmp_path, monkeypatch):
+    from adaos.services.applications import runtime_configuration as module
+    ctx, _channel, _stable, manifest, _release = setup
+    production = ApplicationRuntimeConfiguration(ctx)
+    production.write({"page_size": 40}, expected_revision=0)
+    original = ctx.skill_ctx.get().path
+    dev = tmp_path / "dev/subnet/skills"
+    path = dev / ".runtime/worker/v0.1/slot-a"
+    path.mkdir(parents=True)
+    (path / "skill.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    ctx.paths.dev_skills_dir = lambda: dev
+    ctx.skill_ctx.get().path = path
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "ApplicationStore", lambda _: pytest.fail("DEV must not inspect real installations"))
+        development = ApplicationRuntimeConfiguration(ctx)
+        assert development.read() == {"revision": 0, "values": {"page_size": 10}}
+        development.write({"page_size": 15}, expected_revision=0)
+        assert ApplicationRuntimeConfiguration(ctx).read() == {"revision": 1, "values": {"page_size": 15}}
+    ctx.skill_ctx.get().path = original
+    assert production.read()["values"] == {"page_size": 40}

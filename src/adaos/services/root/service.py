@@ -2702,6 +2702,20 @@ class RootDeveloperService:
         *,
         permission_decision: bool | Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        from adaos.services.applications.local_release_transition import promote_with_local_data
+
+        if permission_decision is False or (isinstance(permission_decision, Mapping)
+                and permission_decision.get("approved") is False):
+            raise RootServiceError("Candidate publication was not approved")
+        return promote_with_local_data(self.ctx, candidate_id, lambda: self._promote_artifact_candidate_source(
+            candidate_id, permission_decision=permission_decision))
+
+    def _promote_artifact_candidate_source(
+        self,
+        candidate_id: str,
+        *,
+        permission_decision: bool | Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         cfg = self._load_config()
         publication = self._artifact_publication_service(cfg)
         affected_component_keys = publication.candidate_runtime_component_keys(

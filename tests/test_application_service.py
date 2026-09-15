@@ -111,6 +111,7 @@ def test_native_workspace_publication_adoption_requires_exact_closure(service):
         components=release.project_release.components)
     installed = service.reconcile_workspace_installation("app_recipes", release.release_digest, lock)
     assert installed.status == "active" and installed.revision == 1
+    assert installed.component_refs[0]["lifecycle"] == "bound"
     assert service.reconcile_workspace_installation("app_recipes", release.release_digest, lock) == installed
     assert not service.store.get_channels("app_recipes")["channels"]
     from dataclasses import replace
@@ -126,6 +127,27 @@ def test_store_enforces_one_to_one_legacy_project_mapping(tmp_path: Path) -> Non
 
     with pytest.raises(ApplicationStoreError, match="already mapped"):
         store.save_application(_application("app_other", "recipes"), expected_revision=0)
+
+
+def test_local_builder_beta_updates_display_flag_without_joining_public_testing(service):
+    release = service.register_release(_release())
+    subscription = service.set_subscription("app_recipes", update_track="stable", update_policy="auto_compatible",
+                                             paused=False, expected_revision=0)
+    service.select_runtime(webspace_id="desktop", application_id="app_recipes", source="local_trial",
+        release_digest=release.release_digest, runtime_root_ref="trial:candidate",
+        expected_revision=0, actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply")
+    beta = service.list_models()[0]
+    assert beta["use_prerelease"] and beta["local_beta_active"]
+    assert not beta["prerelease_following"]
+    assert service.store.get_subscription("app_recipes") == subscription
+    service.select_runtime(webspace_id="desktop", application_id="app_recipes", source="stable_installation",
+        release_digest=release.release_digest, runtime_root_ref="workspace",
+        expected_revision=1, actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply")
+    assert not service.list_models()[0]["use_prerelease"]
+    service.set_subscription("app_recipes", update_track="prerelease", update_policy="auto_compatible",
+                              paused=False, expected_revision=1)
+    stable = service.list_models()[0]
+    assert stable["use_prerelease"] and stable["prerelease_following"] and not stable["local_beta_active"]
 
 
 def test_channels_require_first_stable_then_exact_prerelease_promotion(service: ApplicationService) -> None:

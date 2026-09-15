@@ -109,7 +109,7 @@ def test_native_runtime_requires_exact_release_and_lock(activation_record):
 
 
 @pytest.mark.parametrize("change, reason", [
-    ({"data_mode": "real"}, "empty isolated"),
+    ({"data_mode": "real"}, "not qualified"),
     ({"expires_at": "2000-01-01T00:00:00+00:00"}, "expired"),
     ({"status": "detached"}, "inactive"),
 ])

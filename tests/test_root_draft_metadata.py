@@ -252,7 +252,7 @@ def test_subscription_activation_does_not_invent_runtime_skip_policies() -> None
 
 
 def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     captured: dict[str, object] = {}
     scenario_component = SimpleNamespace(
@@ -362,7 +362,7 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks(
             return [{"ticket_id": f"ticket:{kwargs['component_id']}"}]
 
     service.ctx = SimpleNamespace(
-        paths=SimpleNamespace(state_dir=lambda: Path("state"))
+        paths=SimpleNamespace(state_dir=lambda: tmp_path / "state", workspace_dir=lambda: tmp_path / "workspace")
     )
     monkeypatch.setattr(
         "adaos.services.development_tickets.DevelopmentTicketService",

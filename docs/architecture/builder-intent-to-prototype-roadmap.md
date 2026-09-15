@@ -577,8 +577,9 @@ Implementation boundary: Local Trial/promotion mechanisms and historical Equipme
 - [x] `[must]` Qualify local beta navigation from Builder Process and desktop,
   return home and reopen on desktop/mobile. Evidence: `trial-builder-navigation-05`
   and `trial-browser-04`; exact Trial execution headers and unchanged DEV data.
-- [ ] `[must]` Qualify the installed-Application path without overwriting
-  Applications' stable/prerelease intent. No new Webspace or home-scenario
+- [ ] `[must]` Qualify automatic local Builder Beta cutover for installed
+  Applications without a second Applications approval. Reflect the local Beta
+  flag while preserving the separate external prerelease subscription. No new Webspace or home-scenario
   replacement is permitted. Consume the exclusive cutover in `AP4-20` and
   `APP1-13`: one effective channel/desktop representation, no parallel
   verification Beta, including through old links or background execution.

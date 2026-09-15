@@ -47,7 +47,7 @@ _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
     "adaos.sdk.conversation": "Read and update governed conversational threads and Builder topics.",
     "adaos.sdk.context": "Resolve, compile, inspect, and bind governed agent context.",
     "adaos.sdk.data.skill_env": "Resolve owner-scoped persistent skill data paths and environment state.",
-    "adaos.sdk.data.configuration": "Read/write declared typed settings for an owned selected production Application skill, with revision checks. Not DEV storage or secret resolution; Beta configuration must be prepared by lifecycle first.",
+    "adaos.sdk.data.configuration": "Read/write declared typed settings with revision checks. Production binds the selected owned Application skill; DEV uses isolated synthetic defaults/overrides. No secret resolution; Beta configuration must be prepared by lifecycle first.",
     "adaos.sdk.deployment": "Plan and inspect project deployment through the public SDK boundary.",
     "adaos.sdk.distributed": "Describe and operate governed distributed datasets and services.",
     "adaos.sdk.execution": "Declare and inspect bounded execution jobs and artifacts.",

@@ -5,6 +5,10 @@ settings of the active skill's owning Application installation. The owner is
 resolved from the selected release's bound composition member, not a supplied
 Application ID. Shared components without an unambiguous owner and DEV sources
 cannot use production settings through this interface.
+DEV source and DEV runtime skills use the same calls with a separate synthetic
+store under DEV `.runtime/state`. They start from declared defaults, retain
+their own revisioned overrides and never load the production installation or
+copy production values. Schema changes still require explicit reconciliation.
 
 ```yaml
 capabilities:
@@ -46,8 +50,8 @@ configuration migration or review, independent of business-data reseeding.
 ## Qualification Boundary
 
 The local runtime facade and revisioned store are implemented and tested.
-Builder-driven prepare/adopt integration, DEV synthetic settings, Application
-actor/purpose authorization, live credential resolution/rotation/revocation and
+Local native Builder prepare/adopt and isolated DEV settings are implemented;
+Application actor/purpose authorization, live credential resolution/rotation/revocation and
 two complete Reading List cycles are not qualified by these unit tests. They
 remain open in `APP1-15`; this SDK is not permission to copy production settings
 or secrets into model context, packages or synthetic development fixtures.

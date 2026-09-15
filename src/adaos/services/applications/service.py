@@ -101,13 +101,13 @@ class ApplicationService:
             raise ApplicationServiceError("Workspace does not contain this exact Application release")
         if any(packages.get(item.key) != item.digest for item in release.project_release.components):
             raise ApplicationServiceError("Workspace Application package closure differs from the release")
-        refs = tuple({"component_ref": item.key, "package_digest": item.digest, "lifecycle": "shared"}
-                     for item in release.project_release.components)
+        refs = tuple(self._release_components(release))
         try:
             current = self.store.get_installation(application_id)
         except FileNotFoundError:
             current = None
-        if current and current.status == "active" and current.installed_release_digest == release_digest:
+        if (current and current.status == "active" and current.installed_release_digest == release_digest
+                and current.component_refs == refs):
             return current
         if current and current.status not in {"active", "removed"}:
             raise ApplicationServiceError("Resolve the in-progress Application installation first")
@@ -861,6 +861,9 @@ class ApplicationService:
     ) -> list[dict[str, Any]]:
         installations = {item.application_id: item for item in self.store.list_installations() if item.status != "removed"}
         subscriptions = {item.application_id: item for item in self.store.list_subscriptions()}
+        selections: dict[str, list[RuntimeSelection]] = {}
+        for selection in self.store.list_runtime_selections():
+            selections.setdefault(selection.application_id, []).append(selection)
         operations: dict[str, ApplicationOperation] = {}
         for operation in self.store.list_operations():
             operations.setdefault(operation.application_id, operation)
@@ -871,6 +874,9 @@ class ApplicationService:
                 continue
             channels = dict(self.store.get_channels(application.application_id).get("channels") or {})
             subscription = subscriptions.get(application.application_id)
+            runtime_selections = selections.get(application.application_id, [])
+            local_beta = any(item.source == "local_trial" for item in runtime_selections)
+            prerelease_following = bool(subscription and subscription.update_track == "prerelease")
             effective = self.effective_release(
                 application.application_id,
                 subscriber_subnet_ref=subscriber_subnet_ref,
@@ -897,7 +903,10 @@ class ApplicationService:
                     "available": bool(channels.get("stable")) or application.visibility != "public",
                     "update_available": update_available,
                     "pinned": bool(subscription and subscription.update_policy == "pinned"),
-                    "prerelease_following": bool(subscription and subscription.update_track == "prerelease"),
+                    "prerelease_following": prerelease_following,
+                    "use_prerelease": local_beta or prerelease_following,
+                    "local_beta_active": local_beta,
+                    "runtime_selections": [item.to_dict() for item in runtime_selections],
                     "auto_update_enabled": bool(
                         subscription.update_policy == "auto_compatible"
                         if subscription is not None

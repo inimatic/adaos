@@ -173,7 +173,18 @@ Project/Application identity collapse.
   Local prerequisite: checksum-pinned SQLite snapshots, forward staging and
   installation pass two synthetic incremental cycles including Beta-created
   records. Snapshot-finalization interruption is reconciled without reseeding.
-  This adapter is not yet wired into Builder publication; the task remains open.
+  Local native Builder placement and Root candidate publication now use this
+  journal for declared SQLite stores and typed configuration. Synthetic tests
+  are prerequisites, not live qualification; the two Reading List cycles,
+  general storage adapters and Beta-to-Beta recovery/loss confirmation remain open.
+- [ ] `[must]` `APP1-16` Automatically select the node's own Builder Beta after
+  each completed local development cycle, including installed Stable upgrades,
+  without a second Applications permission. Project the pre-release flag from
+  selected local Beta plus external subscription intent, without silently opting
+  into public testing. Verify publisher denial, failed-migration fencing,
+  replay, all-room refresh, Stable acceptance and unchanged external subscription.
+  The SDK now delegates local placement to the migration coordinator; live
+  Builder/UI proof is still required.
 - [ ] `[must]` `APP1-15` Inherit declared Workspace configuration and scoped
   credential bindings in Beta without copying plaintext into packages or model
   context. Retain compatible overrides across Beta updates/runtime rebuilds;

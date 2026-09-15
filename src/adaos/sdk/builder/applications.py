@@ -149,13 +149,14 @@ def production_webspace_id(webspace_id: str) -> str:
 
 
 def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) -> dict[str, Any]:
-    """Expose an existing local Candidate before first Workspace publication."""
+    """Admit local Builder Beta, migrating Stable data without a second UI approval."""
     import json
 
     from adaos.domain.application import ApplicationRelease
     from adaos.domain.artifact_release import ProjectRelease
     from adaos.sdk.developer import projects
     from adaos.services.applications.trial_runtime import NativeTrialRuntime
+    from adaos.services.applications.local_release_transition import bind_local_data_lifecycle
     from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
     from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
 
@@ -166,15 +167,13 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
         raise ValueError("Trial placement must target the production Webspace, not Preview")
     publisher = publisher_context()
     candidate = projects.get_candidate(candidate_id)["candidate"]
-    runtime = NativeTrialRuntime.resolve(_ctx(), candidate_id, candidate["release_digest"])
+    runtime = NativeTrialRuntime._resolve_immutable(_ctx(), candidate_id, candidate["release_digest"])
     release_path = runtime.root / ".adaos/releases" / f"{runtime.release_digest.split(':')[1]}.json"
     release = ProjectRelease.from_mapping(json.loads(release_path.read_text(encoding="utf-8"))).seal()
     if release.release_digest != runtime.release_digest:
         raise ValueError("Candidate release digest mismatch")
     service = _application_service()
     project_id = release.project_id
-    if (Path(_ctx().paths.workspace_dir()) / "projects" / project_id / "project.yaml").is_file():
-        raise ValueError("Installed Application channel selection belongs to Applications")
     try:
         application = service.store.get_application(project_id)
     except FileNotFoundError:
@@ -191,40 +190,45 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
         application = service.store.get_application(project_id)
     _admit_builder_mutation("create_trial", project_id, subnet_ref=publisher["publisher_ref"],
                             capability="applications.develop")
-    try:
-        selection = service.store.get_runtime_selection(webspace_id, application.application_id)
-    except FileNotFoundError:
-        selection = None
-    if selection and selection.source != "local_trial":
-        raise ValueError("Builder must not overwrite installed channel selection")
     envelope = ApplicationRelease(application_id=application.application_id,
                                   publisher_ref=application.publisher_ref, project_release=release,
                                   accepted_candidate_id=candidate_id,
                                   acceptance_evidence=tuple(candidate["validation_evidence"]),
                                   provenance_refs=(release.release_digest,), lifecycle="trial")
     service.register_release(envelope)
-    try:
+    data = bind_local_data_lifecycle(_ctx(), runtime, release)
+    activations = TrialActivationStore(_state_dir() / "artifact_pipeline/trial-activations")
+
+    def activate(_key):
+        try:
+            for package in runtime.packages:
+                if package.kind == "skill":
+                    runtime.ready_manager(package.artifact_id)
+        except (ValueError, FileNotFoundError, RuntimeError, KeyError):
+            runtime.manager(prepare=True)
         for package in runtime.packages:
             if package.kind == "skill":
                 runtime.ready_manager(package.artifact_id)
-    except (ValueError, FileNotFoundError, RuntimeError, KeyError):
-        runtime.manager(prepare=True)
-    for package in runtime.packages:
-        if package.kind == "skill":
-            runtime.ready_manager(package.artifact_id)
-    if not (selection and selection.runtime_root_ref == f"trial:{candidate_id}"
-            and selection.release_digest == release.release_digest):
-        selection = service.select_runtime(webspace_id=webspace_id, application_id=application.application_id,
-            source="local_trial", release_digest=release.release_digest, runtime_root_ref=f"trial:{candidate_id}",
-            expected_revision=selection.revision if selection else 0, actor_ref=actor_ref,
-            subnet_ref=publisher["publisher_ref"], capability="applications.apply")
-    activations = TrialActivationStore(_state_dir() / "artifact_pipeline/trial-activations")
+        activation = activations.load(candidate_id)
+        proof = {"operation_id": f"application-beta:{project_id}:{candidate_id}",
+                 "contract_digest": data._contract()}
+        activations.update(candidate_id, data_mode="snapshot",
+            target=dict(activation["target"]) | {"webspace_id": webspace_id, "space_kind": "workspace"},
+            safety_evidence=dict(activation.get("safety_evidence") or {}) | {"data_transition": proof})
+        return {"ok": True, **proof}
+
+    transition = data.prepare_beta(webspace_id=webspace_id, activate=activate)
+    selection = service.store.get_runtime_selection(webspace_id, application.application_id)
     activation = activations.load(candidate_id)
-    target = dict(activation["target"]) | {"webspace_id": webspace_id, "space_kind": "workspace"}
-    activation = activations.update(candidate_id, target=target)
-    refresh = refresh_placement(webspace_id)
+    refresh = _refresh_application_placements(application.application_id)
     return {"ok": True, "runtime_selection": selection.to_dict(), "trial_activation": activation,
-            "runtime_refresh": refresh}
+            "runtime_refresh": refresh, "data_transition": transition}
+
+
+def _refresh_application_placements(application_id: str) -> dict[str, Any]:
+    rooms = sorted({item.webspace_id for item in _application_service().store.list_runtime_selections()
+                    if item.application_id == application_id})
+    return {"ok": True, "webspaces": {room: refresh_placement(room) for room in rooms}}
 
 
 def refresh_placement(webspace_id: str) -> dict[str, Any]:
@@ -336,7 +340,7 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
             and (item.get("result_ref") or {}).get("id") == candidate_id):
             state = workflow.record_project_placement("scenario", scenario_id, {**item, "status": "detached"},
                 expected_generation=int(state["generation"]))["workflow"]
-    refresh = refresh_placement(webspace_id)
+    refresh = _refresh_application_placements(application_id)
     return {"ok": True, "workflow": state, "installation": installation.to_dict(),
             "runtime_selection": selection.to_dict(), "runtime_refresh": refresh}
 

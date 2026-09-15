@@ -4269,6 +4269,17 @@ def test_context_packet_omits_intent_duplicated_by_implementation_brief() -> Non
     assert "intent" not in projected["change"]
 
 
+def test_automation_prompt_keeps_release_contract_but_not_runtime_values() -> None:
+    from adaos.services.applications.data_lifecycle import automation_data_contract
+
+    contract = automation_data_contract()
+    packet = {"facets": {"data_policy": {"status": "present", "local_release_lifecycle": contract,
+              "runtime_values": {"secret": "private-value"}}}}
+    projection = _context_packet_prompt_projection(packet)
+    assert projection["facets"]["data_policy"]["local_release_lifecycle"] == contract
+    assert "private-value" not in json.dumps(projection)
+
+
 def test_context_packet_compacts_accepted_prototype_and_resolved_issues() -> None:
     packet = {
         "change": {

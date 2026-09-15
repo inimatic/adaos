@@ -1,0 +1,185 @@
+from contextlib import closing
+from dataclasses import replace
+import sqlite3
+
+import pytest
+
+from adaos.domain.application import RuntimeSelection
+from adaos.services.applications.configuration import ApplicationConfigurationStore
+from adaos.services.applications.data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent, declared_databases
+from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
+
+
+DIGEST = "sha256:" + "a" * 64
+CONFIG = {"schema": {"type": "object", "properties": {"page_size": {"type": "integer"}},
+                     "required": ["page_size"], "additionalProperties": False}, "defaults": {"page_size": 10}}
+
+
+def sql(path, statement, parameters=()):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(path)) as connection:
+        result = connection.execute(statement, parameters).fetchall()
+        connection.commit()
+        return result
+
+
+def manifest(number):
+    return {"configuration": CONFIG, "data_lifecycle": {"schema": "adaos.skill.data_lifecycle.v1",
+        "execution": "native_tools", "databases": [{"path": "records.sqlite", "migrations": [
+            {"version": i, "name": f"field{i}", "statements": [f"ALTER TABLE records ADD COLUMN field{i} TEXT"]}
+            for i in range(1, number + 1)]}]}}
+
+
+def seed(tmp_path):
+    stable = tmp_path / "workspace/data"
+    sql(stable / "records.sqlite", "CREATE TABLE records(id INTEGER PRIMARY KEY, value TEXT)")
+    sql(stable / "records.sqlite", "INSERT INTO records VALUES(1,'original')")
+    state = tmp_path / "state"
+    channel = ApplicationRuntimeChannel(state, "sample")
+    channel.select(RuntimeSelection(webspace_id="desktop", application_id="sample", source="stable_installation",
+        release_digest=DIGEST, runtime_root_ref="workspace", revision=1), expected_revision=0)
+    return state, stable, channel
+
+
+def coordinator(tmp_path, number, stable_manifest=None, target_root=None):
+    stable = tmp_path / "workspace/data"
+    return LocalApplicationDataLifecycle(state_root=tmp_path / "state", private_root=tmp_path,
+        application_id="sample", candidate_id=f"candidate{number}", release_digest="sha256:" + str(number) * 64,
+        stable_digest=DIGEST if number == 1 else "sha256:" + str(number - 1) * 64,
+        components=(OwnedDataComponent("skill:worker", stable, tmp_path / f"beta{number}/data", target_root or stable,
+                                       stable_manifest or {}, manifest(number)),))
+
+
+def test_two_complete_local_data_cutovers_preserve_records_and_settings(tmp_path):
+    state, stable, channel = seed(tmp_path)
+    calls = []
+    for number in (1, 2):
+        lifecycle = coordinator(tmp_path, number, manifest(number - 1) if number > 1 else {})
+        beta = tmp_path / f"beta{number}/data/records.sqlite"
+
+        def activate(key):
+            with pytest.raises(RuntimeChannelConflict, match="fenced"):
+                with channel.execution("workspace", DIGEST):
+                    pass
+            assert len(sql(beta, "SELECT * FROM records")) == number
+            calls.append(("activate", key))
+            return {"ok": True}
+
+        admitted = lifecycle.prepare_beta(webspace_id="desktop", activate=activate)
+        assert admitted["completed"]
+        config = ApplicationConfigurationStore(state, "sample", "skill:worker")
+        assert config.read()["beta"]["values"]["page_size"] == (10 if number == 1 else 20)
+        config.update_beta(candidate_id=f"candidate{number}", schema=CONFIG["schema"], values={"page_size": 20},
+                           credentials={}, expected_revision=config.read()["revision"])
+        sql(beta, "INSERT INTO records(id,value) VALUES(?,?)", (number + 1, f"beta{number}"))
+
+        def publish(key):
+            assert len(sql(stable / "records.sqlite", "SELECT * FROM records")) == number + 1
+            assert config.read()["stable"]["values"] == {"page_size": 20}
+            calls.append(("publish", key))
+            return {"ok": True}
+
+        accepted = lifecycle.accept_beta(webspace_id="desktop", publish=publish)
+        assert accepted["completed"]
+        assert channel.read()[0].runtime_root_ref == "workspace"
+        assert lifecycle.accept_beta(webspace_id="desktop", publish=publish)["completed"]
+        assert lifecycle.prepare_beta(webspace_id="desktop", activate=activate)["completed"]
+        assert channel.read()[0].runtime_root_ref == "workspace"
+    assert len(calls) == 4
+    assert sql(stable / "records.sqlite", "SELECT id,value FROM records ORDER BY id") == [(1, "original"), (2, "beta1"), (3, "beta2")]
+
+
+def test_publication_interruption_keeps_both_runtimes_fenced_and_retries_exact_effect(tmp_path):
+    _state, _stable, channel = seed(tmp_path)
+    lifecycle = coordinator(tmp_path, 1)
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    sql(tmp_path / "beta1/data/records.sqlite", "INSERT INTO records(id,value) VALUES(2,'beta')")
+    keys = []
+
+    def fail(key):
+        keys.append(key)
+        raise SystemExit("publication response lost")
+
+    with pytest.raises(SystemExit):
+        lifecycle.accept_beta(webspace_id="desktop", publish=fail)
+    with pytest.raises(RuntimeChannelConflict, match="fenced"):
+        with channel.execution("trial:candidate1", "sha256:" + "1" * 64):
+            pass
+    result = coordinator(tmp_path, 1).accept_beta(webspace_id="desktop", publish=lambda key: keys.append(key) or {"ok": True})
+    assert result["completed"] and len(keys) == 2 and keys[0] == keys[1]
+
+
+def test_conflicting_stable_writes_are_not_silently_overwritten(tmp_path):
+    _state, stable, _channel = seed(tmp_path)
+    lifecycle = coordinator(tmp_path, 1)
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    sql(stable / "records.sqlite", "INSERT INTO records(id,value) VALUES(3,'external')")
+    with pytest.raises(RuntimeChannelConflict, match="Stable data changed"):
+        lifecycle.accept_beta(webspace_id="desktop", publish=lambda _: pytest.fail("Must not publish conflicting data"))
+    assert len(sql(stable / "records.sqlite", "SELECT * FROM records")) == 2
+
+
+@pytest.mark.parametrize("extra", [{"events": {"subscribe": ["timer.tick"]}}, {"service": {"run": "worker"}},
+                                  {"runtime": {"lifecycle": {"after_activate": "start"}}}])
+def test_background_workers_are_rejected_without_false_drain_receipts(tmp_path, extra):
+    seed(tmp_path)
+    with pytest.raises(ValueError, match="verified owner drain"):
+        coordinator(tmp_path, 1, extra)
+
+
+def test_undeclared_data_remains_untouched(tmp_path):
+    _state, stable, _channel = seed(tmp_path)
+    (stable / "attachment.txt").write_text("private attachment", encoding="utf-8")
+    with pytest.raises(ValueError, match="Undeclared runtime data"):
+        coordinator(tmp_path, 1).prepare_beta(webspace_id="desktop", activate=lambda _: pytest.fail("Must not activate"))
+    assert (stable / "attachment.txt").read_text() == "private attachment"
+
+
+@pytest.mark.parametrize("path", ["../other.sqlite", "C:/other.sqlite", "a/../other.sqlite", "files/secrets.json"])
+def test_manifest_store_paths_are_owner_relative(path):
+    value = manifest(1)
+    value["data_lifecycle"]["databases"][0]["path"] = path
+    with pytest.raises(ValueError, match="owner data path"):
+        declared_databases(value)
+
+
+@pytest.mark.parametrize("phase", ["beta", "stable"])
+def test_existing_destination_data_is_not_discarded(tmp_path, phase):
+    seed(tmp_path)
+    target = tmp_path / "workspace/new-bucket/data"
+    lifecycle = coordinator(tmp_path, 1, target_root=target)
+    destination = tmp_path / "beta1/data" if phase == "beta" else target
+    sql(destination / "records.sqlite", "CREATE TABLE records(id INTEGER)")
+    sql(destination / "records.sqlite", "INSERT INTO records VALUES(99)")
+    with pytest.raises(RuntimeChannelConflict, match="Target data already exists"):
+        lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+        lifecycle.accept_beta(webspace_id="desktop", publish=lambda _: pytest.fail("Must not overwrite unrelated data"))
+    assert sql(destination / "records.sqlite", "SELECT * FROM records") == [(99,)]
+
+
+def test_successful_minor_version_data_adoption_preserves_old_bucket(tmp_path):
+    seed(tmp_path)
+    target = tmp_path / "workspace/new-bucket/data"
+    lifecycle = coordinator(tmp_path, 1, target_root=target)
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    sql(tmp_path / "beta1/data/records.sqlite", "INSERT INTO records(id,value) VALUES(2,'beta')")
+    lifecycle.accept_beta(webspace_id="desktop", publish=lambda _: {"ok": True})
+    assert len(sql(target / "records.sqlite", "SELECT * FROM records")) == 2
+    assert len(sql(tmp_path / "workspace/data/records.sqlite", "SELECT * FROM records")) == 1
+
+
+def test_data_declaration_is_consistent_with_both_skill_schemas():
+    import json
+    from pathlib import Path
+    import jsonschema
+    declaration = manifest(1)["data_lifecycle"]
+    root = Path(__file__).resolve().parents[1] / "src/adaos"
+    schemas = [json.loads((root / path).read_text(encoding="utf-8"))["properties"]["data_lifecycle"]
+               for path in ("abi/skill.schema.json", "services/skill/skill_schema.json")]
+    assert schemas[0] == schemas[1]
+    for schema in schemas:
+        jsonschema.Draft202012Validator.check_schema(schema)
+        jsonschema.validate(declaration, schema)
+        for path in ("../records.sqlite", "a/../b", "a//b", "/outside", "C:/outside"):
+            with pytest.raises(jsonschema.ValidationError):
+                jsonschema.validate({**declaration, "databases": [{"path": path, "migrations": []}]}, schema)

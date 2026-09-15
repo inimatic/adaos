@@ -4742,6 +4742,10 @@ class BuilderWorkflowService:
                 "profiles": data_binding.get("profiles") or [],
                 "implementation_mapping": implementation_mapping_report(data_binding),
             }
+            if str(workflow.get("active_phase") or "") == "automation":
+                from adaos.services.applications.data_lifecycle import automation_data_contract
+
+                data_policy["local_release_lifecycle"] = automation_data_contract()
             workflow_inspection = _mapping(
                 self._workflow_inspection(kind, project_id).get("project")
             )

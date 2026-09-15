@@ -1100,3 +1100,33 @@ descriptor explicitly states these boundaries to avoid misleading Automation.
 The initially pushed `e6f28983f` passed both AdaOS CI and docs on GitHub. A second
 local Reading List baseline verification still reports two records and zero
 missing/changed records. No new model-driven Reading List cycle has been started.
+
+### 2026-09-15: Local Builder Cutover Integration
+
+The user's clarified ownership rule supersedes the earlier post-first-release
+handoff: local Builder prepares and automatically selects its own Beta even for
+installed Applications. Applications reflects the effective pre-release flag;
+public testing subscription intent is separate and is not silently changed.
+Canonical lifecycle, Builder and artifact architecture now agree on this rule.
+
+Native Builder placement binds migration to immutable composition ownership and
+package manifests. Root candidate publication adopts Beta data/configuration
+inside the same durable fence. The original Stable release remains pinned for
+recovery even after the installation record advances. Unknown target buckets,
+unmanaged files, removed/shared owners and background execution are rejected,
+not treated as a successful empty drain. Snapshot runtime admission requires
+the exact completed journal, not an arbitrary `data_mode` label.
+
+DEV can use the typed settings SDK against an isolated synthetic store without
+reading installations. Automation context carries a small generic data-lifecycle
+contract through prompt compaction; it does not include runtime values. Local
+qualification passes 223 focused lifecycle/SDK/Root/ABI tests and 12 focused
+context/configuration tests. The SDK-to-Root synthetic cutover preserves original
+and Beta-created records, including a minor-version data bucket, and replay
+does not publish again. Reading List's private baseline still reports two user
+records and zero missing/changed records.
+
+This is not the two live managed Reading List cycles. Credential binding,
+operator recovery/rollback, Beta-to-Beta loss consent, clarification and About/
+image-output integration remain open. Temporary agent working files must use
+Git-ignored `.tmp/`; this durable instruction now lives in root `AGENTS.md`.

@@ -1,7 +1,7 @@
-"""Typed local settings for the active Application's owned production skill.
+"""Typed local settings for the active Application's owned skill.
 
 Requires manifest configuration.schema/defaults and configuration.read/write.
-DEV/synthetic settings and credential resolution are separate contracts.
+DEV uses a separate synthetic store. Credential resolution is a separate contract.
 """
 
 from __future__ import annotations
@@ -23,8 +23,9 @@ def _service():
 
 def read() -> dict[str, Any]:
     """Return {revision, values} for declared settings of the selected production
-    Application skill. Requires configuration.read. DEV and unprepared Beta are
-    rejected; no production values or credential refs are copied into DEV.
+    Application skill, or isolated DEV defaults/overrides. Requires
+    configuration.read. Unprepared Beta is rejected; no production values or
+    credential refs are copied into DEV.
     """
     return _service().read()
 

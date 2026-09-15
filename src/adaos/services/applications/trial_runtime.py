@@ -48,12 +48,34 @@ class NativeTrialRuntime:
 
     @classmethod
     def resolve(cls, owner: AgentContext, candidate_id: str, release_digest: str) -> "NativeTrialRuntime":
+        runtime = cls._resolve_immutable(owner, candidate_id, release_digest)
         state = Path(owner.paths.state_dir())
         record = TrialActivationStore(state / "artifact_pipeline/trial-activations").load(candidate_id)
-        if not record or record.get("status") != "active":
+        if record.get("data_mode") == "snapshot":
+            from .runtime_channel import ApplicationRuntimeChannel
+            from .runtime_transition import ApplicationRuntimeTransition
+
+            proof = record.get("safety_evidence", {}).get("data_transition") or {}
+            application_id = str((record.get("release_ref") or {}).get("project_id") or "")
+            operation_id = f"application-beta:{application_id}:{candidate_id}"
+            transition = ApplicationRuntimeTransition(ApplicationRuntimeChannel(state, application_id)).get(operation_id)
+            target = (transition or {}).get("intent", {}).get("target", {})
+            if (proof.get("operation_id") != operation_id or not transition or not transition["completed"]
+                    or target.get("runtime_root_ref") != f"trial:{candidate_id}"
+                    or target.get("release_digest") != release_digest
+                    or proof.get("contract_digest") != transition["intent"]["contract_digest"]):
+                raise TrialRuntimeUnavailable("Trial snapshot migration is not committed; completion or recovery required")
+        elif record.get("data_mode") != "empty":
+            raise TrialRuntimeUnavailable("Native Trial data mode is not qualified")
+        return runtime
+
+    @classmethod
+    def _resolve_immutable(cls, owner: AgentContext, candidate_id: str, release_digest: str) -> "NativeTrialRuntime":
+        """Verify Candidate metadata for preparation; this does not admit execution."""
+        state = Path(owner.paths.state_dir())
+        record = TrialActivationStore(state / "artifact_pipeline/trial-activations").load(candidate_id)
+        if not record or record.get("status") not in {"active", "completed"}:
             raise TrialRuntimeUnavailable("Trial is missing or inactive")
-        if record.get("data_mode") != "empty":
-            raise TrialRuntimeUnavailable("Native Trial execution currently supports empty isolated data only")
         expiry = record.get("expires_at")
         if expiry and datetime.fromisoformat(expiry) <= datetime.now(timezone.utc):
             raise TrialRuntimeUnavailable("Trial has expired")

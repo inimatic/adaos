@@ -249,8 +249,10 @@ the only retained runtime snapshot.
 Prototype and Automation use DEV skill declarations. Trial and Publication
 are delivery nodes, not Preview targets: they open through an admitted
 Application RuntimeSelection in an existing production Webspace. Builder owns
-local beta launcher placement before the first Workspace release; Applications
-owns installed stable/prerelease selection thereafter. The Automation snapshot lives outside the DEV
+local Beta placement after each local development cycle, including upgrades of
+installed Stable. Its admitted cutover updates Applications without a second UI
+approval. Applications owns external update subscriptions, not a veto over the
+publisher's local Builder lifecycle. The Automation snapshot lives outside the DEV
 artifact tree, so publication cannot accidentally package Builder runtime
 history. Materialization applies the selected scenario content as an explicit
 payload override without rewriting the scenario pointer or the selected

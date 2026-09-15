@@ -431,8 +431,11 @@ before idempotent replay, DEV/stable resolution or cross-node fallback. Platform
 shell tools outside the candidate remain separate from application execution.
 This boundary belongs to Application RuntimeSelection and common materialization,
 including placement navigation and direct owner-side routes. Trial is never a
-Preview target. Before the first Workspace release, Builder places local beta on
-the production desktop; Applications owns installed channel selection thereafter.
+Preview target. Builder places each admitted local Beta on the production
+desktop, including upgrades of installed Stable, through the common migration
+and exclusive-channel service. Applications reflects this automatic local
+cutover; its prerelease subscription governs external updates, not an extra
+approval of the node's own development.
 Each local Application installation has only one effective Stable or Beta
 representation. There is no parallel verification Beta; the deselected release
 cannot remain active through another Webspace, stale tab or background worker.

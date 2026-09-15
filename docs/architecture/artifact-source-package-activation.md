@@ -840,8 +840,10 @@ DEV source
   -> production desktop launcher placement with Trial/beta badge
 ```
 
-Before the first local Workspace release, Builder owns this local beta placement.
-Once installed, Applications owns the user's stable/prerelease selection.
+Builder owns this local Beta placement for first publication and every subsequent
+local development cycle. The common lifecycle service migrates and switches the
+single selected runtime without a second Applications approval. Applications
+reflects the channel and separately owns external stable/prerelease subscriptions.
 Neither route uses Preview, allocates a development Webspace, changes the desktop
 home scenario or grants external distribution permission. A service-only project
 without a declared launchable entry point is exempt from launcher placement.
