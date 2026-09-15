@@ -1632,3 +1632,15 @@ entire lifecycle roadmap. Successive-Beta replacement/loss consent, broader
 storage/background authority, About resource portability and independent Root
 MCP CLI discovery remain open. No installed record contents entered public
 artifacts or model context, and no application source was manually corrected.
+
+### 2026-09-16: Retain Reviewed Project Documentation
+
+Local candidate retention previously kept `project.yaml` and component tests,
+but dropped the project-root public README on promotion. It now retains only
+that explicit public document, checks its bounded UTF-8 bytes and existing
+private-key scrub rules, and includes it in the digest-checked source projection.
+Tests qualify later DEV edits, unchanged Unicode/line endings, post-promotion
+tampering, links, unsafe content and legacy candidates. A new local source
+receipt is not proof of portable About resources in a remotely installed release;
+CG-06 retains that separate boundary. Existing Reading List candidates are not
+rewritten or promoted again for this prerequisite.

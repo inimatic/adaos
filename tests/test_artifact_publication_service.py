@@ -4,6 +4,7 @@ import json
 import shutil
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +33,7 @@ from adaos.services.artifact_pipeline.project_build import (
     project_source_snapshot,
 )
 from adaos.services import workflow_authoring
+from adaos.services.artifact_pipeline.publication import _read_public_project_document
 from adaos.services.builder.governed import builder_change_definition
 
 
@@ -258,6 +260,9 @@ def test_project_candidate_uses_full_owned_component_closure(tmp_path: Path) -> 
     )
     project_dir = source_workspace / "projects" / "recipes_project"
     project_dir.mkdir(parents=True)
+    public_readme = ("# Demo\r\n\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435\r\n").encode("utf-8")
+    (project_dir / "README.md").write_bytes(public_readme)
+    (project_dir / "private-notes.txt").write_text("Not public documentation", encoding="utf-8")
     (project_dir / "project.yaml").write_text(
         """schema: adaos.project.v1
 kind: project
@@ -367,6 +372,8 @@ lifecycle:
     assert (snapshot / "project" / "recipes_project" / "project.yaml").read_text(
         encoding="utf-8"
     ) == (project_dir / "project.yaml").read_text(encoding="utf-8")
+    assert (snapshot / "project" / "recipes_project" / "README.md").read_bytes() == public_readme
+    assert not (snapshot / "project" / "recipes_project" / "private-notes.txt").exists()
 
     replayed = service.prepare_project_candidate(
         project_id="recipes_project",
@@ -438,6 +445,8 @@ lifecycle:
             prepared.plan,
         )
 
+    # Later DEV edits must not change the immutable candidate's public document.
+    (project_dir / "README.md").write_text("Unreviewed DEV revision", encoding="utf-8")
     service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
     _promote(service, prepared.candidate.candidate_id)
     assert (
@@ -449,6 +458,13 @@ lifecycle:
         prepared.candidate.candidate_id
     )
     assert verification["status"] == "passed"
+    installed_readme = tmp_path / "workspace" / "projects" / "recipes_project" / "README.md"
+    assert installed_readme.read_bytes() == public_readme
+    assert verification["public_documents"][0]["name"] == "README.md"
+    installed_readme.write_text("Changed after acceptance", encoding="utf-8")
+    with pytest.raises(PublicationError, match="public Project document differs"):
+        service.verify_promoted_workspace_source(prepared.candidate.candidate_id)
+    installed_readme.write_bytes(public_readme)
     assert {item["component_ref"] for item in verification["components"]} == {
         "scenario:recipes",
         "skill:shopping_skill",
@@ -496,6 +512,55 @@ lifecycle:
     )
     with pytest.raises(PublicationError, match="differs from promoted candidate"):
         service.verify_promoted_workspace_source(prepared.candidate.candidate_id)
+
+
+@pytest.mark.parametrize("raw, message", [
+    (b"x" * 131073, "128 KiB"),
+    (b"\xff", "UTF-8"),
+    (b"-----BEGIN PRIVATE KEY-----\nnot-a-real-key", "private-key"),
+], ids=["oversized", "invalid-utf8", "private-key"])
+def test_public_project_document_rejects_unsafe_content(tmp_path, raw, message):
+    (tmp_path / "README.md").write_bytes(raw)
+    with pytest.raises(PublicationError, match=message):
+        _read_public_project_document(tmp_path, "README.md")
+
+
+def test_public_project_document_rejects_link(tmp_path):
+    outside = tmp_path / "outside.md"
+    outside.write_text("Not a source document", encoding="utf-8")
+    root = tmp_path / "project"
+    root.mkdir()
+    try:
+        (root / "README.md").symlink_to(outside)
+    except OSError:
+        pytest.skip("Host does not permit symbolic links")
+    with pytest.raises(PublicationError, match="must not be a link"):
+        _read_public_project_document(root, "README.md")
+
+
+@pytest.mark.parametrize("document", [
+    {"name": "../outside.md", "sha256": "0" * 64},
+    {"name": "README.md", "sha256": "0" * 64},
+    "README.md",
+])
+def test_project_document_projection_rejects_tamper_before_manifest_write(tmp_path, document):
+    import hashlib
+
+    service = ArtifactPublicationService(state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace", remote=_Remote(tmp_path / "remote"))
+    snapshot = tmp_path / "source"
+    snapshot.mkdir()
+    manifest = snapshot / "project.yaml"
+    manifest.write_text("id: demo\n", encoding="utf-8")
+    (snapshot / "README.md").write_text("Reviewed", encoding="utf-8")
+    projection = {"candidate_id": "demo", "entries": [], "project": {
+        "project_ref": "project:demo", "snapshot_path": str(manifest),
+        "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        "public_documents": [document],
+    }}
+    with pytest.raises(PublicationError, match="[Pp]roject document"):
+        service._project_development_sources(projection, plan=SimpleNamespace(release=SimpleNamespace(components=[])))
+    assert not (tmp_path / "workspace/projects/demo/project.yaml").exists()
 
 
 def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path) -> None:

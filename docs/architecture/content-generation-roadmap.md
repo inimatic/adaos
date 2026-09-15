@@ -42,3 +42,9 @@ Target: [Typed Content Generation](content-generation.md).
   generic Client crop/position/zoom surface. Qualify cancel, stale apply, portable
   resource packaging and DEV-to-Beta-to-Stable round trips. Existing image drafts
   and README generation are prerequisites, not closure of this integration.
+  Local candidate source retention now carries the exact public `README.md`
+  through promotion and verifies it before source-registry publication. Later
+  DEV edits do not alter that snapshot; unrelated project files are not copied.
+  Bounded UTF-8, private-key rejection, tamper and legacy-candidate tests pass.
+  This source projection is not remote release packaging: guest installation,
+  portable icons, crop UI and the combined About browser proof remain open.

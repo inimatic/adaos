@@ -50,6 +50,7 @@ from adaos.services.artifact_pipeline.packages import (
     ContentAddressedPackageStore,
     artifact_source_snapshot,
     build_artifact_package,
+    _assert_publishable_file,
 )
 from adaos.services.artifact_pipeline.project_build import (
     build_workspace_project_release,
@@ -72,6 +73,7 @@ from adaos.services.artifact_pipeline.recovery import (
 from adaos.services.artifact_pipeline.storage import (
     MutationLockTimeout,
     atomic_write_json,
+    atomic_write_bytes,
     mutation_lock,
     replace_with_retry,
 )
@@ -102,10 +104,33 @@ PUSHED_SOURCE_SCHEMA = "adaos.artifact.pushed_source.v1"
 REBASE_PLAN_SCHEMA = "adaos.artifact.rebase_plan.v1"
 PROMOTION_OPERATION_SCHEMA = "adaos.artifact.promotion_operation.v1"
 _DEVELOPMENT_SOURCE_ROOTS = ("tests",)
+_PROJECT_PUBLIC_DOCUMENTS = ("README.md",)
 
 
 class PublicationError(RuntimeError):
     pass
+
+
+def _read_public_project_document(root: Path, name: str) -> bytes | None:
+    if name not in _PROJECT_PUBLIC_DOCUMENTS:
+        raise PublicationError("unsupported public Project document")
+    path = root / name
+    if path.is_symlink() or path.resolve().parent != root.resolve():
+        raise PublicationError("public Project document must not be a link")
+    if not path.exists():
+        return None
+    if not path.is_file() or path.stat().st_size > 131072:
+        raise PublicationError("public Project document exceeds 128 KiB or is not a file")
+    with path.open("rb") as handle:
+        raw = handle.read(131073)
+    if len(raw) > 131072:
+        raise PublicationError("public Project document exceeds 128 KiB")
+    try:
+        raw.decode("utf-8-sig")
+    except UnicodeError as exc:
+        raise PublicationError("public Project document must be UTF-8") from exc
+    _assert_publishable_file(name, raw, error_type=PublicationError)
+    return raw
 
 
 class PublicationStaleError(PublicationError):
@@ -558,6 +583,10 @@ class ArtifactPublicationService:
             project_snapshot = staging / "project" / project_id / "project.yaml"
             project_snapshot.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(project_manifest, project_snapshot)
+            for name in _PROJECT_PUBLIC_DOCUMENTS:
+                raw = _read_public_project_document(project_manifest.parent, name)
+                if raw is not None:
+                    atomic_write_bytes(project_snapshot.parent / name, raw)
             for package in plan.release.components:
                 collection = "skills" if package.kind == "skill" else "scenarios"
                 source_root = workspace / collection / package.artifact_id
@@ -639,6 +668,18 @@ class ArtifactPublicationService:
                 "snapshot_path": str(project_snapshot),
                 "sha256": hashlib.sha256(project_snapshot.read_bytes()).hexdigest(),
             }
+            documents = []
+            for name in _PROJECT_PUBLIC_DOCUMENTS:
+                raw = _read_public_project_document(project_source.parent, name)
+                if raw is None:
+                    continue
+                target = project_snapshot.parent / name
+                if not target.exists():
+                    atomic_write_bytes(target, raw)
+                if _read_public_project_document(target.parent, name) != raw:
+                    raise PublicationError("retained public Project document differs from candidate")
+                documents.append({"name": name, "sha256": hashlib.sha256(raw).hexdigest()})
+            payload["project"]["public_documents"] = documents
         payload["digest"] = canonical_payload_digest(payload)
         return payload
 
@@ -697,18 +738,37 @@ class ArtifactPublicationService:
             actual_digest = hashlib.sha256(source.read_bytes()).hexdigest()
             if expected_digest != actual_digest:
                 raise PublicationError("development Project source projection digest mismatch")
+            documents = []
+            raw_documents = raw_project.get("public_documents", [])
+            if not isinstance(raw_documents, list) or len(raw_documents) > len(_PROJECT_PUBLIC_DOCUMENTS):
+                raise PublicationError("invalid public Project document projection")
+            for document in raw_documents:
+                if not isinstance(document, Mapping):
+                    raise PublicationError("invalid public Project document projection")
+                name = str(document.get("name") or "")
+                raw = _read_public_project_document(source.parent, name)
+                if raw is None or hashlib.sha256(raw).hexdigest() != document.get("sha256"):
+                    raise PublicationError("public Project document projection digest mismatch")
+                documents.append((name, raw))
             projects_root = (self.workspace_root / "projects").resolve()
             target = (projects_root / project_id / "project.yaml").resolve()
             if projects_root not in target.parents:
                 raise PublicationError("development Project target escapes Workspace")
+            for name, _raw in documents:
+                document_target = target.parent / name
+                if document_target.is_symlink() or document_target.resolve().parent != target.parent:
+                    raise PublicationError("public Project document target must not be a link")
             target.parent.mkdir(parents=True, exist_ok=True)
             temporary = target.with_name(f".{target.name}.tmp")
             shutil.copy2(source, temporary)
             replace_with_retry(temporary, target)
+            for name, raw in documents:
+                atomic_write_bytes(target.parent / name, raw)
             project_projection = {
                 "project_ref": project_ref,
                 "path": str(target),
                 "sha256": actual_digest,
+                "public_documents": list(raw_documents),
             }
         return {
             "status": "completed",
@@ -773,7 +833,7 @@ class ArtifactPublicationService:
         """Prove that Workspace source still matches the promoted candidate.
 
         Runtime files are checked by rebuilding each owned component with the
-        candidate's exact SourceRef. Development-only tests and project.yaml
+        candidate's exact SourceRef. Development-only tests and Project files
         are checked against the source snapshot retained before Trial.
         """
 
@@ -850,6 +910,14 @@ class ArtifactPublicationService:
             raise PublicationError(
                 "Workspace project.yaml differs from the promoted candidate"
             )
+        documents = []
+        for name in _PROJECT_PUBLIC_DOCUMENTS:
+            expected = _read_public_project_document(expected_project.parent, name)
+            if expected is None:
+                continue  # Legacy candidates did not retain public documents.
+            if _read_public_project_document(actual_project.parent, name) != expected:
+                raise PublicationError("Workspace public Project document differs from promoted candidate")
+            documents.append({"name": name, "sha256": hashlib.sha256(expected).hexdigest()})
 
         return {
             "schema": "adaos.artifact.promoted_workspace_source_verification.v1",
@@ -858,6 +926,7 @@ class ArtifactPublicationService:
             "project_id": candidate.project_id,
             "release_digest": candidate.release_digest,
             "project_manifest_sha256": actual_project_digest,
+            "public_documents": documents,
             "components": checked_components,
         }
 
