@@ -85,12 +85,12 @@ def _apply_migrations(connection: sqlite3.Connection, ordered: Sequence[Relation
         started = time.monotonic()
         connection.set_progress_handler(lambda: int(time.monotonic() - started > 120), 10000)
         for item in pending:
-            connection.set_authorizer(SQLiteDataTransition._authorize)
-            try:
-                for statement in item.statements:
+            for statement in item.statements:
+                connection.set_authorizer(SQLiteDataTransition._statement_authorizer())
+                try:
                     connection.execute(statement)
-            finally:
-                connection.set_authorizer(None)
+                finally:
+                    connection.set_authorizer(None)
             connection.execute("INSERT INTO adaos_schema_migrations (version,name,checksum) VALUES (?,?,?)", (item.version, item.name, item.checksum))
         if pending:
             _integrity(connection)
@@ -142,6 +142,25 @@ class SQLiteDataTransition:
                 connection.execute(f"PRAGMA max_page_count={512 * 1024 * 1024 // page_size}")
                 _apply_migrations(connection, ordered, allow_existing=True)
         return self._build(destination, identity, build)
+
+    @staticmethod
+    def _statement_authorizer():
+        altered = None
+
+        def authorize(action, first, second, database, trigger):
+            nonlocal altered
+            verdict = SQLiteDataTransition._authorize(action, first, second, database, trigger)
+            if action == sqlite3.SQLITE_ALTER_TABLE and verdict == sqlite3.SQLITE_OK:
+                altered = (first, second)
+            # SQLite validates ADD COLUMN constraints through an internal
+            # table-valued quick_check. Authorize only the current ALTER target;
+            # a new statement gets a fresh authorizer with no inherited grant.
+            if (action == sqlite3.SQLITE_PRAGMA and first == "quick_check"
+                    and altered == (database, second) and trigger is None):
+                return sqlite3.SQLITE_OK
+            return verdict
+
+        return authorize
 
     @staticmethod
     def _authorize(action, arg1, arg2, _database, _trigger):

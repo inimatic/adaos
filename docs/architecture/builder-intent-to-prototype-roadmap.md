@@ -644,6 +644,15 @@ Implementation boundary: Local Trial/promotion mechanisms and historical Equipme
   migrations tested on synthetic data and clarification of ambiguous mappings;
   migration execution itself must not call an LLM or export records. Every new
   Beta must prove the complete path from Stable, not only the previous Beta.
+- [x] `[must]` Execute declared SQLite initialization and exact reopen with the
+  real Core executor during Automation validation, independently of candidate
+  test doubles. Use disposable empty stores without importing candidate Python
+  or accessing installed records; record per-manifest timing. This establishes
+  initialization compatibility, not migration correctness on existing records.
+- [ ] `[must]` Expand that independent check to immutable published migration
+  history and synthetic fixtures for every supported prior schema. Current
+  Reading List E2E checks cover these cases outside the generic worker; keep the
+  broader gate open until the worker consumes a generic fixture contract.
 - [ ] `[must]` Bind Beta review to `AP4-21` migration/data evidence and preserve
   Beta writes on acceptance (`Keep data=true`); distinguish immutable code from
   mutable working data. Qualify explicit recovery-point/loss confirmation for

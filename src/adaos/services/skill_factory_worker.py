@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import traceback
 from dataclasses import dataclass
@@ -4284,6 +4285,10 @@ class LocalSkillFactoryWorker:
                     + "The previous implementation did not pass the worker checks below. Continue in the existing workspace, "
                     + "fix every reported issue and add focused regression coverage. Do not execute tests or validation; "
                     + "the trusted worker reruns them. Preserve unrelated behavior and mark unexecuted checks explicitly.\n\n"
+                    + "A failing newly generated test does not authorize changing an established business invariant. "
+                    + "When its synthetic fixture contradicts the accepted behavior, fix the fixture while retaining "
+                    + "behavioral coverage. Do not weaken validation or remove assertions just to make tests pass; "
+                    + "use the clarification outcome when the intended behavior cannot be resolved from the task.\n\n"
                     + "\n".join(f"- {item}" for item in test_report["errors"][:40])
                 )
                 repair_root_mcp = root_mcp
@@ -6890,6 +6895,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             changed_paths=changed_paths,
         )
         self._validate_skill_manifests(workspace, checks, errors)
+        self._validate_declared_sqlite_initialization(workspace, checks, errors)
         self._validate_skill_webui_contracts(workspace, checks, errors)
         self._validate_skill_data_routes(workspace, checks, errors)
         self._validate_skill_dependency_isolation(workspace, checks, errors)
@@ -7628,6 +7634,36 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 continue
             errors.extend(f"{relative}: {issue.code}: {issue.message} ({issue.where})" for issue in issues)
             checks.append({"kind": "skill.manifest.schema", "path": relative, "ok": not issues})
+
+    def _validate_declared_sqlite_initialization(self, workspace, checks, errors):
+        from adaos.services.applications.data_lifecycle import declared_databases
+        from adaos.services.applications.sqlite_data_transition import initialize_sqlite_schema
+
+        for path in sorted(workspace.glob("skills/*/skill.yaml")):
+            relative = path.relative_to(workspace).as_posix()
+            started = time.monotonic()
+            check = {"kind": "skill.data_lifecycle.sqlite_initialization", "path": relative,
+                     "scope": "empty-synthetic-store-and-reopen", "ok": False}
+            try:
+                manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                if not isinstance(manifest, dict) or "data_lifecycle" not in manifest:
+                    continue
+                chains = declared_databases(manifest)
+                # Trusted Core executes SQL only. Never import candidate code,
+                # use its test doubles, or inspect installed records/settings.
+                validation_root = self.state_dir / "skill_factory" / "validation"
+                validation_root.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix="sqlite-", dir=validation_root) as temporary:
+                    for index, chain in enumerate(chains.values()):
+                        database = Path(temporary) / f"{index}.sqlite3"
+                        initialize_sqlite_schema(database, chain)
+                        if initialize_sqlite_schema(database, chain)["applied_versions"]:
+                            raise ValueError("Repeated initialization must not apply migrations")
+                check.update(ok=True, databases=len(chains))
+            except Exception as exc:
+                errors.append(f"{relative}: Core SQLite initialization: {type(exc).__name__}: {exc}")
+            check["elapsed_ms"] = round((time.monotonic() - started) * 1000, 2)
+            checks.append(check)
 
     @staticmethod
     def _validate_skill_data_routes(

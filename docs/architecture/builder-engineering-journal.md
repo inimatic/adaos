@@ -1474,3 +1474,31 @@ remain rejected until a result is previewable. The selected target remains
 truthfully labeled Prototype, not Automation. The 52 Preview SDK/architecture
 tests pass; activate and qualify the live picker in the next coordinated restart,
 without interrupting the running Automation worker.
+
+### 2026-09-15: Independent Successor Acceptance Exposes Runtime Gaps
+
+The continued Reading List Automation completed, but independent HTTP/browser
+acceptance rejected it. The first blocker was Core's SQLite authorizer denying
+the internal table-scoped `quick_check` used by `ALTER TABLE ADD COLUMN CHECK`.
+The grant is now restricted to that authorized ALTER target and statement;
+explicit PRAGMA, ledger mutations and transaction escape remain denied. Tests
+cover successful checked-column migration, integrity failure rollback and grant
+scope. The unchanged generated migration passes the real Core fresh/reopen,
+prior-schema and synthetic ledgerless migration probe. Historical checksums
+remain unchanged. Evidence: `cycle-2/acceptance-01/migrations-02.json`.
+
+After restart, HTTP exposed a different blocker: additive DEV configuration
+schema changes were subject to immutable installed-release admission. Compatible
+DEV defaults now project over the isolated synthetic store without overwriting
+existing overrides or writing on read; the next explicit CAS write persists the
+new schema. Incompatible changes and all installed channels remain fail-closed.
+No production settings or secrets enter DEV. The combined configuration/SQLite
+suite passes 54 tests. Live requalification is still required.
+
+Worker validation now executes declared SQL initialization and exact reopen via
+Core, regardless of candidate Python tests or mocked SDK calls. Its evidence is
+explicitly limited to empty synthetic stores. Prior-schema fixtures and immutable
+published-history checks remain independent E2E evidence, not yet a generic
+worker guarantee. A generated repair also changed an existing title-only
+duplicate rule to satisfy its fixture. Collect independent regression results
+and correct through Builder, never by manually editing the application.

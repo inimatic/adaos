@@ -75,7 +75,13 @@ class ApplicationRuntimeConfiguration:
                 return {"values": deepcopy(defaults), "credentials": {}}, None
         release_digest = selected.release_digest if selected else "development:" + _digest(schema)
         if config["release_digest"] != release_digest or config["schema_digest"] != _digest(schema):
-            raise ConfigurationConflict("Runtime settings require explicit release/schema migration")
+            if selected is not None or not config["release_digest"].startswith("development:"):
+                raise ConfigurationConflict("Runtime settings require explicit release/schema migration")
+            # DEV has no immutable release cutover. Project compatible defaults
+            # without deleting overrides or mutating storage on a read; the next
+            # explicit CAS write records the new schema. Installed channels never
+            # enter this branch, and incompatible DEV changes still fail closed.
+            config = {**config, "values": {**deepcopy(defaults), **deepcopy(config["values"])}}
         _validate(schema, config["values"])
         return config, candidate
 

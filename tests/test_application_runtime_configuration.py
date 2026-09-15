@@ -163,3 +163,60 @@ def test_dev_uses_same_settings_sdk_without_loading_real_installation(setup, tmp
         assert ApplicationRuntimeConfiguration(ctx).read() == {"revision": 1, "values": {"page_size": 15}}
     ctx.skill_ctx.get().path = original
     assert production.read()["values"] == {"page_size": 40}
+
+
+def test_dev_additive_settings_keep_overrides_without_writing_on_read(setup, tmp_path, monkeypatch):
+    from adaos.services.applications import runtime_configuration as module
+    ctx, _channel, _stable, manifest, _release = setup
+    ApplicationRuntimeConfiguration(ctx).write({"page_size": 40}, expected_revision=0)
+    production_store = ApplicationConfigurationStore(ctx.paths.state_dir(), "sample", "skill:worker")
+    production_before = production_store.read()
+    dev = tmp_path / "dev/subnet/skills"
+    path = dev / ".runtime/worker/v0.1/slot-a"
+    path.mkdir(parents=True)
+    source = path / "skill.yaml"
+    source.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    ctx.paths.dev_skills_dir = lambda: dev
+    ctx.skill_ctx.get().path = path
+    monkeypatch.setattr(module, "ApplicationStore", lambda _: pytest.fail("DEV must not load an installation"))
+    service = ApplicationRuntimeConfiguration(ctx)
+    service.write({"page_size": 15}, expected_revision=0)
+    store = ApplicationConfigurationStore(dev.parent / ".runtime/state", "development:worker", "skill:worker")
+    original = store.read()
+    manifest["configuration"] = {"schema": {**SCHEMA,
+        "properties": {**SCHEMA["properties"], "order": {"type": "string", "enum": ["title", "newest"]}},
+        "required": ["page_size", "order"]}, "defaults": {"page_size": 10, "order": "newest"}}
+    source.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    assert service.read() == {"revision": 1, "values": {"page_size": 15, "order": "newest"}}
+    assert store.read() == original
+    assert service.write({"page_size": 15, "order": "title"}, expected_revision=1)["revision"] == 2
+    assert ApplicationRuntimeConfiguration(ctx).read()["values"] == {"page_size": 15, "order": "title"}
+    with pytest.raises(ConfigurationConflict):
+        service.write({"page_size": 15, "order": "newest"}, expected_revision=1)
+    assert production_store.read() == production_before
+
+
+@pytest.mark.parametrize("incompatible", ["removed", "changed_type", "missing_default"])
+def test_dev_settings_never_reset_incompatible_overrides(incompatible):
+    from adaos.services.applications.configuration import _digest
+    record = {"stable": {"release_digest": "development:" + _digest(SCHEMA),
+        "schema_digest": _digest(SCHEMA), "values": {"page_size": 15}, "credentials": {}}}
+    original = json.dumps(record, sort_keys=True)
+    schema = {"type": "object", "properties": {}, "additionalProperties": False}
+    defaults = {}
+    if incompatible == "changed_type":
+        schema["properties"]["page_size"] = {"type": "string"}
+        defaults["page_size"] = "10"
+    if incompatible == "missing_default":
+        schema = {**SCHEMA, "required": ["page_size", "new_required"]}
+    with pytest.raises(ConfigurationConflict):
+        ApplicationRuntimeConfiguration._current(None, schema, defaults, record)
+    assert json.dumps(record, sort_keys=True) == original
+
+
+def test_development_binding_cannot_relax_an_installed_configuration_identity():
+    from adaos.services.applications.configuration import _digest
+    record = {"stable": {"release_digest": DIGEST, "schema_digest": _digest(SCHEMA),
+        "values": {"page_size": 15}, "credentials": {}}}
+    with pytest.raises(ConfigurationConflict, match="explicit release/schema migration"):
+        ApplicationRuntimeConfiguration._current(None, SCHEMA, {"page_size": 10}, record)

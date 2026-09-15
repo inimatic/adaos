@@ -5,6 +5,7 @@ import pytest
 
 from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.applications.sqlite_data_transition import SQLiteDataTransition
+from adaos.services.applications.sqlite_data_transition import initialize_sqlite_schema
 
 
 def write(path, sql, *args):
@@ -80,6 +81,55 @@ def test_migration_cannot_escape_transaction_or_private_database(tmp_path, state
                         migrations=[RelationalMigration(1, "bad", (statement,))])
     assert not staged.exists()
     assert rows(stable) == [(1, "private original")]
+
+
+def test_checked_column_migrates_existing_rows_and_reopens_with_same_ledger(tmp_path):
+    adapter, stable = seed(tmp_path)
+    snapshot, staged = tmp_path / "snapshot.sqlite", tmp_path / "staged.sqlite"
+    receipt = adapter.snapshot(stable, snapshot, operation_key="checked")
+    chain = [RelationalMigration(1, "checked_column", (
+        "ALTER TABLE records ADD COLUMN score INTEGER CHECK(score BETWEEN 1 AND 5 OR score IS NULL)",))]
+    adapter.migrate(snapshot, staged, snapshot_digest=receipt["digest"], migrations=chain, operation_key="checked")
+    assert rows(staged) == [(1, "private original", None)]
+    assert rows(stable) == [(1, "private original")]
+    assert initialize_sqlite_schema(staged, chain)["applied_versions"] == []
+    with pytest.raises(sqlite3.IntegrityError):
+        write(staged, "UPDATE records SET score = 6")
+    write(staged, "UPDATE records SET score = 4")
+    assert rows(staged) == [(1, "private original", 4)]
+
+
+def test_checked_column_rejects_existing_violations_and_rolls_back(tmp_path):
+    adapter, stable = seed(tmp_path)
+    snapshot, staged = tmp_path / "snapshot.sqlite", tmp_path / "staged.sqlite"
+    receipt = adapter.snapshot(stable, snapshot, operation_key="checked")
+    with pytest.raises(sqlite3.DatabaseError, match="CHECK constraint failed"):
+        adapter.migrate(snapshot, staged, snapshot_digest=receipt["digest"], operation_key="bad-check",
+            migrations=[RelationalMigration(1, "bad_check", (
+                "ALTER TABLE records ADD COLUMN score INTEGER DEFAULT 9 CHECK(score < 5)",))])
+    assert not staged.exists()
+    assert rows(stable) == [(1, "private original")]
+
+
+@pytest.mark.parametrize("statement", ["PRAGMA quick_check(records)", "SELECT * FROM pragma_quick_check('records')",
+    "PRAGMA writable_schema=ON", "PRAGMA foreign_keys=OFF", "DELETE FROM adaos_schema_migrations"])
+def test_alter_grant_cannot_escape_to_another_statement(tmp_path, statement):
+    database = tmp_path / "fresh.sqlite"
+    chain = [RelationalMigration(1, "create", ("CREATE TABLE records (id INTEGER PRIMARY KEY)",)),
+             RelationalMigration(2, "alter", ("ALTER TABLE records ADD COLUMN value TEXT CHECK(length(value) < 20)", statement))]
+    with pytest.raises(sqlite3.DatabaseError, match="authorized"):
+        initialize_sqlite_schema(database, chain)
+    assert rows(database, "SELECT name FROM sqlite_master WHERE type='table'") == []
+
+
+def test_internal_quick_check_grant_is_target_scoped_and_keeps_ledger_protected():
+    authorize = SQLiteDataTransition._statement_authorizer()
+    assert authorize(sqlite3.SQLITE_PRAGMA, "quick_check", "records", "main", None) == sqlite3.SQLITE_DENY
+    assert authorize(sqlite3.SQLITE_ALTER_TABLE, "main", "records", None, None) == sqlite3.SQLITE_OK
+    assert authorize(sqlite3.SQLITE_PRAGMA, "quick_check", "records", "main", None) == sqlite3.SQLITE_OK
+    for database, table, trigger in [("main", "other", None), ("temp", "records", None), ("main", "records", "user_trigger")]:
+        assert authorize(sqlite3.SQLITE_PRAGMA, "quick_check", table, database, trigger) == sqlite3.SQLITE_DENY
+    assert authorize(sqlite3.SQLITE_ALTER_TABLE, "main", "adaos_schema_migrations", None, None) == sqlite3.SQLITE_DENY
 
 
 def test_migration_history_and_snapshot_checksums_are_pinned(tmp_path):

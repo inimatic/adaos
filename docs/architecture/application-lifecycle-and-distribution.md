@@ -995,6 +995,13 @@ trees. Retain compatible Beta configuration overrides across subsequent Betas;
 schema changes require an explicit algorithmic configuration migration or a
 visible unresolved-field decision, never silently reverting to defaults.
 
+DEV settings use an isolated synthetic namespace, never the installed values.
+An additive compatible schema may project new declared defaults while retaining
+every existing override. Reads do not persist that projection; an explicit
+revision-checked write records it. Removed fields, incompatible values or missing
+required defaults fail rather than dropping overrides. This DEV-only rule does
+not bypass the release/schema checks or fenced migration of Stable and Beta.
+
 Resolve secrets through the existing local secret service with Application,
 component and caller scope; inherit access only to declared, already approved
 bindings. Do not copy plaintext into Candidate source, manifests, artifacts,
