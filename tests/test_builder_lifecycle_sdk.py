@@ -187,6 +187,61 @@ def test_prepare_trial_routes_component_checkpoint_through_owning_project(
     assert result["release"]["project_id"] == "semantic_ui_demo"
 
 
+@pytest.mark.parametrize("changed", [None, "status", "candidate_id", "package_digest", "release_digest"])
+def test_prepare_trial_refreshes_generation_only_for_same_admitted_candidate(monkeypatch, changed):
+    from copy import deepcopy
+    from adaos.sdk.builder import applications
+
+    state = _checkpoint_state()
+    state["generation"] = 1
+    candidate = {
+        "candidate_id": "candidate-1",
+        "package_digest": "sha256:" + "c" * 64,
+        "release_digest": "sha256:" + "d" * 64,
+    }
+    activation = {
+        "activation_id": "activation-1", "data_mode": "snapshot",
+        "target": {"webspace_id": "desktop", "space_kind": "workspace"},
+    }
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *args: deepcopy(state))
+
+    def transition(_kind, _project, action, **kwargs):
+        state["generation"] += 1
+        if action == "candidate_prepared":
+            state["delivery"] = {"status": "trial", **candidate}
+        return {"workflow": deepcopy(state)}
+
+    def place(*args, **kwargs):
+        state["generation"] += 1
+        if changed:
+            state["delivery"][changed] = "different"
+        return {"ok": True, "trial_activation": activation}
+
+    placements = []
+
+    def record(*args, **kwargs):
+        assert kwargs["expected_generation"] == state["generation"] == 4
+        assert args[2]["data_mode"] == "snapshot"
+        placements.append(args[2])
+        return {"workflow": deepcopy(state)}
+
+    monkeypatch.setattr(lifecycle.workflow, "transition", transition)
+    monkeypatch.setattr(lifecycle.projects, "prepare_candidate", lambda *args, **kwargs: {
+        "ok": True, "candidate": candidate, "release": {"version": "0.2.0"},
+        "trial_activation": activation,
+    })
+    monkeypatch.setattr(applications, "place_local_trial", place)
+    monkeypatch.setattr(lifecycle.workflow, "record_project_placement", record)
+    if changed:
+        with pytest.raises(ValueError, match="immutable identity changed"):
+            lifecycle.prepare_trial("scenario", "example", actor="user:test", idempotency_key="trial")
+        assert not placements
+    else:
+        result = lifecycle.prepare_trial("scenario", "example", actor="user:test", idempotency_key="trial")
+        assert result["workflow"]["generation"] == 4
+        assert len(placements) == 1
+
+
 def test_publish_candidate_passes_exact_apply_evidence_to_terminal_transition(
     monkeypatch,
 ) -> None:

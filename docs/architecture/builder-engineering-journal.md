@@ -1371,3 +1371,27 @@ the final parity audit. A healthy transport/widget-status chip is not evidence
 that application reads or writes succeeded; independent HTTP/browser assertions
 must continue checking actual tool responses. Installed data is not exported in
 these reports.
+
+### 2026-09-15: First Native Stable Acceptance And Registry Compatibility
+
+The native Candidate changelog accepted Reading List 0.1.4 into Workspace.
+Independent private comparisons confirm all five Beta records and both settings
+survived. Stable public tools then read all three E2E-owned records, verified
+their settings and removed only those test records. The original two user
+records remain unchanged. Evidence: `cycle-1/stable-01` and
+`cycle-1/stable-data-http-01.json` under `reading-list-migrations-20260915`.
+Capture the next baseline privately before the second native Change.
+
+The Trial SQLite fix does not intercept the parallel Application registry index:
+that service owns `state/applications/registry.sqlite3` and directly indexes DEV
+and Workspace manifests. Only a skill's declared database initialization skips
+the forbidden DEV-mode probe on trusted Trial paths. The combined SDK and
+registry projection/API suite passes 19 tests against the current parallel
+worktree. Registry sources and its access rules are unchanged by this fix.
+
+The public Builder lifecycle SDK now also rereads workflow after asynchronous
+Trial placement and checks the exact Candidate/package/release and Trial state
+before using its current generation. Tests cover unrelated generation changes
+and rejection of each changed identity/decision; 21 lifecycle/placement tests
+pass. Already-prepared Trial reconciliation remains available in native Builder;
+the generic SDK's explicit replay entry point remains a parity follow-up.

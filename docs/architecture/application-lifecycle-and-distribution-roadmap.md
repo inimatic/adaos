@@ -220,8 +220,9 @@ Project/Application identity collapse.
   vault for the verified owner, with synthetic DEV isolation and live revocation.
   A local Windows Keyring roundtrip/revoke probe passes. Delegated/background
   grants, legacy plaintext import, credential retention/garbage collection and
-  live two-cycle/restart qualification remain open; no Reading List setting has
-  yet been inherited live.
+  full live two-cycle qualification remain open. Reading List's first native
+  Stable/Beta/Stable cycle preserves both settings, including Beta edits; DEV
+  restart preservation and stale revision rejection are independently qualified.
 - [x] `[must]` Qualify the `APP1-14` failed-preparation recovery primitive:
   exact Candidate/contract, unchanged Stable verification, durable interrupted
   recovery, retained evidence and no false completed-migration admission.
@@ -235,8 +236,15 @@ Project/Application identity collapse.
   without external-feed opt-in. Wide/compact browser CRUD/settings/reopen and
   live HTTP discovery/import pass without mutating DEV data. Evidence:
   `reading-list-migrations-20260915/cycle-1/beta-observed-02.json`,
-  `beta-browser-03.json`, `beta-http-01.json`. Stable adoption and the second
-  complete increment remain required by `APP6-10`; this sub-proof does not close it.
+  `beta-browser-03.json`, `beta-http-01.json`.
+- [x] `[must]` Qualify first-cycle native Stable acceptance and data adoption:
+  exact Candidate changelog acceptance, Stable runtime selection, both original
+  records plus three Beta-only test records and both settings retained. Remove
+  only E2E-owned records through public tools and reverify the original records.
+  Evidence: `reading-list-migrations-20260915/cycle-1/stable-01` and
+  `stable-data-http-01.json`; value comparisons remain private recovery proofs.
+  The second complete increment remains required by `APP6-10`; these sub-proofs
+  do not close it or claim live credential-slot qualification.
 
 **Exit proof:** two Applications sharing one component install and remove
 without premature package/data deletion; an incompatible version is rejected;

@@ -258,6 +258,17 @@ def prepare_trial(
         admitted = place_local_trial(candidate_id, webspace_id=trial_webspace, actor_ref=actor)
         activation = admitted["trial_activation"]
         result = dict(result) | admitted
+        # Runtime refresh may record a Preview selection while placement is awaited.
+        current = workflow.get_state(object_type, object_id)
+        current_delivery = _mapping(current.get("delivery"))
+        if any(current_delivery.get(key) != value for key, value in {
+            "status": "trial",
+            "candidate_id": candidate_id,
+            "package_digest": package_digest,
+            "release_digest": release_digest,
+        }.items()):
+            raise ValueError("Trial decision or immutable identity changed during placement; reload Builder")
+        completed_workflow = current
     activation_target = _mapping(activation.get("target"))
     if object_type == "scenario" and activation:
         placed = workflow.record_project_placement(
