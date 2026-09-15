@@ -1,6 +1,7 @@
 import { expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { revealPrototypeWidget } from './prototype-navigation.mjs'
 
 // Opt-in qualification of separate scalar editors; never admitted to model context.
 export async function reviewSeparateCrud({ page, application, source, sample, output, layout }) {
@@ -54,6 +55,7 @@ export async function reviewSeparateCrud({ page, application, source, sample, ou
   }
 
   const toolbar = widgets.find(widget => widget.type === 'ui.queryToolbar')
+  await revealPrototypeWidget(page, widgets, collection)
   const search = toolbar?.inputs.controls.find(control => control.kind === 'search')
   const filter = toolbar?.inputs.controls.find(control => control.kind === 'filter' && control.inputType === 'select')
   if (!search || !filter) throw new Error('Search and choice filter required by this probe')

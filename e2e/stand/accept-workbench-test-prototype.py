@@ -14,6 +14,32 @@ from adaos.sdk.builder import workflow
 from adaos.services.resources.prototype import prototype_webui_digest
 
 
+def crud_coverage(webui, samples):
+    application = webui["ui"]["application"]
+    forms = [widget for modal in application.get("modals", {}).values()
+             for widget in modal.get("schema", {}).get("widgets", []) if widget.get("type") == "ui.form"]
+    form = next(widget for widget in forms if any(
+        action.get("type") == "resourceOperation" and action.get("params", {}).get("operation_id") == "create"
+        for action in widget.get("actions", [])))
+    resource = next(action["target"] for action in form["actions"]
+                    if action.get("type") == "resourceOperation" and action.get("params", {}).get("operation_id") == "create")
+    fields = [field["id"] for field in form["inputs"]["fields"] if field["type"] == "shortText"][:2]
+    if len(fields) != 2 or not resource.startswith("prototype."):
+        return False
+    tasks = {f"search/{field}" for field in fields} | {
+        "search/empty-result", "choice-filter/change", "create/required-field-rejection/no-mutation",
+        "update/required-field-rejection/no-mutation",
+        "create/cancel/no-mutation/clear-draft", "create/optional-fields-empty/select-created-record",
+        "delete/confirmation-cancel/no-mutation", "delete/confirmation-accept/collection-refresh"}
+    return {row["layout"] for row in samples} == {"wide", "compact"} and all(
+        not row.get("failure") and not row.get("errors")
+        and tasks.issubset({check.get("task") for check in row["checks"]
+                           if check.get("status") == "passed" and check.get("resource") == resource})
+        and any(check.get("task") == "select/edit/save/reopen" and check.get("status") == "passed"
+                and check.get("field") == fields[0] and check.get("resource") == resource for check in row["checks"])
+        for row in samples)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--creation", required=True, type=Path)
@@ -37,14 +63,7 @@ def main():
         parser.error("Matching successful independent interaction report required")
     if checkpoint["provenance"]["source_sha256"] != hashlib.sha256(raw).hexdigest():
         parser.error("Browser evidence is stale")
-    tasks = {"select/edit/save/reopen", "search/title", "search/author", "search/empty-result",
-             "choice-filter/change", "create/required-field-rejection/no-mutation",
-             "create/cancel/no-mutation/clear-draft", "create/optional-fields-empty/select-created-record",
-             "delete/confirmation-cancel/no-mutation", "delete/confirmation-accept/collection-refresh"}
-    if {row["layout"] for row in browser["samples"]} != {"wide", "compact"} or any(
-        row.get("failure") or row.get("errors") or not tasks.issubset({check.get("task") for check in row["checks"] if check.get("status") == "passed"})
-        for row in browser["samples"]
-    ):
+    if not crud_coverage(json.loads(raw), browser["samples"]):
         parser.error("Both widths must cover the explicitly qualified scalar CRUD path")
     visual_report = json.loads(args.visual.read_text(encoding="utf-8"))
     visual = visual_report.get("samples")

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { reviewSeparateCrud } from './prototype-crud-review.mjs'
+import { revealPrototypeWidget } from './prototype-navigation.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') throw new Error('Interaction review requires ENV_TYPE=dev')
 const checkpointPath = path.resolve(process.env.ADAOS_E2E_CHECKPOINT || '')
@@ -137,6 +138,7 @@ try {
         const rowSelector = collection?.type === 'collection.board' ? '.board-card__main' : 'tr.row-selectable, .collection-focus-item'
         if (process.env.ADAOS_E2E_READONLY === '1') {
           if (!update || !collection || !widget.inputs.readOnlyIf) continue
+          await revealPrototypeWidget(page, widgets, collection)
           const rows = host(collection.id).locator(rowSelector)
           await expect(rows.first()).toBeVisible()
           let checked = false
@@ -180,6 +182,7 @@ try {
           continue
         }
         const row = host(collection.id).locator(rowSelector).first()
+        await revealPrototypeWidget(page, widgets, collection)
         await expect(row).toBeVisible({ timeout: 30_000 })
         await row.click()
         const form = host(widget.id)
@@ -249,6 +252,15 @@ try {
           if (sample.mutations.length !== count) throw new Error('Dismissing an editor caused a mutation')
           sample.checks.push({ editor: widget.id, status: 'passed', task: 'dismiss-without-save/restore-focus/reopen', surface: 'overlay' })
         }
+        if (field.required && field.type === 'shortText') {
+          const before = sample.mutations.length
+          await setValue('')
+          await form.locator(`[data-command-id=${JSON.stringify(update.id)}]`).click()
+          await expect(form.locator('.field-error')).toBeVisible()
+          if (sample.mutations.length !== before) throw new Error('Invalid edit submitted a resource mutation')
+          sample.checks.push({ editor: widget.id, resource: update.target, field: field.id,
+            status: 'passed', task: 'update/required-field-rejection/no-mutation' })
+        }
         const marker = probeValue('edit')
         await setValue(marker)
         let uploadProof
@@ -309,7 +321,7 @@ try {
           await row.click()
         }
         await expectValue(marker)
-        sample.checks.push({ editor: widget.id, field: field.id, fieldType: field.type, status: 'passed', task: 'select/edit/save/reopen', surface: modalId ? 'overlay' : 'inline' })
+        sample.checks.push({ editor: widget.id, resource: update.target, field: field.id, fieldType: field.type, status: 'passed', task: 'select/edit/save/reopen', surface: modalId ? 'overlay' : 'inline' })
         if (uploadProof) {
           const download = page.waitForEvent('download')
           void download.catch(() => {})

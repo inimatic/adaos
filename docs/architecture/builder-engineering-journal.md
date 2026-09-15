@@ -1262,3 +1262,20 @@ The retained input also demonstrates over-fragmented clauses (`open`, `create`,
 behavioral conditions and separate active corrections from inherited evidence;
 adding more output budget or grading these fragments as independent UI features
 is not an acceptable solution. Original Briefs/results remain immutable evidence.
+
+### 2026-09-15: Reading List 005 Independent Prototype Acceptance
+
+The native Builder produced revision 005. Independent browser review at 1440
+and 390 px qualified scalar CRUD, title validation on create and update, search,
+status filtering, cancellation, confirmation, settings edits and visual bounds.
+The stand now navigates public tabs before exercising hidden sections; it does
+not bypass navigation by injecting state. Acceptance binds tasks to the current
+resource and literal field identities, including dotted names, and refuses
+unrelated form evidence. Eight stand regression cases pass.
+
+Evidence: `reading-list-migrations-20260915/cycle-1/interactions-005-final`,
+`visual-005` and `acceptance-005.json`. This is delegated TEST Prototype acceptance,
+not Automation, migration or delivery acceptance. Both private Stable records
+remain unchanged. The next Automation brief names the existing schema, accepted
+UI, public discovery API, forward migrations and typed settings boundary without
+including installation records, settings values or secrets.
