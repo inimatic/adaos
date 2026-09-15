@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from adaos.services.project_install import (
     ensure_workspace_project_materialized,
+    list_workspace_project_definitions,
     list_workspace_projects,
     load_installed_projects,
     record_project_install,
@@ -167,7 +168,9 @@ def test_list_workspace_projects_uses_registry_projection_without_reparse(
     monkeypatch.setattr(project_install, "_parse_workspace_project", explode)
 
     second = list_workspace_projects(workspace)
-    including_hidden = list_workspace_projects(workspace, include_hidden=True)
+    including_hidden = list_workspace_project_definitions(
+        workspace, include_hidden=True
+    )
 
     assert [item["id"] for item in first] == ["alpha"]
     assert [item["id"] for item in second] == ["alpha"]

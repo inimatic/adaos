@@ -220,6 +220,19 @@ def _scan_workspace_projects(
     return items
 
 
+def list_workspace_project_definitions(
+    workspace_root: Path,
+    *,
+    include_hidden: bool = False,
+    refresh: bool = False,
+) -> list[dict[str, Any]]:
+    return list_workspace_projects(
+        workspace_root,
+        include_hidden=include_hidden,
+        refresh=refresh,
+    )
+
+
 def default_install_project_ids(workspace_root: Path) -> tuple[str, ...]:
     return tuple(
         str(item["id"])
@@ -449,6 +462,7 @@ __all__ = [
     "default_install_project_ids",
     "ensure_workspace_project_materialized",
     "install_workspace_project",
+    "list_workspace_project_definitions",
     "list_workspace_projects",
     "load_installed_projects",
     "load_workspace_project",
