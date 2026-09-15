@@ -18,6 +18,8 @@ APPLICATION_REGISTRY_PROJECTION_SCHEMA_VERSION = 1
 APPLICATION_REGISTRY_PROJECTION_VALIDATOR_VERSION = "apreg.local/1"
 DEVELOPMENT_PROJECT_SOURCE_KIND = "dev_project"
 DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND = "dev_project_manifest"
+WORKSPACE_PROJECT_SOURCE_KIND = "workspace_project"
+WORKSPACE_PROJECT_MANIFEST_SOURCE_KIND = "workspace_project_manifest"
 APPLICATION_STORE_SOURCE_KIND = "application_store"
 APPLICATION_STORE_RECORD_SOURCE_KIND = "application_store_record"
 RUNTIME_START_SNAPSHOT_TRUST_META_KEY = "runtime_start_snapshot_trust"
@@ -83,7 +85,9 @@ def _like_token(value: str) -> str:
 
 def _fts_query(value: str) -> str:
     tokens = re.findall(r"[\w.-]+", str(value or "").casefold(), flags=re.UNICODE)
-    return " ".join(f'"{token.replace(chr(34), chr(34) + chr(34))}"' for token in tokens)
+    return " ".join(
+        f'"{token.replace(chr(34), chr(34) + chr(34))}"' for token in tokens
+    )
 
 
 def _bounded_error(exc: BaseException) -> str:
@@ -117,18 +121,33 @@ def _project_manifest_digest(project: Mapping[str, Any]) -> str:
     return _digest(dict(project))
 
 
-def _project_row(project: Mapping[str, Any], *, source_path: Path) -> dict[str, Any]:
+def _project_row(
+    project: Mapping[str, Any],
+    *,
+    source_path: Path,
+    source_kind: str = DEVELOPMENT_PROJECT_SOURCE_KIND,
+) -> dict[str, Any]:
     payload = deepcopy(dict(project))
     project_id = str(payload.get("id") or "").strip()
-    catalog = payload.get("catalog") if isinstance(payload.get("catalog"), Mapping) else {}
-    components = payload.get("components") if isinstance(payload.get("components"), Mapping) else {}
-    owned = [dict(item) for item in components.get("owned") or [] if isinstance(item, Mapping)]
+    catalog = (
+        payload.get("catalog") if isinstance(payload.get("catalog"), Mapping) else {}
+    )
+    components = (
+        payload.get("components")
+        if isinstance(payload.get("components"), Mapping)
+        else {}
+    )
+    owned = [
+        dict(item)
+        for item in components.get("owned") or []
+        if isinstance(item, Mapping)
+    ]
     primary = next(
         (item for item in owned if str(item.get("role") or "") == "primary"),
         owned[0] if owned else {},
     )
     manifest_digest = _project_manifest_digest(payload)
-    return {
+    row = {
         **payload,
         "id": project_id,
         "ref": f"project:{project_id}",
@@ -140,14 +159,21 @@ def _project_row(project: Mapping[str, Any], *, source_path: Path) -> dict[str, 
         "publication": dict(payload.get("publication") or {}),
         "install": dict(payload.get("install") or {}),
         "stage": str((payload.get("publication") or {}).get("stage") or "alpha"),
-        "visibility": str((payload.get("publication") or {}).get("visibility") or "unlisted"),
+        "visibility": str(
+            (payload.get("publication") or {}).get("visibility") or "unlisted"
+        ),
         "default_install": bool((payload.get("install") or {}).get("default") is True),
         "primary_ref": str(primary.get("ref") or "").strip() or None,
         "source_path": str(source_path.expanduser().resolve().parent),
         "manifest_digest": manifest_digest,
-        "source_kind": DEVELOPMENT_PROJECT_SOURCE_KIND,
+        "source_kind": source_kind,
         "validation_status": "valid",
     }
+    for field in ("title_i18n", "description_i18n"):
+        value = catalog.get(field)
+        if isinstance(value, Mapping):
+            row[field] = dict(value)
+    return row
 
 
 class ApplicationRegistryProjection:
@@ -405,7 +431,9 @@ class ApplicationRegistryProjection:
 
     def _get_meta(self, con: sqlite3.Connection, key: str, default: Any = None) -> Any:
         try:
-            row = con.execute("SELECT value_json FROM projection_meta WHERE key=?", (key,)).fetchone()
+            row = con.execute(
+                "SELECT value_json FROM projection_meta WHERE key=?", (key,)
+            ).fetchone()
         except sqlite3.OperationalError:
             return default
         return _load_json(row["value_json"], default) if row else default
@@ -439,7 +467,10 @@ class ApplicationRegistryProjection:
             "started_at": payload["started_at"],
             "trusted_snapshot": bool(startup_trust.get("trusted_snapshot")),
             "reason": str(startup_trust.get("reason") or "").strip() or None,
-            "projection_status": str(startup_trust.get("projection_status") or "").strip() or None,
+            "projection_status": str(
+                startup_trust.get("projection_status") or ""
+            ).strip()
+            or None,
             "trust": startup_trust,
         }
         with mutation_lock(self.lock_path):
@@ -462,7 +493,9 @@ class ApplicationRegistryProjection:
                         _json_pretty(payload),
                     ),
                 )
-                self._set_meta(con, RUNTIME_START_SNAPSHOT_TRUST_META_KEY, start_trust_payload)
+                self._set_meta(
+                    con, RUNTIME_START_SNAPSHOT_TRUST_META_KEY, start_trust_payload
+                )
                 con.commit()
         return payload
 
@@ -560,11 +593,15 @@ class ApplicationRegistryProjection:
             result = {
                 "trusted_snapshot": bool(payload.get("trusted_snapshot")),
                 "reason": str(payload.get("reason") or "").strip() or None,
-                "projection_status": str(payload.get("projection_status") or "").strip() or None,
+                "projection_status": str(payload.get("projection_status") or "").strip()
+                or None,
             }
         result.setdefault("trusted_snapshot", bool(payload.get("trusted_snapshot")))
         result.setdefault("reason", str(payload.get("reason") or "").strip() or None)
-        result.setdefault("projection_status", str(payload.get("projection_status") or "").strip() or None)
+        result.setdefault(
+            "projection_status",
+            str(payload.get("projection_status") or "").strip() or None,
+        )
         result["runtime_start_epoch_id"] = payload.get("epoch_id")
         result["runtime_start_instance_id"] = payload.get("runtime_instance_id")
         result["runtime_started_at"] = payload.get("started_at")
@@ -574,6 +611,7 @@ class ApplicationRegistryProjection:
         self,
         con: sqlite3.Connection,
         *,
+        action: str = "rebuild_development_projects",
         source_path: str,
         runtime_started_at: str | None,
     ) -> bool:
@@ -581,17 +619,21 @@ class ApplicationRegistryProjection:
             """
             SELECT payload_json, completed_at
             FROM projection_journal
-            WHERE action='rebuild_development_projects'
+            WHERE action=?
               AND source_path=?
               AND status='completed'
             ORDER BY updated_at DESC, rowid DESC
             LIMIT 25
             """,
-            (source_path,),
+            (action, source_path),
         ).fetchall()
         for row in rows:
             completed_at = str(row["completed_at"] or "").strip()
-            if runtime_started_at and completed_at and completed_at < runtime_started_at:
+            if (
+                runtime_started_at
+                and completed_at
+                and completed_at < runtime_started_at
+            ):
                 continue
             record = _load_json(row["payload_json"], {})
             if isinstance(record, Mapping) and record.get("allow_reuse") is False:
@@ -614,7 +656,9 @@ class ApplicationRegistryProjection:
                     (str(epoch_id or "").strip(),),
                 ).fetchone()
                 if row is None:
-                    raise ApplicationRegistryProjectionError(f"projection epoch not found: {epoch_id}")
+                    raise ApplicationRegistryProjectionError(
+                        f"projection epoch not found: {epoch_id}"
+                    )
                 source_watermark = self._source_watermark(con)
                 projection_digest = self._projection_digest(con)
                 integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
@@ -625,7 +669,8 @@ class ApplicationRegistryProjection:
                     **_load_json(row["payload_json"], {}),
                     "state": "closed",
                     "shutdown_kind": "graceful",
-                    "shutdown_request_id": str(shutdown_request_id or "").strip() or None,
+                    "shutdown_request_id": str(shutdown_request_id or "").strip()
+                    or None,
                     "shutdown_reason": str(shutdown_reason or "").strip() or None,
                     "shutdown_scope": str(shutdown_scope or "").strip() or None,
                     "seal_status": "complete" if trusted else "integrity_failed",
@@ -671,8 +716,14 @@ class ApplicationRegistryProjection:
         root = str(Path(projects_root).expanduser().resolve())
         with self._connect() as con:
             if require_trusted_runtime_start:
-                startup_payload = self._get_meta(con, RUNTIME_START_SNAPSHOT_TRUST_META_KEY, None)
-                startup_trust = startup_payload.get("trust") if isinstance(startup_payload, Mapping) else None
+                startup_payload = self._get_meta(
+                    con, RUNTIME_START_SNAPSHOT_TRUST_META_KEY, None
+                )
+                startup_trust = (
+                    startup_payload.get("trust")
+                    if isinstance(startup_payload, Mapping)
+                    else None
+                )
                 trusted_start = bool(
                     startup_trust.get("trusted_snapshot")
                     if isinstance(startup_trust, Mapping)
@@ -685,10 +736,14 @@ class ApplicationRegistryProjection:
                     if isinstance(startup_payload, Mapping)
                     else None
                 )
-                if not trusted_start and not self._completed_runtime_rebuild_after_untrusted_start(
-                    con,
-                    source_path=root,
-                    runtime_started_at=runtime_started_at,
+                if (
+                    not trusted_start
+                    and not self._completed_runtime_rebuild_after_untrusted_start(
+                        con,
+                        action="rebuild_development_projects",
+                        source_path=root,
+                        runtime_started_at=runtime_started_at,
+                    )
                 ):
                     return False
             row = con.execute(
@@ -713,7 +768,105 @@ class ApplicationRegistryProjection:
             ).fetchone()
         return bool(journal and journal["status"] == "completed")
 
-    def _development_project_rebuild_cache(self) -> dict[str, dict[str, Any]]:
+    @staticmethod
+    def _project_manifest_state(projects_root: Path) -> dict[str, list[int]]:
+        root = Path(projects_root).expanduser().resolve()
+        state: dict[str, list[int]] = {}
+        if not root.is_dir():
+            return state
+        for manifest in sorted(
+            root.glob("*/project.yaml"), key=lambda item: item.parent.name.casefold()
+        ):
+            try:
+                stat = manifest.stat()
+            except OSError:
+                continue
+            state[str(manifest.resolve())] = [
+                int(stat.st_mtime_ns),
+                int(stat.st_ctime_ns),
+                int(stat.st_size),
+            ]
+        return state
+
+    def workspace_projects_ready(
+        self,
+        projects_root: Path,
+        *,
+        require_trusted_runtime_start: bool = False,
+    ) -> bool:
+        root = str(Path(projects_root).expanduser().resolve())
+        current_state = self._project_manifest_state(Path(root))
+        with self._connect() as con:
+            if require_trusted_runtime_start:
+                startup_payload = self._get_meta(
+                    con, RUNTIME_START_SNAPSHOT_TRUST_META_KEY, None
+                )
+                startup_trust = (
+                    startup_payload.get("trust")
+                    if isinstance(startup_payload, Mapping)
+                    else None
+                )
+                trusted_start = bool(
+                    startup_trust.get("trusted_snapshot")
+                    if isinstance(startup_trust, Mapping)
+                    else startup_payload.get("trusted_snapshot")
+                    if isinstance(startup_payload, Mapping)
+                    else False
+                )
+                runtime_started_at = (
+                    str(startup_payload.get("started_at") or "").strip()
+                    if isinstance(startup_payload, Mapping)
+                    else None
+                )
+                if (
+                    not trusted_start
+                    and not self._completed_runtime_rebuild_after_untrusted_start(
+                        con,
+                        action="rebuild_workspace_projects",
+                        source_path=root,
+                        runtime_started_at=runtime_started_at,
+                    )
+                ):
+                    return False
+            source_rows = con.execute(
+                """
+                SELECT source_path, mtime_ns, ctime_ns, size_bytes
+                FROM projection_source
+                WHERE source_kind=? AND source_path LIKE ?
+                ORDER BY source_path
+                """,
+                (WORKSPACE_PROJECT_MANIFEST_SOURCE_KIND, root + "%"),
+            ).fetchall()
+            indexed_state = {
+                str(row["source_path"]): [
+                    int(row["mtime_ns"] or 0),
+                    int(row["ctime_ns"] or 0),
+                    int(row["size_bytes"] or 0),
+                ]
+                for row in source_rows
+            }
+            if indexed_state == current_state:
+                if current_state:
+                    return True
+                journal = con.execute(
+                    """
+                    SELECT status
+                    FROM projection_journal
+                    WHERE action='rebuild_workspace_projects' AND source_path=?
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (root,),
+                ).fetchone()
+                return bool(journal and journal["status"] == "completed")
+        return False
+
+    def _project_rebuild_cache(
+        self,
+        *,
+        application_source_kind: str,
+        manifest_source_kind: str,
+    ) -> dict[str, dict[str, Any]]:
         with self._connect() as con:
             rows = con.execute(
                 """
@@ -726,7 +879,7 @@ class ApplicationRegistryProjection:
                   ON ai.source_kind=? AND ai.source_id=ps.source_id
                 WHERE ps.source_kind=?
                 """,
-                (DEVELOPMENT_PROJECT_SOURCE_KIND, DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND),
+                (application_source_kind, manifest_source_kind),
             ).fetchall()
         cache: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -738,11 +891,19 @@ class ApplicationRegistryProjection:
                 "validation_status": row["validation_status"],
                 "source": source_payload if isinstance(source_payload, Mapping) else {},
                 "application": (
-                    application_payload if isinstance(application_payload, Mapping) else None
+                    application_payload
+                    if isinstance(application_payload, Mapping)
+                    else None
                 ),
                 "payload_digest": row["application_payload_digest"],
             }
         return cache
+
+    def _development_project_rebuild_cache(self) -> dict[str, dict[str, Any]]:
+        return self._project_rebuild_cache(
+            application_source_kind=DEVELOPMENT_PROJECT_SOURCE_KIND,
+            manifest_source_kind=DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND,
+        )
 
     def rebuild_development_projects(
         self,
@@ -756,17 +917,76 @@ class ApplicationRegistryProjection:
         allow_reuse: bool = True,
         validator_version: str = APPLICATION_REGISTRY_PROJECTION_VALIDATOR_VERSION,
     ) -> dict[str, Any]:
+        return self._rebuild_project_manifests(
+            projects_root,
+            parser=parser,
+            schema_bytes=schema_bytes,
+            operation_id=operation_id,
+            cancel=cancel,
+            progress=progress,
+            allow_reuse=allow_reuse,
+            validator_version=validator_version,
+            action="rebuild_development_projects",
+            application_source_kind=DEVELOPMENT_PROJECT_SOURCE_KIND,
+            manifest_source_kind=DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND,
+        )
+
+    def rebuild_workspace_projects(
+        self,
+        projects_root: Path,
+        *,
+        parser: Callable[[bytes, bytes], Mapping[str, Any]],
+        schema_bytes: bytes,
+        operation_id: str | None = None,
+        cancel: Callable[[], bool] | None = None,
+        progress: Callable[[Mapping[str, Any]], None] | None = None,
+        allow_reuse: bool = True,
+        validator_version: str = APPLICATION_REGISTRY_PROJECTION_VALIDATOR_VERSION,
+    ) -> dict[str, Any]:
+        return self._rebuild_project_manifests(
+            projects_root,
+            parser=parser,
+            schema_bytes=schema_bytes,
+            operation_id=operation_id,
+            cancel=cancel,
+            progress=progress,
+            allow_reuse=allow_reuse,
+            validator_version=validator_version,
+            action="rebuild_workspace_projects",
+            application_source_kind=WORKSPACE_PROJECT_SOURCE_KIND,
+            manifest_source_kind=WORKSPACE_PROJECT_MANIFEST_SOURCE_KIND,
+        )
+
+    def _rebuild_project_manifests(
+        self,
+        projects_root: Path,
+        *,
+        parser: Callable[[bytes, bytes], Mapping[str, Any]],
+        schema_bytes: bytes,
+        operation_id: str | None,
+        cancel: Callable[[], bool] | None,
+        progress: Callable[[Mapping[str, Any]], None] | None,
+        allow_reuse: bool,
+        validator_version: str,
+        action: str,
+        application_source_kind: str,
+        manifest_source_kind: str,
+    ) -> dict[str, Any]:
         root = Path(projects_root).expanduser().resolve()
         op_id = str(operation_id or _operation_id("rebuild")).strip()
         started_at = _now()
         schema_digest = _digest_bytes(bytes(schema_bytes))
         self._record_journal(
             op_id,
-            action="rebuild_development_projects",
+            action=action,
             status="running",
             source_path=str(root),
             started_at=started_at,
-            payload={"root": str(root), "schema_digest": schema_digest, "allow_reuse": bool(allow_reuse)},
+            payload={
+                "root": str(root),
+                "schema_digest": schema_digest,
+                "allow_reuse": bool(allow_reuse),
+            },
         )
         rows: list[dict[str, Any]] = []
         source_rows: list[dict[str, Any]] = []
@@ -774,9 +994,19 @@ class ApplicationRegistryProjection:
         scanned = 0
         reused = 0
         changed = 0
-        cached_sources = self._development_project_rebuild_cache() if allow_reuse else {}
+        cached_sources = (
+            self._project_rebuild_cache(
+                application_source_kind=application_source_kind,
+                manifest_source_kind=manifest_source_kind,
+            )
+            if allow_reuse
+            else {}
+        )
         if root.is_dir():
-            manifests = sorted(root.glob("*/project.yaml"), key=lambda item: item.parent.name.casefold())
+            manifests = sorted(
+                root.glob("*/project.yaml"),
+                key=lambda item: item.parent.name.casefold(),
+            )
         else:
             manifests = []
         for manifest_path in manifests:
@@ -797,9 +1027,12 @@ class ApplicationRegistryProjection:
                         "changed": changed,
                         "allow_reuse": bool(allow_reuse),
                     },
+                    action=action,
+                    application_source_kind=application_source_kind,
+                    manifest_source_kind=manifest_source_kind,
                 )
             scanned += 1
-            source_id = _source_identity(DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND, manifest_path)
+            source_id = _source_identity(manifest_source_kind, manifest_path)
             observed_at = _now()
             try:
                 stat = manifest_path.stat()
@@ -824,8 +1057,13 @@ class ApplicationRegistryProjection:
                     )
                     if str(cached.get("validation_status") or "") == "valid":
                         cached_application = cached.get("application")
-                        cached_payload_digest = str(cached.get("payload_digest") or "").strip()
-                        if isinstance(cached_application, Mapping) and cached_payload_digest:
+                        cached_payload_digest = str(
+                            cached.get("payload_digest") or ""
+                        ).strip()
+                        if (
+                            isinstance(cached_application, Mapping)
+                            and cached_payload_digest
+                        ):
                             rows.append(
                                 {
                                     "project": dict(cached_application),
@@ -842,23 +1080,39 @@ class ApplicationRegistryProjection:
                             source_rows.append(source_payload)
                             reused += 1
                             if progress is not None:
-                                progress({"operation_id": op_id, "scanned": scanned, "indexed": len(rows)})
+                                progress(
+                                    {
+                                        "operation_id": op_id,
+                                        "scanned": scanned,
+                                        "indexed": len(rows),
+                                    }
+                                )
                             continue
                     elif source_payload:
                         source_rows.append(source_payload)
                         reused += 1
                         if progress is not None:
-                            progress({"operation_id": op_id, "scanned": scanned, "indexed": len(rows)})
+                            progress(
+                                {
+                                    "operation_id": op_id,
+                                    "scanned": scanned,
+                                    "indexed": len(rows),
+                                }
+                            )
                         continue
                 changed += 1
                 project = dict(parser(raw, schema_bytes))
                 project_id = str(project.get("id") or manifest_path.parent.name).strip()
-                row_payload = _project_row(project, source_path=manifest_path)
+                row_payload = _project_row(
+                    project,
+                    source_path=manifest_path,
+                    source_kind=application_source_kind,
+                )
                 payload_digest = _digest(row_payload)
                 source_payload = {
                     "schema": "adaos.application.registry_projection_source.v1",
                     "source_id": source_id,
-                    "source_kind": DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND,
+                    "source_kind": manifest_source_kind,
                     "source_ref": f"project:{project_id}",
                     "source_path": str(manifest_path),
                     "mtime_ns": int(stat.st_mtime_ns),
@@ -910,7 +1164,7 @@ class ApplicationRegistryProjection:
                 source_payload = {
                     "schema": "adaos.application.registry_projection_source.v1",
                     "source_id": source_id,
-                    "source_kind": DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND,
+                    "source_kind": manifest_source_kind,
                     "source_ref": source_ref,
                     "source_path": str(manifest_path),
                     "mtime_ns": mtime_ns,
@@ -937,7 +1191,9 @@ class ApplicationRegistryProjection:
                 )
             source_rows.append(source_payload)
             if progress is not None:
-                progress({"operation_id": op_id, "scanned": scanned, "indexed": len(rows)})
+                progress(
+                    {"operation_id": op_id, "scanned": scanned, "indexed": len(rows)}
+                )
         return self._finish_rebuild_journal(
             op_id,
             status="completed",
@@ -954,6 +1210,9 @@ class ApplicationRegistryProjection:
                 "changed": changed,
                 "allow_reuse": bool(allow_reuse),
             },
+            action=action,
+            application_source_kind=application_source_kind,
+            manifest_source_kind=manifest_source_kind,
         )
 
     def upsert_development_project(
@@ -996,9 +1255,21 @@ class ApplicationRegistryProjection:
                 con.execute("BEGIN IMMEDIATE")
                 self._delete_development_project(con, project_id)
                 self._upsert_source(con, source_payload)
-                self._insert_project(con, payload, source_id=source_id, payload_digest=payload_digest)
-                self._replace_project_components(con, project, payload_digest=payload_digest)
-                self._replace_project_entrypoints(con, project, payload_digest=payload_digest)
+                self._insert_project(
+                    con, payload, source_id=source_id, payload_digest=payload_digest
+                )
+                self._replace_project_components(
+                    con,
+                    project,
+                    source_kind=DEVELOPMENT_PROJECT_SOURCE_KIND,
+                    payload_digest=payload_digest,
+                )
+                self._replace_project_entrypoints(
+                    con,
+                    project,
+                    source_kind=DEVELOPMENT_PROJECT_SOURCE_KIND,
+                    payload_digest=payload_digest,
+                )
                 self._insert_validation_report(
                     con,
                     self._validation_report(
@@ -1039,7 +1310,9 @@ class ApplicationRegistryProjection:
     ) -> dict[str, Any]:
         op_id = str(operation_id or _operation_id("store_rebuild")).strip()
         started_at = _now()
-        source_root = str(Path(getattr(store, "root", self.root)).expanduser().resolve())
+        source_root = str(
+            Path(getattr(store, "root", self.root)).expanduser().resolve()
+        )
         applications = list(store.list_applications())
         installations = {
             str(_field(item, "application_id") or ""): item
@@ -1048,7 +1321,9 @@ class ApplicationRegistryProjection:
         }
         runtime_selections: dict[str, list[Any]] = {}
         for selection in store.list_runtime_selections():
-            runtime_selections.setdefault(str(_field(selection, "application_id") or ""), []).append(selection)
+            runtime_selections.setdefault(
+                str(_field(selection, "application_id") or ""), []
+            ).append(selection)
         rows: list[dict[str, Any]] = []
         source_rows: list[dict[str, Any]] = []
         validation_rows: list[dict[str, Any]] = []
@@ -1056,14 +1331,19 @@ class ApplicationRegistryProjection:
             application_payload = _record_payload(application)
             if application_payload is None:
                 continue
-            application_id = str(application_payload.get("application_id") or "").strip()
+            application_id = str(
+                application_payload.get("application_id") or ""
+            ).strip()
             if not application_id:
                 continue
             installation = installations.get(application_id)
             installation_payload = _record_payload(installation)
             selections = [
                 payload
-                for payload in (_record_payload(item) for item in runtime_selections.get(application_id, []))
+                for payload in (
+                    _record_payload(item)
+                    for item in runtime_selections.get(application_id, [])
+                )
                 if payload is not None
             ]
             try:
@@ -1071,7 +1351,11 @@ class ApplicationRegistryProjection:
                 channels = dict(channels_payload.get("channels") or {})
             except Exception:
                 channels = {}
-            display = application_payload.get("display") if isinstance(application_payload.get("display"), Mapping) else {}
+            display = (
+                application_payload.get("display")
+                if isinstance(application_payload.get("display"), Mapping)
+                else {}
+            )
             title = str(display.get("title") or application_id)
             description = str(display.get("summary") or "")
             release_digest = (
@@ -1091,7 +1375,10 @@ class ApplicationRegistryProjection:
                 "visibility": application_payload.get("visibility"),
                 "lifecycle": application_payload.get("lifecycle"),
                 "installed": installation_payload is not None,
-                "local_beta_active": any(str(item.get("source") or "") == "local_trial" for item in selections),
+                "local_beta_active": any(
+                    str(item.get("source") or "") == "local_trial"
+                    for item in selections
+                ),
                 "release_digest": release_digest or None,
                 "channels": {
                     "stable": channels.get("stable"),
@@ -1111,7 +1398,9 @@ class ApplicationRegistryProjection:
                 }
             )
             source_path = Path(source_root) / f"application-{application_id}.json"
-            source_id = _source_identity(APPLICATION_STORE_RECORD_SOURCE_KIND, source_path)
+            source_id = _source_identity(
+                APPLICATION_STORE_RECORD_SOURCE_KIND, source_path
+            )
             timestamp = _now()
             source_rows.append(
                 {
@@ -1170,7 +1459,10 @@ class ApplicationRegistryProjection:
                     "application_entrypoint_index",
                     "application_index",
                 ):
-                    con.execute(f"DELETE FROM {table} WHERE source_kind=?", (APPLICATION_STORE_SOURCE_KIND,))
+                    con.execute(
+                        f"DELETE FROM {table} WHERE source_kind=?",
+                        (APPLICATION_STORE_SOURCE_KIND,),
+                    )
                 con.execute(
                     "DELETE FROM projection_source WHERE source_kind=?",
                     (APPLICATION_STORE_RECORD_SOURCE_KIND,),
@@ -1196,7 +1488,9 @@ class ApplicationRegistryProjection:
                     )
                 for report in validation_rows:
                     self._insert_validation_report(con, report)
-                source_watermark = self._source_watermark(con, APPLICATION_STORE_RECORD_SOURCE_KIND)
+                source_watermark = self._source_watermark(
+                    con, APPLICATION_STORE_RECORD_SOURCE_KIND
+                )
                 projection_digest = self._projection_digest(con)
                 completed_at = _now()
                 record = {
@@ -1276,7 +1570,7 @@ class ApplicationRegistryProjection:
                 f"""
                 SELECT payload_json
                 FROM application_index
-                WHERE {' AND '.join(where)}
+                WHERE {" AND ".join(where)}
                 ORDER BY {order}
                 LIMIT ?
                 """,
@@ -1285,12 +1579,53 @@ class ApplicationRegistryProjection:
         result = []
         for row in rows:
             payload = _load_json(row["payload_json"], {})
-            if profile_token and profile_token not in set(payload.get("profiles") or []):
+            if profile_token and profile_token not in set(
+                payload.get("profiles") or []
+            ):
                 continue
             result.append(deepcopy(payload))
             if len(result) >= maximum:
                 break
         return result
+
+    def list_workspace_projects(
+        self,
+        *,
+        include_hidden: bool = False,
+        query: str | None = None,
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        maximum = max(1, min(int(limit), 5000))
+        query_token = str(query or "").strip()
+        params: list[Any] = [WORKSPACE_PROJECT_SOURCE_KIND, "valid"]
+        where = ["source_kind=?", "validation_status=?"]
+        if not include_hidden:
+            where.append("visibility!='hidden'")
+        with self._connect() as con:
+            fts_available = bool(self._get_meta(con, "fts5_available", False))
+            if query_token and fts_available:
+                fts = _fts_query(query_token)
+                if fts:
+                    where.append(
+                        "(rowid IN (SELECT rowid FROM application_index_fts WHERE application_index_fts MATCH ?) OR search_text LIKE ? ESCAPE '\\')"
+                    )
+                    params.append(fts)
+                    params.append(_like_token(query_token))
+            if query_token and (not fts_available or not _fts_query(query_token)):
+                where.append("search_text LIKE ? ESCAPE '\\'")
+                params.append(_like_token(query_token))
+            params.append(maximum)
+            rows = con.execute(
+                f"""
+                SELECT payload_json
+                FROM application_index
+                WHERE {" AND ".join(where)}
+                ORDER BY application_id COLLATE NOCASE
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [deepcopy(_load_json(row["payload_json"], {})) for row in rows]
 
     def get_development_project(self, project_id: str) -> dict[str, Any] | None:
         with self._connect() as con:
@@ -1322,7 +1657,9 @@ class ApplicationRegistryProjection:
             ).fetchall()
         return [deepcopy(_load_json(row["payload_json"], {})) for row in rows]
 
-    def applications_for_component(self, component_ref: str, *, limit: int = 500) -> list[dict[str, Any]]:
+    def applications_for_component(
+        self, component_ref: str, *, limit: int = 500
+    ) -> list[dict[str, Any]]:
         token = str(component_ref or "").strip()
         if not token:
             return []
@@ -1487,15 +1824,19 @@ class ApplicationRegistryProjection:
                 }
                 for row in stale_rows
             ],
-            "recent_operations": [_load_json(row["payload_json"], {}) for row in latest_journal],
+            "recent_operations": [
+                _load_json(row["payload_json"], {}) for row in latest_journal
+            ],
             "query_sources": {
                 "development_project_list": "sqlite_projection",
                 "development_project_detail": "sqlite_projection_preflight",
                 "development_component_owner": "sqlite_projection",
+                "workspace_project_list": "sqlite_projection",
                 "application_installed_summaries": "sqlite_projection",
                 "application_release_channels": "sqlite_projection",
                 "authoritative_sources": [
                     "dev_project_manifest",
+                    "workspace_project_manifest",
                     "application_store_record",
                     "federated_application_fact",
                 ],
@@ -1573,6 +1914,9 @@ class ApplicationRegistryProjection:
         rows: Sequence[Mapping[str, Any]],
         validation_rows: Sequence[Mapping[str, Any]],
         payload: Mapping[str, Any],
+        action: str = "rebuild_development_projects",
+        application_source_kind: str = DEVELOPMENT_PROJECT_SOURCE_KIND,
+        manifest_source_kind: str = DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND,
     ) -> dict[str, Any]:
         with mutation_lock(self.lock_path):
             with self._connect() as con:
@@ -1586,23 +1930,23 @@ class ApplicationRegistryProjection:
                                 SELECT rowid FROM application_index WHERE source_kind=?
                             )
                             """,
-                            (DEVELOPMENT_PROJECT_SOURCE_KIND,),
+                            (application_source_kind,),
                         )
                     con.execute(
                         "DELETE FROM application_index WHERE source_kind=?",
-                        (DEVELOPMENT_PROJECT_SOURCE_KIND,),
+                        (application_source_kind,),
                     )
                     con.execute(
                         "DELETE FROM application_component_index WHERE source_kind=?",
-                        (DEVELOPMENT_PROJECT_SOURCE_KIND,),
+                        (application_source_kind,),
                     )
                     con.execute(
                         "DELETE FROM application_entrypoint_index WHERE source_kind=?",
-                        (DEVELOPMENT_PROJECT_SOURCE_KIND,),
+                        (application_source_kind,),
                     )
                     con.execute(
                         "DELETE FROM projection_source WHERE source_kind=?",
-                        (DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND,),
+                        (manifest_source_kind,),
                     )
                     for source in source_rows:
                         self._upsert_source(con, source)
@@ -1617,22 +1961,24 @@ class ApplicationRegistryProjection:
                         self._replace_project_components(
                             con,
                             project,
+                            source_kind=application_source_kind,
                             payload_digest=str(row["payload_digest"]),
                         )
                         self._replace_project_entrypoints(
                             con,
                             project,
+                            source_kind=application_source_kind,
                             payload_digest=str(row["payload_digest"]),
                         )
                     for report in validation_rows:
                         self._insert_validation_report(con, report)
-                source_watermark = self._source_watermark(con, DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND)
+                source_watermark = self._source_watermark(con, manifest_source_kind)
                 projection_digest = self._projection_digest(con)
                 completed_at = _now()
                 record = {
                     "schema": "adaos.application.registry_projection_journal.v1",
                     "operation_id": operation_id,
-                    "action": "rebuild_development_projects",
+                    "action": action,
                     "status": status,
                     "source_path": source_path,
                     "started_at": started_at,
@@ -1641,7 +1987,11 @@ class ApplicationRegistryProjection:
                     "source_watermark": source_watermark,
                     "projection_digest": projection_digest,
                     **dict(payload),
-                    "invalid": sum(1 for item in source_rows if item.get("validation_status") == "invalid"),
+                    "invalid": sum(
+                        1
+                        for item in source_rows
+                        if item.get("validation_status") == "invalid"
+                    ),
                 }
                 con.execute(
                     """
@@ -1660,7 +2010,7 @@ class ApplicationRegistryProjection:
                     """,
                     (
                         operation_id,
-                        "rebuild_development_projects",
+                        action,
                         status,
                         source_path,
                         started_at,
@@ -1699,7 +2049,8 @@ class ApplicationRegistryProjection:
             "last_known_good_digest": last_known_good_digest,
         }
         return {
-            "report_id": "apreg.validation." + hashlib.sha256(_json(payload).encode("utf-8")).hexdigest(),
+            "report_id": "apreg.validation."
+            + hashlib.sha256(_json(payload).encode("utf-8")).hexdigest(),
             **payload,
         }
 
@@ -1757,11 +2108,12 @@ class ApplicationRegistryProjection:
         source_id: str,
         payload_digest: str,
     ) -> None:
+        source_kind = str(payload.get("source_kind") or DEVELOPMENT_PROJECT_SOURCE_KIND)
         application_id = str(payload["id"])
         title = str(payload.get("title") or application_id)
         description = str(payload.get("description") or "")
         row_values = (
-            DEVELOPMENT_PROJECT_SOURCE_KIND,
+            source_kind,
             application_id,
             f"project:{application_id}",
             source_id,
@@ -1819,7 +2171,7 @@ class ApplicationRegistryProjection:
         )
         rowid = con.execute(
             "SELECT rowid FROM application_index WHERE source_kind=? AND application_id=?",
-            (DEVELOPMENT_PROJECT_SOURCE_KIND, application_id),
+            (source_kind, application_id),
         ).fetchone()["rowid"]
         with self._ignore_missing_fts(con):
             con.execute("DELETE FROM application_index_fts WHERE rowid=?", (rowid,))
@@ -1828,7 +2180,13 @@ class ApplicationRegistryProjection:
                 INSERT INTO application_index_fts(rowid, application_id, title, description, search_text)
                 VALUES(?,?,?,?,?)
                 """,
-                (rowid, application_id, title, description, _search_text(application_id, title, description)),
+                (
+                    rowid,
+                    application_id,
+                    title,
+                    description,
+                    _search_text(application_id, title, description),
+                ),
             )
 
     def _insert_application_store_summary(
@@ -1842,7 +2200,11 @@ class ApplicationRegistryProjection:
         application_id = str(payload["application_id"])
         title = str(payload.get("title") or application_id)
         description = str(payload.get("description") or "")
-        channels = payload.get("channels") if isinstance(payload.get("channels"), Mapping) else {}
+        channels = (
+            payload.get("channels")
+            if isinstance(payload.get("channels"), Mapping)
+            else {}
+        )
         con.execute(
             """
             INSERT INTO application_index(
@@ -1910,7 +2272,13 @@ class ApplicationRegistryProjection:
                 INSERT INTO application_index_fts(rowid, application_id, title, description, search_text)
                 VALUES(?,?,?,?,?)
                 """,
-                (rowid, application_id, title, description, _search_text(application_id, title, description)),
+                (
+                    rowid,
+                    application_id,
+                    title,
+                    description,
+                    _search_text(application_id, title, description),
+                ),
             )
 
     @staticmethod
@@ -1925,7 +2293,11 @@ class ApplicationRegistryProjection:
             "DELETE FROM application_component_index WHERE source_kind=? AND application_id=?",
             (APPLICATION_STORE_SOURCE_KIND, application_id),
         )
-        installation = payload.get("installation") if isinstance(payload.get("installation"), Mapping) else {}
+        installation = (
+            payload.get("installation")
+            if isinstance(payload.get("installation"), Mapping)
+            else {}
+        )
         for raw in installation.get("component_refs") or []:
             if not isinstance(raw, Mapping):
                 continue
@@ -1983,7 +2355,11 @@ class ApplicationRegistryProjection:
                     APPLICATION_STORE_SOURCE_KIND,
                     application_id,
                     entrypoint_id,
-                    str(payload.get("presentation_ref") or payload.get("presentation") or ""),
+                    str(
+                        payload.get("presentation_ref")
+                        or payload.get("presentation")
+                        or ""
+                    ),
                     1 if payload.get("default") is True else 0,
                     _json_pretty(payload.get("surfaces") or []),
                     _json_pretty(payload.get("bindings") or {}),
@@ -1997,14 +2373,19 @@ class ApplicationRegistryProjection:
         con: sqlite3.Connection,
         project: Mapping[str, Any],
         *,
+        source_kind: str = DEVELOPMENT_PROJECT_SOURCE_KIND,
         payload_digest: str,
     ) -> None:
         project_id = str(project.get("id") or "").strip()
         con.execute(
             "DELETE FROM application_component_index WHERE source_kind=? AND application_id=?",
-            (DEVELOPMENT_PROJECT_SOURCE_KIND, project_id),
+            (source_kind, project_id),
         )
-        components = project.get("components") if isinstance(project.get("components"), Mapping) else {}
+        components = (
+            project.get("components")
+            if isinstance(project.get("components"), Mapping)
+            else {}
+        )
         for raw in components.get("owned") or []:
             if not isinstance(raw, Mapping):
                 continue
@@ -2020,7 +2401,7 @@ class ApplicationRegistryProjection:
                 ) VALUES(?,?,?,?,?,?,?,?,?)
                 """,
                 (
-                    DEVELOPMENT_PROJECT_SOURCE_KIND,
+                    source_kind,
                     component_ref,
                     project_id,
                     str(payload.get("role") or ""),
@@ -2037,12 +2418,13 @@ class ApplicationRegistryProjection:
         con: sqlite3.Connection,
         project: Mapping[str, Any],
         *,
+        source_kind: str = DEVELOPMENT_PROJECT_SOURCE_KIND,
         payload_digest: str,
     ) -> None:
         project_id = str(project.get("id") or "").strip()
         con.execute(
             "DELETE FROM application_entrypoint_index WHERE source_kind=? AND application_id=?",
-            (DEVELOPMENT_PROJECT_SOURCE_KIND, project_id),
+            (source_kind, project_id),
         )
         for raw in project.get("entrypoints") or []:
             if not isinstance(raw, Mapping):
@@ -2060,10 +2442,14 @@ class ApplicationRegistryProjection:
                 ) VALUES(?,?,?,?,?,?,?,?,?)
                 """,
                 (
-                    DEVELOPMENT_PROJECT_SOURCE_KIND,
+                    source_kind,
                     project_id,
                     entrypoint_id,
-                    str(payload.get("presentation") or payload.get("presentation_ref") or ""),
+                    str(
+                        payload.get("presentation")
+                        or payload.get("presentation_ref")
+                        or ""
+                    ),
                     1 if payload.get("default") is True else 0,
                     _json_pretty(payload.get("surfaces") or []),
                     _json_pretty(payload.get("bindings") or {}),
@@ -2073,7 +2459,9 @@ class ApplicationRegistryProjection:
             )
 
     @staticmethod
-    def _insert_validation_report(con: sqlite3.Connection, report: Mapping[str, Any]) -> None:
+    def _insert_validation_report(
+        con: sqlite3.Connection, report: Mapping[str, Any]
+    ) -> None:
         con.execute(
             """
             INSERT OR REPLACE INTO validation_report(
@@ -2113,7 +2501,9 @@ class ApplicationRegistryProjection:
         ).fetchall()
         for row in rows:
             try:
-                con.execute("DELETE FROM application_index_fts WHERE rowid=?", (row["rowid"],))
+                con.execute(
+                    "DELETE FROM application_index_fts WHERE rowid=?", (row["rowid"],)
+                )
             except sqlite3.OperationalError:
                 pass
         con.execute(
@@ -2122,7 +2512,9 @@ class ApplicationRegistryProjection:
         )
 
     @staticmethod
-    def _source_watermark(con: sqlite3.Connection, source_kind: str | None = None) -> str:
+    def _source_watermark(
+        con: sqlite3.Connection, source_kind: str | None = None
+    ) -> str:
         if source_kind is None:
             rows = con.execute(
                 """
@@ -2141,16 +2533,18 @@ class ApplicationRegistryProjection:
                 """,
                 (source_kind,),
             ).fetchall()
-        return _digest([
-            {
-                "source_kind": row["source_kind"],
-                "source_ref": row["source_ref"],
-                "content_digest": row["content_digest"],
-                "schema_digest": row["schema_digest"],
-                "validation_status": row["validation_status"],
-            }
-            for row in rows
-        ])
+        return _digest(
+            [
+                {
+                    "source_kind": row["source_kind"],
+                    "source_ref": row["source_ref"],
+                    "content_digest": row["content_digest"],
+                    "schema_digest": row["schema_digest"],
+                    "validation_status": row["validation_status"],
+                }
+                for row in rows
+            ]
+        )
 
     @staticmethod
     def _projection_digest(con: sqlite3.Connection) -> str:
@@ -2161,15 +2555,17 @@ class ApplicationRegistryProjection:
             ORDER BY source_kind, application_id
             """
         ).fetchall()
-        return _digest([
-            {
-                "source_kind": row["source_kind"],
-                "application_id": row["application_id"],
-                "payload_digest": row["payload_digest"],
-                "validation_status": row["validation_status"],
-            }
-            for row in rows
-        ])
+        return _digest(
+            [
+                {
+                    "source_kind": row["source_kind"],
+                    "application_id": row["application_id"],
+                    "payload_digest": row["payload_digest"],
+                    "validation_status": row["validation_status"],
+                }
+                for row in rows
+            ]
+        )
 
     @staticmethod
     def _ignore_missing_fts(con: sqlite3.Connection):
@@ -2178,7 +2574,10 @@ class ApplicationRegistryProjection:
                 return None
 
             def __exit__(self, exc_type, exc, _traceback):
-                return exc_type is sqlite3.OperationalError and "application_index_fts" in str(exc)
+                return (
+                    exc_type is sqlite3.OperationalError
+                    and "application_index_fts" in str(exc)
+                )
 
         return _Guard()
 

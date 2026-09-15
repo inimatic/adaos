@@ -47,6 +47,11 @@ _INSTALL_DEFAULTS = {
 _OWNERSHIP_INDEX_SCHEMA = "adaos.developer.component_ownership_index.v1"
 _OWNERSHIP_INDEX_NAME = ".component-ownership.v1.json"
 _OWNERSHIP_INDEX_LOCK = threading.RLock()
+_ABSENT_PROJECTION_REASONS = {
+    "registry_projection_absent",
+    "projection_epoch_absent",
+    "runtime_start_snapshot_trust_absent",
+}
 
 
 class ProjectCompositionError(SdkError):
@@ -99,9 +104,38 @@ def _registry_state_dir() -> Path:
 
 
 def _registry_projection():
-    from adaos.services.application_registry_projection import ApplicationRegistryProjection
+    from adaos.services.application_registry_projection import (
+        ApplicationRegistryProjection,
+    )
 
     return ApplicationRegistryProjection(_registry_state_dir())
+
+
+def _projection_has_runtime_start(startup_trust: Mapping[str, Any]) -> bool:
+    return any(
+        bool(startup_trust.get(field))
+        for field in (
+            "runtime_start_epoch_id",
+            "runtime_start_instance_id",
+            "runtime_started_at",
+        )
+    )
+
+
+def _projection_requires_trusted_runtime_start(
+    registry: Any,
+) -> tuple[bool, dict[str, Any]]:
+    startup_trust = registry.runtime_start_snapshot_trust_state()
+    if _projection_has_runtime_start(startup_trust):
+        return True, dict(startup_trust)
+    snapshot_trust = registry.snapshot_trust_state()
+    reason = str(snapshot_trust.get("reason") or "").strip()
+    if (
+        not bool(snapshot_trust.get("trusted_snapshot"))
+        and reason not in _ABSENT_PROJECTION_REASONS
+    ):
+        return True, dict(startup_trust)
+    return False, dict(startup_trust)
 
 
 def rebuild_registry_projection(
@@ -120,16 +154,24 @@ def rebuild_registry_projection(
 def _ensure_registry_projection():
     registry = _registry_projection()
     parent = _root_parent()
-    if not registry.development_projects_ready(parent):
+    require_trust, startup_trust = _projection_requires_trusted_runtime_start(registry)
+    if not registry.development_projects_ready(
+        parent,
+        require_trusted_runtime_start=require_trust,
+    ):
         registry.rebuild_development_projects(
             parent,
             parser=_parse_project,
             schema_bytes=_schema_path().read_bytes(),
+            allow_reuse=not require_trust
+            or bool(startup_trust.get("trusted_snapshot")),
         )
     return registry
 
 
-def _upsert_registry_projection(project: Mapping[str, Any], manifest_path: Path) -> None:
+def _upsert_registry_projection(
+    project: Mapping[str, Any], manifest_path: Path
+) -> None:
     _registry_projection().upsert_development_project(
         project,
         manifest_path=manifest_path,
@@ -305,9 +347,13 @@ def normalized_definition(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _parse_project(raw: bytes, schema_bytes: bytes) -> dict[str, Any]:
-    value = yaml.load(
-        raw.decode("utf-8-sig"), Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-    ) or {}
+    value = (
+        yaml.load(
+            raw.decode("utf-8-sig"),
+            Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader),
+        )
+        or {}
+    )
     if not isinstance(value, Mapping):
         raise ProjectCompositionError("Project manifest must be an object")
     return _validate_project(value, schema_bytes)
@@ -418,9 +464,7 @@ def _write_ownership_index(
             for project_id, identity in sorted(manifest_state.items())
         },
         "owners": {
-            str(component_ref): sorted(
-                {str(project_id) for project_id in project_ids}
-            )
+            str(component_ref): sorted({str(project_id) for project_id in project_ids})
             for component_ref, project_ids in sorted(owners.items())
             if project_ids
         },
@@ -449,9 +493,7 @@ def _rebuild_ownership_index(
             component_ref = str(owned.get("ref") or "")
             if component_ref:
                 owners.setdefault(component_ref, []).append(str(project["id"]))
-    return _write_ownership_index(
-        parent, manifest_state=manifest_state, owners=owners
-    )
+    return _write_ownership_index(parent, manifest_state=manifest_state, owners=owners)
 
 
 def _component_ownership_index() -> dict[str, Any]:
@@ -480,7 +522,9 @@ def _update_ownership_index(project: Mapping[str, Any], *, deleted: bool) -> Non
         if index and other_current == other_prior:
             owners = {
                 str(component_ref): [str(item) for item in project_ids]
-                for component_ref, project_ids in dict(index.get("owners") or {}).items()
+                for component_ref, project_ids in dict(
+                    index.get("owners") or {}
+                ).items()
                 if isinstance(project_ids, list)
             }
             for component_ref in list(owners):
@@ -492,9 +536,7 @@ def _update_ownership_index(project: Mapping[str, Any], *, deleted: bool) -> Non
                     component_ref = str(owned.get("ref") or "")
                     if component_ref:
                         owners.setdefault(component_ref, []).append(project_id)
-            _write_ownership_index(
-                parent, manifest_state=current_state, owners=owners
-            )
+            _write_ownership_index(parent, manifest_state=current_state, owners=owners)
             return
         _rebuild_ownership_index(parent, current_state)
 
@@ -1080,7 +1122,9 @@ def create_research_direction(
     }
 
 
-def project_for_component(component_ref: str, *, refresh: bool = False) -> dict[str, Any] | None:
+def project_for_component(
+    component_ref: str, *, refresh: bool = False
+) -> dict[str, Any] | None:
     if refresh:
         rebuild_registry_projection()
     registry = _ensure_registry_projection()

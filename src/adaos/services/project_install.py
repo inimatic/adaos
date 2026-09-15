@@ -16,18 +16,118 @@ class ProjectInstallError(RuntimeError):
     """Raised when a workspace Project cannot be installed."""
 
 
+_ABSENT_PROJECTION_REASONS = {
+    "registry_projection_absent",
+    "projection_epoch_absent",
+    "runtime_start_snapshot_trust_absent",
+}
+_PROJECTION_VIEW_META_FIELDS = {
+    "description",
+    "manifest_digest",
+    "primary_ref",
+    "ref",
+    "source_kind",
+    "title",
+    "validation_status",
+}
+
+
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
     try:
         payload = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
-        raise ProjectInstallError(f"cannot read Project manifest {path}: {exc}") from exc
+        raise ProjectInstallError(
+            f"cannot read Project manifest {path}: {exc}"
+        ) from exc
     if not isinstance(payload, Mapping):
         raise ProjectInstallError(f"Project manifest must contain an object: {path}")
     return dict(payload)
+
+
+def _project_schema_bytes() -> bytes:
+    from adaos.sdk.developer import compositions
+
+    return compositions._schema_path().read_bytes()
+
+
+def _parse_workspace_project(raw: bytes, schema_bytes: bytes) -> dict[str, Any]:
+    _ = schema_bytes
+    value = (
+        yaml.load(
+            raw.decode("utf-8-sig"),
+            Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader),
+        )
+        or {}
+    )
+    if not isinstance(value, Mapping):
+        raise ProjectInstallError("Project manifest must contain an object")
+    return normalized_definition(value)
+
+
+def _state_dir_for_workspace(workspace_root: Path) -> Path:
+    workspace = Path(workspace_root).expanduser().resolve()
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        ctx = get_ctx()
+        ctx_workspace = Path(ctx.paths.workspace_dir()).expanduser().resolve()
+        if ctx_workspace == workspace:
+            return Path(ctx.paths.state_dir()).expanduser().resolve()
+    except Exception:
+        pass
+    return (workspace.parent / "state").resolve()
+
+
+def _workspace_project_registry(workspace_root: Path):
+    from adaos.services.application_registry_projection import (
+        ApplicationRegistryProjection,
+    )
+
+    return ApplicationRegistryProjection(_state_dir_for_workspace(workspace_root))
+
+
+def _projection_has_runtime_start(startup_trust: Mapping[str, Any]) -> bool:
+    return any(
+        bool(startup_trust.get(field))
+        for field in (
+            "runtime_start_epoch_id",
+            "runtime_start_instance_id",
+            "runtime_started_at",
+        )
+    )
+
+
+def _projection_requires_trusted_runtime_start(
+    registry: Any,
+) -> tuple[bool, dict[str, Any]]:
+    startup_trust = registry.runtime_start_snapshot_trust_state()
+    if _projection_has_runtime_start(startup_trust):
+        return True, dict(startup_trust)
+    snapshot_trust = registry.snapshot_trust_state()
+    reason = str(snapshot_trust.get("reason") or "").strip()
+    if (
+        not bool(snapshot_trust.get("trusted_snapshot"))
+        and reason not in _ABSENT_PROJECTION_REASONS
+    ):
+        return True, dict(startup_trust)
+    return False, dict(startup_trust)
+
+
+def _workspace_project_projection_view(project: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: item
+        for key, item in dict(project).items()
+        if key not in _PROJECTION_VIEW_META_FIELDS
+    }
 
 
 def load_workspace_project(workspace_root: Path, project_id: str) -> dict[str, Any]:
@@ -66,18 +166,54 @@ def list_workspace_projects(
     workspace_root: Path,
     *,
     include_hidden: bool = False,
+    refresh: bool = False,
 ) -> list[dict[str, Any]]:
     workspace = Path(workspace_root).expanduser().resolve()
     projects_root = workspace / "projects"
     if not projects_root.is_dir():
         return []
+    try:
+        registry = _workspace_project_registry(workspace)
+        require_trust, startup_trust = _projection_requires_trusted_runtime_start(
+            registry
+        )
+        if refresh or not registry.workspace_projects_ready(
+            projects_root,
+            require_trusted_runtime_start=require_trust,
+        ):
+            registry.rebuild_workspace_projects(
+                projects_root,
+                parser=_parse_workspace_project,
+                schema_bytes=_project_schema_bytes(),
+                allow_reuse=not require_trust
+                or bool(startup_trust.get("trusted_snapshot")),
+            )
+        return [
+            _workspace_project_projection_view(project)
+            for project in registry.list_workspace_projects(
+                include_hidden=include_hidden
+            )
+        ]
+    except Exception:
+        return _scan_workspace_projects(projects_root, include_hidden=include_hidden)
+
+
+def _scan_workspace_projects(
+    projects_root: Path,
+    *,
+    include_hidden: bool = False,
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
-    for manifest in sorted(projects_root.glob("*/project.yaml"), key=lambda item: item.parent.name.lower()):
+    for manifest in sorted(
+        projects_root.glob("*/project.yaml"), key=lambda item: item.parent.name.lower()
+    ):
         try:
             definition = normalized_definition(_read_yaml(manifest))
         except Exception:
             continue
-        visibility = str((definition.get("publication") or {}).get("visibility") or "unlisted")
+        visibility = str(
+            (definition.get("publication") or {}).get("visibility") or "unlisted"
+        )
         if visibility == "hidden" and not include_hidden:
             continue
         items.append({**definition, "source_path": str(manifest.parent.resolve())})
@@ -98,7 +234,10 @@ def selected_project_component_refs(
     feature_ids: Sequence[str] = (),
     include_optional: bool = False,
 ) -> tuple[str, ...]:
-    owned = [str(item.get("ref") or "") for item in (definition.get("components") or {}).get("owned") or []]
+    owned = [
+        str(item.get("ref") or "")
+        for item in (definition.get("components") or {}).get("owned") or []
+    ]
     owned_set = {ref for ref in owned if ref}
     primary_refs = {
         str(item.get("ref") or "")
@@ -106,7 +245,9 @@ def selected_project_component_refs(
         if item.get("role") == "primary"
     }
     selected = {ref for ref in primary_refs if ref}
-    requested_features = {str(item).strip() for item in feature_ids if str(item).strip()}
+    requested_features = {
+        str(item).strip() for item in feature_ids if str(item).strip()
+    }
     features = list((definition.get("install") or {}).get("features") or [])
     if not features:
         selected.update(owned_set)
@@ -130,7 +271,9 @@ def selected_project_component_refs(
 
 
 def _installed_projects_path(ctx: Any) -> Path:
-    state_dir = Path(ctx.paths.state_dir() if callable(ctx.paths.state_dir) else ctx.paths.state_dir)
+    state_dir = Path(
+        ctx.paths.state_dir() if callable(ctx.paths.state_dir) else ctx.paths.state_dir
+    )
     return state_dir / "projects" / "installed.json"
 
 
@@ -163,7 +306,11 @@ def record_project_install(
     project_id = str(definition.get("id") or "").strip()
     if not project_id:
         raise ProjectInstallError("Project id is empty")
-    catalog = definition.get("catalog") if isinstance(definition.get("catalog"), Mapping) else {}
+    catalog = (
+        definition.get("catalog")
+        if isinstance(definition.get("catalog"), Mapping)
+        else {}
+    )
     record = {
         "id": project_id,
         "version": str(definition.get("version") or ""),
@@ -182,16 +329,18 @@ def record_project_install(
     for field in ("title_i18n", "description_i18n"):
         value = catalog.get(field)
         if isinstance(value, Mapping):
-            record[field] = {str(key): item for key, item in value.items() if item is not None}
+            record[field] = {
+                str(key): item for key, item in value.items() if item is not None
+            }
     remaining = [
-        item
-        for item in items
-        if str(item.get("id") or "").strip() != project_id
+        item for item in items if str(item.get("id") or "").strip() != project_id
     ]
     payload = {
         "schema": "adaos.project.installs.v1",
         "updated_at": record["installed_at"],
-        "projects": sorted([*remaining, record], key=lambda item: str(item.get("id") or "")),
+        "projects": sorted(
+            [*remaining, record], key=lambda item: str(item.get("id") or "")
+        ),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(path, payload)
@@ -220,17 +369,25 @@ def install_workspace_project(
     result: dict[str, Any] = {
         "id": str(definition["id"]),
         "version": str(definition["version"]),
-        "title": str((definition.get("catalog") or {}).get("title") or definition["id"]),
+        "title": str(
+            (definition.get("catalog") or {}).get("title") or definition["id"]
+        ),
         "components": list(component_refs),
         "scenarios": [],
         "skills": [],
         "warnings": [],
     }
-    catalog = definition.get("catalog") if isinstance(definition.get("catalog"), Mapping) else {}
+    catalog = (
+        definition.get("catalog")
+        if isinstance(definition.get("catalog"), Mapping)
+        else {}
+    )
     for field in ("title_i18n", "description_i18n"):
         value = catalog.get(field)
         if isinstance(value, Mapping):
-            result[field] = {str(key): item for key, item in value.items() if item is not None}
+            result[field] = {
+                str(key): item for key, item in value.items() if item is not None
+            }
 
     for ref in component_refs:
         kind, _, artifact_id = ref.partition(":")
@@ -257,7 +414,9 @@ def install_workspace_project(
                     skill_mgr.setup_skill(artifact_id)
                 except Exception as exc:
                     result["warnings"].append(f"skill setup {artifact_id}: {exc}")
-            result["skills"].append({"id": artifact_id, "version": version, "slot": slot})
+            result["skills"].append(
+                {"id": artifact_id, "version": version, "slot": slot}
+            )
         except Exception as exc:
             result["warnings"].append(f"skill {artifact_id}: {exc}")
 

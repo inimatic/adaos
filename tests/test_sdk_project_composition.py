@@ -24,6 +24,7 @@ def project_space(monkeypatch, tmp_path: Path) -> dict[str, Path]:
     for root in roots.values():
         root.mkdir(parents=True)
     monkeypatch.setattr(compositions, "_root_parent", lambda: roots["projects"])
+    monkeypatch.setattr(compositions, "_registry_state_dir", lambda: roots["state"])
     monkeypatch.setattr(
         projects, "_roots", lambda: (roots["skills"], roots["scenarios"])
     )
@@ -152,8 +153,12 @@ def test_project_search_filters_before_limit_and_matches_unicode(project_space):
         value["catalog"]["title"] = title
         compositions.create(value)
     assert [item["id"] for item in compositions.list_projects(limit=1)] == ["aaa"]
-    assert [item["id"] for item in compositions.list_projects(query="ПРИМЕР", limit=1)] == ["zzz"]
-    assert [item["id"] for item in compositions.list_projects(query="20260911-uid", limit=1)] == ["zzz"]
+    assert [
+        item["id"] for item in compositions.list_projects(query="ПРИМЕР", limit=1)
+    ] == ["zzz"]
+    assert [
+        item["id"] for item in compositions.list_projects(query="20260911-uid", limit=1)
+    ] == ["zzz"]
     assert compositions.list_projects(query="not present", limit=1) == []
 
 
@@ -179,7 +184,9 @@ def test_project_read_cache_isolated_and_reuses_validation(project_space, monkey
     assert validated == ["cached_project"]
 
 
-def test_project_catalog_projection_rebuild_admits_external_edit_and_removal(project_space):
+def test_project_catalog_projection_rebuild_admits_external_edit_and_removal(
+    project_space,
+):
     compositions.create(_project("edited_project", "edited_skill"))
     path = project_space["projects"] / "edited_project" / "project.yaml"
     before = compositions.list_projects()[0]
@@ -192,7 +199,10 @@ def test_project_catalog_projection_rebuild_admits_external_edit_and_removal(pro
     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
     assert compositions.list_projects(query="New Research") == []
-    assert compositions.list_projects(query="TLP Research")[0]["manifest_digest"] == before["manifest_digest"]
+    assert (
+        compositions.list_projects(query="TLP Research")[0]["manifest_digest"]
+        == before["manifest_digest"]
+    )
 
     rebuild = compositions.rebuild_registry_projection()
     assert rebuild["indexed"] == 1
@@ -208,7 +218,9 @@ def test_project_catalog_projection_rebuild_admits_external_edit_and_removal(pro
     assert compositions.list_projects() == []
 
 
-def test_project_read_cache_invalidates_on_schema_change(project_space, tmp_path, monkeypatch):
+def test_project_read_cache_invalidates_on_schema_change(
+    project_space, tmp_path, monkeypatch
+):
     compositions.create(_project("schema_project", "schema_skill"))
     path = project_space["projects"] / "schema_project" / "project.yaml"
     schema_path = tmp_path / "project-schema.json"
@@ -220,7 +232,9 @@ def test_project_read_cache_invalidates_on_schema_change(project_space, tmp_path
     schema = json.loads(original_schema)
     schema["properties"]["id"] = {"const": "different_project"}
     schema_path.write_text(json.dumps(schema), encoding="utf-8")
-    with pytest.raises(compositions.ProjectCompositionError, match="manifest invalid at id"):
+    with pytest.raises(
+        compositions.ProjectCompositionError, match="manifest invalid at id"
+    ):
         compositions._read(path)
     schema_path.write_bytes(original_schema)
     assert compositions._read(path)["id"] == "schema_project"
@@ -247,7 +261,10 @@ def test_project_read_does_not_cache_large_manifests(project_space):
     path = project_space["projects"] / "large_project" / "project.yaml"
     path.write_bytes(path.read_bytes() + b"\n#" + b"x" * 65536)
     compositions._cached_project.cache_clear()
-    assert compositions._read(path)["catalog"]["description"] == value["catalog"]["description"]
+    assert (
+        compositions._read(path)["catalog"]["description"]
+        == value["catalog"]["description"]
+    )
     assert compositions._cached_project.cache_info().currsize == 0
 
 
@@ -366,6 +383,37 @@ def test_project_component_lookup_uses_registry_projection(
     )
 
 
+def test_project_catalog_facade_rebuilds_after_untrusted_runtime_start(
+    project_space,
+    monkeypatch,
+) -> None:
+    compositions.create(_project("recovered_project", "recovered_skill"))
+    registry = compositions._registry_projection()
+    registry.start_epoch(runtime_instance_id="runtime.crashed")
+    previous_trust = registry.snapshot_trust_state()
+    registry.start_epoch(
+        runtime_instance_id="runtime.restarted",
+        previous_snapshot_trust=previous_trust,
+    )
+
+    parsed: list[str] = []
+    parse_project = compositions._parse_project
+
+    def count_parse(raw: bytes, schema_bytes: bytes) -> dict:
+        project = parse_project(raw, schema_bytes)
+        parsed.append(str(project["id"]))
+        return project
+
+    monkeypatch.setattr(compositions, "_parse_project", count_parse)
+
+    assert compositions.list_projects()[0]["id"] == "recovered_project"
+    assert parsed == ["recovered_project"]
+    assert registry.development_projects_ready(
+        project_space["projects"],
+        require_trusted_runtime_start=True,
+    )
+
+
 def test_project_component_lookup_rebuilds_after_external_manifest_change(
     project_space,
 ) -> None:
@@ -387,9 +435,9 @@ def test_project_component_lookup_rebuilds_after_external_manifest_change(
     )
 
     assert compositions.project_for_component("scenario:external_demo") is None
-    assert compositions.project_for_component("scenario:external_demo", refresh=True)["ref"] == (
-        "project:external_owner"
-    )
+    assert compositions.project_for_component("scenario:external_demo", refresh=True)[
+        "ref"
+    ] == ("project:external_owner")
 
 
 def test_project_replace_updates_component_registry_projection(project_space) -> None:
