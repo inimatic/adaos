@@ -1,0 +1,49 @@
+# Typed Content Generation
+
+## Contract
+
+Applications use one SDK for schema-bound content generation, image-assisted
+generation and standalone images. README is a consumer, not a Core domain rule.
+Application-owned instructions define purpose and out-of-scope behavior; user
+requests, current values and images are untrusted inputs, not instruction roles.
+No implicit conversation, workspace files or secrets enter the context.
+
+Generation is a durable Root job with a stable request identity. Model, reasoning,
+sampling parameters, schema and supplied context are captured before submission.
+Retries observe or resume the same job; a new request is an explicit new attempt.
+Root remains the subscription admission and accounting authority, including for
+runtime content requests. Do not bypass it with direct provider credentials or
+report a second token debit at the application layer. Retain actual provider
+usage, effective model and request/job correlation in result evidence.
+
+Typed results distinguish completed data, application out-of-scope response,
+provider refusal, incomplete output and failure. Validate against JSON Schema
+locally as well as requesting provider Structured Outputs. Do not truncate or
+salvage invalid output into an apparently valid form. Generation never submits
+a business form or saves a file. Review/apply is a separate action, guarded by
+the original value or document digest. Discard preserves the user's draft.
+
+Image inputs are explicit bounded media objects; no arbitrary URL fetching or
+filesystem access. Image output is an independently addressable immutable media
+artifact, not embedded Markdown or base64 in application/Yjs state. Its metadata
+retains media type, digest, provenance and usage. Unsupported modality/model or
+missing pricing/entitlement must be explicit, not silently downgraded to text.
+
+## Client Pattern
+
+A form may expose Generate/Improve, instruction input and acknowledged model
+settings. Pending/error/refusal/out-of-scope states preserve editable values.
+Show the proposed result before an explicit Apply; applying updates draft fields,
+not persistence. README uses its existing edit/save/digest contract, with no
+automatic image generation. Builder may declare application-specific purpose
+and schema through this SDK without adding domain examples to Core prompts.
+
+## Engineering Basis
+
+Use provider-native constrained output and explicit refusal handling as described
+in [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
+Keep image understanding and image creation separate capabilities, following
+[vision inputs](https://developers.openai.com/api/docs/guides/images-vision) and
+[image generation](https://developers.openai.com/api/docs/guides/image-generation).
+Provider format conformance does not establish semantic correctness or permission
+to persist generated content; application review and authorization still apply.
