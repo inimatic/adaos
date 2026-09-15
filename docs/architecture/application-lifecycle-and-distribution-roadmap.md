@@ -6,6 +6,8 @@ Last reviewed: 2026-09-08.
 
 Target architecture:
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
+Companion access architecture:
+[Application Access, Permissions, and Roles](application-access-permissions.md).
 
 This roadmap sequences the Application domain, SDK/MCP surface, Builder-built
 Applications product, trusted prerelease pilot, stable release proof, and later
@@ -37,6 +39,10 @@ tests, operation receipts, or end-to-end evidence.
    organizations, or collaborative development.
 7. Existing `Project*` records remain compatibility inputs until explicit
    migration evidence permits retirement.
+8. Application permission profiles, Application roles, and per-user access
+   management follow the
+   [Application Access, Permissions, and Roles Roadmap](application-access-permissions-roadmap.md);
+   this roadmap keeps release/install/update lifecycle authority.
 
 ## Current Baseline
 
@@ -324,8 +330,11 @@ Builder development and consumes only public contracts.
   representation, never adds a parallel Beta. A schema-incompatible return to
   Stable opens the snapshot recovery decision with possible data loss.
 - [ ] `[must]` `APP4-04` Show publisher display identity and technical
-  fingerprint, visibility, exact effective release, permissions, dependencies,
-  migration/backup state, release notes, and Development Report status.
+  fingerprint, visibility, exact effective release, permission-profile summary,
+  role-impact summary, dependencies, migration/backup state, release notes, and
+  Development Report status. Deep permission, role, user, child, guest, secret,
+  and approval management is owned by `AAPR4` in the Application Access
+  roadmap.
 - [ ] `[must]` `APP4-05` Make Applications the product inventory authority and
   remove duplicate Inventory from Infrastate UI while preserving diagnostics.
 - [ ] `[must]` `APP4-06` Mark Applications as a protected system Application:

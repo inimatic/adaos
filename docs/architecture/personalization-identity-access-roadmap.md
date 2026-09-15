@@ -4,6 +4,8 @@ Status: implementation roadmap and progress tracker.
 
 Target architecture:
 [Personalization, Identity, and Access](personalization-identity-access.md).
+Companion Application access architecture:
+[Application Access, Permissions, and Roles](application-access-permissions.md).
 
 This roadmap is intentionally phase-gated. The first goal is not to build a
 large user-management UI; it is to land the minimum durable identity, policy,
@@ -78,6 +80,10 @@ checked.
   exist below the UI or skill surface.
 - `owner` remains a subnet-level technical superuser, but product surfaces must
   still preserve user-private data boundaries.
+- Application permission profiles, Application-defined roles, and per-Application
+  user/child/guest grants are sequenced by the Application Access roadmap. This
+  roadmap supplies the verified subjects, devices, sessions, role presets,
+  privacy zones, constraints, and audit facts that Application access intersects.
 - Root-server or external identity can verify who a user is; subnet grants
   decide what that identity may do inside the subnet.
 - Prefer standard identity patterns where they fit: WebAuthn/passkeys for

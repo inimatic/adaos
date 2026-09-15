@@ -9,6 +9,10 @@ and a roadmap-compatible authorization vocabulary.
 
 The implementation roadmap lives in
 [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md).
+Application-specific permission profiles, Application-defined roles,
+per-subject Application access grants, Users & Access projections, and
+permission observability are owned by
+[Application Access, Permissions, and Roles](application-access-permissions.md).
 The future trusted-development-group boundary is described by
 [Governed Evolution](governed-evolution.md); this document remains
 authoritative for identity, consent, membership, grants, and revocation.
@@ -27,6 +31,9 @@ The target architecture must:
 - let non-owner users have private data and scoped memberships;
 - support public guest joins, targeted invites, device pairing, and recovery;
 - make access decisions through roles, capabilities, constraints, and audit;
+- provide identity, device, session, membership, privacy-zone, and audit facts
+  that Application access can intersect without storing Application roles in
+  profile settings;
 - leave room for optional root-server identity, SSO, and secret isolation.
 
 ## Current implementation baseline
@@ -357,6 +364,14 @@ workspace.write
 Role presets expand to capabilities plus constraints. Advanced UI can expose
 the expanded capability set later, but normal owner flows should present simple
 presets.
+
+Application-defined roles such as `viewer`, `editor`, `student`, `teacher`,
+`assignee`, or `moderator` are not platform role presets. They are scoped
+relationship facts on an Application and are governed by
+[Application Access, Permissions, and Roles](application-access-permissions.md).
+This document supplies the subjects, platform role ceilings, devices,
+sessions, privacy zones, constraints, and audit records that Application access
+evaluates.
 
 ## Join and login flows
 

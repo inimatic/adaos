@@ -65,6 +65,12 @@ The Builder does not bypass AdaOS. It uses AdaOS contracts to create changes
 that can be inspected, validated, installed, activated, observed, repaired, and
 rolled back.
 
+Application permission profiles, Application-defined roles, child/guest access
+fixtures, and declared-versus-observed permission profiling are governed by
+[Application Access, Permissions, and Roles](application-access-permissions.md).
+Builder must surface those declarations and observations during Application
+development, but the runtime policy service remains the enforcement authority.
+
 Core invariant:
 
 - humans and AI can propose capability changes
@@ -72,6 +78,8 @@ Core invariant:
   observability, and rollback
 - risky or ambiguous changes stay reviewable before they become durable runtime
   behavior
+- declared permissions, app roles, secrets, LLM/network use, and child/guest
+  compatibility stay observable before release
 
 ## Scope
 

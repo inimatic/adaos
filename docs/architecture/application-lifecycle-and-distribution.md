@@ -43,6 +43,10 @@ Builder session and source-context mechanics remain owned by
 until its compatibility vocabulary is retired. Implementation order is owned
 by the
 [Application Lifecycle and Distribution Roadmap](application-lifecycle-and-distribution-roadmap.md).
+Application-level permission profiles, Application-defined roles, per-user,
+child, and guest Application access grants, secrets/connected-account access,
+and the Users & Access product projection are owned by
+[Application Access, Permissions, and Roles](application-access-permissions.md).
 
 In this document, `dev/.runtime` is a logical shorthand for the per-subnet,
 component-scoped preview slots, for example
@@ -113,6 +117,9 @@ component-scoped preview slots, for example
 18. The Applications product is itself created through managed Builder
     development after the Application Core, SDK, and MCP contracts exist. This
     dogfoods the same chat-to-release path that third-party Applications use.
+19. Application releases expose permission and role impact as release metadata,
+    but grant evaluation, user/child/guest access assignment, and permission
+    observability are governed by the shared Application Access architecture.
 
 ## Current Implementation Boundary
 
