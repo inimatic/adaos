@@ -30,8 +30,11 @@ For Application permissions and roles, Pending Actions are the fallback and
 step-up decision surface when an action is not already covered by an
 Application grant, changes a sensitive role or permission, or requires
 guardian/trusted-device approval. The durable Application permission profile,
-role assignment, and grant state are owned by
-[Application Access, Permissions, and Roles](application-access-permissions.md).
+role assignment, grant state, and Builder final verification report are owned
+by [Application Access, Permissions, and Roles](application-access-permissions.md).
+A Pending Action may approve a bounded action or grant change, but it must not
+override a failed Application release hard gate such as undeclared high-risk
+observed access.
 
 ## Implementation Status
 
@@ -72,6 +75,9 @@ Current implemented slice:
 - [ ] Application permission Pending Actions use product-facing Application,
   user, role, data, and provider language by default, with raw tool ids only in
   technical detail.
+- [ ] Application permission Pending Actions deep-link to the relevant
+  permission profile, grant, role, or final verification check when the request
+  originates from release readiness.
 - [ ] Notification deep links to Pending Actions without making notifications
   the source of truth.
 - [ ] Delegated response-handler subscription handshake.

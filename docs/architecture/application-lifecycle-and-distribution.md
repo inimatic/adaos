@@ -47,6 +47,9 @@ Application-level permission profiles, Application-defined roles, per-user,
 child, and guest Application access grants, secrets/connected-account access,
 and the Users & Access product projection are owned by
 [Application Access, Permissions, and Roles](application-access-permissions.md).
+That architecture also defines Builder final verification for permission,
+role, access, secret, disclosure, and regression evidence before Trial,
+publication, or external install/update review.
 
 In this document, `dev/.runtime` is a logical shorthand for the per-subnet,
 component-scoped preview slots, for example
@@ -120,6 +123,10 @@ component-scoped preview slots, for example
 19. Application releases expose permission and role impact as release metadata,
     but grant evaluation, user/child/guest access assignment, and permission
     observability are governed by the shared Application Access architecture.
+20. A Builder-created or Builder-updated Application must carry release-bound
+    final verification evidence before Trial, publication, or external install
+    review can treat it as ready. The verification report is evidence, not a
+    substitute for lifecycle operations, human approval, or runtime policy.
 
 ## Current Implementation Boundary
 

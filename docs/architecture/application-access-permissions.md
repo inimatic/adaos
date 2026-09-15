@@ -102,6 +102,22 @@ established authorization patterns:
 - AI agents need explicit tool mediation, high-impact action approval, prompt
   injection resistance, memory/data-exfiltration defenses, and monitoring. See
   [OWASP AI Agent Security](https://cheatsheetseries.owasp.org/cheatsheets/AI_Agent_Security_Cheat_Sheet.html).
+- Secure software development practice treats verification, security tests,
+  traceable evidence, and release readiness as development artifacts rather
+  than informal memory. See
+  [NIST SP 800-218 SSDF](https://csrc.nist.gov/pubs/sp/800/218/final) and
+  [OWASP ASVS](https://owasp.org/www-project-application-security-verification-standard/).
+- Software supply-chain practice uses provenance and attestations so a release
+  consumer can inspect how an artifact was produced and verified. AdaOS does
+  not need full marketplace signing in V1, but the report shape should be
+  compatible with that direction. See [SLSA](https://slsa.dev/spec/v1.2/)
+  and [in-toto](https://in-toto.io/).
+- Release platforms and source-control systems increasingly make pre-release
+  checks visible and enforceable through pre-launch reports, required status
+  checks, and review gates. See
+  [Google Play pre-launch reports](https://play.google.com/console/about/pre-launchreports/)
+  and
+  [GitHub protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
 - Sensitive approvals should be able to require user presence, authentication
   intent, and reauthentication. See
   [NIST SP 800-63B](https://pages.nist.gov/800-63-4/sp800-63b.html).
@@ -190,6 +206,13 @@ established authorization patterns:
 : Durable request for a human decision. It is used when an operation is not
   covered by an existing Application grant, requires one-time or step-up
   approval, changes sensitive policy, or needs guardian approval.
+
+`ApplicationVerificationReport`
+: Versioned release-bound evidence produced by Builder final verification. It
+  records check ids, gate levels, results, evidence refs, permission/profile
+  digests, observed-capability digests, test commands, manual attestations,
+  residual risks, and whether the candidate may enter Trial, publication, or
+  install/update review.
 
 ## Target Declaration Shape
 
@@ -327,6 +350,8 @@ Install or first use shows the Application permission profile:
 - secrets and connected accounts;
 - notifications;
 - background or recurring actions;
+- release-readiness status, warnings, attestations, and residual risks when a
+  Builder verification report exists;
 - child and guest default behavior.
 
 Runtime action flow:
@@ -499,6 +524,101 @@ Release gates:
 - method-level approvals are acceptable fallback evidence, not a substitute
   for Application permission profile coverage.
 
+## Builder Final Verification
+
+Before an ApplicationRelease becomes installable outside source DEV, Builder
+must produce an `ApplicationVerificationReport`. The report is the durable
+release-readiness artifact for Builder-created or Builder-updated
+Applications. It is not a chat summary and not a human completion verdict.
+
+DEV prototypes may show an incomplete report as readiness guidance. Candidate,
+Trial, publication, and marketplace submission must respect the report's hard
+gates.
+
+Every check has one result:
+
+- `passed`: the invariant was verified;
+- `failed`: the invariant was violated and evidence was captured;
+- `inconclusive`: the environment, credentials, test data, or diagnostics were
+  insufficient for a valid decision;
+- `skipped`: the check was outside the declared release scope and the report
+  names why.
+
+Every check has one gate level:
+
+- `hard_gate`: failure or inconclusive result blocks Candidate/Trial or
+  publication for the applicable channel;
+- `warning`: visible debt that does not block the current release stage but is
+  shown in Builder, Applications, and review surfaces;
+- `attestation`: explicit developer or owner confirmation for an area that is
+  not yet fully machine-verifiable.
+
+The first mandatory checklist is:
+
+- permission profile schema, normalization, flat compatibility projection, and
+  deterministic `permission_profile_digest`;
+- declared versus statically inferred versus observed permissions, with
+  undeclared high-risk LLM, network, write, secret, notification, background,
+  or external-provider access as hard-gate defects;
+- Application role declaration, role ids, role capability expansion,
+  `assignable_to`, child/guest compatibility, and role-update impact;
+- install/update disclosure preview: required and optional permissions, data
+  practices, secrets, connected accounts, notifications, background work,
+  LLM/model use, and affected users;
+- Pending Action fallback preview for actions not covered by general
+  Application grants, including user-facing text and approval routing;
+- secrets and connected-account declaration, scope, binding, missing/revoked
+  states, and proof that secret values are not exposed in source, logs, or
+  report output;
+- access matrix checks for owner, member, child, guest, and at least one
+  declared custom Application role when roles exist;
+- regression-test evidence for changed behavior, with focused affected tests
+  required for DEV/Candidate and broader release tests required before
+  publication;
+- auditability for allowed, denied, approved, revoked, update-blocked, child,
+  guest, secret, and external-provider decisions;
+- UI disclosure readiness for Applications, Users & Access, Pending Actions,
+  chat/Telegram keyboard actions, and voice handoff notifications.
+
+The V1 report should have a small structured shape:
+
+```yaml
+verification:
+  schema: adaos.application.verification_report.v1
+  application_id: family_tasks
+  release_digest: sha256:...
+  source_commit: ...
+  permission_profile_digest: sha256:...
+  observed_capabilities_digest: sha256:...
+  overall: passed
+  checks:
+    - id: permission_profile.schema
+      gate: hard_gate
+      result: passed
+      evidence: artifacts/verification/permission-profile.json
+    - id: permissions.declared_vs_observed
+      gate: hard_gate
+      result: passed
+      evidence: artifacts/verification/permission-drift.json
+    - id: regression.changed_behavior
+      gate: hard_gate
+      result: passed
+      evidence: artifacts/verification/tests-junit.xml
+    - id: privacy.data_practices_reviewed
+      gate: attestation
+      result: passed
+      actor: user:developer
+  warnings: []
+  residual_risks: []
+```
+
+The report must be immutable once bound to an ApplicationRelease. A subsequent
+source, permission, role, data-practice, dependency, secret, or runtime
+behavior change creates a new report or invalidates the old one for release
+purposes. Long-term, the report can be signed or embedded as an in-toto/SLSA
+style attestation. V1 only needs deterministic serialization, evidence refs,
+and digest binding.
+
 ## Product Boundary
 
 The first product shape is:
@@ -511,6 +631,7 @@ Applications
      -> Access
      -> Roles
      -> Connected accounts
+     -> Release readiness
 
 Users & Access
   -> People
@@ -526,6 +647,7 @@ Pending Actions
 
 Builder
   -> permission profiler
+  -> final verification report
   -> app role declaration
   -> access fixtures
 ```
@@ -546,6 +668,7 @@ The first implementation does not include:
 - hierarchical Application roles;
 - quorum, threshold, or delegated approval workflows;
 - full voice approval for high-risk actions;
+- complete signed SLSA/in-toto/SBOM admission and marketplace certification;
 - commercial entitlement and billing policy;
 - marketplace-wide trust, malware, privacy-label, and compliance review.
 

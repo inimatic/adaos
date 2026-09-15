@@ -223,6 +223,49 @@ before placement Builder offers `Place in Webspace`; after durable target input
 it offers `Open published project` through Navigation SDK. Continuing
 development creates a new Change over the stable version.
 
+### 14. Application release final verification
+
+Before Trial, publication, or external install/update review for a
+Builder-created Application, request Final Verification and inspect the
+`ApplicationVerificationReport`. DEV-only prototypes may remain incomplete,
+but the report must be explicit about incomplete checks.
+
+Verify:
+
+- the report schema is `adaos.application.verification_report.v1`;
+- the report names the Application, source commit, release digest,
+  permission profile digest, observed capability digest, and evidence bundle;
+- every check has exactly one result:
+  `passed`, `failed`, `inconclusive`, or `skipped`;
+- every check has exactly one gate level:
+  `hard_gate`, `warning`, or `attestation`;
+- hard-gate failures or inconclusive mandatory checks block Candidate/Trial or
+  publication for the declared release scope;
+- permission profile schema, normalization, flat compatibility projection,
+  digest stability, and install/update diff checks are present;
+- declared, statically inferred, and observed LLM, network, workspace write,
+  secret, notification, background, external-provider, and child-data access
+  are compared;
+- undeclared high-risk observed access is reported as a hard-gate defect;
+- Application roles include role ids, capability expansion, `assignable_to`,
+  `default_for`, sensitive flags, update impact, and access-matrix fixtures;
+- owner, member, child, guest, and at least one custom Application role are
+  exercised when the Application declares roles;
+- changed behavior has focused regression-test evidence; publication candidates
+  name the broader release test profile or an explicit bounded skip reason;
+- secrets and connected accounts show declared scopes, required/optional state,
+  missing/revoked behavior, and no secret value in source, logs, or report;
+- data practices, LLM/model use, notifications, background work, and external
+  providers are visible in the install/update disclosure preview;
+- Pending Action fallback cards use user-facing Application language and route
+  sensitive approval to a trusted device when required;
+- audit evidence covers allow, deny, approval, revoke, update-blocked, child,
+  guest, secret, and external-provider decisions with actor-chain fields.
+
+Manual attestations are allowed only where the report names the responsible
+actor, scope, evidence, and residual risk. A free-form chat approval is not a
+substitute for a structured attestation check.
+
 ## Negative Checks
 
 - A stale control returns a fresh frame and does not execute.
@@ -242,6 +285,12 @@ development creates a new Change over the stable version.
 - Invalid UTF-8 is rejected before LLM or Codex processing.
 - A timeout or unknown outcome never authorizes blind repetition of a mutating
   command.
+- A release candidate without an Application verification report cannot be
+  treated as publication-ready.
+- A report with undeclared high-risk observed access cannot be overridden by a
+  method-level approval grant.
+- A skipped permission, role, secret, or regression check must name a bounded
+  release scope; otherwise it is inconclusive, not passed.
 
 ## Evidence and Authority
 

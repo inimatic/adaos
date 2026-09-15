@@ -13,7 +13,8 @@ pack, solution agent, endpoint, and channel is governed by the
 The canonical product and distribution boundary is governed by
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
 Application permissions, Application-defined roles, per-user/child/guest
-Application access, and the Users & Access product projection are governed by
+Application access, Builder final verification, and the Users & Access product
+projection are governed by
 [Application Access, Permissions, and Roles](application-access-permissions.md).
 [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md)
 retains the current `Project*` implementation vocabulary during migration.
@@ -134,6 +135,7 @@ future workbenches whose domain instances outnumber useful launchable apps.
 | `install` | Add to assistant | Use install/deploy wording only in advanced or developer UI. |
 | `application role` | App role | Role declared by an Application, such as viewer, editor, assignee, student, teacher, reviewer, or moderator. It is distinct from subnet role presets such as owner, member, child, and guest. |
 | `permission profile` | App permissions | Human-facing summary of what an Application may do, derived from structured Application permission declarations and enforced by platform policy. |
+| `ApplicationVerificationReport` | Release readiness report | Builder-produced release-bound evidence for permission declarations, observed access, app roles, regression tests, access matrix, secrets, disclosures, Pending Action fallback, auditability, warnings, attestations, and residual risks. |
 | `user access management` | Users & Access | Product surface for people, children, guests, devices, sessions, Application access, Application roles, approvals, and audit. |
 
 ## UI Rules

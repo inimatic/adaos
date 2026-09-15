@@ -92,6 +92,7 @@ Choose `skipped` only with a reason in the manifest.
 | Code and contracts | targeted unit/integration commands, full relevant suite, commit ids, clean diff check |
 | Browser | focused runtime tests, production build, console/network errors, projection lifecycle and reconnect observations |
 | Runtime and operations | readiness, status cards, operation lifecycle, install/update or explicit out-of-scope reason |
+| Application final verification | `ApplicationVerificationReport` when an Application enters Trial, publication, or external install/update review; permission/profile digests, declared-versus-observed access, Application roles, regression-test evidence, access matrix, secrets, disclosures, Pending Action fallback, auditability, warnings, attestations, and residual risks |
 | Yjs and projections | demand set, ProjectionRecord lifecycle, materialization/readback, dispatcher diagnostics, load/pressure snapshot |
 | Stand | target identity, version convergence, smoke checks, bounded soak where required, before/after snapshots |
 | Metrics and logs | latency/error counters, memory/pressure samples, correlated log window |

@@ -9,9 +9,10 @@ Target architecture:
 
 This roadmap sequences the first enforceable AdaOS slice for Application-level
 permissions, Application-defined roles, per-user/child/guest Application access,
-runtime enforcement, Users & Access observability, and conversational approval
-entry points. It intentionally does not build a general enterprise IAM system
-before the local Applications proof exists.
+runtime enforcement, Users & Access observability, conversational approval
+entry points, and Builder final verification before Trial/publication. It
+intentionally does not build a general enterprise IAM system before the local
+Applications proof exists.
 
 ## Priority Model
 
@@ -38,12 +39,15 @@ The repository already has:
   review;
 - per-skill secrets and vault plumbing;
 - Pending Actions and browser retry behavior for method-level action approval.
+- a Builder verification guide and MVP evidence-bundle convention that can be
+  extended with Application-specific release-readiness checks.
 
 The missing vertical path is:
 
 ```text
 Application declaration -> install/update review -> access grant/role assignment
--> runtime enforcement -> audit/observability -> revoke/update review
+-> runtime enforcement -> Builder final verification -> audit/observability
+-> revoke/update review
 ```
 
 ## Sequencing Rules
@@ -56,10 +60,12 @@ Application declaration -> install/update review -> access grant/role assignment
 4. Users & Access is a product projection over the shared access service, not a
    second policy store.
 5. Runtime enforcement must land before broad conversational approval.
-6. Child and guest floors are mandatory in the first proof.
-7. Method-level Pending Actions remain fallback for uncovered or high-risk
+6. Builder final verification is the release boundary; a green chat summary or
+   successful prototype is not enough to publish.
+7. Child and guest floors are mandatory in the first proof.
+8. Method-level Pending Actions remain fallback for uncovered or high-risk
    operations.
-8. Advanced policy engines, enterprise identity, and marketplace compliance
+9. Advanced policy engines, enterprise identity, and marketplace compliance
    follow evidence from the local proof.
 
 ## AAPR0. Architecture and Ownership
@@ -74,7 +80,8 @@ Application declaration -> install/update review -> access grant/role assignment
   planning to this architecture without duplicating its checklist.
 - [ ] `[must]` `AAPR0-03` Record the first implementation issue bundle with
   named evidence gates for backend contracts, runtime enforcement, Applications
-  UI, Users & Access UI, and Builder permission profiling.
+  UI, Users & Access UI, Builder permission profiling, and Builder final
+  verification.
 
 **Exit proof:** planning pages route Application permissions, Application
 roles, and Application access grants to this roadmap.
@@ -183,9 +190,10 @@ Application-centric and subject-centric views.
 
 - [ ] `[must]` `AAPR4-01` Extend Application install/update review to show
   structured permissions, data practices, LLM/network use, secrets,
-  notifications, background work, and role model.
+  notifications, background work, role model, and release-readiness summary.
 - [ ] `[must]` `AAPR4-02` Add Application detail tabs or sections:
-  Permissions, Access, Roles, Connected Accounts, and Activity.
+  Permissions, Access, Roles, Connected Accounts, Release Readiness, and
+  Activity.
 - [ ] `[must]` `AAPR4-03` Add minimal role assignment management from
   Applications: assign declared Application role, change role, revoke access,
   and show affected child/guest constraints.
@@ -195,7 +203,7 @@ Application-centric and subject-centric views.
   and Users & Access detail instead of showing only raw tool ids.
 - [ ] `[must]` `AAPR4-06` Add Builder permission profiler: declared,
   statically inferred, observed, undeclared observed, unused, child/guest
-  compatibility, and role diff.
+  compatibility, role diff, and inputs for Builder final verification.
 - [ ] `[should]` `AAPR4-07` Add responsive compact/wide UI, keyboard flows, and
   EN/RU i18n fixtures for long permission, role, provider, and denial labels.
 - [ ] `[could]` `AAPR4-08` Add app-embedded role management component that
@@ -204,35 +212,87 @@ Application-centric and subject-centric views.
 **Exit proof:** browser tests cover Application-centric and user-centric
 access management without direct database edits.
 
-## AAPR5. First End-to-End Proof
+## AAPR5. Builder Final Verification
+
+**Outcome:** Builder can produce a release-bound verification report that
+blocks unsafe Application candidates before Trial, publication, or external
+install.
+
+- [ ] `[must]` `AAPR5-01` Add
+  `adaos.application.verification_report.v1` with result states
+  `passed|failed|inconclusive|skipped`, gate levels
+  `hard_gate|warning|attestation`, report digest, release digest,
+  source commit, permission profile digest, observed capability digest,
+  evidence refs, warnings, attestations, and residual risks.
+- [ ] `[must]` `AAPR5-02` Add Builder Final Verification UI/CLI output that
+  renders the report as a checklist, names blocking checks first, and links
+  each item to evidence or required follow-up.
+- [ ] `[must]` `AAPR5-03` Validate permission profile schema, normalization,
+  flat compatibility projection, digest stability, install/update disclosure
+  preview, and permission/role diff classification.
+- [ ] `[must]` `AAPR5-04` Compare declared, statically inferred, and observed
+  capabilities. Undeclared high-risk LLM, network, workspace write, secret,
+  notification, background, external-provider, or child-data access is a hard
+  gate.
+- [ ] `[must]` `AAPR5-05` Verify Application role declarations, role capability
+  expansion, `assignable_to`, `default_for`, sensitive flags, update impact,
+  and owner/member/child/guest/custom-role access matrix fixtures.
+- [ ] `[must]` `AAPR5-06` Require regression-test evidence for changed
+  behavior. For DEV/Candidate, focused affected tests may pass the gate; for
+  publication, the report must name the broader release test profile or explain
+  a bounded `skipped` scope.
+- [ ] `[must]` `AAPR5-07` Verify secrets, connected accounts, external provider
+  scopes, notifications, background jobs, and data-practice disclosures,
+  including missing/revoked states and secret-value redaction in source, logs,
+  and report output.
+- [ ] `[must]` `AAPR5-08` Verify Pending Action fallback cards and routing for
+  uncovered or step-up actions, including chat/Telegram keyboard affordances
+  and voice handoff text for trusted-device approval.
+- [ ] `[must]` `AAPR5-09` Verify auditability for allow, deny, approval,
+  revoke, update-blocked, child, guest, secret, and external-provider
+  decisions, including actor chain and reviewed profile digest.
+- [ ] `[should]` `AAPR5-10` Integrate the report into the MVP release evidence
+  bundle and CI status checks so required checks can be run outside the Builder
+  UI.
+- [ ] `[could]` `AAPR5-11` Emit an in-toto/SLSA-compatible attestation for the
+  report after deterministic serialization and signing boundaries exist.
+
+**Exit proof:** one Application candidate has a persisted verification report
+with hard gates, warnings, attestations, evidence refs, report digest, and
+release/profile/observed-capability digests. Publication rejects a candidate
+with an undeclared high-risk observed permission and accepts one that passes.
+
+## AAPR6. First End-to-End Proof
 
 **Outcome:** the first access-aware Applications slice works through real
 install, grant, runtime, audit, and revoke flows.
 
-- [ ] `[must]` `AAPR5-01` Owner installs an Application with LLM/network/write
+- [ ] `[must]` `AAPR6-01` Owner installs an Application with LLM/network/write
   permissions, sees the profile, grants access, and covered runtime actions do
   not request raw method approval.
-- [ ] `[must]` `AAPR5-02` Owner grants a child access with an app role that can
+- [ ] `[must]` `AAPR6-02` Owner grants a child access with an app role that can
   read or complete assigned work but cannot use LLM/network/secrets without
   guardian approval.
-- [ ] `[must]` `AAPR5-03` Owner grants guest access through a TTL link with a
+- [ ] `[must]` `AAPR6-03` Owner grants guest access through a TTL link with a
   readonly app role, proves no profile binding, and revokes live access.
-- [ ] `[must]` `AAPR5-04` Application update adds or elevates a permission and
+- [ ] `[must]` `AAPR6-04` Application update adds or elevates a permission and
   a role capability; auto-update pauses for review and shows affected users.
-- [ ] `[must]` `AAPR5-05` Secret/connected-account use shows missing,
+- [ ] `[must]` `AAPR6-05` Secret/connected-account use shows missing,
   connected, revoked, and denied states without exposing secret values.
-- [ ] `[must]` `AAPR5-06` Users & Access shows the same facts from a user,
+- [ ] `[must]` `AAPR6-06` Users & Access shows the same facts from a user,
   child, guest, device/session, and Application perspective.
-- [ ] `[must]` `AAPR5-07` Builder reports declared versus observed permissions
-  and blocks release on undeclared observed high-risk access.
-- [ ] `[should]` `AAPR5-08` Conversational read/explain/revoke works, with
+- [ ] `[must]` `AAPR6-07` Builder final verification reports declared versus
+  observed permissions, records regression/access-matrix evidence, and blocks
+  release on undeclared observed high-risk access.
+- [ ] `[should]` `AAPR6-08` Conversational read/explain/revoke works, with
   approval routed to Pending Actions or trusted device for sensitive changes.
-- [ ] `[could]` `AAPR5-09` Telegram keyboard mirrors low-risk Pending Action
+- [ ] `[could]` `AAPR6-09` Telegram keyboard mirrors low-risk Pending Action
   decisions with the same grant and audit records.
 
 **Exit proof:** one evidence bundle captures release/profile digests, grants,
 role assignments, runtime decisions, Pending Actions, child/guest cases,
-revoke cutoff, update diff, browser views, and audit queries.
+revoke cutoff, update diff, Builder final verification report, browser views,
+and audit queries.
 
 ## Should-Level Follow-Up
 
@@ -307,5 +367,8 @@ This roadmap is complete for V1 when:
   revocation state;
 - Builder can explain declared, inferred, observed, and undeclared
   permissions;
+- Builder final verification persists a release-bound report with hard gates,
+  warnings, attestations, evidence refs, regression evidence, access-matrix
+  evidence, and release/profile/observed-capability digests;
 - every allowed, denied, approved, revoked, and update-blocked access decision
   is auditable.

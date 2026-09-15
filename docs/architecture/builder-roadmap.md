@@ -32,6 +32,7 @@ cannot change a gate or define a competing target; link decisions back here.
 | [Streaming patches](builder-streaming-patches.md) | Transport/journal/atomic commit; renderer JSONL is compatibility only |
 | [Scenario development guide](../guides/builder-scenario-development.md) | Normative stage-aware authoring procedure, not experimental results |
 | [Verification guide](../guides/builder-verification.md) | Verification procedure, not permission or a completion verdict |
+| [Application access roadmap](application-access-permissions-roadmap.md) | Application permission, role, access, and Builder final-verification release gates |
 | [Functional parity fixture](builder-functional-parity.json) | Executable Builder-product compatibility data; not generic model context |
 | [Engineering journal](builder-engineering-journal.md) | The only incremental Builder observation record |
 | [Client roadmap](client-component-system-roadmap.md) | Client-owned integrity, component contracts and renderer acceptance |
@@ -140,6 +141,9 @@ health, not just changed archive bytes. BIP-28 owns installed lifecycle proof.
 
 Setup inputs, secret refs, permissions and verification belong to a declarative
 release-owned contract, not generated ad hoc installation code.
+For Applications, the release-owned verification contract is the
+`ApplicationVerificationReport` from the Application Access roadmap; Builder
+surfaces and produces it, but the access roadmap owns its checklist semantics.
 
 - [ ] `[could]` Add a setup assistant that renders missing inputs, secret refs,
   capability review and verification results from that contract.

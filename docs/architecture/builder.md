@@ -95,6 +95,8 @@ The Builder owns the development path for:
   derived compatibility projection and is never the version authority
 - NLU hints, examples, aliases, and descriptor fixes
 - tests, smoke checks, runtime validation evidence, and release notes
+- release-readiness checklists and `ApplicationVerificationReport` evidence
+  for Builder-created or Builder-updated Applications
 
 The Builder does not own:
 
@@ -1069,6 +1071,40 @@ The runtime must provide:
 - route, memory, stream, and Yjs guard evidence
 - lifecycle diagnostics and quarantine summaries
 - status/notification projections that explain failure without hiding it
+- Application final verification reports that bind release, permission,
+  role, test, audit, and disclosure evidence before Trial or publication
+
+## Final Verification
+
+Builder final verification is the release-quality gate between a working
+candidate and a candidate that may enter Trial, publication, or external
+install/update review.
+
+For Applications, Builder must produce the
+`adaos.application.verification_report.v1` report defined by
+[Application Access, Permissions, and Roles](application-access-permissions.md#builder-final-verification).
+The report uses machine-readable checks with `hard_gate`, `warning`, and
+`attestation` levels. It must not be replaced by a conversational summary, a
+successful prototype render, or a green generated-code message.
+
+The mandatory Application checks cover:
+
+- permission profile declaration, normalization, digest stability, and update
+  diff;
+- declared versus inferred versus observed LLM, network, workspace write,
+  secret, notification, background, and external-provider access;
+- Application role declarations and owner/member/child/guest/custom-role
+  access-matrix fixtures;
+- secrets, connected accounts, data practices, notifications, and background
+  work disclosures;
+- Pending Action fallback text and routing for uncovered or step-up actions;
+- regression-test evidence for changed behavior;
+- auditability for allow, deny, approve, revoke, child, guest, secret, and
+  update-blocked decisions.
+
+DEV prototypes may carry warnings and incomplete checks. Trial, publication,
+and marketplace submission must fail closed on hard-gate failures or
+inconclusive mandatory checks for their release scope.
 
 ## Relationship To Pending Actions
 
