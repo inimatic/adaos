@@ -13,7 +13,7 @@ import tempfile
 import time
 import tomllib
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS
 from adaos.services.env_policy import env_float
@@ -188,6 +188,37 @@ def _verify_prepare_lease(path: str | os.PathLike[str] = "", token: str = "") ->
     if str(payload.get("state") or "").strip().lower() != "active":
         reason = str(payload.get("reason") or payload.get("revoked_reason") or "revoked").strip()
         raise RuntimeError(f"core update prepare lease revoked: {reason}")
+
+
+def _write_prepare_lease_progress(
+    path: str | os.PathLike[str] = "",
+    token: str = "",
+    *,
+    stage: str,
+    message: str,
+    **extra: object,
+) -> dict[str, object]:
+    lease_path_raw = str(path or "").strip()
+    lease_token = str(token or "").strip()
+    if not lease_path_raw and not lease_token:
+        return {}
+    _verify_prepare_lease(lease_path_raw, lease_token)
+    lease_path = Path(lease_path_raw).expanduser().resolve()
+    payload = json.loads(lease_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError("core update prepare lease payload is invalid")
+    payload["stage"] = str(stage or "").strip() or None
+    payload["message"] = str(message or "").strip() or None
+    payload["progress_at"] = time.time()
+    payload["updated_at"] = payload["progress_at"]
+    payload.update(extra)
+    staged = lease_path.with_name(f".{lease_path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        staged.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(staged, lease_path)
+    finally:
+        staged.unlink(missing_ok=True)
+    return payload
 
 
 def _terminate_subprocess_tree(process: subprocess.Popen[str]) -> None:
@@ -1570,11 +1601,15 @@ def _checkout_base_version(repo_dir: Path) -> str:
     return "0.1.0"
 
 
-def _checkout_build_version(repo_dir: Path) -> str:
+def _checkout_build_version(repo_dir: Path, *, source_history: Mapping[str, object] | None = None) -> str:
     explicit = str(os.getenv("ADAOS_BUILD_VERSION") or "").strip()
     if explicit:
         return explicit
     base = _checkout_base_version(repo_dir)
+    history = source_history if isinstance(source_history, Mapping) else {}
+    if bool(history.get("was_shallow")) and str(history.get("fetch_mode") or "").strip().lower() == "skipped":
+        short_sha = _git_text(repo_dir, "rev-parse", "--short", "HEAD")
+        return f"{base}+g{short_sha}" if short_sha else base
     rev_count = _git_text(repo_dir, "rev-list", "--count", "HEAD")
     if not rev_count:
         return base
@@ -1585,10 +1620,27 @@ def _checkout_build_version(repo_dir: Path) -> str:
     return f"{base}{suffix}"
 
 
-def _ensure_complete_history_for_build_identity(repo_dir: Path) -> dict[str, object]:
+def _complete_history_for_build_identity_enabled() -> bool:
+    raw = str(os.getenv("ADAOS_CORE_UPDATE_COMPLETE_HISTORY_FOR_BUILD_IDENTITY") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _ensure_complete_history_for_build_identity(
+    repo_dir: Path,
+    *,
+    target_version: str = "",
+) -> dict[str, object]:
     shallow_path = repo_dir / ".git" / "shallow"
     if not shallow_path.exists():
         return {"state": "complete", "was_shallow": False}
+    if _is_probably_git_sha(str(target_version or "").strip()) and not _complete_history_for_build_identity_enabled():
+        return {
+            "state": "complete",
+            "was_shallow": True,
+            "fetch_mode": "skipped",
+            "reason": "immutable_target_version",
+            "identity_mode": "base_version_plus_git_sha",
+        }
     git = shutil.which("git")
     if not git:
         raise RuntimeError("git is required to complete shallow core update history")
@@ -1732,6 +1784,14 @@ def prepare_slot(
     prepared_slot.mkdir(parents=True, exist_ok=True)
     try:
         checkout_tmp = prepared_slot / "repo"
+        _write_prepare_lease_progress(
+            prepare_lease_path,
+            prepare_lease_token,
+            stage="checkout",
+            message="checking out target repository",
+            target_rev=target_rev,
+            target_version=target_version,
+        )
         checkout_result = _prepare_checkout_repo(
             checkout_dir=checkout_tmp,
             source_repo_dir=source_repo_dir,
@@ -1744,13 +1804,34 @@ def prepare_slot(
         else:
             source_kind = str(checkout_result)
             source_checkout = {"kind": source_kind, "attempts": []}
-        source_history = _ensure_complete_history_for_build_identity(checkout_tmp)
+        _write_prepare_lease_progress(
+            prepare_lease_path,
+            prepare_lease_token,
+            stage="source_history",
+            message="validating source history for build identity",
+            source_kind=source_kind,
+        )
+        source_history = _ensure_complete_history_for_build_identity(checkout_tmp, target_version=target_version)
+        _write_prepare_lease_progress(
+            prepare_lease_path,
+            prepare_lease_token,
+            stage="venv",
+            message="preparing slot virtual environment",
+            source_history=source_history,
+        )
         venv_tmp = prepared_slot / "venv"
         venv_seed = _prepare_seed_venv(
             venv_dir=venv_tmp,
             slot_dir=slot_dir,
             repo_root_dir=repo_root_dir,
             checkout_dir=checkout_tmp,
+        )
+        _write_prepare_lease_progress(
+            prepare_lease_path,
+            prepare_lease_token,
+            stage="install",
+            message="installing candidate slot project",
+            venv_seed=venv_seed,
         )
         install_result = _install_slot_project(
             checkout_dir=checkout_tmp,
@@ -1768,10 +1849,18 @@ def prepare_slot(
         git_short_commit = _git_text(checkout_tmp, "rev-parse", "--short", "HEAD")
         git_branch = _git_text(checkout_tmp, "rev-parse", "--abbrev-ref", "HEAD")
         git_subject = _git_text(checkout_tmp, "show", "-s", "--format=%s", "HEAD")
-        build_version = _checkout_build_version(checkout_tmp)
+        build_version = _checkout_build_version(checkout_tmp, source_history=source_history)
         base_version = _checkout_base_version(checkout_tmp)
         build_date = _checkout_build_date(checkout_tmp)
         bootstrap_update = _detect_bootstrap_promotion_requirement(checkout_tmp, repo_root_dir)
+        _write_prepare_lease_progress(
+            prepare_lease_path,
+            prepare_lease_token,
+            stage="finalize",
+            message="finalizing prepared slot",
+            build_version=build_version,
+            git_short_commit=git_short_commit,
+        )
         _strip_repo_vcs_metadata(checkout_tmp)
         _verify_prepare_lease(prepare_lease_path, prepare_lease_token)
         manifest = {

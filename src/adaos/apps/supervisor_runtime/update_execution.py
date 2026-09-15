@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,26 @@ from typing import Any
 
 
 PREPARE_HEARTBEAT_SEC = 15.0
+
+
+def _prepare_lease_progress(path: str, token: str) -> dict[str, Any]:
+    lease_path_raw = str(path or "").strip()
+    lease_token = str(token or "").strip()
+    if not lease_path_raw or not lease_token:
+        return {}
+    try:
+        payload = json.loads(Path(lease_path_raw).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if str(payload.get("token") or "").strip() != lease_token:
+        return {}
+    return {
+        "prepare_stage": str(payload.get("stage") or "").strip() or None,
+        "prepare_stage_message": str(payload.get("message") or "").strip() or None,
+        "prepare_progress_at": payload.get("progress_at") or payload.get("updated_at"),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +268,8 @@ class SupervisorUpdateExecution:
                         break
                     heartbeat_at = time.time()
                     elapsed_s = max(0.0, heartbeat_at - prepare_started_at)
+                    lease_progress = _prepare_lease_progress(prepare_lease_path, prepare_lease_token)
+                    stage_message = str(lease_progress.get("prepare_stage_message") or "").strip()
                     timeout_s = max(0.0, float(prepare_timeout_sec or 0.0))
                     if timeout_s and elapsed_s >= timeout_s:
                         prepare_timed_out = True
@@ -276,6 +299,7 @@ class SupervisorUpdateExecution:
                                 "prepare_timed_out": True,
                                 "prepare_lease_path": prepare_lease_path or None,
                                 "prepare_lease_token": prepare_lease_token or None,
+                                **lease_progress,
                             }
                         )
                         prepare_result = await prepare_task
@@ -288,14 +312,16 @@ class SupervisorUpdateExecution:
                             "target_rev": target_rev,
                             "target_version": target_version,
                             "reason": reason,
-                            "message": f"preparing inactive slot; worker active for {elapsed_s:.0f}s",
+                            "message": stage_message
+                            or f"preparing inactive slot; worker active for {elapsed_s:.0f}s",
                             "prepare_elapsed_s": round(elapsed_s, 3),
                             "prepare_heartbeat_at": heartbeat_at,
                             "prepare_timeout_sec": prepare_timeout_sec,
                             "prepare_lease_path": prepare_lease_path or None,
                             "prepare_lease_token": prepare_lease_token or None,
+                            **lease_progress,
                         }
-            )
+                    )
             if str(prepare_result.get("state") or "").strip().lower() != "prepared":
                 prepare_lease_revocation = operations.revoke_prepare_lease(
                     status={

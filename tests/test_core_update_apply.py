@@ -1016,6 +1016,35 @@ def test_checkout_build_version_env_override_wins(monkeypatch, tmp_path: Path) -
     assert mod._checkout_build_version(tmp_path) == "2026.5.22"
 
 
+def test_checkout_build_version_uses_sha_identity_when_history_fetch_skipped(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.1016"\n',
+        encoding="utf-8",
+    )
+
+    def _fake_git_text(_repo_dir, *args):
+        if args == ("rev-parse", "--short", "HEAD"):
+            return "88a95a1"
+        if args == ("rev-list", "--count", "HEAD"):
+            pytest.fail("shallow skipped history must not compute a shallow rev-list count")
+        return ""
+
+    monkeypatch.delenv("ADAOS_BUILD_VERSION", raising=False)
+    monkeypatch.setattr(mod, "_git_text", _fake_git_text)
+
+    assert (
+        mod._checkout_build_version(
+            tmp_path,
+            source_history={"was_shallow": True, "fetch_mode": "skipped"},
+        )
+        == "0.1.1016+g88a95a1"
+    )
+
+
 def test_complete_history_for_build_identity_unshallows_standard_clone(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
@@ -1038,6 +1067,37 @@ def test_complete_history_for_build_identity_unshallows_standard_clone(monkeypat
     assert calls == [
         (["git", "fetch", "--unshallow", "origin"], tmp_path)
     ]
+
+
+def test_complete_history_for_build_identity_skips_unshallow_for_pinned_target(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    shallow_path = tmp_path / ".git" / "shallow"
+    shallow_path.parent.mkdir(parents=True)
+    shallow_path.write_text("deadbeef\n", encoding="utf-8")
+
+    monkeypatch.delenv("ADAOS_CORE_UPDATE_COMPLETE_HISTORY_FOR_BUILD_IDENTITY", raising=False)
+    monkeypatch.setattr(
+        mod,
+        "_run",
+        lambda *_args, **_kwargs: pytest.fail("pinned target must not fetch full history"),
+    )
+
+    result = mod._ensure_complete_history_for_build_identity(
+        tmp_path,
+        target_version="88a95a15e2bb3d025e6d8b825ea9cc35ae65bff3",
+    )
+
+    assert result == {
+        "state": "complete",
+        "was_shallow": True,
+        "fetch_mode": "skipped",
+        "reason": "immutable_target_version",
+        "identity_mode": "base_version_plus_git_sha",
+    }
+    assert shallow_path.exists()
 
 
 def test_complete_history_for_build_identity_rejects_still_shallow_checkout(

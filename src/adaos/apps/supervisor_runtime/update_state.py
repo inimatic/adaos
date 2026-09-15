@@ -319,6 +319,13 @@ class UpdateAttemptStore:
             "prepare_lease_token": str(source.get("prepare_lease_token") or "").strip()
             or None,
             "prepare_timeout_sec": epoch(source.get("prepare_timeout_sec")) or None,
+            "prepare_elapsed_s": epoch(source.get("prepare_elapsed_s")) or None,
+            "prepare_heartbeat_at": epoch(source.get("prepare_heartbeat_at")) or None,
+            "prepare_timed_out": bool(source.get("prepare_timed_out")),
+            "prepare_stage": str(source.get("prepare_stage") or "").strip() or None,
+            "prepare_stage_message": str(source.get("prepare_stage_message") or "").strip()
+            or None,
+            "prepare_progress_at": epoch(source.get("prepare_progress_at")) or None,
             "subsequent_transition_request": dict(
                 source.get("subsequent_transition_request") or {}
             )
