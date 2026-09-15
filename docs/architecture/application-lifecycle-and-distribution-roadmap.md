@@ -188,8 +188,12 @@ Project/Application identity collapse.
   This is not post-adoption rollback or loss-confirmed Beta replacement.
   The scoped SQLite initialization SDK now shares Beta's checksum executor:
   empty creation, retry, legacy DEV migration, installed-upgrade refusal and
-  transactional rollback have synthetic coverage. Its use by generated Reading
-  List code and the full two-cycle live proof remain open.
+  transactional rollback have synthetic coverage. Generated Reading List code
+  now passes actual SDK initialization, HTTP CRUD/settings, public discovery,
+  desktop/mobile browser review and restart persistence. The first native Beta
+  migrated the two private Stable records intact, but placement projection
+  rejected the existing `snapshot` mode; contract/replay qualification precedes
+  continuation. The full two-cycle live proof remains open.
 - [ ] `[must]` `APP1-16` Automatically select the node's own Builder Beta after
   each completed local development cycle, including installed Stable upgrades,
   without a second Applications permission. Project the pre-release flag from

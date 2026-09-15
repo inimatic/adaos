@@ -8,7 +8,7 @@ from typing import Any, Mapping
 PROJECT_PLACEMENT_SCHEMA = "adaos.project.placement.v1"
 _PLACEMENT_KINDS = {"stable", "trial"}
 _PLACEMENT_STATUSES = {"active", "detached", "expired", "failed", "reconciling"}
-_DATA_MODES = {"empty", "mock", "fixture", "sandbox", "read_only", "live_readonly", "real", "live"}
+_DATA_MODES = {"empty", "mock", "snapshot", "fixture", "sandbox", "read_only", "live_readonly", "real", "live"}
 
 
 class BuilderPlacementError(ValueError):

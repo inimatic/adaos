@@ -1753,14 +1753,15 @@ def test_change_set_advances_through_automation_trial_and_publication(
 
 
 @pytest.mark.parametrize("changed", [None, "candidate", "digest", "target", "runtime", "activation", "safety", "status"])
-def test_placement_replay_is_noop_only_for_exact_result(workflow_project, changed):
+@pytest.mark.parametrize("data_mode", ["empty", "snapshot"])
+def test_placement_replay_is_noop_only_for_exact_result(workflow_project, changed, data_mode):
     service, root = workflow_project
     generation = service.describe("scenario", "recipes")["generation"]
     placement = {
         "kind": "trial", "result_ref": {"kind": "candidate", "id": "candidate-a", "digest": "sha256:" + "a" * 64},
         "target": {"webspace_id": "desktop-dev", "space_kind": "development"},
         "runtime_binding": {"kind": "isolated_trial_workspace", "path": "trials/candidate-a"},
-        "trial_activation_ref": "activation-a", "safety": {"status": "verified"}, "data_mode": "empty",
+        "trial_activation_ref": "activation-a", "safety": {"status": "verified"}, "data_mode": data_mode,
     }
     first = service.record_project_placement("scenario", "recipes", placement, expected_generation=generation)
     persisted = (root / "prompt_state.json").read_bytes()

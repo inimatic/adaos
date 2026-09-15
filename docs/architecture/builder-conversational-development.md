@@ -1241,6 +1241,13 @@ a stable widget/field ref is available.
 The declarative UI addresses logical data contracts. Environment-specific
 bindings are separate, typed Preview binding profiles:
 
+Published result placements also preserve the Trial activation's storage
+provenance (`empty`, `mock`, `snapshot`, `read_only`, `real`). In particular,
+`snapshot` means a forward-migrated copy of accepted Stable, not a Prototype
+fixture or a second live Stable. Placement projection preserves its activation
+and data-transition references. It does not authorize runtime access: the
+selected release and completed migration receipt remain the runtime gate.
+
 | Mode | Intended use | Default Prototype policy |
 | --- | --- | --- |
 | `mock` | Generated in-memory examples with no external authority | allowed |

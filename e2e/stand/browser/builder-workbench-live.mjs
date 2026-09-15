@@ -330,8 +330,11 @@ try {
         const admission = JSON.parse(process.env.ADAOS_E2E_PREPARE_TRIAL)
         const current = await widget('design-current-work').locator('ada-details-widget')
           .evaluate(el => window.ng.getComponent(el).state.getSnapshot())
+        const exactDelivery = admission.resume_candidate_id
+          ? current.workbench.delivery.status === 'trial' && current.workbench.delivery.candidate_id === admission.resume_candidate_id
+          : current.workbench.delivery.status === 'checkpoint'
         if (current.workbench.automation_task_id !== admission.task || current.selectedProjectId !== admission.scenario
-          || current.workbench.delivery.status !== 'checkpoint') throw new Error('Exact completed TEST checkpoint required')
+          || !exactDelivery) throw new Error('Exact completed TEST checkpoint or admitted interrupted Trial required')
         await fs.writeFile(path.join(output, 'trial-admission.json'), JSON.stringify(admission, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' })
         await command('publication').click()
         await widget('publication-actions').waitFor()

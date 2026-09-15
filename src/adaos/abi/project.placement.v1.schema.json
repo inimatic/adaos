@@ -30,7 +30,7 @@
     "host_capability": { "type": "string", "minLength": 1, "maxLength": 300 },
     "scenario_id": { "type": ["string", "null"], "maxLength": 300 },
     "audience": { "type": "string", "minLength": 1, "maxLength": 160 },
-    "data_mode": { "enum": ["empty", "mock", "fixture", "sandbox", "read_only", "live_readonly", "real", "live"] },
+    "data_mode": { "enum": ["empty", "mock", "snapshot", "fixture", "sandbox", "read_only", "live_readonly", "real", "live"] },
     "runtime_binding": { "type": "object" },
     "trial_activation_ref": { "type": ["string", "null"], "maxLength": 500 },
     "safety": { "type": "object" },
