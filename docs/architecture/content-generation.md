@@ -38,6 +38,24 @@ artifact, not embedded Markdown or base64 in application/Yjs state. Its metadata
 retains media type, digest, provenance and usage. Unsupported modality/model or
 missing pricing/entitlement must be explicit, not silently downgraded to text.
 
+The standalone transport is a durable `images.generate` Root job with an explicit
+image model, independent of the text development/runtime profile. Hosted image
+tools in text Responses are rejected until their separate model admission and
+accounting are supported. A provider timeout must not cause automatic paid replay.
+Image request fingerprints include API and subnet scope; another subnet cannot
+retrieve the job. The node SDK also scopes drafts to the verified invocation
+subject and executing skill, not a configured owner fallback.
+
+`adaos.sdk.llm.images.generate/get` stages one PNG/JPEG/WebP draft with bounded
+encoded bytes and decoded pixels. The image is stored by content digest and
+published as a browser media descriptor, never as a local path or token-bearing
+URL in UI state. The optional `context` is retained locally for review/apply
+correlation and is not sent to the image provider. Root counts generated images
+and token usage separately, retains missing metering as unknown, and carries
+modality through regional relays. This transport is not a permission to save an
+icon into an application. Deployment qualification and discoverability are tracked
+in CG-04; no application should assume image availability from SDK presence alone.
+
 ## Client Pattern
 
 A form may expose Generate/Improve, instruction input and acknowledged model

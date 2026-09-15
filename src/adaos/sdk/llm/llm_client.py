@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Optional
 import json
 import logging
 import os
+import re
 import time
 
 import requests
@@ -777,6 +778,37 @@ def submit_response_job(
         stream_protocol=stream_protocol,
         profile_scope=profile_scope,
     )
+    return _submit_root_job(root_payload, request_id=request_id, timeout=timeout, submit_started=submit_started)
+
+
+def submit_image_job(*, request_id: str, model: str, prompt: str, size: str = "1024x1024",
+                     quality: str = "low", output_format: str = "png", background: str = "opaque",
+                     timeout: float | None = None) -> Dict[str, Any]:
+    """Submit one image to the same subscribed durable Root broker.
+
+    The image model is explicit, never inferred from a text-generation profile.
+    Reusing request_id recovers the same request; it is not a new paid attempt.
+    """
+    if not isinstance(model, str) or not re.fullmatch(r"gpt-image-[a-z0-9.-]+", model):
+        raise ValueError("An explicit GPT Image model is required")
+    if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 200:
+        raise ValueError("A bounded stable image request_id is required")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode("utf-8")) > 32000:
+        raise ValueError("Image prompt must contain 1..32000 UTF-8 bytes")
+    if (size not in {"1024x1024", "1536x1024", "1024x1536", "auto"}
+            or quality not in {"low", "medium", "high", "auto"}
+            or output_format not in {"png", "jpeg", "webp"}
+            or background not in {"opaque", "transparent", "auto"}
+            or (background == "transparent" and output_format == "jpeg")):
+        raise ValueError("Invalid image output parameters")
+    payload = {"api": "images.generate", "model": model, "request_id": request_id,
+               "image": {"prompt": prompt, "size": size, "quality": quality,
+                         "output_format": output_format, "background": background}}
+    return _submit_root_job(payload, request_id=request_id, timeout=timeout, submit_started=time.perf_counter())
+
+
+def _submit_root_job(root_payload: Mapping[str, Any], *, request_id: str | None,
+                     timeout: float | None, submit_started: float) -> Dict[str, Any]:
     payload_bytes = _json_size_bytes(root_payload)
     if _legacy_http_enabled():
         legacy_started = time.perf_counter()

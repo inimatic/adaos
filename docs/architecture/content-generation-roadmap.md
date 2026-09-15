@@ -22,8 +22,12 @@ Target: [Typed Content Generation](content-generation.md).
   guard for stale saves; interactive conflict-resolution UX is separate BIP-02 work.
 - [ ] `[should]` CG-04: Explicit image input and independently stored image
   output SDK, verified modality support, limits, artifact isolation and usage.
-  Partial: bounded explicit image inputs and Responses transport have unit
-  coverage; standalone image output and Root modality accounting are not qualified.
+  Partial: standalone image draft service/SDK and explicit Root Images transport
+  have local contract coverage for owner isolation, digest-bound media, byte/pixel
+  bounds, stable retries, invalid output and missing usage. Root modality, scoped
+  image fingerprints and regional relay accounting have local tests. Remaining:
+  concurrent/restart Root admission, deployed capability/model qualification,
+  subscription presentation, SDK discoverability and About browser round trip.
 - [x] `[should]` CG-05: Publish reusable form-generation guidance and SDK/ABI
   discoverability for Builder; test an unrelated schema and out-of-scope prompt
   without injecting application-specific rules into Core.
