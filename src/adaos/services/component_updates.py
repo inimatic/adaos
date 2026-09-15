@@ -327,12 +327,20 @@ class ComponentUpdateService:
         for selection in selections:
             if selection.webspace_id != webspace_id or selection.source not in {"local_trial", "stable_installation"}:
                 continue
-            application = store.get_application(selection.application_id)
+            try:
+                application = store.get_application(selection.application_id)
+                release = store.get_release(selection.application_id, selection.release_digest)
+            except FileNotFoundError:
+                # A stale selection must not hide unrelated available changesets.
+                continue
             if application.publisher_ref != publisher:
                 continue
-            release = store.get_release(selection.application_id, selection.release_digest)
             scenario = applications._primary_scenario(application)
-            state = workflow.get_state("scenario", scenario)
+            try:
+                state = workflow.get_state("scenario", scenario)
+            except FileNotFoundError:
+                # Stable can outlive its local DEV checkout. Do not recreate it.
+                continue
             delivery = state.get("delivery") or {}
             if delivery.get("candidate_id") != release.accepted_candidate_id:
                 continue
@@ -362,9 +370,16 @@ class ComponentUpdateService:
         if (notice["candidate"]["id"], notice["candidate"]["digest"]) != (candidate_id, candidate_digest):
             raise ValueError("The reviewed Candidate changed")
         store = ApplicationStore(Path(self.state_dir or current_state_dir()))
-        matches = [selection for selection in store.list_runtime_selections()
-                   if selection.webspace_id == webspace_id and
-                   store.get_release(selection.application_id, selection.release_digest).accepted_candidate_id == candidate_id]
+        matches = []
+        for selection in store.list_runtime_selections():
+            if selection.webspace_id != webspace_id:
+                continue
+            try:
+                release = store.get_release(selection.application_id, selection.release_digest)
+            except FileNotFoundError:
+                continue
+            if release.accepted_candidate_id == candidate_id:
+                matches.append(selection)
         if len(matches) != 1:
             raise ValueError("The reviewed Candidate has no unambiguous RuntimeSelection")
         result = applications.accept_local_trial(matches[0].application_id, webspace_id=webspace_id,

@@ -42,10 +42,14 @@ after the clean baseline from the observed cross-domain gap taxonomy.
 
 ## Current Audit
 
-- [ ] `[must]` Qualify generic modal resize and fullscreen restoration on desktop
+- [x] `[must]` Qualify generic schema-modal resize and fullscreen restoration on desktop
   and mobile. Persist current-user device/scenario/webspace scopes; resolve exact
   scopes before wildcards. Saving application defaults from alpha/beta requires
   explicit DEV source confirmation and source-digest concurrency control.
+  `modal-settings-03` verifies device save/reopen, current-user shared preference,
+  explicit DEV default edit, preference precedence over that default, and loading
+  shared settings in a fresh compact browser context. Native non-schema dialogs
+  and physical-device sync/orientation qualification are not included.
 - [ ] `[should]` Qualify opt-in current/disabled collection rows with keyboard
   behavior and truthful semantic/ABI discovery. No Builder-specific renderer.
 

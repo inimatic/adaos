@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 def image_input(data: bytes, *, media_type: str, detail: str = "auto") -> dict[str, Any]:
     if not isinstance(data, bytes) or not data or len(data) > 5 * 1024 * 1024:
-        raise ValueError("An image must contain 1..5 MiB of explicitly supplied bytes")
+        raise ValueError("An image must contain 1 byte to 5 MiB of explicitly supplied bytes")
     signatures = {"image/png": data.startswith(b"\x89PNG\r\n\x1a\n"),
                   "image/jpeg": data.startswith(b"\xff\xd8\xff"),
                   "image/webp": data.startswith(b"RIFF") and data[8:12] == b"WEBP"}
@@ -30,3 +30,6 @@ def validate_image_input(value: Mapping[str, Any]) -> dict[str, Any]:
     if checked["sha256"] != value.get("sha256"):
         raise ValueError("Image input digest mismatch")
     return checked
+
+
+__all__ = ["image_input"]

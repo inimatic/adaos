@@ -460,6 +460,20 @@ class WebspaceBuilderPublicationService:
                 "sourceSpace": source_space,
             }
             page["_adaos"] = metadata
+            # Scenario-owned modal declarations share the same source revision.
+            # Do not relabel a modal explicitly owned by another component.
+            modals = application.get("modals")
+            for modal in modals.values() if isinstance(modals, Mapping) else []:
+                if not isinstance(modal, dict):
+                    continue
+                modal_meta = dict(modal.get("_adaos") or {})
+                owner = modal_meta.get("component")
+                if owner and owner != {"type": "scenario", "id": scenario_id}:
+                    continue
+                modal["_adaos"] = {**modal_meta,
+                    "releaseStage": release_stage,
+                    "releaseStageSource": "builder_materialization",
+                    "materialization": dict(metadata["materialization"])}
         return dict(override), source_space
 
     async def apply_revision_materialization(

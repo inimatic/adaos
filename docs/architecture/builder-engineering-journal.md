@@ -926,3 +926,51 @@ tests; modal/action suites separately pass 96. Candidate acceptance now requires
 exact publication evidence and the active Workspace package closure. Stable
 placement uses the production owner, not Preview; its live acceptance is pending.
 Unrelated in-progress Yjs/PageData edits are not part of these checkpoints.
+
+`local-workspace-acceptance-04` completes local Reading List beta acceptance
+through Process -> production placement -> scenario Changelog -> Accept into
+Workspace. The exact Candidate/package digest is checked before promotion, its
+publication receipt is reconciled into ApplicationInstallation/RuntimeSelection,
+and the matching Trial placement is detached. Reloaded wide/compact views execute
+Workspace, not Trial or DEV. This is local activation, not public GitHub release;
+isolated Trial data is not copied into production. The review now states that
+data boundary explicitly. A stale selection or removed DEV checkout cannot hide
+other components' changesets.
+
+The failed first attempts revealed a tree-to-list event contract mismatch:
+`$event.item.placementKind` was missing on flat-list events. Both Builder stage
+lists now use direct row fields; source tests and the capability catalog record
+this distinction. No domain-specific exception was added to the renderer.
+
+`refinement-review-08` passes enriched README generation and explicit reviewed
+UTF-8 save. The packet has 536 input tokens; GPT-5 returns 1141 output tokens
+(832 reasoning) in 25.206 seconds at Root, 24.351 seconds upstream. Inspecting
+inputs exposed empty application descriptions, so component/tool declarations
+provide evidence without supplying all source files. The result is technically
+accurate but still too implementation-oriented for polished user documentation;
+editorial guidance remains a quality improvement, not a schema-acceptance gate.
+Successful document saves now advance the open form's digest for subsequent edits.
+
+`content-generation-20260915-01` exercises an unrelated checklist schema and an
+out-of-scope prompt with GPT-5 low. They pass in 9.187/8.938 seconds including
+polling, with 240/489 and 225/223 input/output tokens. Root logs show one execution
+per request after exact SDK retries and terminal reads. This does not prove
+crash-safe exactly-once billing. Image INPUT transport is covered; standalone
+image OUTPUT, image-model entitlement/accounting and browser job recovery remain
+open in the content roadmap and are not advertised as implemented generation.
+
+`modal-settings-03` passes device save/reopen, current-user all-device preference,
+explicit DEV default edit, preference precedence over the DEV default, and a
+fresh compact browser context loading the shared size. Browser review caught
+invalid JSON characters in a preference key, missing ALPHA metadata on scenario
+modals, and late preference loading overwriting an unsaved resize. The fixes use
+Core-compatible encoded scope IDs, owner-preserving materialization metadata and
+an interaction guard. Desktop sizing reapplies on viewport change; mobile stays
+bounded to its viewport. The Client shell/list/modal suite passes 215 tests;
+the generic boundary and 41-widget inventory checks pass. Full physical-device
+and all-dialog-class coverage remains outside this receipt.
+
+The final focused Core/DEV package regression set passes 180 tests. Client
+`7a59ea1` fixes shared preference identifiers and resize-intent races; its gitlink
+and `.sha` are updated together in Core. Checkpoints are local-only while the
+remaining content-generation qualification is open.

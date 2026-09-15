@@ -14,6 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inspect", action="store_true")
     parser.add_argument("--refinement", action="store_true", help="Review Process, modal resizing and one README draft on the owned TEST")
+    parser.add_argument("--modal-settings-only", action="store_true", help="Review shared modal preferences and explicit DEV defaults without another LLM request")
     parser.add_argument("--select-created", type=Path, help="Read-only review of the TEST application from a creation receipt")
     parser.add_argument("--trial-evidence", type=Path, help="Prepare only the reviewed TEST Trial from independent evidence")
     parser.add_argument("--open-trial", type=Path, help="Open the exact retained TEST Trial through Process")
@@ -44,6 +45,10 @@ def main():
         if not args.select_created or not args.inspect:
             parser.error("Refinement review requires an owned TEST selection and inspect mode")
         env["ADAOS_E2E_REFINEMENT"] = "1"
+    if args.modal_settings_only:
+        if not args.refinement:
+            parser.error("Modal preference review requires refinement mode")
+        env["ADAOS_E2E_MODAL_SETTINGS_ONLY"] = "1"
     if args.select_created:
         import json
         receipt = json.loads(args.select_created.read_text(encoding="utf-8"))["created_test"]

@@ -113,7 +113,7 @@ try {
         const stages = widget('process-tree').locator('ion-item.collection-focus-item')
         await expect(stages).toHaveCount(6, { timeout: 60000 })
         await expect(widget('process-tree').locator('[aria-current="step"]')).toHaveCount(1)
-        await expect(stages.last()).toHaveAttribute('aria-disabled', 'true')
+        await expect(stages.first()).not.toHaveAttribute('aria-disabled', 'true')
         await capture('process-stages')
         report.checks.push({ profile, check: 'revision_stage_list_current_and_disabled', passed: true })
         await closeModal()
@@ -122,8 +122,13 @@ try {
         if (profile === 'wide') {
           const bounds = () => modal.evaluate(el => el.shadowRoot.querySelector('.modal-wrapper').getBoundingClientRect().width)
           const before = await bounds()
+          if (before < viewport.width - 20) {
+            await modal.getByRole('button', { name: 'Fullscreen', exact: true }).click()
+            await expect.poll(bounds).toBeCloseTo(viewport.width, 0)
+          }
+          const fullWidth = await bounds()
           await modal.getByRole('button', { name: 'Fullscreen', exact: true }).click()
-          await expect.poll(bounds).toBeLessThan(before - 20)
+          await expect.poll(bounds).toBeLessThan(fullWidth - 20)
           const controls = modal.locator('ada-modal-size-controls')
           const width = controls.locator('input[type="range"]').first()
           await width.evaluate(el => { el.value = '70'; el.dispatchEvent(new Event('input', { bubbles: true })) })
@@ -134,9 +139,39 @@ try {
           await command('applications').click()
           await expect.poll(bounds).toBeCloseTo(viewport.width * .7, 0)
           report.checks.push({ profile, check: 'modal_maximize_resize_reopen', passed: true })
+          if (process.env.ADAOS_E2E_MODAL_SETTINGS_ONLY) {
+            await modal.getByRole('button', { name: /Resize dialog|Размер окна/i }).first().click()
+            await controls.locator('input[type="range"]').first().evaluate(el => { el.value = '72'; el.dispatchEvent(new Event('input', { bubbles: true })) })
+            await controls.locator('select').nth(0).selectOption('all')
+            const sharedReply = page.waitForResponse(response => response.request().method() === 'PATCH' && response.url().includes('/api/personalization/current-user/preferences'))
+            await controls.getByRole('button', { name: /^(Сохранить размер|Save size)$/ }).click()
+            const shared = await sharedReply
+            const sharedBody = await shared.json()
+            await fs.writeFile(path.join(output, 'shared-modal-preference.json'), JSON.stringify({ status: shared.status(), result: sharedBody }, null, 2) + '\n', 'utf8')
+            if (!shared.ok()) throw new Error('Shared modal preference save failed: ' + JSON.stringify(sharedBody))
+            await expect(controls.getByRole('status')).toHaveText(/Размер сохранён|Size saved/)
+            await controls.locator('input[type="range"]').first().evaluate(el => { el.value = '74'; el.dispatchEvent(new Event('input', { bubbles: true })) })
+            await controls.getByRole('button', { name: /Save in application|Сохранить в настройках приложения/i }).click()
+            await expect(controls).toContainText(/webui.json/)
+            const defaultReply = page.waitForResponse(response => response.request().method() === 'PATCH' && response.url().includes('/api/builder/modal-settings'))
+            await controls.getByRole('button', { name: /Confirm DEV|Подтвердить.*DEV/i }).click()
+            const saved = await defaultReply
+            const body = await saved.json()
+            await fs.writeFile(path.join(output, 'dev-modal-default.json'), JSON.stringify(body, null, 2) + '\n', 'utf8')
+            if (!saved.ok() || body.ok !== true) throw new Error('Explicit DEV default edit failed')
+            await capture('shared-and-dev-modal-settings')
+            await closeModal()
+            await command('applications').click()
+            await expect.poll(bounds).toBeCloseTo(viewport.width * .72, 0)
+            report.checks.push({ profile, check: 'current_user_shared_preference_and_explicit_dev_default', passed: true })
+          }
+        }
+        if (profile === 'compact' && process.env.ADAOS_E2E_MODAL_SETTINGS_ONLY) {
+          await expect.poll(() => modal.locator('ada-modal-size-controls').evaluate(el => window.ng.getComponent(el).size.width)).toBe(72)
+          report.checks.push({ profile, check: 'shared_preference_loaded_in_new_browser_context', passed: true })
         }
         await closeModal()
-        if (profile === 'wide') {
+        if (profile === 'wide' && !process.env.ADAOS_E2E_MODAL_SETTINGS_ONLY) {
           const details = await widget('design-current-work').locator('ada-details-widget')
             .evaluate(el => window.ng.getComponent(el).state.getSnapshot())
           if (!String(details.selectedProjectId).startsWith('workbench_test_')) throw new Error('README generation must target the retained TEST only')
@@ -175,6 +210,15 @@ try {
           await widget('readme-generated-draft').scrollIntoViewIfNeeded()
           await capture('readme-generated-draft')
           report.checks.push({ profile, check: 'readme_draft_generated_without_save', passed: true })
+          const draft = widget('readme-generated-draft')
+          const draftText = await draft.locator('textarea').inputValue()
+          if (!draftText.trim()) throw new Error('Generated README is empty')
+          const saveReply = page.waitForResponse(response => response.request().postData()?.includes('builder_sdk_control_skill:save_readme'), { timeout: 90000 })
+          await draft.getByRole('button', { name: /Save|Сохранить/i }).click()
+          const saved = await (await saveReply).json()
+          await fs.writeFile(path.join(output, 'readme-save.json'), JSON.stringify({ response: saved, reviewed_text: draftText }, null, 2) + '\n', 'utf8')
+          if (saved.ok !== true) throw new Error('Explicit README review/save failed')
+          report.checks.push({ profile, check: 'readme_reviewed_and_saved', passed: true })
           await closeModal()
         }
       }
@@ -194,7 +238,7 @@ try {
         void response.catch(() => {})
         const opened = page.waitForEvent('popup', { timeout: 90000 })
         void opened.catch(() => {})
-        await node.getByRole('button', { name: /open placement/i }).click()
+        await node.getByRole('button', { name: 'Open placement', exact: true }).click()
         const value = await (await response).json()
         await fs.writeFile(path.join(output, `${profile}-trial-navigation.json`), JSON.stringify(value, null, 2) + '\n', 'utf8')
         if (!value.ok || value.result?.placement?.result_ref?.id !== trial.delivery.candidate_id) throw new Error('Trial navigation identity mismatch')

@@ -5389,7 +5389,9 @@ def test_builder_preview_sources_exact_prototype_and_retained_automation(monkeyp
     revisions.mkdir(parents=True)
     prototype = {
         "schema": "adaos.webui.v1",
-        "ui": {"application": {"desktop": {"pageSchema": {"title": "Recipes prototype"}}}},
+        "ui": {"application": {"desktop": {"pageSchema": {"title": "Recipes prototype"}},
+            "modals": {"edit": {"schema": {"id": "edit"}},
+                       "external": {"_adaos": {"component": {"type": "skill", "id": "other"}}}}}},
     }
     (revisions / "002.json").write_text(
         json.dumps({"after_webui": prototype}),
@@ -5437,6 +5439,10 @@ def test_builder_preview_sources_exact_prototype_and_retained_automation(monkeyp
     assert automation_space == "dev"
     assert automation_content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "active: Recipes automation"
     assert automation_content["ui"]["application"]["desktop"]["pageSchema"]["_adaos"]["releaseStage"] == "ALPHA"
+    modal_meta = prototype_content["ui"]["application"]["modals"]["edit"]["_adaos"]
+    assert modal_meta["releaseStage"] == "ALPHA"
+    assert modal_meta["materialization"]["revision"] == "002"
+    assert "releaseStage" not in prototype_content["ui"]["application"]["modals"]["external"]["_adaos"]
 
 
 def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> None:

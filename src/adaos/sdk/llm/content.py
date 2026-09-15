@@ -35,3 +35,6 @@ def generate(*, request_id: str, purpose: str, prompt: str, schema: Mapping[str,
 def get(request_id: str) -> dict[str, Any]:
     """Poll a durable draft without submitting another model invocation."""
     return _service().get(request_id)
+
+
+__all__ = ["generate", "get"]

@@ -2072,6 +2072,24 @@ When coding:
 - keep raw diagnostic evidence separate from smoothed operator state
 - accept routing metadata and unknown keyword args
 - preserve owner attribution where helper APIs require it
+- for typed runtime content (a form draft, document or classification), use
+  `adaos.sdk.llm.content.generate()` and `get()` rather than a custom provider
+  call. Keep application-owned `purpose` separate from the user's `prompt`
+  and untrusted `data`. Supply the destination JSON Schema, an explicit model
+  or the admitted runtime default, and one stable `request_id` per intent.
+  Retry the same inputs with the same ID; changed inputs require a new ID.
+  `completed` returns schema-validated `data`; `out_of_scope`, `refused`,
+  `incomplete`, `invalid_output`, `failed` and `cancelled` must not be applied.
+  Show the editable draft and require explicit Save through the application's
+  normal validator and concurrency guard. Generation does not save business
+  records. Use `ui.form` `stateKey` for runtime values, never a literal
+  `default: "$state..."`. `callSkill.requestIdParam` retains one UUID across
+  approval retry. Persist the returned request ID to resume polling after
+  reopening; never regenerate on modal open or on every form change.
+  Optional vision input uses `adaos.sdk.llm.media.image_input()` with explicit
+  bounded bytes; it never fetches URLs. Image generation output is a separate,
+  not-yet-qualified contract, not a text field or a ready-made provider bypass.
+  See [Typed Content Generation](../architecture/content-generation.md).
 - for Builder-like long LLM work, submit a Root async job with
   `adaos.sdk.llm.llm_client.submit_response_job()`, store the `job_id` with the
   current artifact/session, poll with `wait_response_job()`, and apply the

@@ -2,12 +2,40 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from adaos.apps.api import component_updates as updates_api
 from adaos.services.component_updates import ComponentUpdateService
+
+
+def test_missing_dev_or_stale_selection_does_not_hide_other_trial_notices(tmp_path, monkeypatch):
+    from adaos.sdk.builder import applications, workflow
+    from adaos.services.applications import store as stores
+
+    selections = [SimpleNamespace(webspace_id="desktop", source="local_trial", application_id=name, release_digest="digest")
+                  for name in ["missing-release", "missing-dev", "active"]]
+    def release(application_id, _digest):
+        if application_id == "missing-release":
+            raise FileNotFoundError(application_id)
+        return SimpleNamespace(accepted_candidate_id="candidate", release_digest="digest", project_release=SimpleNamespace(version="0.1.0"))
+    def state(_kind, scenario):
+        if scenario == "missing-dev":
+            raise FileNotFoundError(scenario)
+        return {"delivery": {"candidate_id": "candidate", "package_digest": "package", "status": "trial"}}
+    store = SimpleNamespace(list_runtime_selections=lambda: selections, get_release=release,
+        get_application=lambda identifier: SimpleNamespace(publisher_ref="subnet:local", display={"title": identifier}))
+    monkeypatch.setattr(stores, "ApplicationStore", lambda _root: store)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:local")
+    monkeypatch.setattr(applications, "_primary_scenario", lambda app: app.display["title"])
+    monkeypatch.setattr(workflow, "get_state", state)
+    service = ComponentUpdateService(state_dir=tmp_path)
+    recorded = []
+    monkeypatch.setattr(ComponentUpdateService, "record_aprobation", lambda self, **kwargs: recorded.append(kwargs) or {"ok": True})
+    assert service.reconcile_local_trials("desktop") == 1
+    assert recorded[0]["component_id"] == "active"
 
 
 def _aprobation(

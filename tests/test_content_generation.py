@@ -88,6 +88,26 @@ def test_recursive_schema_keeps_its_original_root():
     assert result["$defs"]["content"]["properties"]["children"]["items"]["$ref"] == "#/$defs/content"
 
 
+@pytest.mark.parametrize("schema", [
+    {"$id": "https://example.org/schema", "type": "object"},
+    {"$dynamicRef": "#node"},
+    {"$defs": {"node": {"$dynamicAnchor": "node"}}},
+])
+def test_rejects_schema_resource_scope_changes(schema):
+    with pytest.raises(ValueError, match="local JSON Pointer"):
+        draft_schema(schema)
+
+
+def test_content_facades_are_discoverable_without_application_specific_examples():
+    from adaos.sdk.core.exporter import _public_facade_symbols
+    symbols = {item["name"]: item for item in _public_facade_symbols("rich")}
+    generate = symbols["adaos.sdk.llm.content.generate"]
+    assert {"purpose", "schema", "request_id", "images"} <= {arg["name"] for arg in generate["signature_detail"]["args"]}
+    assert "adaos.sdk.llm.media.image_input" in symbols
+    assert "adaos.sdk.llm.media.validate_image_input" not in symbols
+    assert "adaos.sdk.developer.documents.write" in symbols
+
+
 def test_missing_root_identity_is_retryable(tmp_path):
     service, _ = setup_service(tmp_path)
     service.broker.submit_response_job = lambda *args, **kwargs: {"status": "queued"}

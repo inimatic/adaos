@@ -20,6 +20,8 @@ def _digest(value: Any) -> str:
 def _local_schema(value: Any) -> None:
     if isinstance(value, dict):
         for key, item in value.items():
+            if key in {"$id", "$dynamicRef", "$dynamicAnchor"}:
+                raise ValueError("Content schemas use local JSON Pointer references, not resource IDs or dynamic scope")
             if key in {"$ref", "$dynamicRef"} and not str(item).startswith("#"):
                 raise ValueError("Content schemas cannot load external references")
             _local_schema(item)

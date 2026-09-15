@@ -16,6 +16,13 @@ runtime content requests. Do not bypass it with direct provider credentials or
 report a second token debit at the application layer. Retain actual provider
 usage, effective model and request/job correlation in result evidence.
 
+The discoverable facades are `adaos.sdk.llm.content.generate/get`,
+`adaos.sdk.llm.media.image_input`, and `adaos.sdk.developer.documents.read/write`.
+Schema references are local JSON Pointers; resource IDs and dynamic reference
+scopes are rejected rather than changing meaning when wrapped in the result
+envelope. Standalone image output must not be advertised as available until Root
+admits and accounts for its image model/modality, independently of text usage.
+
 Typed results distinguish completed data, application out-of-scope response,
 provider refusal, incomplete output and failure. Validate against JSON Schema
 locally as well as requesting provider Structured Outputs. Do not truncate or
