@@ -4,6 +4,16 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
+    "configuration": {
+      "description": "Typed non-secret settings for an owned Application runtime. Secrets use separate credential bindings.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "defaults"],
+      "properties": {
+        "schema": { "type": "object" },
+        "defaults": { "type": "object" }
+      }
+    },
     "name": {
       "type": "string",
       "pattern": "^[a-z0-9_.-]+$",

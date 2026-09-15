@@ -184,9 +184,12 @@ Project/Application identity collapse.
   Implemented prerequisite: the local revisioned configuration store separates
   typed values and opaque credential references, preserves compatible Beta
   overrides and checks adoption conflicts. Twelve local tests cover two Betas,
-  schema rejection, deletion/null semantics and concurrent edits. Runtime/SDK
-  binding, grant/revocation evaluation and migration/cutover integration remain
-  open; this store does not by itself inherit any live skill configuration.
+  schema rejection, deletion/null semantics and concurrent edits. The typed
+  runtime SDK now resolves a bound composition owner implicitly, applies skill
+  capability/profile checks, separates DEV and rejects pending cutovers or stale
+  schemas. It does not return or change credential bindings. Application actor/
+  purpose grants, live secret resolution/revocation and lifecycle prepare/adopt
+  integration remain open; no Reading List setting has yet been inherited live.
 
 **Exit proof:** two Applications sharing one component install and remove
 without premature package/data deletion; an incompatible version is rejected;

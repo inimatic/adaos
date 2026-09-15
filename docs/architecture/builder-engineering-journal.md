@@ -1087,3 +1087,16 @@ cycles with Beta-created records, and interrupted snapshot finalization. Their
 local tests are mechanism evidence only. The live Reading List lifecycle, scoped
 runtime settings/secrets, clarification and About/image-output integration are
 still unqualified; APP1-13 through APP1-15 and AP4-20/AP4-21 remain open.
+
+The follow-on typed configuration facade binds the current production skill to
+its selected release's `composition_lock`, checks manifest/profile capabilities,
+retains opaque credential refs without returning them, and enforces revision and
+schema preconditions under the native execution lease. Six runtime configuration
+tests cover Stable defaults/persistence, Beta overrides/adoption, DEV/shared-owner
+denial, profile denial and cutover fencing. This does not qualify live credential
+resolution, DEV synthetic settings or Builder prepare/adopt integration. Its SDK
+descriptor explicitly states these boundaries to avoid misleading Automation.
+
+The initially pushed `e6f28983f` passed both AdaOS CI and docs on GitHub. A second
+local Reading List baseline verification still reports two records and zero
+missing/changed records. No new model-driven Reading List cycle has been started.
