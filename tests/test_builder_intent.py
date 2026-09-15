@@ -28,6 +28,18 @@ def test_reference_punctuation_and_words_are_not_operations(statement):
     assert brief["residual_requirements"][0]["statement"] == clauses[0][0]
 
 
+@pytest.mark.parametrize("statement", [
+    "Stop for Prototype review after applying.",
+    "This is a Prototype correction, not an Automation or publication request.",
+])
+def test_review_stop_is_a_retained_process_boundary(statement):
+    from adaos.services.builder.prototype_context import prototype_process_constraints, prototype_requirement_inventory
+    brief = compile_prototype_brief(statement)
+    constraints = prototype_process_constraints(brief)
+    assert constraints and all(item["verification_owner"] == "stage_boundary" for item in constraints)
+    assert prototype_requirement_inventory(brief) == []
+
+
 def test_intent_capture_is_exact_content_addressed_evidence() -> None:
     statement = "Покажи заявки и позволь назначить ответственного."
 

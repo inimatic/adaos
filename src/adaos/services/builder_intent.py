@@ -30,6 +30,8 @@ def process_constraint_kind(statement: str) -> str | None:
             r"(?:do not|don't|never) publish(?: (?:yet|automatically))?",
             r"(?:refine|update) the current .{1,100} prototype \d+ only",
             r"after applying,? stop for (?:independent )?prototype review",
+            r"(?:stop|pause) for (?:independent )?prototype review after applying",
+            r"this is a prototype (?:correction|change|iteration),? not an? (?:automation|implementation)(?: or publication)? request",
             r"не (?:запускай|начинай|запускать) (?:автоматизацию|codex)(?: и не публикуй)?",
             r"после применения остановись (?:для|перед) (?:независимой )?проверки? прототипа",
         ),
