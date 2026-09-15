@@ -20,7 +20,7 @@ def inspect_admitted_input(input_dir: Path) -> dict:
     """Report retained inputs, never reconstructed context or task credentials."""
     receipts = {}
     documents = {}
-    for name in ("task.md", "packet.json", "prototype-resource-handoff.json", "implementation-bindings.json"):
+    for name in ("task.md", "packet.json", "prototype-resource-handoff.json", "implementation-bindings.json", "automation-outcome.schema.json"):
         path = input_dir / name
         if not path.is_file():
             continue

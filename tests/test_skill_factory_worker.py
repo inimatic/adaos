@@ -2304,7 +2304,8 @@ def test_worker_records_exhausted_public_contract_validation_feedback(
 
 
 @pytest.mark.parametrize("during_repair", [False, True])
-def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_path, monkeypatch, during_repair):
+@pytest.mark.parametrize("user_decision", [False, True])
+def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_path, monkeypatch, during_repair, user_decision):
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev/skills"
@@ -2324,9 +2325,18 @@ def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_pat
     model_calls = []
     def execute(**kwargs):
         model_calls.append(kwargs["prompt"])
+        if user_decision:
+            from adaos.domain.automation_outcome import outcome_message
+            final_message = outcome_message(json.dumps({
+                "status": "needs_input", "report": "An ownership decision is pending.",
+                "questions": [{"id": "ownership", "question": "Shared or personal?",
+                               "reason": "The requested scope is undecided.", "options": []}],
+            }))
+        else:
+            final_message = "```adaos-development-feedback\n" + json.dumps(envelope) + "\n```"
         return CodexRunResult(returncode=0, final_message=(
             "Initial implementation" if during_repair and len(model_calls) == 1 else
-            "```adaos-development-feedback\n" + json.dumps(envelope) + "\n```"))
+            final_message))
     worker = LocalSkillFactoryWorker(
         state_dir=state_dir, repo_root=repo_root, dev_skills_root=dev_skills,
         dev_scenarios_root=tmp_path / "dev/scenarios", runs_root=tmp_path / "runs",
@@ -2344,7 +2354,9 @@ def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_pat
     assert result["ok"] is False
     failure = factory.read_task(submitted["task"]["task_id"])["failure_history"][-1]
     assert failure["stage"] == "development_feedback"
-    assert failure["failure_class"] == "capability_blocked"
+    assert failure["failure_class"] == ("user_input_required" if user_decision else "capability_blocked")
+    if user_decision:
+        assert failure["details"]["clarification_questions"][0]["id"] == "ownership"
     assert len(failure["details"]["development_feedback_refs"]) == 1
     assert len(model_calls) == (2 if during_repair else 1)
     if during_repair:
@@ -4464,6 +4476,7 @@ def test_worker_applies_frozen_agent_profile_to_codex_executor(
     captured: dict[str, int | str | None] = {}
 
     def fake_call(self, **_kwargs):
+        captured["prompt"] = _kwargs["prompt"]
         captured["model"] = self.model
         captured["reasoning_effort"] = self.reasoning_effort
         captured["timeout_seconds"] = self.timeout_seconds
@@ -4501,15 +4514,18 @@ def test_worker_applies_frozen_agent_profile_to_codex_executor(
         },
     )
 
+    actual_prompt = captured.pop("prompt")
     assert captured == {
         "model": "gpt-5.4",
         "reasoning_effort": "high",
         "timeout_seconds": 600,
     }
     prompt_path = tmp_path / "input/model-attempts/001.prompt.md"
-    assert prompt_path.read_bytes() == b"bounded task"
+    assert prompt_path.read_text(encoding="utf-8") == actual_prompt
+    assert actual_prompt.endswith("bounded task")
+    assert "needs_input" in actual_prompt
     receipt = json.loads(prompt_path.with_suffix(".json").read_text(encoding="utf-8"))
-    assert receipt["prompt_sha256"] == hashlib.sha256(b"bounded task").hexdigest()
+    assert receipt["prompt_sha256"] == hashlib.sha256(actual_prompt.encode("utf-8")).hexdigest()
 
 
 def test_worker_retains_each_exact_model_input_before_execution(tmp_path):

@@ -1150,6 +1150,17 @@ retained without silently truncating text. Secret values and private production
 records must never be requested through this channel. Intake's smaller
 material-clarification budget is independent of this Automation batch bound.
 
+Codex completion has an enforced structured outcome before validation:
+`completed`, `needs_input`, or `blocked`, with the full report and identified
+questions. `completed` admits independent checks, not acceptance. `needs_input`
+maps to the existing governed question batch and stops validation, source
+application and automatic repair until explicit continuation. Do not depend on
+an interactive Codex tool in a non-interactive worker, or infer continuation from
+ordinary prose. A malformed or contradictory outcome fails closed, including
+recovery; it is not treated as broken application code. Preserve the raw result,
+schema and every attempt. Platform feedback keeps its existing separate contract
+inside the report; it cannot be disguised as a user-answerable question.
+
 Informal application discussion and formal Change conversation are distinct
 scopes with stable conversation identities and separate drafts/history. A menu
 may select the scope, while message commands remain explicit actions. Discussing

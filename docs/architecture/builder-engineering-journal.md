@@ -1429,3 +1429,22 @@ migrations immutable and asks one explicit ownership clarification before edits.
 This tests the real question/answer/continuation path, not inferred ambiguity.
 The independent migration probe now covers every prior declared schema version,
 not only the first, plus a synthetic ledgerless legacy schema and exact replay.
+
+### 2026-09-15: Automation Clarification Misrouted Into Repair
+
+Second-cycle task `task.01M2K7QEGFYR4JFAMJ2FWF7DM6` received the complete approved
+006 brief; retained input audit confirms its digest, stage and migration policy.
+Codex first attempted the unavailable interactive `request_user_input`, then
+returned the required ownership question as prose without editing source. The
+worker recognized only a feedback fence and incorrectly validated the unchanged
+Prototype, then requested a repair. That repair produced unsupported `skillCall`
+data sources. It was rejected and never applied to DEV/Trial/Stable. This is a
+control-contract defect, not evidence that the model ignored the question.
+
+The subprocess executor now enforces a structured final outcome via Codex CLI
+`--output-schema`. The typed question adapter reuses existing owner-bound
+interactions and does not invent another conversation store. Malformed outcomes
+cannot enter validation or recovery; required questions stop first and repair
+turns. Raw responses and input schemas remain retained. The full independent
+live clarification/continuation proof and second release cycle remain open.
+Official contract: https://developers.openai.com/codex/noninteractive#create-structured-outputs-with-a-schema.

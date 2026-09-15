@@ -31,6 +31,7 @@ from adaos.domain.development_validation import (
 )
 from adaos.domain.development_escalations import parse_development_escalations
 from adaos.domain.development_feedback import parse_development_feedback, required_user_questions
+from adaos.domain.automation_outcome import OUTCOME_INSTRUCTION, OUTCOME_SCHEMA, outcome_message
 from adaos.domain.development_budget import (
     execution_billable_token_limit,
     execution_prompt_token_limit,
@@ -2925,6 +2926,9 @@ class SubprocessCodexExecutor:
     ) -> CodexRunResult:
         output_dir.mkdir(parents=True, exist_ok=True)
         final_path = output_dir / "last_message.md"
+        outcome_schema_path = output_dir.parent / "input" / "automation-outcome.schema.json"
+        outcome_schema_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(outcome_schema_path, OUTCOME_SCHEMA)
         live_events_path = output_dir / "codex-live.jsonl"
         live_stderr_path = output_dir / "codex-live.stderr.log"
         command = [
@@ -2933,6 +2937,8 @@ class SubprocessCodexExecutor:
             "--json",
             "--ephemeral",
             "--ignore-user-config",
+            "--output-schema",
+            str(outcome_schema_path.resolve()),
             "--sandbox",
             self.sandbox_mode,
             "-c",
@@ -3027,6 +3033,15 @@ class SubprocessCodexExecutor:
         events = live_events_path.read_text(encoding="utf-8", errors="replace")
         stderr = live_stderr_path.read_text(encoding="utf-8", errors="replace")
         final_message = final_path.read_text(encoding="utf-8", errors="replace") if final_path.exists() else ""
+        outcome_error = ""
+        if process.returncode == 0 and budget_exceeded is None:
+            try:
+                final_message = outcome_message(final_message)
+            except (TypeError, ValueError) as exc:
+                # Invalid completion is not an implementation defect and must
+                # never enter the source validation/automatic repair loop.
+                outcome_error = f"Invalid Automation outcome: {exc}"
+                stderr = stderr.rstrip() + "\n" + outcome_error + "\n"
         if budget_exceeded is None and max_model_tokens is not None and max_model_tokens > 0:
             provider_usage = _codex_jsonl_usage(live_events_path)
             live_estimate = _codex_jsonl_live_budget_estimate(live_events_path, prompt=prompt)
@@ -3054,7 +3069,7 @@ class SubprocessCodexExecutor:
         return CodexRunResult(
             returncode=CODEX_TOKEN_BUDGET_EXIT_CODE
             if budget_exceeded is not None
-            else int(process.returncode or 0),
+            else int(process.returncode or (1 if outcome_error else 0)),
             events=events,
             stderr=stderr,
             final_message=final_message,
@@ -3489,6 +3504,11 @@ class LocalSkillFactoryWorker:
             raise ValueError("result recovery requires a preserved failed local run")
         if not workspace.is_dir() or not (workspace / ".git").is_dir():
             raise ValueError("result recovery requires the preserved task workspace")
+        structured_message = None
+        if (input_dir / "automation-outcome.schema.json").is_file():
+            structured_message = outcome_message((output_dir / "last_message.md").read_text(encoding="utf-8"))
+            if any(item["blocking"] for item in parse_development_feedback(structured_message)):
+                raise ValueError("Cannot recover an implementation with unresolved blocking development feedback")
 
         test_report_path = output_dir / "test_report.json"
         test_report = _read_json(test_report_path) if test_report_path.is_file() else {}
@@ -3502,7 +3522,7 @@ class LocalSkillFactoryWorker:
             final_message_path = runtime_dir / "codex-final.md"
             if not final_message_path.is_file():
                 raise ValueError("pre-commit recovery requires a completed Codex result")
-            final_message = final_message_path.read_text(encoding="utf-8").strip()
+            final_message = structured_message or final_message_path.read_text(encoding="utf-8").strip()
             development_escalations = parse_development_escalations(final_message)
             feedback_items = parse_development_feedback(final_message)
             development_feedback = self._record_codex_development_feedback(
@@ -4754,6 +4774,7 @@ class LocalSkillFactoryWorker:
         agent_profile: Mapping[str, Any] | None = None,
         root_mcp: Mapping[str, Any] | None = None,
     ) -> CodexRunResult:
+        prompt = OUTCOME_INSTRUCTION + "\n" + prompt
         input_root = output_dir.parent / "input" / "model-attempts"
         input_root.mkdir(parents=True, exist_ok=True)
         attempt = len(list(input_root.glob("*.prompt.md"))) + 1
