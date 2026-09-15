@@ -31,7 +31,9 @@ a business form or saves a file. Review/apply is a separate action, guarded by
 the original value or document digest. Discard preserves the user's draft.
 
 Image inputs are explicit bounded media objects; no arbitrary URL fetching or
-filesystem access. Image output is an independently addressable immutable media
+filesystem access. The combined request budget includes base64 image bytes,
+not only text; oversize content is rejected locally without truncation or a
+provider attempt. Image output is an independently addressable immutable media
 artifact, not embedded Markdown or base64 in application/Yjs state. Its metadata
 retains media type, digest, provenance and usage. Unsupported modality/model or
 missing pricing/entitlement must be explicit, not silently downgraded to text.

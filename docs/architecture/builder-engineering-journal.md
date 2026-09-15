@@ -974,3 +974,11 @@ The final focused Core/DEV package regression set passes 180 tests. Client
 `7a59ea1` fixes shared preference identifiers and resize-intent races; its gitlink
 and `.sha` are updated together in Core. Checkpoints are local-only while the
 remaining content-generation qualification is open.
+
+DEV checkpoints: Builder `0.2.141` (`sha256:ff83f450945434d08dfad84fc0a4cd3896a17927a145700af66ffb430af3c7a8`)
+and Reading List `0.1.2` (`sha256:bcd03040e9f0396660e452e266ec2480efa38832d37bec8d4aa018d252586c40`)
+were built with native `adaos dev project push --local-only`. The latter captures
+the reviewed README in DEV; it does not replace the accepted Workspace `0.1.1`.
+An additional request-budget test verifies encoded image bytes count toward the
+local bound before Root's 2 MiB JSON ingress limit; no image-output qualification
+is implied.

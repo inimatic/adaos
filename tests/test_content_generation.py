@@ -139,3 +139,12 @@ def test_multimodal_input_is_explicit_bounded_and_separate_from_instructions(tmp
         validate_image_input({**picture, "data_url": "http://localhost/private"})
     with pytest.raises(ValueError, match="four"):
         request(service, images=[picture] * 5)
+
+
+def test_encoded_images_count_toward_the_request_transport_budget(tmp_path):
+    from adaos.sdk.llm.media import image_input
+    picture = image_input(b"\x89PNG\r\n\x1a\n" + b"x" * 900_000, media_type="image/png")
+    service, calls = setup_service(tmp_path)
+    with pytest.raises(ValueError, match="including encoded images"):
+        request(service, images=[picture])
+    assert calls == []

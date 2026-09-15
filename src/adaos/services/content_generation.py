@@ -76,11 +76,10 @@ class ContentGenerationService:
         envelope = draft_schema(schema)
         request = {"purpose": purpose, "prompt": prompt, "schema": dict(schema), "data": data,
                    "model": model, "reasoning": reasoning, "temperature": temperature, "max_output_tokens": max_output_tokens,
-                   "context": dict(context or {})}
+                   "context": dict(context or {}), "images": image_inputs}
         encoded = json.dumps(request, ensure_ascii=False, allow_nan=False)
         if len(encoded.encode("utf-8")) > 1024 * 1024:
-            raise ValueError("Content request exceeds 1 MiB; split the input, it will not be truncated")
-        request["images"] = image_inputs
+            raise ValueError("Content request including encoded images exceeds 1 MiB; split the input, it will not be truncated")
         path = self._path(request_id)
         with mutation_lock(path.with_suffix(".lock")):
             if path.exists():
