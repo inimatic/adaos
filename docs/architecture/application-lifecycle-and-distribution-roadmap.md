@@ -39,10 +39,13 @@ tests, operation receipts, or end-to-end evidence.
    organizations, or collaborative development.
 7. Existing `Project*` records remain compatibility inputs until explicit
    migration evidence permits retirement.
-8. Application permission profiles, Application roles, and per-user access
-   management follow the
+8. Application permission profiles, Application roles, per-user access
+   management, and Builder final verification follow the
    [Application Access, Permissions, and Roles Roadmap](application-access-permissions-roadmap.md);
    this roadmap keeps release/install/update lifecycle authority.
+9. A successful Builder response, Prototype, or Automation run is not release
+   readiness. Trial/publication gates must require the relevant verification
+   report when the Application access roadmap makes it mandatory.
 
 ## Current Baseline
 
@@ -164,6 +167,12 @@ Project/Application identity collapse.
   rotation/revocation and least-privilege checks across rollback. Qualify
   settings, secrets, restart, schema changes and cross-Application denial
   independently from business-data reseeding.
+  Implemented prerequisite: the local revisioned configuration store separates
+  typed values and opaque credential references, preserves compatible Beta
+  overrides and checks adoption conflicts. Twelve local tests cover two Betas,
+  schema rejection, deletion/null semantics and concurrent edits. Runtime/SDK
+  binding, grant/revocation evaluation and migration/cutover integration remain
+  open; this store does not by itself inherit any live skill configuration.
 
 **Exit proof:** two Applications sharing one component install and remove
 without premature package/data deletion; an incompatible version is rejected;
@@ -331,10 +340,11 @@ Builder development and consumes only public contracts.
   Stable opens the snapshot recovery decision with possible data loss.
 - [ ] `[must]` `APP4-04` Show publisher display identity and technical
   fingerprint, visibility, exact effective release, permission-profile summary,
-  role-impact summary, dependencies, migration/backup state, release notes, and
-  Development Report status. Deep permission, role, user, child, guest, secret,
-  and approval management is owned by `AAPR4` in the Application Access
-  roadmap.
+  role-impact summary, final verification summary, dependencies,
+  migration/backup state, release notes, and Development Report status. Deep
+  permission, role, user, child, guest, secret, approval management, and
+  verification-checklist semantics are owned by `AAPR4`/`AAPR5` in the
+  Application Access roadmap.
 - [ ] `[must]` `APP4-05` Make Applications the product inventory authority and
   remove duplicate Inventory from Infrastate UI while preserving diagnostics.
 - [ ] `[must]` `APP4-06` Mark Applications as a protected system Application:
@@ -579,7 +589,8 @@ collaboration scope expands.
   movement, installation, Hub restart, Root restart, relay duplicate/order, and
   report status resync; reconcile without false success or duplicate effect.
 - [ ] `[must]` `APP6-07` Capture exact browser, operation, release, Trial,
-  WorkspaceLock, artifact, report, and recovery evidence in one bounded report.
+  WorkspaceLock, artifact, Application verification report, Development Report,
+  and recovery evidence in one bounded report.
 - [ ] `[should]` `APP6-08` Repeat with a second Application composition and a
   different shared dependency shape.
 - [ ] `[could]` `APP6-09` Run a longer trusted prerelease pilot with staged
