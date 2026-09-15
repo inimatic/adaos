@@ -2350,6 +2350,24 @@ def test_binding_repair_augments_incomplete_binding_without_removing_old_referen
     assert {k: v for k, v in result.items() if k != "requirement_bindings"} == {k: v for k, v in candidate.items() if k != "requirement_bindings"}
 
 
+def test_binding_repair_preserves_duplicate_source_evidence_accepted_by_compiler():
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    missing = candidate["requirement_bindings"].pop()
+    candidate["requirement_bindings"].append(copy.deepcopy(candidate["requirement_bindings"][0]))
+    original = copy.deepcopy(candidate)
+    with pytest.raises(BuilderWorkflowError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    plan = prototype_sdk.prepare_binding_repair(candidate, caught.value.findings)
+    patch = {"schema": "adaos.builder.binding_repair.v1", "base_sha256": plan["base_sha256"],
+             "bindings": [{"requirement_ref": missing["requirement_ref"], "add_semantic_refs": missing["semantic_refs"]}]}
+    repaired = prototype_sdk.apply_binding_repair(candidate, patch, caught.value.findings)
+    assert candidate == original
+    assert repaired["requirement_bindings"] == [*original["requirement_bindings"], missing]
+    assert {k: v for k, v in repaired.items() if k != "requirement_bindings"} == {k: v for k, v in original.items() if k != "requirement_bindings"}
+    compile_semantic_prototype_candidate(repaired, brief=brief)
+
+
 def test_state_repair_preserves_fixtures_commands_and_other_states() -> None:
     from adaos.sdk.builder.prototype import prepare_state_repair, apply_state_repair
     brief, semantic = _multi_resource_fixture()

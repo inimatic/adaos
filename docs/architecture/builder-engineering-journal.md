@@ -1244,3 +1244,21 @@ previews. Runtime/browser requalification follows the coordinated API restart.
 Automation context now states exact typed settings methods, capabilities, revision
 preconditions and the SQLite migration ledger boundary. No installed values are
 included. Both user Stable records remained unchanged at the last private check.
+
+### 2026-09-15: Retained Repair Schema And Narrow Follow-up
+
+Native failed-job replay confused a terminal binding-repair envelope with a full
+candidate and raised `KeyError: title`. DEV Builder now checks schemas and prefers
+the digest-bound retained merged candidate. Reading List 004 was recovered with
+zero incremental model tokens; full packaged skill tests passed before activation.
+
+A subsequent single-purpose chat request restored `required=true` for the book
+title in the model output. Applying its metadata repair exposed inconsistent
+duplicate-binding handling: compilation unions evidence, but repair rejected the
+same source. Repair now appends without discarding any source evidence, with
+regression coverage. This is not yet browser acceptance of the new candidate.
+The retained input also demonstrates over-fragmented clauses (`open`, `create`,
+`change no`, `record`) and 164 accumulated refs. BIP-10 must preserve complete
+behavioral conditions and separate active corrections from inherited evidence;
+adding more output budget or grading these fragments as independent UI features
+is not an acceptable solution. Original Briefs/results remain immutable evidence.

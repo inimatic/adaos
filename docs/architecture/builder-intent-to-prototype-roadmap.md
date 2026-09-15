@@ -385,6 +385,11 @@ Exit/remaining work: Admit contracts by shape/operation/authority before optiona
 
 ### BIP-10
 
+- [ ] `[must]` Preserve whole behavioral constraints during extraction; do not
+  convert verb/noun matches inside negative or conditional clauses into separate
+  positive operations. Keep original evidence spans and distinguish the active
+  correction from inherited requirements without silently discarding either.
+
 - [x] `[must]` Separate explicit EN/RU process/privacy/preservation instructions
   from widget coverage in model context and compiler, retaining exact Brief IDs
   and constraints in the compiled artifact. Preserve ambiguous application rules.

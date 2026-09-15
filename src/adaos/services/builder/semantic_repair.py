@@ -142,9 +142,11 @@ def apply_binding_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any]
         raise BuilderWorkflowError("binding repair is not applicable to these findings")
     Draft202012Validator(plan["output_schema"]).validate(repair)
     result = copy.deepcopy(dict(candidate))
-    bindings = {item["requirement_ref"]: item for item in result["requirement_bindings"]}
-    if len(bindings) != len(result["requirement_bindings"]):
-        raise BuilderWorkflowError("binding repair cannot resolve duplicate source bindings")
+    bindings = {}
+    for item in result["requirement_bindings"]:
+        # Compilation unions repeated evidence. Append to its first occurrence
+        # without discarding any original references or changing the base digest.
+        bindings.setdefault(item["requirement_ref"], item)
     changed: set[str] = set()
     for patch in repair["bindings"]:
         requirement = patch["requirement_ref"]
