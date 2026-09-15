@@ -229,6 +229,14 @@ Project/Application identity collapse.
   declared slots/purpose, profile denial, cross-Application isolation, synthetic
   DEV, inherited/adopted refs and live revocation. Keep full lifecycle/UI and
   delegated actor qualification open above.
+- [x] `[must]` Qualify the first Reading List local Beta cutover prerequisite:
+  native Builder preparation/reconciliation, unchanged original Stable records,
+  migrated records in Beta, exactly one desktop icon and local prerelease flag
+  without external-feed opt-in. Wide/compact browser CRUD/settings/reopen and
+  live HTTP discovery/import pass without mutating DEV data. Evidence:
+  `reading-list-migrations-20260915/cycle-1/beta-observed-02.json`,
+  `beta-browser-03.json`, `beta-http-01.json`. Stable adoption and the second
+  complete increment remain required by `APP6-10`; this sub-proof does not close it.
 
 **Exit proof:** two Applications sharing one component install and remove
 without premature package/data deletion; an incompatible version is rejected;
