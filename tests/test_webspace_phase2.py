@@ -5405,6 +5405,9 @@ def test_builder_preview_sources_exact_prototype_and_retained_automation(monkeyp
         "ui": {"application": {"desktop": {"pageSchema": {"title": "Recipes automation"}}}},
     }
     (automation_dir / "webui.json").write_text(json.dumps(automation), encoding="utf-8")
+    (automation_dir / "snapshot.json").write_text(json.dumps({
+        "object_type": "scenario", "object_id": "recipes", "task_id": "task.current",
+    }), encoding="utf-8")
     monkeypatch.setattr(
         webspace_runtime_module.scenarios_loader,
         "scenario_root_for_space",

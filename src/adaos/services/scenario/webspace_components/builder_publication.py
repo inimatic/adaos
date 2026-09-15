@@ -45,14 +45,14 @@ class WebspaceBuilderPublicationService:
         from adaos.services.builder.workbench import BuilderWorkbenchService
 
         target = BuilderWorkbenchService.from_context().existing_preview_target(webspace_id)
-        if not target or target.get("stage") not in {"prototype", "trial"}:
+        if not target or target.get("stage") not in {"prototype", "automation", "trial"}:
             return {}
         stage = target["stage"]
-        selected = str(target.get("object_id") or "").strip()
+        selected = str(target.get("scenario_id") or target.get("object_id") or "").strip()
         revision = str(target.get("candidate_id") or target.get("revision") or "").strip()
         if not selected or not revision or (scenario_id and scenario_id != selected):
             raise ValueError("selected preview identity does not match the requested scenario")
-        if stage == "prototype":
+        if stage in {"prototype", "automation"}:
             from adaos.services.resources.prototype import prototype_webui_digest
 
             content, _ = self.preview_content_override(
@@ -65,7 +65,7 @@ class WebspaceBuilderPublicationService:
                 "skill_decls_fingerprint": None,
                 "materialization_identity": operations.canonical_materialization_identity(
                     webspace_id=webspace_id, scenario_id=selected, revision=revision,
-                    source_fingerprint=f"prototype:{prototype_webui_digest(content)}",
+                    source_fingerprint=f"{stage}:{prototype_webui_digest(content)}",
                 ),
             }
         activation, root = self.trial_workspace_for_preview(selected, revision=revision, operations=operations)
@@ -317,6 +317,7 @@ class WebspaceBuilderPublicationService:
             )
         elif stage_token == "automation":
             from adaos.services.runtime_paths import current_state_dir
+            from adaos.services.builder.automation_snapshot import read_automation_ui
 
             snapshot_path = (
                 current_state_dir()
@@ -327,11 +328,7 @@ class WebspaceBuilderPublicationService:
                 / "automation"
                 / "webui.json"
             )
-            try:
-                snapshot_payload = json.loads(snapshot_path.read_text(encoding="utf-8-sig"))
-            except (OSError, json.JSONDecodeError):
-                snapshot_payload = None
-            content = snapshot_payload if isinstance(snapshot_payload, Mapping) else None
+            content = read_automation_ui(snapshot_path.parent, scenario_id, revision_token or None)
         elif stage_token == "trial":
             _, selected_root = self.trial_workspace_for_preview(
                 scenario_id,

@@ -607,8 +607,8 @@ def select_target(
 
     kind = str(object_type or "").strip().lower().rstrip("s")
     project_id = str(object_id or "").strip()
-    if kind != "scenario":
-        raise ValueError("only scenario Lifecycle nodes can be shown in Preview")
+    if kind not in {"project", "scenario"}:
+        raise ValueError("only scenario-backed Lifecycle nodes can be shown in Preview")
     if not project_id:
         raise ValueError("object_id is required")
     stage_token = str(stage or "").strip().lower()
@@ -616,9 +616,20 @@ def select_target(
         raise ValueError("Preview is DEV-only; use production placement navigation")
     source = canonical_source_webspace_id(source_webspace_id)
 
+    scenario_id = project_id
+    if kind == "project":
+        from adaos.sdk.developer import compositions
+
+        manifest = compositions.get(project_id)
+        owned = (manifest.get("components") or {}).get("owned") or []
+        primary = next((item for item in owned if item.get("role") == "primary"), owned[0] if owned else {})
+        component_kind, _, scenario_id = str(primary.get("ref") or "").partition(":")
+        if component_kind != "scenario" or not scenario_id:
+            raise ValueError("Revision Preview requires a scenario-backed project")
+
     from adaos.services.builder.workflow import BuilderWorkflowService
 
-    workflow = BuilderWorkflowService.from_context().describe(kind, project_id)
+    workflow = BuilderWorkflowService.from_context().describe("scenario", scenario_id)
     if follow_active:
         stage_token = str(workflow.get("active_phase") or "prototype")
     if stage_token not in {"prototype", "automation"}:
@@ -662,6 +673,8 @@ def select_target(
         wait_for_rebuild=True,
         publish_event=False,
     )
+    if selected.get("ok") is False:
+        return selected
     # ``select_target`` materializes the requested snapshot itself, so it must
     # not publish ``builder.preview.desired`` and schedule a second reconcile.
     # Project selection is a separate projection, however: Builder hosts
@@ -695,7 +708,7 @@ def select_target(
     materializer = materialize_revision_via_owner if via_owner else materialize_revision
     materialized = materializer(
         webspace_id=preview_id,
-        scenario_id=project_id,
+        scenario_id=scenario_id,
         revision=target_revision or None,
         preview_stage=stage_token,
         preview_label=label,
@@ -706,10 +719,13 @@ def select_target(
             "preview_revision": target_revision or None,
         },
     )
+    if materialized.get("ok") is False or materialized.get("accepted") is False:
+        return {"ok": False, "materialization": materialized, "preview_webspace_id": preview_id}
     target = {
         "schema": "adaos.builder.preview_target.v1",
         "object_type": kind,
         "object_id": project_id,
+        "scenario_id": scenario_id,
         "stage": stage_token,
         "revision": target_revision or None,
         "label": label,
@@ -749,9 +765,12 @@ def refresh_follow_active_target(
     current_target = _plain(current_binding.get("preview_target"))
     if not bool(current_target.get("follow_active")):
         return {"ok": True, "skipped": "preview_target_not_following_active", "binding": current_binding}
-    if (
-        str(current_target.get("object_type") or "").strip().lower().rstrip("s") != kind
-        or str(current_target.get("object_id") or "").strip() != project_id
+    target_kind = str(current_target.get("object_type") or "").strip().lower().rstrip("s")
+    target_id = str(current_target.get("object_id") or "").strip()
+    target_scenario = str(current_target.get("scenario_id") or "").strip()
+    if not (
+        (target_kind == kind and target_id == project_id)
+        or (target_kind == "project" and target_scenario == project_id)
     ):
         return {"ok": True, "skipped": "preview_target_project_mismatch", "binding": current_binding}
     if str(current_target.get("stage") or "").strip().lower() != "prototype":
@@ -765,8 +784,8 @@ def refresh_follow_active_target(
     selected_binding = _plain(
         service.set_selected_project(
             source_webspace_id=source,
-            object_type=kind,
-            object_id=project_id,
+            object_type=target_kind,
+            object_id=target_id,
             title=selected_title,
             description=selected_description,
             persist_projection=False,
@@ -775,8 +794,9 @@ def refresh_follow_active_target(
     target = {
         **current_target,
         "schema": "adaos.builder.preview_target.v1",
-        "object_type": kind,
-        "object_id": project_id,
+        "object_type": target_kind,
+        "object_id": target_id,
+        "scenario_id": project_id,
         "stage": "prototype",
         "revision": revision_token,
         "label": f"proto: {project_id} · UI {revision_token}",
@@ -820,10 +840,11 @@ def ensure_selected_target(source_webspace_id: str | None = None) -> dict[str, A
         _service().relationships.require_preview_target(preview_id)
         return {"ok": True, "recreated": False, "preview_webspace_id": preview_id}
     target = _plain(binding.get("preview_target"))
-    if target.get("object_type") == "scenario" and target.get("stage"):
+    if target.get("object_type") in {"project", "scenario"} and target.get("stage"):
         result = select_target(
-            "scenario", str(target["object_id"]), stage=str(target["stage"]),
+            str(target["object_type"]), str(target["object_id"]), stage=str(target["stage"]),
             revision=target.get("revision"), source_webspace_id=source, via_owner=True,
+            follow_active=bool(target.get("follow_active")),
         )
     else:
         scenario = str(binding.get("runtime_scenario_id") or "").strip()
@@ -869,7 +890,7 @@ def navigation_link(
         expected_scenario_id=(
             str(target.get("object_id") or "").strip() or None
             if object_type == "scenario"
-            else str(binding.get("runtime_scenario_id") or "").strip() or None
+            else str(target.get("scenario_id") or binding.get("runtime_scenario_id") or "").strip() or None
         ),
         expected_revision=str(target.get("revision") or "").strip() or None,
         preview_stage=str(target.get("stage") or "").strip() or None,

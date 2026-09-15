@@ -108,15 +108,38 @@ try {
       }) })
       await capture('initial')
       report.checks.push({ profile, check: 'live_workbench_render', passed: true })
+      await command('specimens').click()
+      const processMenu = page.locator('ion-popover').filter({ visible: true }).last()
+      const stages = processMenu.getByRole('menuitemradio')
+      await expect(stages).toHaveCount(6, { timeout: 60000 })
+      await expect(processMenu.locator('[aria-current="step"]')).toHaveCount(1)
+      await expect(stages.first()).toBeEnabled()
+      await capture('process-menu')
+      report.checks.push({ profile, check: 'live_process_menu_current_step', passed: true })
+      await page.keyboard.press('Escape')
+      if (process.env.ADAOS_E2E_VERIFY_EXISTING_PREVIEW) {
+        const selected = JSON.parse(process.env.ADAOS_E2E_SELECT_CREATED)
+        const response = page.waitForResponse(reply => reply.request().postData()?.includes(':open_preview'), { timeout: 90000 })
+        const popup = page.waitForEvent('popup', { timeout: 90000 })
+        void popup.catch(() => {})
+        await command('open').click()
+        const reply = await (await response).json()
+        if (!reply.ok || !reply.result?.ok) throw new Error('Open Preview failed')
+        const target = reply.result.navigation?.target
+        if (target?.object_type !== 'project' || target?.object_id !== selected.id || !target?.revision) {
+          throw new Error('Preview lost the selected Application or its revision')
+        }
+        const opened = await popup
+        await opened.waitForLoadState('domcontentloaded')
+        const url = new URL(opened.url())
+        if (url.searchParams.get('expected_scenario_id') !== target.scenario_id
+            || url.searchParams.get('expected_revision') !== target.revision) throw new Error('Preview URL identity mismatch')
+        await expect(widget('design-revision-identity')).toContainText(target.label, { timeout: 30000 })
+        await capture('preview-target')
+        report.checks.push({ profile, check: 'existing_preview_result_matches_opened_revision', passed: true, target })
+        await opened.close()
+      }
       if (process.env.ADAOS_E2E_REFINEMENT) {
-        await command('specimens').click()
-        const stages = widget('process-tree').locator('ion-item.collection-focus-item')
-        await expect(stages).toHaveCount(6, { timeout: 60000 })
-        await expect(widget('process-tree').locator('[aria-current="step"]')).toHaveCount(1)
-        await expect(stages.first()).not.toHaveAttribute('aria-disabled', 'true')
-        await capture('process-stages')
-        report.checks.push({ profile, check: 'revision_stage_list_current_and_disabled', passed: true })
-        await closeModal()
         await command('applications').click()
         const modal = page.locator('ion-modal').filter({ visible: true }).last()
         if (profile === 'wide') {
@@ -231,8 +254,9 @@ try {
             source: response.headers()['x-adaos-runtime-source'],
             release: response.headers()['x-adaos-release-digest'] }, response: await response.json().catch(() => null) })
         })
-        await command('specimens').click()
-        const node = widget('process-tree').locator(`ion-item[data-focus-ref="trial:${trial.delivery.candidate_id}"]`)
+        await command('inspect-section').click()
+        await page.locator('ion-popover').filter({ visible: true }).last().locator('[data-command-option="process"]').click()
+        const node = widget('design-process').locator(`ion-item[data-focus-ref="trial:${trial.delivery.candidate_id}"]`)
         await node.waitFor({ timeout: 30000 })
         const response = page.waitForResponse(response => response.request().postData()?.includes('builder_sdk_control_skill:get_project_placement_navigation'), { timeout: 90000 })
         void response.catch(() => {})

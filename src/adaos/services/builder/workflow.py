@@ -6377,6 +6377,18 @@ class BuilderWorkflowService:
     ) -> dict[str, Any]:
         """Replace the retained project-aware Automation snapshot."""
 
+        from adaos.services.artifact_pipeline.storage import mutation_lock
+        from adaos.services.builder.automation_snapshot import snapshot_lock_path
+
+        with mutation_lock(snapshot_lock_path(self.automation_snapshot_root(object_type, object_id))):
+            return self._snapshot_current_automation(object_type, object_id, task_id=task_id,
+                project_ref=project_ref, component_refs=component_refs)
+
+    def _snapshot_current_automation(
+        self, object_type: str, object_id: str, *, task_id: str | None = None,
+        project_ref: str | None = None, component_refs: Sequence[str] = (),
+    ) -> dict[str, Any]:
+
         kind = _kind(object_type)
         project_id = _project_id(object_id)
         root = self.project_root(kind, project_id)
@@ -6453,6 +6465,8 @@ class BuilderWorkflowService:
                 "version": self._project_version(kind, project_id),
                 "created_at": created_at,
                 "files": copied,
+                "file_digests": {name: hashlib.sha256((temporary / name).read_bytes()).hexdigest()
+                                 for name in copied},
             }
             (temporary / "snapshot.json").write_text(
                 json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",

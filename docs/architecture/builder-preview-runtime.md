@@ -221,6 +221,18 @@ separate **Show in Preview** action selects one of these sources:
 | Prototype | exact DEV `ui_revisions/NNN.json` snapshot | any retained UI revision | `proto:` |
 | Automation | single retained Builder runtime snapshot | current completed result only | `active:` |
 
+A project-backed Preview retains the aggregate `object_type=project` /
+`object_id` and a separate primary `scenario_id`. The URL and materializer use
+that scenario; selecting or following a revision must not replace the selected
+Application with its component. Recreating a deleted Preview retains both the
+exact revision and the `follow_active` choice. A failed or superseded
+materialization must not be recorded as the selected ready target.
+
+Automation materialization verifies the retained snapshot's scenario/task
+identity under the same cross-process lock used by its writer. New snapshots
+include content digests. A missing, changed or replaced snapshot fails closed;
+current DEV content cannot stand in for the requested Automation result.
+
 The visual tree is a provenance projection, not three independent lists:
 
 ```text

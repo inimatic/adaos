@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--prototype-prompt", type=Path, help="Submit one explicit prompt through the created TEST application's chat")
     parser.add_argument("--base-revision", help="Expected current revision for one deliberate follow-up")
     parser.add_argument("--open-preview", action="store_true", help="Open the selected owned TEST preview through Builder")
+    parser.add_argument("--verify-existing-preview", action="store_true", help="Open an existing owned TEST and verify the Result target")
     parser.add_argument("--automation-brief", type=Path, help="Start one explicitly accepted owned TEST through the native form")
     parser.add_argument("--automation-followup", action="store_true", help="Use the existing Automation iteration form")
     parser.add_argument("--codex-model", default="gpt-5.5")
@@ -107,6 +108,10 @@ def main():
         if not args.exercise_test:
             parser.error("Preview review requires the owned TEST exercise")
         env["ADAOS_E2E_OPEN_PREVIEW"] = "1"
+    if args.verify_existing_preview:
+        if not args.select_created or not args.inspect:
+            parser.error("Existing Preview verification requires owned TEST selection and inspect mode")
+        env["ADAOS_E2E_VERIFY_EXISTING_PREVIEW"] = "1"
     if args.automation_brief:
         if not args.resume_created or args.prototype_prompt or args.open_preview:
             parser.error("Automation requires prior creation and no competing Prototype/preview operation")

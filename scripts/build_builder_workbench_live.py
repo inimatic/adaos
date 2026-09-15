@@ -111,8 +111,8 @@ def build():
     for button in header["inputs"]["buttons"]:
         if button["id"] == "specimens":
             button.pop("options", None)
-            button.pop("selectedStateKey", None)
-            button.pop("optionMetaPaths", None)
+            button.update(selectedStateKey="inspectedProcessRef", optionMetaPaths=["subtitle"],
+                          optionsDataSource=source("get_process_stages", revision="$state.inspectedPrototypeRevision"))
             button.update(design.text_field("label", "Процесс", "Process"))
         if button["id"] == "applications":
             button.pop("label_i18n", None)
@@ -123,7 +123,11 @@ def build():
                 action["params"]["modalId"], action["params"]["modalId"])
         if action["type"] == "openDevTickets":
             action["params"] = {"target_scope": {"type": "$state.selectedProjectKind", "id": "$state.selectedProjectId", "source": "dev"}}
-    header["actions"].append(design.modal_action("click:specimens", "process"))
+    header["actions"].extend([
+        call("select:specimens", "inspect_process_ref", inspected_ref="$event.id",
+             expected_generation="$state.workflowGeneration"),
+        design.update("select:specimens", inspectedProcessRef="$event.id", workbenchView="$event.view"),
+    ])
 
     current = copy.deepcopy(specimens["design-current-work"])
     current["dataSource"] = source("get_workbench")

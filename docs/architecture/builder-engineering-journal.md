@@ -1015,3 +1015,30 @@ Canonical architecture and `APP1-15` distinguish versioned configuration,
 approved local credential bindings and business records; secrets do not enter
 model context or immutable publication artifacts. Implementation is authorized
 for the discussed Builder, lifecycle/data and About/image-generation work.
+
+### 2026-09-15: Preview Identity And Configuration Prerequisites
+
+DEV Builder `0.2.143` is checkpointed locally, without publication to Workspace
+or GitHub. The Process dropdown uses the canonical six-stage projection; its
+overlay, current-step marker and compact layout pass local wide/mobile browser
+review in `workbench-refinement-20260915/process-preview-02`. The first run
+correctly failed against the old materialized UI; refreshing the owner projection
+loaded the new source. Client command-menu tests: 26 passing.
+
+Preview selection now retains the aggregate Application identity and its primary
+scenario, including explicit Prototype revisions and the retained Automation
+task. Snapshot reads verify exact task identity and new content digests; missing
+Automation content does not fall back to current DEV source. Live Open Preview
+through the Builder button now matches the Result label, aggregate/primary
+scenario and retained task in both 1440px and 390px layouts: six browser checks
+pass in `workbench-refinement-20260915/process-preview-03`. Room recovery also
+retains the selected Prototype or Automation identity, with focused unit tests.
+
+`ApplicationConfigurationStore` provides local typed values and credential-ref
+overlays with revision preconditions, compatible Beta-to-Beta retention, explicit
+conflict rejection and acceptance adoption. Its twelve tests pass. It is not yet
+bound into runtime activation or credential authorization; APP1-15 remains open.
+Real Reading List data has not been migrated or replaced. Inspection confirmed
+that the current native Trial only admits empty data and the older activation
+engine requires reversible migrations: both require the planned exclusive
+cutover/snapshot integration, not removal of their safety checks.

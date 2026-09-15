@@ -95,6 +95,18 @@ Owner/dependencies: Builder workflow + Client.
 - [x] `[must]` Qualify revision-scoped flat Process stages, separate current-work
   emphasis from inspected selection, and disable unavailable stages without
   replacing server admission. Automation requires an accepted UI Prototype.
+- [x] `[should]` Expose the same six real stages in a compact Process dropdown;
+  keep current-step emphasis independent of the inspected selection. Generic
+  Client menu options support `current`, `disabled` and localized metadata.
+  Desktop/mobile browser rendering is verified; this is not a simulated state
+  switch or completion of clarification/continuation integration.
+- [ ] `[must]` Qualify exact aggregate/scenario/revision Preview identity through
+  the live Open Preview command and Result field, including deleted targets,
+  follow-active updates and rejection of a replaced Automation snapshot.
+  Live retained-Automation Open Preview/Result passes in both desktop/mobile
+  layouts; unit tests cover pinned recreation, follow-active primary scenario,
+  failed/superseded materialization and replaced snapshots. Interactive deletion
+  and transition/recovery qualification remain open.
 - [x] `[must]` Qualify scenario-header Changelog and exact local Candidate
   acceptance into Workspace without a Dev Ticket. Keep publisher authority,
   immutable Trial source, subscription selection and public publication separate.

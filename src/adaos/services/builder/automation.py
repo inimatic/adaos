@@ -1952,6 +1952,10 @@ class BuilderAutomationService:
             str(target.get("object_type") or "").strip().lower().rstrip("s")
             == str(object_type or "").strip().lower().rstrip("s")
             and str(target.get("object_id") or "").strip() == str(object_id or "").strip()
+        ) or (
+            target.get("object_type") == "project"
+            and str(object_type or "").strip().lower().rstrip("s") == "scenario"
+            and str(target.get("scenario_id") or "").strip() == str(object_id or "").strip()
         )
 
     def start_from_execute(
@@ -8047,8 +8051,8 @@ class BuilderAutomationService:
 
                 target_stage = "prototype" if pending_transition == "return_to_prototype" else "automation"
                 readiness["materialization"] = preview.select_target(
-                    object_type,
-                    object_id,
+                    str(preview_target.get("object_type") or object_type),
+                    str(preview_target.get("object_id") or object_id),
                     stage=target_stage,
                     source_webspace_id=webspace_id,
                     follow_active=True,

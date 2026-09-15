@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
 from adaos.sdk.builder import preview
 from adaos.services.builder.workbench import _preview_state_projection
@@ -17,8 +18,68 @@ def test_explicit_open_recreates_missing_preview_with_exact_revision(monkeypatch
     result = preview.ensure_selected_target("desktop")
     assert result["recreated"] is True
     assert calls == [(("scenario", "recipes"), {
-        "stage": "prototype", "revision": "003", "source_webspace_id": "desktop", "via_owner": True,
+        "stage": "prototype", "revision": "003", "source_webspace_id": "desktop", "via_owner": True, "follow_active": False,
     })]
+
+
+@pytest.mark.parametrize("stage,revision", [("prototype", "071"), ("automation", "task.fixed")])
+@pytest.mark.parametrize("kind", ["project", "scenario"])
+@pytest.mark.parametrize("materialized", [{"ok": True}, {"ok": False}, {"ok": True, "accepted": False}])
+def test_revision_selection_persists_actual_target_and_keeps_project_identity(monkeypatch, kind, stage, revision, materialized):
+    from adaos.services.builder.workflow import BuilderWorkflowService
+    from adaos.sdk.developer import compositions
+
+    service = _Workbench()
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(compositions, "get", lambda _: {"components": {"owned": [
+        {"ref": "scenario:screen", "role": "primary"}]}})
+    workflows = []
+    def describe(*args):
+        workflows.append(args)
+        return {"capabilities": {"can_preview_prototype": True, "can_preview_automation": True},
+                "prototype": {"head_revision": "072"}, "automation": {"snapshot_task_id": "task.fixed"}}
+    monkeypatch.setattr(BuilderWorkflowService, "from_context", lambda: SimpleNamespace(describe=describe))
+    selections, renders, events = [], [], []
+    def select(*args, **kwargs):
+        selections.append((args, kwargs))
+        return {"ok": True, "preview_webspace_id": "desktop-dev", "binding": {
+            "selection": {"object_type": kind, "object_id": "app", "title": "Example"}}}
+    monkeypatch.setattr(preview, "select_project", select)
+    monkeypatch.setattr(preview, "materialize_revision", lambda **kw: renders.append(kw) or materialized)
+    monkeypatch.setattr("adaos.sdk.data.events.publish", lambda *args, **kwargs: events.append((args, kwargs)))
+    result = preview.select_target(kind, "app", stage=stage, revision=revision)
+    if materialized.get("ok") is False or materialized.get("accepted") is False:
+        assert result["ok"] is False
+        assert service.set_calls == []
+        assert service.target["revision"] == "003"
+        return
+    assert result["ok"]
+    assert workflows == [("scenario", "screen" if kind == "project" else "app")]
+    assert selections[0][0] == (kind, "app")
+    assert selections[0][1]["publish_event"] is False
+    assert len(renders) == 1
+    assert renders[0]["revision"] == revision
+    assert renders[0]["scenario_id"] == workflows[0][1]
+    assert service.target["object_type"] == kind
+    assert service.target["object_id"] == "app"
+    assert service.target["stage"] == stage
+    assert service.target["revision"] == revision
+    assert len(events) == 1
+    assert events[0][0][1]["object_type"] == kind
+
+
+def test_project_preview_recreation_keeps_aggregate_identity_and_pinned_revision(monkeypatch):
+    from adaos.services.workspaces import index
+
+    service = _Workbench(follow_active=False)
+    service.target.update(object_type="project", object_id="builder", scenario_id="builder", revision="071")
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(index, "get_workspace", lambda _: None)
+    calls = []
+    monkeypatch.setattr(preview, "select_target", lambda *args, **kwargs: calls.append((args, kwargs)) or {"ok": True})
+    assert preview.ensure_selected_target("desktop")["recreated"]
+    assert calls == [(("project", "builder"), {"stage": "prototype", "revision": "071",
+        "source_webspace_id": "desktop", "via_owner": True, "follow_active": False})]
 
 
 class _Workbench:
@@ -260,6 +321,41 @@ def test_refresh_follow_active_target_preserves_explicit_snapshot(monkeypatch) -
     assert result["skipped"] == "preview_target_not_following_active"
     assert result["binding"]["preview_target"]["revision"] == "003"
     assert service.set_calls == []
+
+
+def test_follow_active_scenario_update_preserves_aggregate_identity(monkeypatch):
+    service = _Workbench()
+    service.target.update(object_type="project", object_id="recipe-app", scenario_id="recipes")
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    result = preview.refresh_follow_active_target("scenario", "recipes", revision="006")
+    assert result["target"]["object_type"] == "project"
+    assert result["target"]["object_id"] == "recipe-app"
+    assert result["target"]["scenario_id"] == "recipes"
+    assert result["selection"]["object_id"] == "recipe-app"
+    assert result["target"]["revision"] == "006"
+    unrelated = preview.refresh_follow_active_target("scenario", "other", revision="007")
+    assert unrelated["skipped"] == "preview_target_project_mismatch"
+
+
+def test_project_navigation_uses_target_primary_scenario(monkeypatch):
+    service = _Workbench()
+    service.target.update(object_type="project", object_id="recipe-app", scenario_id="recipes")
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr("adaos.sdk.navigation.runtime_scope", lambda: {"zone": "lo", "subnet_id": "sn_test"})
+    result = preview.navigation_link("desktop", base_url="http://127.0.0.1:8100")
+    assert result["destination"]["expected_scenario_id"] == "recipes"
+    assert result["destination"]["expected_revision"] == "003"
+
+
+def test_automation_matches_project_target_only_through_primary_scenario():
+    from adaos.services.builder.automation import BuilderAutomationService
+
+    target = {"object_type": "project", "object_id": "recipe-app", "scenario_id": "recipes"}
+    match = BuilderAutomationService._preview_target_matches_project
+    assert match(target, object_type="scenario", object_id="recipes")
+    assert match(target, object_type="project", object_id="recipe-app")
+    assert not match(target, object_type="skill", object_id="recipes")
+    assert not match(target, object_type="scenario", object_id="other")
 
 
 def test_navigation_link_uses_shared_sdk_and_preserves_preview_expectations(monkeypatch) -> None:
