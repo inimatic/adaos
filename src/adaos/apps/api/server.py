@@ -1063,7 +1063,10 @@ def _start_application_registry_projection_epoch(app: FastAPI) -> dict[str, Any]
     service = _application_registry_projection_service()
     previous_trust = service.snapshot_trust_state()
     runtime = _runtime_identity_public_payload()
-    epoch = service.start_epoch(runtime_instance_id=runtime.get("runtime_instance_id"))
+    epoch = service.start_epoch(
+        runtime_instance_id=runtime.get("runtime_instance_id"),
+        previous_snapshot_trust=previous_trust,
+    )
     payload = {
         "schema": "adaos.application.registry_projection.runtime_start.v1",
         "previous_snapshot_trust": previous_trust,

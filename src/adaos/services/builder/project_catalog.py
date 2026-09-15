@@ -207,11 +207,13 @@ class BuilderProjectCatalogService:
 
     def _project_registry(self, parent: Path) -> list[tuple[Path, Path | None, dict[str, Any]]]:
         registry = ApplicationRegistryProjection(self.state_dir)
-        if not registry.development_projects_ready(parent):
+        if not registry.development_projects_ready(parent, require_trusted_runtime_start=True):
+            startup_trust = registry.runtime_start_snapshot_trust_state()
             registry.rebuild_development_projects(
                 parent,
                 parser=project_compositions._parse_project,
                 schema_bytes=project_compositions._schema_path().read_bytes(),
+                allow_reuse=bool(startup_trust.get("trusted_snapshot")),
             )
         rows = registry.list_development_projects(limit=5000)
         return [

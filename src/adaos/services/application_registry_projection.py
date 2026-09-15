@@ -20,6 +20,7 @@ DEVELOPMENT_PROJECT_SOURCE_KIND = "dev_project"
 DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND = "dev_project_manifest"
 APPLICATION_STORE_SOURCE_KIND = "application_store"
 APPLICATION_STORE_RECORD_SOURCE_KIND = "application_store_record"
+RUNTIME_START_SNAPSHOT_TRUST_META_KEY = "runtime_start_snapshot_trust"
 
 
 class ApplicationRegistryProjectionError(RuntimeError):
@@ -413,8 +414,14 @@ class ApplicationRegistryProjection:
         self,
         *,
         runtime_instance_id: str | None = None,
+        previous_snapshot_trust: Mapping[str, Any] | None = None,
         validator_version: str = APPLICATION_REGISTRY_PROJECTION_VALIDATOR_VERSION,
     ) -> dict[str, Any]:
+        startup_trust = (
+            deepcopy(dict(previous_snapshot_trust))
+            if isinstance(previous_snapshot_trust, Mapping)
+            else self.snapshot_trust_state(validator_version=validator_version)
+        )
         epoch_id = "apreg.epoch." + uuid.uuid4().hex
         payload = {
             "schema": "adaos.application.registry_projection_epoch.v1",
@@ -424,6 +431,16 @@ class ApplicationRegistryProjection:
             "runtime_instance_id": str(runtime_instance_id or "").strip() or None,
             "state": "open",
             "started_at": _now(),
+        }
+        start_trust_payload = {
+            "schema": "adaos.application.registry_projection.runtime_start_snapshot_trust.v1",
+            "epoch_id": epoch_id,
+            "runtime_instance_id": payload["runtime_instance_id"],
+            "started_at": payload["started_at"],
+            "trusted_snapshot": bool(startup_trust.get("trusted_snapshot")),
+            "reason": str(startup_trust.get("reason") or "").strip() or None,
+            "projection_status": str(startup_trust.get("projection_status") or "").strip() or None,
+            "trust": startup_trust,
         }
         with mutation_lock(self.lock_path):
             with self._connect() as con:
@@ -445,13 +462,14 @@ class ApplicationRegistryProjection:
                         _json_pretty(payload),
                     ),
                 )
+                self._set_meta(con, RUNTIME_START_SNAPSHOT_TRUST_META_KEY, start_trust_payload)
                 con.commit()
         return payload
 
     def latest_epoch(self) -> dict[str, Any] | None:
         with self._connect() as con:
             row = con.execute(
-                "SELECT payload_json FROM projection_epoch ORDER BY started_at DESC, epoch_id DESC LIMIT 1"
+                "SELECT payload_json FROM projection_epoch ORDER BY started_at DESC, rowid DESC LIMIT 1"
             ).fetchone()
         return _load_json(row["payload_json"], {}) if row else None
 
@@ -473,7 +491,7 @@ class ApplicationRegistryProjection:
                 """
                 SELECT *
                 FROM projection_epoch
-                ORDER BY started_at DESC, epoch_id DESC
+                ORDER BY started_at DESC, rowid DESC
                 LIMIT 1
                 """
             ).fetchone()
@@ -519,6 +537,66 @@ class ApplicationRegistryProjection:
             "projection_digest": row["projection_digest"],
             "sqlite_integrity_ms": integrity_ms,
         }
+
+    def runtime_start_snapshot_trust_state(self) -> dict[str, Any]:
+        if not self.db_path.exists():
+            return {
+                "trusted_snapshot": False,
+                "reason": "registry_projection_absent",
+                "projection_status": "untrusted_rebuild",
+            }
+        with self._connect() as con:
+            payload = self._get_meta(con, RUNTIME_START_SNAPSHOT_TRUST_META_KEY, None)
+        if not isinstance(payload, Mapping):
+            return {
+                "trusted_snapshot": False,
+                "reason": "runtime_start_snapshot_trust_absent",
+                "projection_status": "untrusted_rebuild",
+            }
+        trust = payload.get("trust")
+        if isinstance(trust, Mapping):
+            result = deepcopy(dict(trust))
+        else:
+            result = {
+                "trusted_snapshot": bool(payload.get("trusted_snapshot")),
+                "reason": str(payload.get("reason") or "").strip() or None,
+                "projection_status": str(payload.get("projection_status") or "").strip() or None,
+            }
+        result.setdefault("trusted_snapshot", bool(payload.get("trusted_snapshot")))
+        result.setdefault("reason", str(payload.get("reason") or "").strip() or None)
+        result.setdefault("projection_status", str(payload.get("projection_status") or "").strip() or None)
+        result["runtime_start_epoch_id"] = payload.get("epoch_id")
+        result["runtime_start_instance_id"] = payload.get("runtime_instance_id")
+        result["runtime_started_at"] = payload.get("started_at")
+        return result
+
+    def _completed_runtime_rebuild_after_untrusted_start(
+        self,
+        con: sqlite3.Connection,
+        *,
+        source_path: str,
+        runtime_started_at: str | None,
+    ) -> bool:
+        rows = con.execute(
+            """
+            SELECT payload_json, completed_at
+            FROM projection_journal
+            WHERE action='rebuild_development_projects'
+              AND source_path=?
+              AND status='completed'
+            ORDER BY updated_at DESC, rowid DESC
+            LIMIT 25
+            """,
+            (source_path,),
+        ).fetchall()
+        for row in rows:
+            completed_at = str(row["completed_at"] or "").strip()
+            if runtime_started_at and completed_at and completed_at < runtime_started_at:
+                continue
+            record = _load_json(row["payload_json"], {})
+            if isinstance(record, Mapping) and record.get("allow_reuse") is False:
+                return True
+        return False
 
     def seal_epoch(
         self,
@@ -584,9 +662,35 @@ class ApplicationRegistryProjection:
                 con.commit()
         return payload
 
-    def development_projects_ready(self, projects_root: Path) -> bool:
+    def development_projects_ready(
+        self,
+        projects_root: Path,
+        *,
+        require_trusted_runtime_start: bool = False,
+    ) -> bool:
         root = str(Path(projects_root).expanduser().resolve())
         with self._connect() as con:
+            if require_trusted_runtime_start:
+                startup_payload = self._get_meta(con, RUNTIME_START_SNAPSHOT_TRUST_META_KEY, None)
+                startup_trust = startup_payload.get("trust") if isinstance(startup_payload, Mapping) else None
+                trusted_start = bool(
+                    startup_trust.get("trusted_snapshot")
+                    if isinstance(startup_trust, Mapping)
+                    else startup_payload.get("trusted_snapshot")
+                    if isinstance(startup_payload, Mapping)
+                    else False
+                )
+                runtime_started_at = (
+                    str(startup_payload.get("started_at") or "").strip()
+                    if isinstance(startup_payload, Mapping)
+                    else None
+                )
+                if not trusted_start and not self._completed_runtime_rebuild_after_untrusted_start(
+                    con,
+                    source_path=root,
+                    runtime_started_at=runtime_started_at,
+                ):
+                    return False
             row = con.execute(
                 """
                 SELECT 1 FROM application_index
@@ -649,6 +753,7 @@ class ApplicationRegistryProjection:
         operation_id: str | None = None,
         cancel: Callable[[], bool] | None = None,
         progress: Callable[[Mapping[str, Any]], None] | None = None,
+        allow_reuse: bool = True,
         validator_version: str = APPLICATION_REGISTRY_PROJECTION_VALIDATOR_VERSION,
     ) -> dict[str, Any]:
         root = Path(projects_root).expanduser().resolve()
@@ -661,7 +766,7 @@ class ApplicationRegistryProjection:
             status="running",
             source_path=str(root),
             started_at=started_at,
-            payload={"root": str(root), "schema_digest": schema_digest},
+            payload={"root": str(root), "schema_digest": schema_digest, "allow_reuse": bool(allow_reuse)},
         )
         rows: list[dict[str, Any]] = []
         source_rows: list[dict[str, Any]] = []
@@ -669,7 +774,7 @@ class ApplicationRegistryProjection:
         scanned = 0
         reused = 0
         changed = 0
-        cached_sources = self._development_project_rebuild_cache()
+        cached_sources = self._development_project_rebuild_cache() if allow_reuse else {}
         if root.is_dir():
             manifests = sorted(root.glob("*/project.yaml"), key=lambda item: item.parent.name.casefold())
         else:
@@ -690,6 +795,7 @@ class ApplicationRegistryProjection:
                         "indexed": len(rows),
                         "reused": reused,
                         "changed": changed,
+                        "allow_reuse": bool(allow_reuse),
                     },
                 )
             scanned += 1
@@ -701,7 +807,8 @@ class ApplicationRegistryProjection:
                 source_digest = _digest_bytes(raw)
                 cached = cached_sources.get(source_id)
                 if (
-                    cached is not None
+                    allow_reuse
+                    and cached is not None
                     and cached.get("source")
                     and cached.get("content_digest") == source_digest
                     and cached.get("schema_digest") == schema_digest
@@ -845,6 +952,7 @@ class ApplicationRegistryProjection:
                 "indexed": len(rows),
                 "reused": reused,
                 "changed": changed,
+                "allow_reuse": bool(allow_reuse),
             },
         )
 
@@ -1317,7 +1425,7 @@ class ApplicationRegistryProjection:
                 """
                 SELECT payload_json
                 FROM projection_epoch
-                ORDER BY started_at DESC, epoch_id DESC
+                ORDER BY started_at DESC, rowid DESC
                 LIMIT 1
                 """
             ).fetchone()
@@ -1333,6 +1441,7 @@ class ApplicationRegistryProjection:
                 """
             ).fetchall()
             trust = self.snapshot_trust_state()
+            runtime_start_trust = self.runtime_start_snapshot_trust_state()
         epoch = _load_json(latest_epoch["payload_json"], {}) if latest_epoch else None
         seal_receipt = (
             epoch
@@ -1346,6 +1455,7 @@ class ApplicationRegistryProjection:
             "db_path": str(self.db_path),
             "schema_version": APPLICATION_REGISTRY_PROJECTION_SCHEMA_VERSION,
             "trusted_snapshot": trust,
+            "runtime_start_snapshot_trust": runtime_start_trust,
             "projection_status": trust.get("projection_status", "warming"),
             "epoch": epoch,
             "seal_receipt": seal_receipt,

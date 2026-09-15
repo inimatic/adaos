@@ -254,6 +254,72 @@ def test_registry_snapshot_trust_requires_closed_graceful_epoch(tmp_path: Path) 
     assert trusted["shutdown_request_id"] == "shutdown.1"
 
 
+def test_registry_runtime_start_trust_allows_current_open_epoch_to_use_projection(
+    tmp_path: Path,
+) -> None:
+    projects = tmp_path / "projects"
+    _write_project(projects, _project("trusted", "scenario:trusted"))
+    service = ApplicationRegistryProjection(tmp_path / "state")
+    _rebuild(service, projects)
+    previous_epoch = service.start_epoch(runtime_instance_id="runtime.previous")
+    service.seal_epoch(previous_epoch["epoch_id"], shutdown_request_id="shutdown.previous")
+    previous_trust = service.snapshot_trust_state()
+
+    service.start_epoch(
+        runtime_instance_id="runtime.current",
+        previous_snapshot_trust=previous_trust,
+    )
+
+    assert service.snapshot_trust_state()["reason"] == "epoch_open"
+    startup_trust = service.runtime_start_snapshot_trust_state()
+    assert startup_trust["trusted_snapshot"] is True
+    assert startup_trust["shutdown_request_id"] == "shutdown.previous"
+    assert service.development_projects_ready(projects, require_trusted_runtime_start=True)
+
+
+def test_registry_runtime_start_requires_full_rebuild_after_ungraceful_snapshot(
+    tmp_path: Path,
+) -> None:
+    projects = tmp_path / "projects"
+    _write_project(projects, _project("recovered", "scenario:recovered"))
+    service = ApplicationRegistryProjection(tmp_path / "state")
+    _rebuild(service, projects)
+    service.start_epoch(runtime_instance_id="runtime.crashed")
+    previous_trust = service.snapshot_trust_state()
+
+    assert previous_trust["reason"] == "epoch_open"
+    service.start_epoch(
+        runtime_instance_id="runtime.restarted",
+        previous_snapshot_trust=previous_trust,
+    )
+    assert not service.development_projects_ready(projects, require_trusted_runtime_start=True)
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("incremental reuse should not satisfy untrusted runtime recovery")
+
+    reused = service.rebuild_development_projects(
+        projects,
+        parser=explode,
+        schema_bytes=compositions._schema_path().read_bytes(),
+    )
+
+    assert reused["reused"] == 1
+    assert reused["allow_reuse"] is True
+    assert not service.development_projects_ready(projects, require_trusted_runtime_start=True)
+
+    rebuilt = service.rebuild_development_projects(
+        projects,
+        parser=compositions._parse_project,
+        schema_bytes=compositions._schema_path().read_bytes(),
+        allow_reuse=False,
+    )
+
+    assert rebuilt["reused"] == 0
+    assert rebuilt["changed"] == 1
+    assert rebuilt["allow_reuse"] is False
+    assert service.development_projects_ready(projects, require_trusted_runtime_start=True)
+
+
 def test_registry_projection_indexes_application_store_inventory(tmp_path: Path) -> None:
     service = ApplicationRegistryProjection(tmp_path / "state")
     store = _FakeApplicationStore(tmp_path / "state" / "applications")
