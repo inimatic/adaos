@@ -1551,3 +1551,28 @@ test fixture. Live qualification of this context fix remains open.
 The focused worker, SQL initialization, retained handoff and outcome regression
 suite also passes in a fresh process after the interrupted run. No parallel
 application-index changes were reverted or disabled.
+
+### 2026-09-16: Successful HTTP Is Not a Complete UI Command
+
+With the complete correction restored, `cycle-2/automation-correction-03`
+completed and passed worker tests. Independent HTTP passed CRUD, optional
+rating, shared ordering, rejected enum/stale writes, the original title-only
+duplicate policy, public discovery and imported metadata. Actual Core migration
+checks passed fresh/reopen, both prior versions and synthetic ledgerless state;
+both published migration checksums remain unchanged.
+
+Wide/compact browser checks still rejected post-delete command availability.
+The model added an updateState step with a new ID beside a named form button.
+Client correctly dispatches only actions sharing that button's ID, so the new
+step was unreachable. Core now diagnoses orphan submit steps in explicit named
+forms, including scenario modals; the bounded capsule and capability catalog
+state the ordered, same-ID, fail-stopping contract. Retained historical sources
+are not revalidated as the candidate. Correct the application through Builder
+and requalify in the browser; do not change Client dispatch to run unrelated
+submit commands or declare HTTP success as complete acceptance.
+
+The clarification suite now includes a real worker fixture with correction ->
+question -> answer -> second question -> answer -> completion. All 19 tests pass
+and both decisions retain the exact original correction. This fixture disables
+runtime materialization and is not evidence for a subsequent UI delivery cycle.
+The live normal correction clears the previous clarification context as expected.

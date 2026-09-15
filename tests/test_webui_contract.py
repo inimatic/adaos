@@ -16,12 +16,32 @@ from adaos.sdk.web import (
     validate_webui,
 )
 from adaos.services.webui_contract import (
+    validate_form_action_bindings,
     validate_skill_tool_references,
     validate_webui_contract,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_named_form_commands_reject_orphan_submit_steps_in_nested_modals():
+    form = {"type": "ui.form", "inputs": {"buttons": [{"id": "remove"}]}, "actions": [
+        {"id": "remove", "on": "submit", "type": "callSkill", "target": "sample.remove"},
+        {"id": "clear_selection", "on": "submit", "type": "updateState", "params": {"selected": ""}},
+    ]}
+    document = {"ui": {"registry": {"modals": {"editor": {"schema": {"widgets": [form]}}}}}}
+    issues = validate_form_action_bindings(document)
+    assert [issue.code for issue in issues] == ["webui.form.submit_action_unreachable"]
+    assert "actions[1]" in issues[0].where
+    assert any(issue.code == issues[0].code for issue in validate_webui_contract(document))
+    form["actions"][1]["id"] = "remove"
+    assert not validate_form_action_bindings(document)
+    form["actions"].append({"on": "change:name", "type": "updateState", "params": {"dirty": True}})
+    assert not validate_form_action_bindings(document)
+    form["inputs"].pop("buttons")
+    form["actions"][1]["id"] = "separate_legacy_submit_step"
+    assert not validate_form_action_bindings(document)
 
 
 def test_same_skill_tool_reference_validation_covers_actions_and_data_sources() -> None:

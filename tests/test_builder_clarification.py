@@ -234,3 +234,52 @@ def test_canonical_change_switch_rejects_stale_question_form(batch, tmp_path, mo
     with pytest.raises(ValueError, match="Change"):
         automation.resume_clarification(object_type="scenario", object_id="sample", interaction_id=first["interaction_id"],
             expected_generation=first["generation"], confirmed=True)
+
+
+def test_worker_repeated_questions_resume_exact_correction_not_initial_brief(batch, tmp_path):
+    from test_builder_automation import _service
+    from adaos.domain.automation_outcome import outcome_message
+    from adaos.services.skill_factory_worker import CodexRunResult
+
+    _service_fixture, fixture = batch
+    questions = fixture["last_failure"]["details"]["clarification_questions"]
+    automation = _service(tmp_path)
+    create_worker = automation.worker_factory
+    prompts = []
+
+    def worker_factory():
+        worker = create_worker()
+        executor = worker.executor
+
+        def execute(**kwargs):
+            prompts.append(kwargs["prompt"])
+            if len(prompts) in {2, 3}:
+                question = questions[len(prompts) - 2]
+                return CodexRunResult(returncode=0, final_message=outcome_message(json.dumps({
+                    "status": "needs_input", "report": "A required scoped decision is missing.",
+                    "questions": [{**question, "options": []}],
+                })))
+            return executor(**kwargs)
+
+        worker.executor = execute
+        return worker
+
+    automation.worker_factory = worker_factory
+    automation.start_from_execute(object_type="scenario", object_id="recipes", implementation_brief="Implement the accepted interface.")
+    correction = "Preserve the existing identifiers and fix rejected deletion; do not redesign."
+    automation.submit_turn(text=correction, object_type="scenario", object_id="recipes")
+    for question, answer in (("scope", "Local owner"), ("retention", "30 days")):
+        state = automation.clarification_state(object_type="scenario", object_id="recipes")
+        assert state["pending"] and state["questions"][0]["id"] == question
+        answered = automation.answer_clarification(object_type="scenario", object_id="recipes",
+            interaction_id=state["interaction_id"], expected_generation=state["generation"],
+            answers={question: answer}, idempotency_key=question)["clarification"]
+        automation.resume_clarification(object_type="scenario", object_id="recipes",
+            interaction_id=state["interaction_id"], expected_generation=answered["generation"], confirmed=True)
+    assert len(prompts) == 4
+    assert all(correction in prompt for prompt in prompts[1:])
+    assert "Local owner" in prompts[2] and "Local owner" in prompts[3] and "30 days" in prompts[3]
+    session = automation.get_session("scenario", "recipes")
+    assert session["status"] == "completed"
+    context = session["clarification_continuation"]["continuation_context"]
+    assert context["paused_instruction"] == correction and len(context["resolutions"]) == 2

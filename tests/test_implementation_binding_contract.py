@@ -34,6 +34,8 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
     assert guide["examples"]["board_move"]["params"]["revision"] == "$event.revision"
     assert "rolls" in guide["binding_rules"]["board_move"]
     assert "on=click:<command>" in guide["binding_rules"]["selection"]
+    assert "SAME id" in guide["binding_rules"]["mutation"]
+    assert "on=submit alone does not bind" in guide["binding_rules"]["mutation"]
     catalog = json.loads((root / "ui.capability_catalog.v1.json").read_text(encoding="utf-8"))
     details = next(item for item in catalog["components"] if item["id"] == "item.details")
     assert "false/throw" in details["manifest"]["commands"]

@@ -17,6 +17,11 @@ _SAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _LOG_DEDUP_TTL_S = 300.0
 _LOG_DEDUP: dict[str, float] = {}
 _DIAGNOSTIC_CATALOG: dict[str, dict[str, str]] = {
+    "webui.form.submit_action_unreachable": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "For named form buttons, give every step in the command the same actions[*].id as inputs.buttons[*].id. on=submit alone does not bind it.",
+    },
     "webui.interface.default_view_unknown": {
         "severity": "error",
         "owner": "skill",
@@ -194,13 +199,41 @@ def validate_webui_contract(
     registry = _mapping(raw.get("registry"))
     modals = _mapping(registry.get("modals"))
     widgets = _list(raw.get("widgets") or _mapping(raw.get("catalog")).get("widgets"))
-    return _validate_contract(
+    return validate_form_action_bindings(raw, source=source) + _validate_contract(
         interfaces=interfaces,
         modals=modals,
         widgets=widgets,
         source=source,
         default_skill=declared_skill,
     )
+
+
+def validate_form_action_bindings(
+    webui: Mapping[str, Any] | None, *, source: str = "webui.json",
+) -> list[WebUiContractIssue]:
+    """Match explicit form command reachability to the Client's ID dispatch."""
+    issues = []
+    for path, widget in _walk_mappings(_mapping(webui)):
+        if widget.get("type") != "ui.form":
+            continue
+        buttons = _mapping(widget.get("inputs")).get("buttons")
+        if not isinstance(buttons, list) or not buttons:
+            continue
+        # Legacy trigger-only forms have a different dispatch contract.
+        if any(not isinstance(button, Mapping) or not button.get("id") for button in buttons):
+            continue
+        ids = {button["id"] for button in buttons if isinstance(button["id"], str)}
+        for index, action in enumerate(_list(widget.get("actions"))):
+            if not isinstance(action, Mapping) or action.get("on") != "submit":
+                continue
+            if not isinstance(action.get("id"), str) or action["id"] not in ids:
+                issues.append(_issue(
+                    "error", "webui.form.submit_action_unreachable",
+                    "Submit action is unreachable: named form buttons execute only matching action IDs. "
+                    "Bind success steps to the same button ID, after its mutation; false/throw stops the sequence.",
+                    f"{source}:{path}.actions[{index}]", source=source,
+                ))
+    return issues
 
 
 def validate_skill_tool_references(

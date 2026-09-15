@@ -1913,6 +1913,35 @@ def test_validation_uses_candidate_not_historical_baseline(tmp_path):
     assert any("broken.py" in error for error in rejected["errors"])
 
 
+def test_worker_rejects_unreachable_form_success_action_before_browser(tmp_path):
+    repo = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "workspace"
+    _core_created_skill_fixture(repo, workspace / "skills", "demo")
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    form = {"id": "editor", "type": "ui.form", "inputs": {"buttons": [{"id": "delete"}]}, "actions": [
+        {"id": "delete", "on": "submit", "type": "callSkill", "target": "demo.remove"},
+        {"id": "clear", "on": "submit", "type": "updateState", "params": {"selected": ""}},
+    ]}
+    document = {"widgets": [form]}
+    path = scenario / "webui.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    history = scenario / ".builder_previous_automation"
+    history.mkdir()
+    (history / "webui.json").write_text(json.dumps(document), encoding="utf-8")
+    worker = LocalSkillFactoryWorker(state_dir=tmp_path / "state", repo_root=repo,
+        dev_skills_root=workspace / "skills", dev_scenarios_root=workspace / "scenarios", runs_root=tmp_path / "runs")
+    assignment = {"target": {"type": "skill", "id": "demo"}, "forge": {"sparse_paths": ["skills/demo/"]}}
+    rejected = worker._validate_workspace(assignment, workspace)
+    assert not rejected["ok"]
+    assert sum("webui.form.submit_action_unreachable" in error for error in rejected["errors"]) == 1
+    form["actions"][1]["id"] = "delete"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    accepted = worker._validate_workspace(assignment, workspace)
+    assert accepted["ok"], accepted["errors"]
+    assert any(check["kind"] == "webui.form_action_bindings.strict" and check["ok"] for check in accepted["checks"])
+
+
 def test_surgical_repair_enforces_exact_files_and_file_count(tmp_path: Path) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",

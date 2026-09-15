@@ -657,6 +657,10 @@ Implementation boundary: Local Trial/promotion mechanisms and historical Equipme
   test doubles. Use disposable empty stores without importing candidate Python
   or accessing installed records; record per-manifest timing. This establishes
   initialization compatibility, not migration correctness on existing records.
+- [x] `[must]` Reject unreachable submit actions in forms with explicit named
+  buttons. Shared command steps use the same action/button ID and ordered,
+  fail-stopping execution; validate skills and scenarios independently of
+  candidate tests. Keep this dispatch rule in the bounded Automation capsule.
 - [ ] `[must]` Expand that independent check to immutable published migration
   history and synthetic fixtures for every supported prior schema. Current
   Reading List E2E checks cover these cases outside the generic worker; keep the

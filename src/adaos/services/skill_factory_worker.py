@@ -6921,8 +6921,16 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             if not self._candidate_file(path, workspace):
                 continue
             try:
-                _loads_strict_json(path.read_text(encoding="utf-8"))
+                payload = _loads_strict_json(path.read_text(encoding="utf-8"))
                 checks.append({"kind": "json", "path": path.relative_to(workspace).as_posix(), "ok": True})
+                if path.name == "webui.json":
+                    from adaos.services.webui_contract import validate_form_action_bindings
+
+                    relative = path.relative_to(workspace).as_posix()
+                    issues = validate_form_action_bindings(payload, source=relative)
+                    checks.append({"kind": "webui.form_action_bindings.strict", "path": relative,
+                                   "ok": not issues, "issues": [issue.to_dict() for issue in issues]})
+                    errors.extend(f"{issue.code}: {issue.message} ({issue.where})" for issue in issues)
             except Exception as exc:
                 errors.append(f"{path.relative_to(workspace)}: {type(exc).__name__}: {exc}")
         for path in sorted([*workspace.rglob("*.yaml"), *workspace.rglob("*.yml")]):
