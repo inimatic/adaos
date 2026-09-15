@@ -18,6 +18,8 @@ APPLICATION_REGISTRY_PROJECTION_SCHEMA_VERSION = 1
 APPLICATION_REGISTRY_PROJECTION_VALIDATOR_VERSION = "apreg.local/1"
 DEVELOPMENT_PROJECT_SOURCE_KIND = "dev_project"
 DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND = "dev_project_manifest"
+APPLICATION_STORE_SOURCE_KIND = "application_store"
+APPLICATION_STORE_RECORD_SOURCE_KIND = "application_store_record"
 
 
 class ApplicationRegistryProjectionError(RuntimeError):
@@ -85,6 +87,29 @@ def _fts_query(value: str) -> str:
 
 def _bounded_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"[:2000]
+
+
+def _record_payload(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return deepcopy(dict(value))
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return deepcopy(dict(to_dict()))
+    return None
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+    observed = getattr(value, name, default)
+    if observed is not default:
+        return observed
+    payload = _record_payload(value)
+    if payload is not None:
+        return payload.get(name, default)
+    return default
 
 
 def _project_manifest_digest(project: Mapping[str, Any]) -> str:
@@ -806,6 +831,221 @@ class ApplicationRegistryProjection:
                 )
                 con.commit()
 
+    def rebuild_application_store(
+        self,
+        store: Any,
+        *,
+        operation_id: str | None = None,
+        validator_version: str = APPLICATION_REGISTRY_PROJECTION_VALIDATOR_VERSION,
+    ) -> dict[str, Any]:
+        op_id = str(operation_id or _operation_id("store_rebuild")).strip()
+        started_at = _now()
+        source_root = str(Path(getattr(store, "root", self.root)).expanduser().resolve())
+        applications = list(store.list_applications())
+        installations = {
+            str(_field(item, "application_id") or ""): item
+            for item in store.list_installations()
+            if str(_field(item, "status") or "") != "removed"
+        }
+        runtime_selections: dict[str, list[Any]] = {}
+        for selection in store.list_runtime_selections():
+            runtime_selections.setdefault(str(_field(selection, "application_id") or ""), []).append(selection)
+        rows: list[dict[str, Any]] = []
+        source_rows: list[dict[str, Any]] = []
+        validation_rows: list[dict[str, Any]] = []
+        for application in applications:
+            application_payload = _record_payload(application)
+            if application_payload is None:
+                continue
+            application_id = str(application_payload.get("application_id") or "").strip()
+            if not application_id:
+                continue
+            installation = installations.get(application_id)
+            installation_payload = _record_payload(installation)
+            selections = [
+                payload
+                for payload in (_record_payload(item) for item in runtime_selections.get(application_id, []))
+                if payload is not None
+            ]
+            try:
+                channels_payload = store.get_channels(application_id)
+                channels = dict(channels_payload.get("channels") or {})
+            except Exception:
+                channels = {}
+            display = application_payload.get("display") if isinstance(application_payload.get("display"), Mapping) else {}
+            title = str(display.get("title") or application_id)
+            description = str(display.get("summary") or "")
+            release_digest = (
+                str(installation_payload.get("installed_release_digest") or "").strip()
+                if installation_payload is not None
+                else ""
+            )
+            payload = {
+                "schema": "adaos.application.registry_application_summary.v1",
+                "source_kind": APPLICATION_STORE_SOURCE_KIND,
+                "application_id": application_id,
+                "source_ref": f"application:{application_id}",
+                "legacy_project_id": application_payload.get("legacy_project_id"),
+                "publisher_ref": application_payload.get("publisher_ref"),
+                "title": title,
+                "description": description,
+                "visibility": application_payload.get("visibility"),
+                "lifecycle": application_payload.get("lifecycle"),
+                "installed": installation_payload is not None,
+                "local_beta_active": any(str(item.get("source") or "") == "local_trial" for item in selections),
+                "release_digest": release_digest or None,
+                "channels": {
+                    "stable": channels.get("stable"),
+                    "prerelease": channels.get("prerelease"),
+                },
+                "application": application_payload,
+                "installation": installation_payload,
+                "runtime_selections": selections,
+            }
+            payload_digest = _digest(payload)
+            source_digest = _digest(
+                {
+                    "application": application_payload,
+                    "installation": installation_payload,
+                    "channels": payload["channels"],
+                    "runtime_selections": selections,
+                }
+            )
+            source_path = Path(source_root) / f"application-{application_id}.json"
+            source_id = _source_identity(APPLICATION_STORE_RECORD_SOURCE_KIND, source_path)
+            timestamp = _now()
+            source_rows.append(
+                {
+                    "schema": "adaos.application.registry_projection_source.v1",
+                    "source_id": source_id,
+                    "source_kind": APPLICATION_STORE_RECORD_SOURCE_KIND,
+                    "source_ref": f"application:{application_id}",
+                    "source_path": str(source_path),
+                    "mtime_ns": None,
+                    "ctime_ns": None,
+                    "size_bytes": None,
+                    "content_digest": source_digest,
+                    "schema_digest": None,
+                    "parse_status": "parsed",
+                    "validation_status": "valid",
+                    "observed_at": timestamp,
+                    "validated_at": timestamp,
+                    "payload_digest": payload_digest,
+                    "error": None,
+                }
+            )
+            validation_rows.append(
+                self._validation_report(
+                    source_id=source_id,
+                    validator_version=validator_version,
+                    status="valid",
+                    checked_digest=source_digest,
+                    checked_at=timestamp,
+                    last_known_good_digest=source_digest,
+                )
+            )
+            rows.append(
+                {
+                    "application": application_payload,
+                    "installation": installation_payload,
+                    "payload": payload,
+                    "payload_digest": payload_digest,
+                    "source_id": source_id,
+                }
+            )
+        with mutation_lock(self.lock_path):
+            with self._connect() as con:
+                con.execute("BEGIN IMMEDIATE")
+                with self._ignore_missing_fts(con):
+                    con.execute(
+                        """
+                        DELETE FROM application_index_fts
+                        WHERE rowid IN (
+                            SELECT rowid FROM application_index WHERE source_kind=?
+                        )
+                        """,
+                        (APPLICATION_STORE_SOURCE_KIND,),
+                    )
+                for table in (
+                    "application_component_index",
+                    "application_entrypoint_index",
+                    "application_index",
+                ):
+                    con.execute(f"DELETE FROM {table} WHERE source_kind=?", (APPLICATION_STORE_SOURCE_KIND,))
+                con.execute(
+                    "DELETE FROM projection_source WHERE source_kind=?",
+                    (APPLICATION_STORE_RECORD_SOURCE_KIND,),
+                )
+                for source in source_rows:
+                    self._upsert_source(con, source)
+                for row in rows:
+                    self._insert_application_store_summary(
+                        con,
+                        row["payload"],
+                        source_id=str(row["source_id"]),
+                        payload_digest=str(row["payload_digest"]),
+                    )
+                    self._replace_application_store_components(
+                        con,
+                        row["payload"],
+                        payload_digest=str(row["payload_digest"]),
+                    )
+                    self._replace_application_store_entrypoints(
+                        con,
+                        row["application"],
+                        payload_digest=str(row["payload_digest"]),
+                    )
+                for report in validation_rows:
+                    self._insert_validation_report(con, report)
+                source_watermark = self._source_watermark(con, APPLICATION_STORE_RECORD_SOURCE_KIND)
+                projection_digest = self._projection_digest(con)
+                completed_at = _now()
+                record = {
+                    "schema": "adaos.application.registry_projection_journal.v1",
+                    "operation_id": op_id,
+                    "action": "rebuild_application_store",
+                    "status": "completed",
+                    "source_path": source_root,
+                    "started_at": started_at,
+                    "updated_at": completed_at,
+                    "completed_at": completed_at,
+                    "source_watermark": source_watermark,
+                    "projection_digest": projection_digest,
+                    "scanned": len(applications),
+                    "indexed": len(rows),
+                    "invalid": 0,
+                }
+                con.execute(
+                    """
+                    INSERT INTO projection_journal(
+                        operation_id, action, status, source_path, started_at,
+                        updated_at, completed_at, source_watermark,
+                        projection_digest, payload_json
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(operation_id) DO UPDATE SET
+                        status=excluded.status,
+                        updated_at=excluded.updated_at,
+                        completed_at=excluded.completed_at,
+                        source_watermark=excluded.source_watermark,
+                        projection_digest=excluded.projection_digest,
+                        payload_json=excluded.payload_json
+                    """,
+                    (
+                        op_id,
+                        "rebuild_application_store",
+                        "completed",
+                        source_root,
+                        started_at,
+                        completed_at,
+                        completed_at,
+                        source_watermark,
+                        projection_digest,
+                        _json_pretty(record),
+                    ),
+                )
+                con.commit()
+        return record
+
     def list_development_projects(
         self,
         *,
@@ -883,6 +1123,26 @@ class ApplicationRegistryProjection:
             ).fetchall()
         return [deepcopy(_load_json(row["payload_json"], {})) for row in rows]
 
+    def applications_for_component(self, component_ref: str, *, limit: int = 500) -> list[dict[str, Any]]:
+        token = str(component_ref or "").strip()
+        if not token:
+            return []
+        maximum = max(1, min(int(limit), 5000))
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                SELECT ai.payload_json
+                FROM application_component_index ac
+                JOIN application_index ai
+                  ON ai.source_kind=ac.source_kind AND ai.application_id=ac.application_id
+                WHERE ac.source_kind=? AND ac.component_ref=? AND ai.validation_status='valid'
+                ORDER BY ai.title COLLATE NOCASE, ai.application_id COLLATE NOCASE
+                LIMIT ?
+                """,
+                (APPLICATION_STORE_SOURCE_KIND, token, maximum),
+            ).fetchall()
+        return [deepcopy(_load_json(row["payload_json"], {})) for row in rows]
+
     def installed_summaries(self, *, limit: int = 500) -> list[dict[str, Any]]:
         maximum = max(1, min(int(limit), 5000))
         with self._connect() as con:
@@ -890,11 +1150,11 @@ class ApplicationRegistryProjection:
                 """
                 SELECT payload_json
                 FROM application_index
-                WHERE installed=1 AND validation_status='valid'
+                WHERE source_kind=? AND installed=1 AND validation_status='valid'
                 ORDER BY title COLLATE NOCASE, application_id COLLATE NOCASE
                 LIMIT ?
                 """,
-                (maximum,),
+                (APPLICATION_STORE_SOURCE_KIND, maximum),
             ).fetchall()
         return [deepcopy(_load_json(row["payload_json"], {})) for row in rows]
 
@@ -905,11 +1165,11 @@ class ApplicationRegistryProjection:
                 SELECT application_id, release_digest, stable_release_digest,
                        prerelease_release_digest, payload_digest
                 FROM application_index
-                WHERE application_id=?
-                ORDER BY source_kind='application_store' DESC, updated_at DESC
+                WHERE source_kind=? AND application_id=?
+                ORDER BY updated_at DESC
                 LIMIT 1
                 """,
-                (str(application_id or "").strip(),),
+                (APPLICATION_STORE_SOURCE_KIND, str(application_id or "").strip()),
             ).fetchone()
         if row is None:
             return None
@@ -1317,6 +1577,167 @@ class ApplicationRegistryProjection:
                 (rowid, application_id, title, description, _search_text(application_id, title, description)),
             )
 
+    def _insert_application_store_summary(
+        self,
+        con: sqlite3.Connection,
+        payload: Mapping[str, Any],
+        *,
+        source_id: str,
+        payload_digest: str,
+    ) -> None:
+        application_id = str(payload["application_id"])
+        title = str(payload.get("title") or application_id)
+        description = str(payload.get("description") or "")
+        channels = payload.get("channels") if isinstance(payload.get("channels"), Mapping) else {}
+        con.execute(
+            """
+            INSERT INTO application_index(
+                source_kind, application_id, source_ref, source_id, kind, title,
+                description, version, publisher_ref, visibility, lifecycle,
+                installed, local_beta, release_digest, stable_release_digest,
+                prerelease_release_digest, source_path, search_text,
+                payload_digest, validation_status, updated_at, payload_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(source_kind, application_id) DO UPDATE SET
+                source_ref=excluded.source_ref,
+                source_id=excluded.source_id,
+                kind=excluded.kind,
+                title=excluded.title,
+                description=excluded.description,
+                version=excluded.version,
+                publisher_ref=excluded.publisher_ref,
+                visibility=excluded.visibility,
+                lifecycle=excluded.lifecycle,
+                installed=excluded.installed,
+                local_beta=excluded.local_beta,
+                release_digest=excluded.release_digest,
+                stable_release_digest=excluded.stable_release_digest,
+                prerelease_release_digest=excluded.prerelease_release_digest,
+                source_path=excluded.source_path,
+                search_text=excluded.search_text,
+                payload_digest=excluded.payload_digest,
+                validation_status=excluded.validation_status,
+                updated_at=excluded.updated_at,
+                payload_json=excluded.payload_json
+            """,
+            (
+                APPLICATION_STORE_SOURCE_KIND,
+                application_id,
+                f"application:{application_id}",
+                source_id,
+                "application",
+                title,
+                description,
+                str((payload.get("application") or {}).get("version") or ""),
+                payload.get("publisher_ref"),
+                str(payload.get("visibility") or ""),
+                str(payload.get("lifecycle") or ""),
+                1 if payload.get("installed") else 0,
+                1 if payload.get("local_beta_active") else 0,
+                payload.get("release_digest"),
+                channels.get("stable"),
+                channels.get("prerelease"),
+                None,
+                _search_text(application_id, title, description),
+                payload_digest,
+                "valid",
+                _now(),
+                _json_pretty(dict(payload)),
+            ),
+        )
+        rowid = con.execute(
+            "SELECT rowid FROM application_index WHERE source_kind=? AND application_id=?",
+            (APPLICATION_STORE_SOURCE_KIND, application_id),
+        ).fetchone()["rowid"]
+        with self._ignore_missing_fts(con):
+            con.execute("DELETE FROM application_index_fts WHERE rowid=?", (rowid,))
+            con.execute(
+                """
+                INSERT INTO application_index_fts(rowid, application_id, title, description, search_text)
+                VALUES(?,?,?,?,?)
+                """,
+                (rowid, application_id, title, description, _search_text(application_id, title, description)),
+            )
+
+    @staticmethod
+    def _replace_application_store_components(
+        con: sqlite3.Connection,
+        payload: Mapping[str, Any],
+        *,
+        payload_digest: str,
+    ) -> None:
+        application_id = str(payload.get("application_id") or "").strip()
+        con.execute(
+            "DELETE FROM application_component_index WHERE source_kind=? AND application_id=?",
+            (APPLICATION_STORE_SOURCE_KIND, application_id),
+        )
+        installation = payload.get("installation") if isinstance(payload.get("installation"), Mapping) else {}
+        for raw in installation.get("component_refs") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            component_ref = str(raw.get("component_ref") or "").strip()
+            if not component_ref:
+                continue
+            con.execute(
+                """
+                INSERT INTO application_component_index(
+                    source_kind, component_ref, application_id, component_role,
+                    lifecycle, exposure, package_digest, payload_digest, payload_json
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    APPLICATION_STORE_SOURCE_KIND,
+                    component_ref,
+                    application_id,
+                    "installed",
+                    str(raw.get("lifecycle") or ""),
+                    "application",
+                    raw.get("package_digest"),
+                    payload_digest,
+                    _json_pretty(dict(raw)),
+                ),
+            )
+
+    @staticmethod
+    def _replace_application_store_entrypoints(
+        con: sqlite3.Connection,
+        application: Mapping[str, Any],
+        *,
+        payload_digest: str,
+    ) -> None:
+        application_id = str(application.get("application_id") or "").strip()
+        con.execute(
+            "DELETE FROM application_entrypoint_index WHERE source_kind=? AND application_id=?",
+            (APPLICATION_STORE_SOURCE_KIND, application_id),
+        )
+        for raw in application.get("entrypoints") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            entrypoint_id = str(raw.get("entrypoint_id") or raw.get("id") or "").strip()
+            if not entrypoint_id:
+                continue
+            payload = dict(raw)
+            con.execute(
+                """
+                INSERT INTO application_entrypoint_index(
+                    source_kind, application_id, entrypoint_id, presentation_ref,
+                    is_default, supported_surfaces_json, binding_summary_json,
+                    payload_digest, payload_json
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    APPLICATION_STORE_SOURCE_KIND,
+                    application_id,
+                    entrypoint_id,
+                    str(payload.get("presentation_ref") or payload.get("presentation") or ""),
+                    1 if payload.get("default") is True else 0,
+                    _json_pretty(payload.get("surfaces") or []),
+                    _json_pretty(payload.get("bindings") or {}),
+                    payload_digest,
+                    _json_pretty(payload),
+                ),
+            )
+
     @staticmethod
     def _replace_project_components(
         con: sqlite3.Connection,
@@ -1501,6 +1922,8 @@ class ApplicationRegistryProjection:
 __all__ = [
     "APPLICATION_REGISTRY_PROJECTION_SCHEMA_VERSION",
     "APPLICATION_REGISTRY_PROJECTION_VALIDATOR_VERSION",
+    "APPLICATION_STORE_RECORD_SOURCE_KIND",
+    "APPLICATION_STORE_SOURCE_KIND",
     "ApplicationRegistryProjection",
     "ApplicationRegistryProjectionError",
     "DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND",

@@ -10,6 +10,92 @@ from adaos.sdk.developer import compositions
 from adaos.services.application_registry_projection import ApplicationRegistryProjection
 
 
+_DIGEST_A = "sha256:" + "a" * 64
+_DIGEST_B = "sha256:" + "b" * 64
+_DIGEST_C = "sha256:" + "c" * 64
+
+
+class _StoreRecord:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def to_dict(self) -> dict:
+        return dict(self._payload)
+
+
+class _FakeApplicationStore:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def list_applications(self) -> tuple[_StoreRecord, ...]:
+        return (
+            _StoreRecord(
+                {
+                    "schema": "adaos.application.v1",
+                    "application_id": "app_demo",
+                    "legacy_project_id": "demo",
+                    "publisher_ref": "subnet:local",
+                    "slug": "app_demo",
+                    "display": {"title": "Demo App", "summary": "Installed demo"},
+                    "visibility": "public",
+                    "entrypoints": [
+                        {"entrypoint_id": "main", "presentation_ref": "skill:demo"}
+                    ],
+                    "publisher": {"publisher_ref": "subnet:local"},
+                    "protection": {},
+                    "lifecycle": "active",
+                    "revision": 1,
+                }
+            ),
+        )
+
+    def list_installations(self) -> tuple[_StoreRecord, ...]:
+        return (
+            _StoreRecord(
+                {
+                    "schema": "adaos.application.installation.v1",
+                    "installation_id": "installation:demo",
+                    "application_id": "app_demo",
+                    "installed_release_digest": _DIGEST_A,
+                    "component_refs": [
+                        {
+                            "component_ref": "skill:demo",
+                            "package_digest": _DIGEST_C,
+                            "lifecycle": "bound",
+                        }
+                    ],
+                    "data_policy": "retain",
+                    "status": "active",
+                    "revision": 1,
+                }
+            ),
+        )
+
+    def list_runtime_selections(self) -> tuple[_StoreRecord, ...]:
+        return (
+            _StoreRecord(
+                {
+                    "schema": "adaos.application.runtime_selection.v1",
+                    "webspace_id": "workspace",
+                    "application_id": "app_demo",
+                    "source": "local_trial",
+                    "release_digest": _DIGEST_B,
+                    "runtime_root_ref": "trial:demo",
+                    "revision": 1,
+                }
+            ),
+        )
+
+    def get_channels(self, application_id: str) -> dict:
+        assert application_id == "app_demo"
+        return {
+            "schema": "adaos.application.channel_set.v1",
+            "application_id": application_id,
+            "revision": 1,
+            "channels": {"stable": _DIGEST_A, "prerelease": _DIGEST_B},
+        }
+
+
 def _project(project_id: str, component_ref: str = "scenario:demo") -> dict:
     return {
         "schema": "adaos.project.v1",
@@ -141,3 +227,28 @@ def test_registry_snapshot_trust_requires_closed_graceful_epoch(tmp_path: Path) 
     assert sealed["seal_status"] == "complete"
     assert trusted["trusted_snapshot"] is True
     assert trusted["shutdown_request_id"] == "shutdown.1"
+
+
+def test_registry_projection_indexes_application_store_inventory(tmp_path: Path) -> None:
+    service = ApplicationRegistryProjection(tmp_path / "state")
+    store = _FakeApplicationStore(tmp_path / "state" / "applications")
+
+    result = service.rebuild_application_store(store, operation_id="store.test")
+
+    assert result["status"] == "completed"
+    assert result["indexed"] == 1
+    summaries = service.installed_summaries()
+    assert len(summaries) == 1
+    assert summaries[0]["application_id"] == "app_demo"
+    assert summaries[0]["title"] == "Demo App"
+    assert summaries[0]["installed"] is True
+    assert summaries[0]["local_beta_active"] is True
+    assert summaries[0]["release_digest"] == _DIGEST_A
+
+    channels = service.release_channel_pointers("app_demo")
+    assert channels is not None
+    assert channels["release_digest"] == _DIGEST_A
+    assert channels["channels"] == {"stable": _DIGEST_A, "prerelease": _DIGEST_B}
+
+    owners = service.applications_for_component("skill:demo")
+    assert [item["application_id"] for item in owners] == ["app_demo"]

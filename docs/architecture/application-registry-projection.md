@@ -479,7 +479,7 @@ inventory queries without scanning manifests.
   journal tables.
 - [x] `[must]` `APREG1-02` Add deterministic projection row digests and source
   watermarks.
-- [ ] `[must]` `APREG1-03` Add query APIs for list/search/detail preflight,
+- [x] `[must]` `APREG1-03` Add query APIs for list/search/detail preflight,
   component reverse lookup, installed summaries, and release/channel pointers.
 - [x] `[must]` `APREG1-04` Add rebuild command and service operation with
   bounded progress, cancellation, and journal records.
