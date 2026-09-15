@@ -195,6 +195,14 @@ integration, not closure of the remaining interaction/continuation obligations.
   the live path, including exact Required actions network approval; input audit
   03 retains the exact resolved question and answer. Wider interruption/partial
   batch coverage and completed continuation acceptance remain in the open gate.
+- [x] `[must]` Preserve the paused correction alongside clarification answers,
+  including repeated rounds without recursively embedding previous prompts.
+  Local regressions cover restart, initial/correction instructions, prior
+  decisions and refusal of missing or ambiguous paused instructions.
+- [ ] `[must]` Qualify correction -> clarification -> resumed correction with a
+  real model, checking semantic input completeness as well as answer provenance.
+  `cycle-2/tool-clarification-01` exposed a lost correction despite structurally
+  valid receipts; it is not positive evidence for this gate.
 - [x] `[should]` Restore the full wrapping application title, clarify revision
   labeling and model component selection, development settings, Preview link/QR,
   informal discussion, platform-request consent and public README editing.

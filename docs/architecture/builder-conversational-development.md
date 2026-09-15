@@ -1146,6 +1146,16 @@ completed response, keeps the same Change and links source Run, response and
 continuation Run. A task already queued for that response is reused, including
 recovery after the session acknowledgement was interrupted.
 
+A clarification continuation carries the exact paused iteration instruction as
+well as the answers. The answer is an amendment to that task, not a replacement
+prompt or a return to the original implementation brief. Repeated question
+rounds retain a flat, provenance-linked list of decisions alongside one paused
+instruction. A request to ask a question is fulfilled by its recorded answer;
+the model must not re-ask it merely because the original brief is retained.
+Missing or ambiguous paused instructions block continuation instead of silently
+dropping the requested correction. A new ordinary correction starts its own
+continuation context; it does not inherit questions from another Change.
+
 The Codex feedback envelope may carry at most eight identified required
 questions under blocking `insufficient_context`. These are necessary user
 decisions, not routine implementation choices or optional UX preferences. A

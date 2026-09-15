@@ -1535,3 +1535,19 @@ question through native clarification, not by disabling structured outcomes or
 treating a model misconception as a new user design decision. The official
 [Codex non-interactive contract](https://developers.openai.com/codex/noninteractive#create-structured-outputs-with-a-schema)
 defines the schema for the final response.
+
+### 2026-09-15: Clarification Must Retain the Paused Task
+
+Native `cycle-2/tool-clarification-01` saved the answer, reloaded it and explicitly
+resumed the same Change. Actual input audit 06 then exposed a context defect:
+the continuation contained the answer referring to three corrections, but not
+those corrections themselves. Structural receipts alone did not detect the
+semantic omission. Clarification now retains the exact paused instruction and
+a flat list of question/answer rounds with Run/response provenance. A missing
+or ambiguous instruction fails closed; normal corrections reset this context.
+All 18 clarification tests pass, including repeated rounds and the real worker
+test fixture. Live qualification of this context fix remains open.
+
+The focused worker, SQL initialization, retained handoff and outcome regression
+suite also passes in a fresh process after the interrupted run. No parallel
+application-index changes were reverted or disabled.

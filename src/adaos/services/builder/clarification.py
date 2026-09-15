@@ -124,14 +124,42 @@ class BuilderClarificationService:
         response = self._latest(record)
         if confirmed is not True or record["status"] != "answered" or not response or response["status"] != "answered":
             raise BuilderClarificationError("All questions and explicit continuation consent are required")
-        # Preserve questions and exact user wording as task input, not inferred requirements.
+        # Resume the paused instruction, not just the answer to its last question.
+        # Keep repeated question rounds flat instead of nesting prior JSON prompts.
+        retained = (session.get("clarification_continuation") or {}).get("continuation_context")
+        if retained is not None:
+            context = deepcopy(retained)
+            if (not isinstance(context, dict) or not isinstance(context.get("paused_instruction"), str)
+                    or not isinstance(context.get("resolutions"), list)):
+                raise BuilderClarificationError("Retained clarification context is invalid")
+        else:
+            iteration = session.get("iteration")
+            turns = [turn for turn in session.get("turns") or []
+                     if isinstance(turn, dict) and turn.get("iteration") == iteration]
+            if iteration == 0:
+                instruction = session.get("implementation_brief")
+            elif len(turns) == 1:
+                instruction = turns[0].get("text")
+            else:
+                instruction = None
+            if not isinstance(instruction, str) or not instruction.strip():
+                raise BuilderClarificationError("The exact paused Automation instruction is unavailable")
+            context = {"paused_instruction": instruction, "resolutions": []}
         values = response["values"]
-        prompt = "User clarification for the same accepted requirements. Continue the paused work; do not broaden scope.\n" + json.dumps(
-            {"source_run_id": record["metadata"]["binding"]["run_id"], "response_id": response["response_id"],
-             "answers": [{"question": item["question"], "answer": values[item["id"]]} for item in record["metadata"]["questions"]]},
-            ensure_ascii=False, indent=2)
+        context["resolutions"].append({
+            "source_run_id": record["metadata"]["binding"]["run_id"], "response_id": response["response_id"],
+            "answers": [{"question_id": item["id"], "question": item["question"], "answer": values[item["id"]]}
+                        for item in record["metadata"]["questions"]],
+        })
+        prompt = (
+            "Continue the same paused Automation instruction; do not broaden scope. "
+            "The decisions below resolve the cited questions, including any earlier instruction to ask them. "
+            "They supplement, not replace, the requested work.\n\n## Paused Automation instruction\n\n"
+            + context["paused_instruction"] + "\n\n## Resolved clarification decisions\n\n"
+            + json.dumps(context["resolutions"], ensure_ascii=False, indent=2)
+        )
         return {"text": prompt, "response_id": response["response_id"], "interaction_id": interaction_id,
-                "source_run_id": record["metadata"]["binding"]["run_id"]}
+                "source_run_id": record["metadata"]["binding"]["run_id"], "continuation_context": context}
 
     def complete(self, session, *, interaction_id, expected_generation, continuation_task_id):
         with self._lock(interaction_id):

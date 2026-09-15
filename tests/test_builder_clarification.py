@@ -22,6 +22,8 @@ def batch(tmp_path, monkeypatch):
     ]
     session = {"object_type": "scenario", "object_id": "sample", "session_id": "automation.scenario.sample",
                "current_task_id": "task.1", "canonical_change_id": "change.1", "iteration": 1,
+               "implementation_brief": "Implement the accepted prototype.",
+               "turns": [{"iteration": 1, "text": "Correct deletion without changing the accepted layout."}],
                "prototype_acceptance": {"digest": "accepted.1"},
                "last_failure": {"failure_class": "user_input_required", "details": {"clarification_questions": questions}}}
     service = BuilderClarificationService(tmp_path)
@@ -47,9 +49,50 @@ def test_questions_survive_restart_partial_answers_and_explicit_continuation(bat
     continued = service.resume_input(session, interaction_id=complete["interaction_id"], expected_generation=complete["generation"], confirmed=True)
     assert "30 days" in continued["text"] and "Local owner" in continued["text"]
     assert continued["source_run_id"] == "task.1"
+    assert session["turns"][0]["text"] in continued["text"]
     record = service.complete(session, interaction_id=complete["interaction_id"], expected_generation=complete["generation"], continuation_task_id="task.2")
     assert record["completed_at"] and record["status"] == "completed"
     assert service.complete(session, interaction_id=complete["interaction_id"], expected_generation=complete["generation"], continuation_task_id="task.2") == record
+
+
+def _answer_batch(service, session, key="answer"):
+    first = service.project(session)
+    answered = service.answer(session, interaction_id=first["interaction_id"], expected_generation=first["generation"],
+        answers={item["id"]: "Explicit decision: " + item["id"] for item in first["questions"]}, idempotency_key=key)
+    return dict(interaction_id=first["interaction_id"], expected_generation=answered["generation"], confirmed=True)
+
+
+def test_repeated_clarification_keeps_paused_correction_and_prior_decisions_flat(batch):
+    service, session = batch
+    first = service.resume_input(session, **_answer_batch(service, session))
+    source = deepcopy(session)
+    source.update(iteration=2, current_task_id="task.2",
+                  clarification_continuation={key: value for key, value in first.items() if key != "text"})
+    source["turns"].append({"iteration": 2, "text": first["text"]})
+    source["last_failure"]["details"]["clarification_questions"] = [
+        {"id": "audit", "question": "Which audit trail?", "reason": "Required destination."}]
+    second = BuilderClarificationService(service.state_dir).resume_input(source, **_answer_batch(service, source))
+    assert second["text"].count(session["turns"][0]["text"]) == 1
+    assert second["text"].count("## Resolved clarification decisions") == 1
+    assert "Explicit decision: scope" in second["text"] and "Explicit decision: audit" in second["text"]
+    assert [item["source_run_id"] for item in second["continuation_context"]["resolutions"]] == ["task.1", "task.2"]
+    assert len(first["continuation_context"]["resolutions"]) == 1
+
+
+def test_initial_clarification_retains_original_instruction(batch):
+    service, session = batch
+    session.update(iteration=0, turns=[])
+    continued = service.resume_input(session, **_answer_batch(service, session))
+    assert continued["continuation_context"]["paused_instruction"] == session["implementation_brief"]
+
+
+@pytest.mark.parametrize("turns", [[], [{"iteration": 0, "text": "Wrong iteration"}],
+    [{"iteration": 1, "text": "First"}, {"iteration": 1, "text": "Ambiguous"}]])
+def test_missing_paused_correction_cannot_silently_resume_initial_brief(batch, turns):
+    service, session = batch
+    session["turns"] = turns
+    with pytest.raises(BuilderClarificationError, match="exact paused"):
+        service.resume_input(session, **_answer_batch(service, session))
 
 
 def test_lost_answer_ack_is_idempotent_but_reused_key_cannot_change_answer(batch):
