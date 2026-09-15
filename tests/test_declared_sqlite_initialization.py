@@ -110,3 +110,36 @@ def test_sdk_uses_declared_path_and_actual_dev_scope_only(monkeypatch, tmp_path)
         with pytest.raises(RuntimeError, match="a_ensure_database"):
             lifecycle.ensure_database("sample.db")
     asyncio.run(misuse())
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_sdk_trial_verifies_existing_chain_without_requesting_dev(monkeypatch, tmp_path, complete):
+    from adaos.sdk.data import lifecycle
+    from adaos.services.applications.trial_runtime import TrialPaths, TrialRuntimeUnavailable
+
+    owner = SimpleNamespace(paths=SimpleNamespace(package_path=lambda: tmp_path / "package", subnet_id="sn-test"))
+    paths = TrialPaths(owner, tmp_path / "trials/candidate-example")
+    with pytest.raises(TrialRuntimeUnavailable):
+        paths.dev_skills_dir()
+    source = paths.root / "skills/sample"
+    source.mkdir(parents=True)
+    manifest = source / "skill.yaml"
+    declaration = {"data_lifecycle": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": [
+        {"path": "sample.db", "migrations": [{"version": item.version, "name": item.name, "statements": list(item.statements)} for item in CHAIN]}]}}
+    manifest.write_text(yaml.safe_dump(declaration), encoding="utf-8")
+    current = SimpleNamespace(name="sample", path=source)
+    ctx = SimpleNamespace(paths=paths, skill_ctx=SimpleNamespace(get=lambda: current))
+    monkeypatch.setattr(lifecycle, "require_ctx", lambda *args: ctx)
+    monkeypatch.setattr(lifecycle, "require_skill_capability", lambda *args: SimpleNamespace(manifest_path=manifest))
+    data = paths.root / "skills/.runtime/sample/v0.1/data"
+    data.mkdir(parents=True)
+    database = data / "sample.db"
+    initialize_sqlite_schema(database, CHAIN if complete else CHAIN[:1])
+    original = database.read_bytes()
+    monkeypatch.setattr(lifecycle, "resolve_skill_data_root", lambda *args: data)
+    if complete:
+        assert lifecycle.ensure_database("sample.db")["applied_versions"] == []
+    else:
+        with pytest.raises(ValueError, match="fenced Beta"):
+            lifecycle.ensure_database("sample.db")
+    assert database.read_bytes() == original

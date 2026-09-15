@@ -58,6 +58,12 @@ try {
       return widget(form).locator(`[data-webui-field-id=${JSON.stringify(matches[0].id)}]`)
     }
     const reveal = id => revealPrototypeWidget(page, widgets, specification(id))
+    const waitForApplication = async () => {
+      const navigation = widgets.find(item => item.inputs?.variant === 'tabs')
+      await widget(navigation?.id || 'books_list').waitFor({ timeout: 60000 })
+      await reveal('books_list')
+      await widget('books_list').waitFor({ timeout: 60000 })
+    }
     const close = async () => {
       const modal = page.locator('ion-modal.show-modal').last()
       await modal.getByRole('button', { name: /^(close|закрыть)$/i }).click()
@@ -118,9 +124,7 @@ try {
         await tile.click()
         check('production-desktop-beta-launcher')
       }
-      await page.locator('[data-webui-widget-id]').first().waitFor({ timeout: 60000 })
-      await reveal('books_list')
-      await widget('books_list').waitFor({ timeout: 60000 })
+      await waitForApplication()
       if (trial) await availability('beta-open')
       await capture('initial')
       await widget('open-book_create').getByRole('button').click()
@@ -230,7 +234,7 @@ try {
         await expect(tile.locator('.release-review-badge')).toHaveText(/BETA/i)
         await availability('return-home')
         await tile.click()
-        await widget('books_list').waitFor({ timeout: 60000 })
+        await waitForApplication()
         await availability('beta-reopen')
         check('return-home-and-reopen-beta')
         await home().click()

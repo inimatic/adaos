@@ -25,7 +25,10 @@ def main():
     parser.add_argument("--browser", action="store_true", help="Run independent desktop/mobile interactions")
     parser.add_argument("--discovery", action="store_true", help="Qualify an explicit public API query and import, without sending library contents")
     parser.add_argument("--trial", type=Path, help="Exact admitted local Trial receipt")
+    parser.add_argument("--stable", action="store_true", help="Verify this Trial's retained writes after native Stable acceptance")
     args = parser.parse_args()
+    if args.stable and (not args.trial or not args.resume or args.browser):
+        parser.error("Stable adoption review requires an exact Trial and its retained HTTP writes")
     load_dotenv()
     root = Path.cwd()
     output = args.output.resolve()
@@ -52,6 +55,11 @@ def main():
         assert trial["builder_placement"]["target"]["space_kind"] == "workspace"
         webspace = trial["builder_placement"]["target"]["webspace_id"]
         dev_before = hashlib.sha256(dev_database.read_bytes()).hexdigest()
+        if args.stable:
+            from adaos.services.applications.store import ApplicationStore
+            selection = ApplicationStore(root / ".adaos/state").get_runtime_selection(webspace, identifier)
+            assert selection.source == "stable_installation" and selection.runtime_root_ref == "workspace"
+            assert selection.release_digest == trial["placement"]["runtime_selection"]["release_digest"]
     if args.browser:
         if args.resume:
             parser.error("Browser review and restart verification are separate phases")
@@ -80,7 +88,8 @@ def main():
               "scenario": identifier, "task": task, "source_sha256": source_digest,
               "checks": [], "calls": [], "records": [], "passed": False}
     if trial:
-        report.update(scope="Independent local Trial-owner HTTP acceptance; not external distribution",
+        report.update(scope=("Native Stable adoption of retained Beta writes" if args.stable
+                             else "Independent local Trial-owner HTTP acceptance; not external distribution"),
                       trial=trial["placement"]["runtime_selection"], dev_database_before=dev_before)
 
     def call(tool, *, rejected=False, **values):
@@ -94,8 +103,11 @@ def main():
                                 "elapsed_ms": round((perf_counter() - started) * 1000, 2),
                                 "ok": response.ok and body.get("ok") is not False})
         if trial and response.ok:
-            assert response.headers.get("X-AdaOS-Runtime-Source") == "trial"
-            assert response.headers.get("X-AdaOS-Release-Digest") == report["trial"]["release_digest"]
+            if args.stable:
+                assert response.headers.get("X-AdaOS-Runtime-Source") != "trial"
+            else:
+                assert response.headers.get("X-AdaOS-Runtime-Source") == "trial"
+                assert response.headers.get("X-AdaOS-Release-Digest") == report["trial"]["release_digest"]
         if rejected:
             assert response.status_code in (400, 409, 422) or (response.ok and (body.get("ok") is False or body.get("result", {}).get("ok") is False)), f"{tool}: expected rejection, HTTP {response.status_code}"
             return body
@@ -126,6 +138,10 @@ def main():
             if previous.get("settings_written"):
                 expected_settings = previous["settings_written"]
                 actual_settings = call("read_settings")["item"]
+                if args.stable:
+                    # Adoption advances configuration identity but must keep the
+                    # owner's Beta values, not require an obsolete revision.
+                    expected_settings = {key: value for key, value in expected_settings.items() if key != "revision"}
                 check("restart-preserves-settings", all(actual_settings.get(key) == value for key, value in expected_settings.items()))
             # Only records created by this review are removed, through public tools.
             for expected in previous["records"]:

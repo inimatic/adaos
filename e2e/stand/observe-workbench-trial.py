@@ -7,11 +7,14 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+import requests
 
+from adaos.apps.cli.active_control import resolve_control_token
 from adaos.e2e.builder import _write_json
 from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel
 from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition
 from adaos.services.applications.store import ApplicationStore
+from adaos.services.applications.service import ApplicationService
 from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
 
 
@@ -67,11 +70,23 @@ def main():
         assert proof["operation_id"] == operation_id and transition["completed"]
         assert transition["intent"]["contract_digest"] == proof["contract_digest"]
         assert set(transition["receipts"]) == {"snapshot_migrate_data", "inherit_configuration", "activate_verify"}
+        model = next(item for item in ApplicationService(store).list_models()
+                     if item["application"]["application_id"] == identifier)
+        assert model["local_beta_active"] and model["use_prerelease"]
+        hub = "http://127.0.0.1:8778"
+        catalog = requests.get(hub + "/api/node/yjs/webspaces/" + selection.webspace_id + "/catalog/apps",
+                               headers={"X-AdaOS-Token": resolve_control_token(base_url=hub)}, timeout=30)
+        catalog.raise_for_status()
+        launchers = [item for item in catalog.json()["items"] if item.get("scenario_id") == identifier]
+        assert len(launchers) == 1 and launchers[0]["release_stage"] == "beta"
+        assert launchers[0]["component_update"]["candidate"]["id"] == candidate
         report.update(passed=True, builder_placement=placement, delivery=delivery,
                       placement={"runtime_selection": selection.to_dict()},
                       operation={"id": operation_id, "completed": True, "contract_digest": proof["contract_digest"],
                                  "steps": list(transition["receipts"])},
-                      all_selected_webspaces=[item.webspace_id for item in selections])
+                      all_selected_webspaces=[item.webspace_id for item in selections],
+                      desktop={"count": len(launchers), "release_stage": "beta", "execution": "requires-independent-review"},
+                      flags={key: model[key] for key in ("use_prerelease", "local_beta_active", "prerelease_following")})
     except Exception as exc:
         report["failure"] = {"type": type(exc).__name__, "message": str(exc)}
     finally:

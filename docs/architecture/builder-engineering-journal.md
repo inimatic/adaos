@@ -1344,3 +1344,30 @@ must not export library records; their tests retain only outcome metadata and
 changelog-panel images. Beta/Stable cutover is still a separate unqualified gate.
 Visible actions without a selected record remain a UX follow-up, not a claimed
 fix or a reason to regenerate the accepted Prototype during Automation.
+
+### 2026-09-15: Native Beta Cutover And Runtime Qualification Blockers
+
+Native Builder migrated the two existing Stable records into Beta 0.1.4 and
+selected it on the production desktop. Placement projection initially rejected
+the already defined `snapshot` storage mode. The placement ABI and validator now
+preserve it, with Trial-ABI parity and exact replay regression coverage. The
+native publication form remains reachable during Trial review. Reconciliation
+refreshes workflow generation after runtime refresh while refusing a different
+Candidate, package, release or decision. DEV Builder 0.2.148 includes that fix;
+111 control-skill and 24 scenario tests pass. Successful browser reconciliation
+did not change the Beta database hash or rerun migration.
+
+`cycle-1/beta-observed-02.json` independently confirms the completed migration
+transaction, one desktop Beta icon, effective prerelease=true and external
+prerelease-following=false. This is not execution acceptance. Browser execution
+then exposed SQLite SDK initialization calling a forbidden DEV accessor on
+immutable Trial paths. The SDK now treats the trusted Trial channel as installed,
+without probing DEV. Real TrialPaths tests verify a complete chain reopens without
+mutation and an incomplete chain still requires fenced migration. The related
+28 tests pass; live requalification follows the coordinated API restart.
+
+Keep the SDK lifecycle coordinator's equivalent asynchronous placement path in
+the final parity audit. A healthy transport/widget-status chip is not evidence
+that application reads or writes succeeded; independent HTTP/browser assertions
+must continue checking actual tool responses. Installed data is not exported in
+these reports.

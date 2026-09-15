@@ -40,7 +40,8 @@ def ensure_database(path: str) -> dict:
     if destination.resolve() != destination or not destination.is_relative_to(root):
         raise ValueError("Database path escaped the current skill's data root or used a link")
     source = Path(current.path).resolve()
-    getter = getattr(ctx.paths, "dev_skills_dir", None)
+    trial = str(getattr(ctx.paths, "runtime_channel_ref", "workspace")).startswith("trial:")
+    getter = None if trial else getattr(ctx.paths, "dev_skills_dir", None)
     dev = Path(getter()).resolve() if getter else None
     development = bool(dev and (source.is_relative_to(dev / current.name)
                                or source.is_relative_to(dev / ".runtime" / current.name)))
