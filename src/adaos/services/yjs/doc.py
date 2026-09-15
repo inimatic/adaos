@@ -180,6 +180,98 @@ def _invalidate_live_map_value_cache_for_roots(webspace_id: str, root_names: lis
         invalidate_live_map_value_cache(webspace_id, map_name=root)
 
 
+def _create_yjs_update_message(update: bytes) -> bytes | None:
+    try:
+        from ypy_websocket import yutils as _ypy_yutils  # pylint: disable=import-outside-toplevel
+
+        create_update_message = getattr(_ypy_yutils, "create_update_message", None)
+        if not callable(create_update_message):
+            return None
+        return bytes(create_update_message(bytes(update or b"")))
+    except Exception:
+        _log.debug("failed to create Yjs update message for live-room broadcast", exc_info=True)
+        return None
+
+
+async def _send_live_room_client_update(client: Any, message: bytes) -> None:
+    send = getattr(client, "send", None)
+    if not callable(send):
+        return
+    result = send(message)
+    if inspect.isawaitable(result):
+        await result
+
+
+def _schedule_live_room_client_broadcast(
+    room: Any,
+    update: bytes | bytearray | memoryview | None,
+) -> dict[str, Any]:
+    update_bytes = bytes(update or b"")
+    result: dict[str, Any] = {
+        "direct_client_broadcast_clients": 0,
+        "direct_client_broadcast_scheduled": 0,
+        "direct_client_broadcast_bytes": len(update_bytes),
+        "direct_client_broadcast_reason": None,
+        "direct_client_broadcast_error": None,
+    }
+    if not update_bytes:
+        result["direct_client_broadcast_reason"] = "empty_update"
+        return result
+    clients = list(getattr(room, "clients", []) or [])
+    result["direct_client_broadcast_clients"] = len(clients)
+    if not clients:
+        result["direct_client_broadcast_reason"] = "no_clients"
+        return result
+    message = _create_yjs_update_message(update_bytes)
+    if not message:
+        result["direct_client_broadcast_reason"] = "message_unavailable"
+        return result
+
+    tracked_client_send = getattr(room, "_tracked_client_send", None)
+    task_group = getattr(room, "_task_group", None)
+    start_soon = getattr(task_group, "start_soon", None)
+    if callable(tracked_client_send) and callable(start_soon):
+        scheduled = 0
+        for client in clients:
+            try:
+                start_soon(tracked_client_send, client, message, len(update_bytes))
+                scheduled += 1
+            except Exception as exc:
+                result["direct_client_broadcast_error"] = f"{type(exc).__name__}: {exc}"
+                _log.debug("failed scheduling tracked live-room client broadcast", exc_info=True)
+        result["direct_client_broadcast_scheduled"] = scheduled
+        result["direct_client_broadcast_reason"] = "task_group"
+        return result
+
+    loop = getattr(room, "_loop", None)
+    if loop is None or not getattr(loop, "is_running", lambda: False)():
+        result["direct_client_broadcast_reason"] = "loop_not_running"
+        return result
+
+    scheduled = 0
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    for client in clients:
+        try:
+            if current_loop is loop:
+                loop.create_task(_send_live_room_client_update(client, message))
+            else:
+                loop.call_soon_threadsafe(
+                    lambda target=client: loop.create_task(
+                        _send_live_room_client_update(target, message)
+                    )
+                )
+            scheduled += 1
+        except Exception as exc:
+            result["direct_client_broadcast_error"] = f"{type(exc).__name__}: {exc}"
+            _log.debug("failed scheduling live-room client broadcast", exc_info=True)
+    result["direct_client_broadcast_scheduled"] = scheduled
+    result["direct_client_broadcast_reason"] = "loop"
+    return result
+
+
 def _resolve_yjs_write_owner() -> str:
     try:
         current = getattr(get_ctx(), "skill_ctx", None)
@@ -648,6 +740,7 @@ def _schedule_room_update(
                     governed=True,
                 )
             Y.apply_update(room.ydoc, update)
+            _schedule_live_room_client_broadcast(room, update)
             _invalidate_live_map_value_cache_for_roots(webspace_id, None)
         except Exception:
             pass
@@ -1230,6 +1323,7 @@ async def async_get_ydoc(
                     update = _encode_diff(ydoc, persist_before)
                     _record_doc_timing(timings, "encode_diff", stage_started, prefix=timing_prefix)
                     persisted = False
+                    broadcast_scheduled = False
                     if update:
                         try:
                             stage_started = time.perf_counter()
@@ -1258,6 +1352,10 @@ async def async_get_ydoc(
                             already_persisted=persisted,
                             governed=True,
                         )
+                        stage_started = time.perf_counter()
+                        _schedule_live_room_client_broadcast(room, update)
+                        _record_doc_timing(timings, "room_update", stage_started, prefix=timing_prefix)
+                        broadcast_scheduled = True
                         if write_update_callback is not None:
                             try:
                                 write_update_callback(
@@ -1276,7 +1374,8 @@ async def async_get_ydoc(
                                 _log.debug("async_get_ydoc write update callback failed", exc_info=True)
                     else:
                         _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
-                    _set_doc_timing(timings, "room_update", 0.0, prefix=timing_prefix)
+                    if not broadcast_scheduled:
+                        _set_doc_timing(timings, "room_update", 0.0, prefix=timing_prefix)
                 else:
                     stage_started = time.perf_counter()
                     update = _encode_diff(ydoc, before)
@@ -1423,6 +1522,11 @@ def _execute_live_room_mutation(
         "encode_mode": "transaction_diff",
         "mutator_result": None,
         "error": None,
+        "direct_client_broadcast_clients": 0,
+        "direct_client_broadcast_scheduled": 0,
+        "direct_client_broadcast_bytes": 0,
+        "direct_client_broadcast_reason": None,
+        "direct_client_broadcast_error": None,
     }
     current_room = _resolve_live_room(webspace_id)
     if (
@@ -1521,6 +1625,7 @@ def _execute_live_room_mutation(
                 already_persisted=False,
                 governed=True,
             )
+            result.update(_schedule_live_room_client_broadcast(room, update))
             _invalidate_live_map_value_cache_for_roots(webspace_id, root_names)
     except Exception as exc:
         result["reason"] = "error"
@@ -1573,6 +1678,11 @@ async def submit_live_room_mutation(
             "encode_mode": "none",
             "mutator_result": None,
             "error": None,
+            "direct_client_broadcast_clients": 0,
+            "direct_client_broadcast_scheduled": 0,
+            "direct_client_broadcast_bytes": 0,
+            "direct_client_broadcast_reason": None,
+            "direct_client_broadcast_error": None,
         }
         _record_live_room_command(result)
         return result
@@ -1628,6 +1738,11 @@ async def submit_live_room_mutation(
             "encode_mode": "none",
             "mutator_result": None,
             "error": "owner_loop_not_running",
+            "direct_client_broadcast_clients": 0,
+            "direct_client_broadcast_scheduled": 0,
+            "direct_client_broadcast_bytes": 0,
+            "direct_client_broadcast_reason": None,
+            "direct_client_broadcast_error": None,
         }
     _record_live_room_command(result)
     return result
@@ -1710,6 +1825,7 @@ def apply_update_to_live_room(
                 already_persisted=False,
                 governed=False,
             )
+            _schedule_live_room_client_broadcast(room, update)
             _invalidate_live_map_value_cache_for_roots(webspace_id, root_names)
         except Exception:
             pass

@@ -1348,6 +1348,57 @@ async def test_submit_live_room_mutation_awaits_direct_transaction_diff(monkeypa
     assert diagnostics["direct_total"] == 2
 
 
+async def test_submit_live_room_mutation_schedules_client_broadcast(monkeypatch) -> None:
+    webspace_id = "live-room-command-broadcast"
+    room_doc = Y.YDoc()
+    scheduled: list[tuple[object, tuple[object, ...]]] = []
+
+    class _TaskGroup:
+        def start_soon(self, fn, *args) -> None:
+            scheduled.append((fn, args))
+
+    async def _tracked_client_send(_client, _message, _update_bytes) -> None:
+        return None
+
+    client = object()
+    room = SimpleNamespace(
+        ydoc=room_doc,
+        ystore=object(),
+        _task_group=_TaskGroup(),
+        _thread_id=threading.get_ident(),
+        _loop=asyncio.get_running_loop(),
+        clients=[client],
+        _tracked_client_send=_tracked_client_send,
+    )
+    monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: room)
+    monkeypatch.setattr(ydoc_module, "mark_backend_room_update", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        ydoc_module,
+        "_create_yjs_update_message",
+        lambda update: b"update:" + bytes(update or b""),
+    )
+
+    result = await ydoc_module.submit_live_room_mutation(
+        webspace_id,
+        lambda ydoc, txn: ydoc.get_map("registry").set(txn, "revision", 7),
+        root_names=["registry"],
+        governed=True,
+    )
+
+    assert result["applied"] is True
+    assert result["changed"] is True
+    assert result["direct_client_broadcast_clients"] == 1
+    assert result["direct_client_broadcast_scheduled"] == 1
+    assert result["direct_client_broadcast_bytes"] == result["update_bytes"]
+    assert result["direct_client_broadcast_reason"] == "task_group"
+    assert len(scheduled) == 1
+    fn, args = scheduled[0]
+    assert fn is _tracked_client_send
+    assert args[0] is client
+    assert args[1].startswith(b"update:")
+    assert args[2] == result["update_bytes"]
+
+
 async def test_submit_live_room_mutation_rejects_stale_room_generation(monkeypatch) -> None:
     webspace_id = "live-room-command-stale-generation"
     room_doc = Y.YDoc()
