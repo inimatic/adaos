@@ -4278,6 +4278,11 @@ def test_automation_prompt_keeps_release_contract_but_not_runtime_values() -> No
     projection = _context_packet_prompt_projection(packet)
     assert projection["facets"]["data_policy"]["local_release_lifecycle"] == contract
     assert "private-value" not in json.dumps(projection)
+    settings = contract["configuration_contract"]
+    assert "expected_revision=revision" in settings["write"]
+    assert "configuration.write" in settings["write"]
+    assert "a_read()" in settings["async"]
+    assert "legacy schema" in " ".join(contract["rules"])
 
 
 def test_context_packet_compacts_accepted_prototype_and_resolved_issues() -> None:

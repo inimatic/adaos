@@ -33,6 +33,8 @@ def main():
     parser.add_argument("--codex-model", default="gpt-5.5")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.inspect and args.exercise_test:
+        parser.error("Inspect-only mode cannot create, refine or automate a TEST application")
     load_dotenv()
     if os.getenv("ENV_TYPE") != "dev":
         parser.error("Requires ENV_TYPE=dev")

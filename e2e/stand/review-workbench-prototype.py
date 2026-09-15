@@ -28,10 +28,18 @@ def main():
     identity = created["id"]
     if not identity.startswith("workbench_test_") or created["result"]["project"]["created_by"] != "builder.user":
         parser.error("Owned UI creation receipt required")
+    if "requests" in preview:
+        navigations = [row.get("response", {}).get("result", {}).get("navigation")
+                       for row in preview["requests"]
+                       if row.get("body", {}).get("tool", "").endswith(":open_preview")]
+        preview = next((row for row in reversed(navigations) if row), {})
     target = parse_qs(urlparse(preview["url"]).query)
     if target.get("expected_scenario_id") != [identity] or target.get("webspace_id") != ["desktop-dev-dev"]:
         parser.error("Preview must match the single paired DEV Builder destination")
     source = Path(".adaos/dev/sn_6acf0c01/scenarios") / identity
+    current_revision = (source / "ui_revisions/current.txt").read_text(encoding="utf-8").strip()
+    if target.get("expected_revision") not in (None, [current_revision]):
+        parser.error("Preview receipt is stale; reopen the current revision through Builder")
     payload = json.loads((source / "webui.json").read_text(encoding="utf-8"))
     widgets = payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
     collection = next((row for row in widgets if row["type"] in ("ui.list", "ui.table")), {})

@@ -258,8 +258,10 @@ history. Materialization applies the selected scenario content as an explicit
 payload override without rewriting the scenario pointer or the selected
 Lifecycle node.
 
-`follow_active=true` means the target is initially resolved from
-`workflow.active_phase`; an explicit historical selection is read-only and
+`follow_active=true` means the target is resolved from `workflow.active_phase`
+and its current revision on each explicit Open Preview, including when the
+paired Webspace already exists. A retained last-rendered revision is not a pin
+in this mode. An explicit historical selection is read-only and
 does not change that phase. The Builder header presents the editable process
 (`WORKING`) and the rendered target (`VIEWING`) separately so a user can move
 through the tree without mistaking navigation for a state transition.

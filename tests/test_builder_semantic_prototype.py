@@ -33,6 +33,22 @@ def test_evidence_capacity_is_independent_of_ui_component_capacity():
         semantic_prototype_provider_contract(version="v2", brief=brief)
 
 
+def test_nonvisual_process_constraints_remain_in_compiled_provenance_not_ui_bindings():
+    brief, semantic = _multi_resource_fixture()
+    brief.setdefault("residual_requirements", []).append({"id": "residual:process", "statement":
+        "Do not inspect installed records, settings or secrets", "evidence": ["intent.statement"], "confidence": 1.0})
+    candidate = _multi_resource_candidate(semantic)
+    result = compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert result["validation"]["ok"]
+    metadata = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"]
+    assert metadata["process_constraints"][0]["id"] == "residual:process"
+    assert not any(item["requirement_ref"] == "residual:process" for item in result["semantic_document"]["requirement_bindings"])
+    # Unknown product requirements cannot use this path to bypass coverage.
+    brief["residual_requirements"][-1]["statement"] = "Retain the queue when the editor closes"
+    with pytest.raises(BuilderWorkflowError, match="no semantic binding or gap"):
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+
+
 def _text(key: str, en: str, ru: str) -> dict[str, str]:
     return {"key": key, "en": en, "ru": ru}
 

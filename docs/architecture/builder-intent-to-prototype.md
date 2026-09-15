@@ -21,6 +21,18 @@ Client decontamination and component-system growth.
 
 ## Architecture Decision
 
+Product behavior and Builder process instructions have different verification
+owners. Explicit instructions about stage authorization, private installed data,
+source identity preservation and future Automation scope remain traceable
+`process_constraints` in model context and compiled metadata. They are not
+requests for widgets, capability gaps or proof of completed implementation.
+Core stage/data boundaries and independent source review own their verification;
+Automation-scope instructions must survive the handoff. Old immutable Briefs
+are projected without changing their content addresses. Ambiguous application
+rules stay in the required UI inventory; a broad negative-word filter is unsafe.
+The implemented explicit EN/RU classifier is a narrow guard, not general semantic
+intent understanding. BIP-10 still owns that unfinished work.
+
 Builder must compile ordinary user intent through reviewable typed
 representations, not compensate for missing product understanding with finished
 application recipes or cumulative renderer prompts.

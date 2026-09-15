@@ -22,6 +22,40 @@ def test_explicit_open_recreates_missing_preview_with_exact_revision(monkeypatch
     })]
 
 
+@pytest.mark.parametrize("exists", [False, True])
+def test_open_follow_active_resolves_current_revision_not_retained_pin(monkeypatch, exists):
+    from adaos.services.workspaces import index
+
+    service = _Workbench()
+    validated = []
+    service.relationships = SimpleNamespace(require_preview_target=validated.append)
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(index, "get_workspace", lambda _: {} if exists else None)
+    calls = []
+    monkeypatch.setattr(preview, "select_target", lambda *args, **kwargs:
+                        calls.append((args, kwargs)) or {"ok": True, "target": {"revision": "004"}})
+    result = preview.ensure_selected_target("desktop")
+    assert result["target"]["revision"] == "004"
+    assert result["recreated"] is not exists
+    assert validated == (["dev1-dev"] if exists else [])
+    assert calls == [(("scenario", "recipes"), {
+        "stage": "prototype", "revision": None, "source_webspace_id": "desktop", "via_owner": True,
+        "follow_active": True,
+    })]
+
+
+def test_open_existing_pinned_preview_does_not_follow_new_head(monkeypatch):
+    from adaos.services.workspaces import index
+
+    service = _Workbench(follow_active=False)
+    service.relationships = SimpleNamespace(require_preview_target=lambda _: None)
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(index, "get_workspace", lambda _: {})
+    monkeypatch.setattr(preview, "select_target", lambda *a, **kw: pytest.fail("Explicit pin must stay selected"))
+    assert preview.ensure_selected_target("desktop")["recreated"] is False
+    assert service.target["revision"] == "003"
+
+
 @pytest.mark.parametrize("stage,revision", [("prototype", "071"), ("automation", "task.fixed")])
 @pytest.mark.parametrize("kind", ["project", "scenario"])
 @pytest.mark.parametrize("materialized", [{"ok": True}, {"ok": False}, {"ok": True, "accepted": False}])

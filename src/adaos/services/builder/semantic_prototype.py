@@ -16,7 +16,7 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from adaos.services.ui_capabilities import validate_webui_capabilities
 
-from .prototype_context import prototype_state_requirements, prototype_requirement_inventory
+from .prototype_context import prototype_state_requirements, prototype_requirement_inventory, prototype_process_constraints
 from .prototype_stage import automation_obligations, PROTOTYPE_STAGE_CONTRACT
 from .prototype_contracts import STATE_PROOF_RULES
 from .workflow import BuilderWorkflowError
@@ -147,7 +147,8 @@ def _requirement_contract_findings(
                 ),
             }
         )
-    unexpected = sorted((bound | gaps) - required)
+    process_refs = {item["id"] for item in prototype_process_constraints(brief)}
+    unexpected = sorted((bound | gaps) - required - process_refs)
     if unexpected:
         findings.append(
             {
@@ -724,7 +725,10 @@ def _validate_semantic_prototype_v1(
             _fail("brief_digest does not match the supplied Prototype Brief")
         required = _brief_requirement_ids(brief)
         missing = sorted(required - set(bindings) - gaps)
-        unexpected = sorted((set(bindings) | gaps) - required)
+        # Old candidates may carry irrelevant visual bindings for process clauses.
+        # Retain their provenance without requiring new candidates to fabricate them.
+        process_refs = {item["id"] for item in prototype_process_constraints(brief)}
+        unexpected = sorted((set(bindings) | gaps) - required - process_refs)
         if missing:
             _fail(f"accepted requirements have no semantic binding or gap: {missing}")
         if unexpected:
@@ -3656,7 +3660,8 @@ def _validate_semantic_prototype_v2(
             _fail("brief_digest does not match the supplied Prototype Brief")
         required = _brief_requirement_ids(brief)
         missing = sorted(required - set(bindings) - gaps)
-        unexpected = sorted((set(bindings) | gaps) - required)
+        process_refs = {item["id"] for item in prototype_process_constraints(brief)}
+        unexpected = sorted((set(bindings) | gaps) - required - process_refs)
         if missing:
             _fail(f"accepted requirements have no semantic binding or gap: {missing}")
         if unexpected:
@@ -4094,6 +4099,7 @@ def _compile_semantic_prototype_v2(
                 "capability_gaps": copy.deepcopy(document["capability_gaps"]),
                 "acceptance_stage": "prototype",
                 "automation_requirements": automation_obligations(document, brief),
+                "process_constraints": prototype_process_constraints(brief or {}),
             }
         },
     }
@@ -4181,6 +4187,7 @@ def _compile_semantic_prototype_v2(
         "binding_expansions": binding_expansions,
         "capability_gaps": copy.deepcopy(document["capability_gaps"]),
         "automation_requirements": automation_obligations(document, brief),
+        "process_constraints": prototype_process_constraints(brief or {}),
         "validation": validation,
     }
     if len(prototype_resources) == 1:

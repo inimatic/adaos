@@ -3,7 +3,7 @@
 Status: active target delivery roadmap; implemented mechanisms do not imply
 complete user, lifecycle or production acceptance.
 
-Last reviewed: 2026-09-14.
+Last reviewed: 2026-09-15.
 
 ## Document Ownership Audit
 
@@ -72,9 +72,11 @@ The functional parity JSON remains unchanged because tests consume it.
 6. Evaluate conditional could work; large-project orchestration and preview
    leasing remain deferred.
 
-Current work permits sequential frozen DEV Automation in one existing Builder
-and its single owned preview. Trial/publication are paused, not removed from
-non-deferred scope. Do not manually repair generated application code,
+Current work permits sequential DEV development in one existing Builder and
+its single owned preview. The user has resumed local Trial/Stable qualification
+for two Reading List increments, including private data migration and settings
+inheritance. This is not blanket permission to publish unrelated applications.
+Do not manually repair generated application code,
 regenerate approved prototypes, introduce subject-specific Core/Client logic
 or remove compatibility without rollback evidence.
 

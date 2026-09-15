@@ -16,6 +16,45 @@ from jsonschema import Draft202012Validator
 INTENT_SCHEMA = "adaos.builder.intent.v1"
 PROTOTYPE_BRIEF_SCHEMA = "adaos.builder.prototype_brief.v1"
 
+
+def process_constraint_kind(statement: str) -> str | None:
+    """Recognize explicit Builder instructions, not arbitrary negative UI rules.
+
+    These clauses retain their evidence but are verified by authoring/process
+    review, not by adding widgets. Ambiguous clauses stay UI requirements.
+    """
+    text = str(statement).strip().rstrip(".!;")
+    rules = {
+        "stage_boundary": (
+            r"(?:do not|don't|never) (?:start|run|begin) (?:automation|codex)(?: or (?:publish|publication))?",
+            r"(?:do not|don't|never) publish(?: (?:yet|automatically))?",
+            r"(?:refine|update) the current .{1,100} prototype \d+ only",
+            r"after applying,? stop for (?:independent )?prototype review",
+            r"не (?:запускай|начинай|запускать) (?:автоматизацию|codex)(?: и не публикуй)?",
+            r"после применения остановись (?:для|перед) (?:независимой )?проверки? прототипа",
+        ),
+        "data_isolation": (
+            r"(?:do not|don't|never) (?:inspect|read|copy|access) (?:the )?(?:installed|workspace|trial|stable|production|live|current) (?:records|data|settings|configuration|credentials|secrets)(?:[, /]*(?:or |and )?(?:records|data|settings|configuration|credentials|secrets))*?(?: into .+)?",
+            r"use (?:only )?synthetic .{0,80}(?:records|data|fixtures) only",
+            r"(?:не читай|не копируй|не просматривай) (?:установленные|рабочие|реальные|пользовательские) (?:данные|записи|настройки|секреты)(?:[, ]+(?:и |или )?(?:данные|записи|настройки|секреты))*",
+        ),
+        "source_preservation": (
+            r"do not rename the existing (?:resource )?field identifiers(?: merely to qualify references)?",
+            r"reference qualification and field identity are different",
+            r"use the existing languages(?: and preserve working behavior)?",
+            r"(?:сохрани|используй) (?:существующие|текущие) языки(?: интерфейса)?",
+            r"не переименовывай (?:существующие )?идентификаторы полей",
+        ),
+        "automation_scope": (
+            r"(?:real|actual) .{1,160} belong(?:s)? to automation",
+            r"(?:real|actual) .{1,160} (?:is|are) for (?:the )?automation (?:stage|phase)(?: later)?",
+        ),
+    }
+    for kind, patterns in rules.items():
+        if any(re.fullmatch(pattern, text, re.IGNORECASE) for pattern in patterns):
+            return kind
+    return None
+
 _ABI_ROOT = Path(__file__).resolve().parents[1] / "abi"
 _REF_PATTERN = re.compile(
     r"(?:https?://[^\s<>()]+|(?:project|change|scenario|skill|modal):[A-Za-z0-9_.:/-]+)",

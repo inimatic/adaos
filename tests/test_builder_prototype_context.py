@@ -1,9 +1,53 @@
 from __future__ import annotations
 
 import json
+import copy
+import pytest
 
 from adaos.sdk.builder import intent, prototype
 from adaos.services.builder.semantic_prototype import _brief_requirement_ids
+
+
+@pytest.mark.parametrize("directive,owner", [
+    ("Do not inspect installed records, settings or secrets", "data_isolation"),
+    ("After applying, stop for independent Prototype review", "stage_boundary"),
+    ("do not start Automation or publish", "stage_boundary"),
+    ("Refine the current Example prototype 003 only", "stage_boundary"),
+    ("Do not rename the existing resource field identifiers merely to qualify references", "source_preservation"),
+    ("reference qualification and field identity are different", "source_preservation"),
+    ("Use the existing languages and preserve working behavior", "source_preservation"),
+    ("real search and duplicate enforcement belong to Automation", "automation_scope"),
+    ("Не читай пользовательские данные и секреты", "data_isolation"),
+    ("Не запускай автоматизацию", "stage_boundary"),
+    ("Сохрани существующие языки интерфейса", "source_preservation"),
+])
+def test_process_constraints_are_retained_without_fabricated_widget_proof(directive, owner):
+    # Legacy Briefs keep their original content address and exact requirement IDs.
+    brief = intent.compile_brief("Search requests by title.")
+    brief["residual_requirements"].append({"id": "residual:process", "statement": directive,
+                                          "evidence": ["intent.statement"], "confidence": 1.0})
+    original = copy.deepcopy(brief)
+    context = prototype.model_context(brief, compact=True)
+    assert brief == original
+    constraints = context["process_constraints"]
+    assert constraints == [{"id": "residual:process", "statement": directive,
+                            "kind": "residual", "verification_owner": owner}]
+    assert "residual:process" not in _brief_requirement_ids(brief)
+    assert all(row["id"] != "residual:process" for row in context["required_references"])
+    assert any(row["kind"] == "operation" for row in context["required_references"])
+    assert "not automatically passed" in context["process_constraint_policy"]
+
+
+@pytest.mark.parametrize("statement", [
+    "Do not delete completed records", "Prevent users from reading other users' secrets",
+    "Do not start a timer before an item is selected", "Show a review before applying changes",
+    "Do not inspect installed records in this application: offer a button for their owners instead",
+    "Не удалять запись без подтверждения", "Не показывать секреты в таблице",
+    "Use an Automation tab to show process status", "Preserve create and edit dialogs",
+])
+def test_ambiguous_and_application_rules_are_not_discarded_as_process_constraints(statement):
+    from adaos.services.builder_intent import process_constraint_kind
+    assert process_constraint_kind(statement) is None
 
 
 def test_model_context_keeps_semantics_without_repeating_full_intent() -> None:

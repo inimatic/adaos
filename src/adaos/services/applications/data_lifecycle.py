@@ -42,9 +42,17 @@ def automation_data_contract() -> dict[str, Any]:
         "declaration": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": []},
         "database_fields": {"path": "relative SQLite filename under this skill's SDK data root",
             "migrations": "full ordered list of {version: positive integer, name: string, statements: SQL string[]}"},
+        "configuration_contract": {
+            "manifest": "configuration.schema is a JSON Schema for the non-secret values object; configuration.defaults must satisfy it.",
+            "read": "adaos.sdk.data.configuration.read() -> {revision, values}; requires configuration.read.",
+            "write": "adaos.sdk.data.configuration.write(values, expected_revision=revision) replaces the complete values object; requires configuration.write. Keep the revision from the displayed snapshot; do not reread it to bypass a conflict.",
+            "async": "Async handlers use a_read() / a_write(values, expected_revision=revision).",
+            "boundary": "Settings are not application database rows. Do not hard-code production values in manifests or copy credential references into forms/model input. SDK write preserves separate secret bindings.",
+        },
         "rules": [
             "Declare each owned SQLite store; use an empty databases list only when the skill has no mutable stores.",
             "Preserve applied migration versions/checksums. Append forward SQL migrations; keep fresh-install initialization compatible with the same schema.",
+            "Core owns the adaos_schema_migrations checksum ledger during cutover. SQL statements may not modify it, change transaction boundaries, issue PRAGMA, attach databases or load extensions. A first chain must also handle an existing legacy schema without that ledger; test both empty and legacy databases with synthetic records.",
             "Develop and test with synthetic records only. Never inspect/copy Workspace or Trial records, configuration values or secrets into DEV, fixtures, packages or model input.",
             "Core snapshots accepted Stable and runs the pinned chain for each new Beta; Stable acceptance adopts Beta writes. Do not implement channel copying/resetting in handlers.",
             "Use adaos.sdk.data.configuration for declared non-secret settings; DEV is isolated and lifecycle inherits/adopts real settings. Secrets are separate scoped bindings.",

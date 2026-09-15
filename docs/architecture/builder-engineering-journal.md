@@ -1219,3 +1219,28 @@ Automation projects required questions as awaiting input while preserving the
 terminal worker receipt; stale Change answers/continuations are refused.
 Core intent/semantic/clarification/SDK tests and ten focused DEV repair tests pass.
 Managed cycle completion and all installed-data migration evidence remain open.
+
+### 2026-09-15: Incremental Prototype Review And Process Constraints
+
+Exact failed-job recovery produced Reading List Prototype 003 without resending
+the original chat message. Browser review at 1440 and 390 px confirmed rendering,
+selection, editing and settings, but found lost required-title validation.
+Discovery/tab placement and indistinguishable create commands were also reported
+through one subsequent Builder prompt. The old successful Prototype is not silently
+reapproved. Evidence: `reading-list-migrations-20260915/cycle-1` under Builder E2E
+artifacts; these are inspected training examples, not held-out results.
+
+The follow-up job and bounded binding repair stopped on eleven uncovered refs.
+Their exact input statements were authoring/privacy/stage constraints, not missing
+widgets. The shared context/compiler projection now retains their IDs and separate
+verification owners, with negative tests preserving application rules. The original
+Brief and failed results are unchanged. This narrow explicit-language correction
+does not close BIP-10 semantic understanding or installed lifecycle acceptance.
+
+The first follow-active Preview open returned 002 and the next 003. Explicit open
+now resolves the current target even when its paired Webspace already exists;
+historical pins remain unchanged. Regression tests cover both existing and deleted
+previews. Runtime/browser requalification follows the coordinated API restart.
+Automation context now states exact typed settings methods, capabilities, revision
+preconditions and the SQLite migration ledger boundary. No installed values are
+included. Both user Stable records remained unchanged at the last private check.

@@ -385,6 +385,14 @@ Exit/remaining work: Admit contracts by shape/operation/authority before optiona
 
 ### BIP-10
 
+- [x] `[must]` Separate explicit EN/RU process/privacy/preservation instructions
+  from widget coverage in model context and compiler, retaining exact Brief IDs
+  and constraints in the compiled artifact. Preserve ambiguous application rules.
+  This narrow classification is not a general semantic interpreter or review pass.
+- [ ] `[must]` Qualify process-constraint review and subsequent Automation handoff
+  on the retained application increments; do not count discarded UI bindings as
+  evidence that a privacy, preservation or stage restriction was satisfied.
+
 - [x] `[must]` Preserve reference punctuation and original source offsets during
   deterministic clause extraction; do not infer UI operations from URL path words.
 - [ ] `[must]` Qualify accumulated multi-turn context capacity on a released

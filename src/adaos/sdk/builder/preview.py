@@ -829,21 +829,24 @@ def public_app_base() -> str:
 
 
 def ensure_selected_target(source_webspace_id: str | None = None) -> dict[str, Any]:
-    """Recreate a deleted Preview on an explicit open command, retaining its pin."""
+    """Open the current follow-active target or retain an explicitly pinned one."""
 
     from adaos.services.workspaces.index import get_workspace
 
     source = canonical_source_webspace_id(source_webspace_id)
     binding = get_binding(source)
-    preview_id = str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or "").strip()
-    if preview_id and get_workspace(preview_id) is not None:
-        _service().relationships.require_preview_target(preview_id)
-        return {"ok": True, "recreated": False, "preview_webspace_id": preview_id}
     target = _plain(binding.get("preview_target"))
+    preview_id = str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or "").strip()
+    exists = bool(preview_id and get_workspace(preview_id) is not None)
+    if exists:
+        _service().relationships.require_preview_target(preview_id)
+        if not target.get("follow_active"):
+            return {"ok": True, "recreated": False, "preview_webspace_id": preview_id}
     if target.get("object_type") in {"project", "scenario"} and target.get("stage"):
         result = select_target(
             str(target["object_type"]), str(target["object_id"]), stage=str(target["stage"]),
-            revision=target.get("revision"), source_webspace_id=source, via_owner=True,
+            revision=None if target.get("follow_active") else target.get("revision"),
+            source_webspace_id=source, via_owner=True,
             follow_active=bool(target.get("follow_active")),
         )
     else:
@@ -856,7 +859,7 @@ def ensure_selected_target(source_webspace_id: str | None = None) -> dict[str, A
         )
     if result.get("ok") is False:
         raise RuntimeError("Selected Preview could not be recreated")
-    return {**result, "recreated": True}
+    return {**result, "recreated": not exists}
 
 
 def navigation_link(

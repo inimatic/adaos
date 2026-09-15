@@ -1,6 +1,7 @@
 """Close evidence references over declared, unambiguous ownership edges."""
 
 from collections.abc import Mapping
+from .prototype_context import prototype_process_constraints
 
 
 def close_bindings(document: dict, brief: Mapping | None) -> list[dict]:
@@ -51,6 +52,7 @@ def binding_findings(document: Mapping, brief: Mapping | None) -> list[dict]:
     views = {f"view:{view['id']}": view for view in document["views"]}
     bindings = {item["requirement_ref"]: set(item["semantic_refs"]) for item in document["requirement_bindings"]}
     gaps = {item["requirement_ref"] for item in document["capability_gaps"]}
+    process_refs = {item["id"] for item in prototype_process_constraints(brief)}
     findings = []
 
     def add(ref, detail):
@@ -64,6 +66,8 @@ def binding_findings(document: Mapping, brief: Mapping | None) -> list[dict]:
 
     for operation in brief.get("operations", []):
         ref, kind = operation["id"], operation["kind"]
+        if ref in process_refs:
+            continue
         if kind not in {"search", "filter"} or ref in gaps:
             continue
         queries = {f"query:{query['id']}" for view in views.values()

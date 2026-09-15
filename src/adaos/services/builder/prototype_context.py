@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .prototype_stage import PROTOTYPE_STAGE_CONTRACT
+from adaos.services.builder_intent import process_constraint_kind
 
 
 MODEL_CONTEXT_SCHEMA = "adaos.builder.prototype_model_context.v1"
@@ -61,8 +62,7 @@ def prototype_state_requirements(brief: Mapping[str, Any]) -> list[dict[str, str
     return requirements
 
 
-def prototype_requirement_inventory(brief: Mapping[str, Any]) -> list[dict[str, str]]:
-    """The same exact requirement inventory is used by the model and compiler."""
+def _requirement_inventory(brief: Mapping[str, Any]) -> list[dict[str, str]]:
     inventory = [
         {**item, "kind": kind}
         for group, kind in (
@@ -79,6 +79,19 @@ def prototype_requirement_inventory(brief: Mapping[str, Any]) -> list[dict[str, 
     return inventory
 
 
+def prototype_process_constraints(brief: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Retain non-widget obligations, including old content-addressed Briefs."""
+    return [{**item, "verification_owner": kind}
+            for item in _requirement_inventory(brief)
+            if (kind := process_constraint_kind(item["statement"]))]
+
+
+def prototype_requirement_inventory(brief: Mapping[str, Any]) -> list[dict[str, str]]:
+    """The same UI proof obligations are used by the model and compiler."""
+    excluded = {item["id"] for item in prototype_process_constraints(brief)}
+    return [item for item in _requirement_inventory(brief) if item["id"] not in excluded]
+
+
 def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[str, Any]:
     """Remove persistence metadata and raw-statement duplication from a brief.
 
@@ -92,6 +105,11 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
 
     jobs = _statements(value.get("principal_jobs"))
     state_requirements = prototype_state_requirements(value)
+    process_constraints = prototype_process_constraints(value)
+    process_ids = {item["id"] for item in process_constraints}
+    jobs = [item for item in jobs if item["id"] not in process_ids]
+    state_requirements = [item for item in state_requirements
+                          if item.get("id", item.get("job_ref")) not in process_ids]
 
     facts = {
         name: fact
@@ -114,7 +132,7 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
             for key in ("id", "kind", "statement", "source_clause", "target", "effect_scope", "authority")
         }
         for item in value.get("operations") or []
-        if isinstance(item, Mapping)
+        if isinstance(item, Mapping) and item.get("id") not in process_ids
     ]
     for operation in operations:
         operation["related_job_refs"] = [
@@ -136,7 +154,8 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
         for item in value.get("collection_requirements") or []
         if isinstance(item, Mapping)
     ]
-    residual_requirements = _statements(value.get("residual_requirements"))
+    residual_requirements = [item for item in _statements(value.get("residual_requirements"))
+                             if item["id"] not in process_ids]
     interpretation = (
         value.get("interpretation")
         if isinstance(value.get("interpretation"), Mapping)
@@ -148,6 +167,8 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
         "brief_ref": str(value.get("brief_id") or ""),
         "brief_digest": str(value.get("digest") or ""),
         "required_references": prototype_requirement_inventory(value),
+        "process_constraints": process_constraints,
+        "process_constraint_policy": "These are retained authoring, privacy, preservation or stage obligations, not requests for widgets. Obey them; do not bind them to UI or invent capability gaps. They are not automatically passed: independent source/process review owns verification. automation_scope must remain in the later Automation task, not become executable Prototype logic.",
         "coverage_policy": "Every required_references id needs a binding or explicit gap. Related jobs and operations may share semantic refs; neither binding replaces the other.",
         "knowledge_policy": "facts are admitted knowledge; unknowns are not omissions in the request. Infer a suitable entity/view design from the original user request, but do not present design choices as user-confirmed facts or external authority.",
         "primary_jobs": jobs,
@@ -215,5 +236,6 @@ __all__ = [
     "compile_prototype_model_context",
     "prototype_state_requirements",
     "prototype_requirement_inventory",
+    "prototype_process_constraints",
     "prototype_output_locales",
 ]
