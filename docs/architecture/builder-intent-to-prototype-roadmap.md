@@ -472,6 +472,12 @@ Owner/dependencies: Core semantic repair + Builder execution.
 
 Implementation boundary: Binding/reference/state repairs, additive visibility, view-only repair, exact invariants and immutable-candidate checks are implemented. Latest local semantic tests pass; full-candidate fallback and complete independent-diagnostic coverage are not eliminated.
 
+- [x] `[must]` Present deterministic repair as its own current phase, leading
+  with observed failures and preserving the full admitted task as reference.
+  Keep verification ownership consistent in ordinary and preserved repair;
+  candidate models do not rerun worker tests. Local prompt regressions qualify
+  ordering and preservation, not reduced latency or complete repair reliability.
+
 Exit/remaining work: Aggregate all independent findings before selecting scope; qualify fixture/value/binding repair, exact replay and unchanged accepted semantics on fresh repeated runs. Compare authoritative slices with full-context/full-regeneration controls before reducing payloads.
 
 ### BIP-14

@@ -39,6 +39,7 @@ from adaos.services.skill_factory_worker import (
     _codex_jsonl_root_mcp_evidence,
     _codex_prompt_budget_check,
     _context_packet_prompt_projection,
+    _deterministic_repair_prompt,
     _loads_strict_json,
     _persisted_descriptor_working_set_evidence,
     _root_mcp_profile_from_assignment,
@@ -50,6 +51,18 @@ from adaos.services.skill_factory_worker import (
 def test_strict_json_validation_rejects_duplicate_manifest_keys() -> None:
     with pytest.raises(ValueError, match="duplicate JSON key: area"):
         _loads_strict_json('{"area":"top","area":"bottom"}')
+
+
+def test_validation_repair_leads_with_failures_and_keeps_full_reference():
+    original = "Original accepted task and resolved decisions.\nKeep the full reference."
+    prompt = _deterministic_repair_prompt(original, ["scenario/test.py: ordered steps were collapsed"])
+    assert prompt.startswith("# Deterministic validation repair")
+    assert prompt.index("ordered steps were collapsed") < prompt.index(original)
+    assert prompt.count(original) == 1
+    assert "Do not execute tests, validation, status or diff" in prompt
+    assert "Skill tests run in that skill package alone" in prompt
+    assert "not repeat initial implementation" in prompt
+    assert "weakening an established business invariant" in prompt
 
 
 def test_codex_jsonl_usage_accepts_reasoning_output_tokens(tmp_path: Path) -> None:

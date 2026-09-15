@@ -1576,3 +1576,18 @@ question -> answer -> second question -> answer -> completion. All 19 tests pass
 and both decisions retain the exact original correction. This fixture disables
 runtime materialization and is not evidence for a subsequent UI delivery cycle.
 The live normal correction clears the previous clarification context as expected.
+
+The next worker pass caught the same orphan-action defect in the settings
+editor. Its automatic repair then introduced two failing tests: a skill-package
+test reached into a sibling scenario, and a scenario test collapsed ordered
+same-ID command steps into a dictionary. No failed candidate was published.
+Repair context now leads with the actual failures and explicit current phase,
+keeping the complete admitted task below as reference rather than repeating
+initial implementation instructions first. Both ordinary and preserved repair
+use one verification contract. Token/time limits were not shortened. A native
+bounded follow-up must correct these test ownership/sequence issues.
+
+The model also reported optional task Root MCP tools absent from its tool
+discovery. The advertised local lease passed admission, and needed binding
+contracts were already retained locally; this is not evidence of a provider
+timeout. Keep the discovery issue open for an actual CLI/transport inspection.

@@ -2888,6 +2888,25 @@ def _codex_failure_detail(result: CodexRunResult, *, limit: int = 2000) -> str:
     return detail[-max(200, int(limit)) :]
 
 
+def _deterministic_repair_prompt(prompt: str, errors: list[str]) -> str:
+    return (
+        "# Deterministic validation repair\n\n"
+        "Current phase: repair the reported failures in the existing isolated candidate, not repeat initial implementation. "
+        "Keep already working changes. Read the failing source/test locations first; consult the admitted reference below "
+        "only for necessary contracts. Do not repeat discovery unless a reported failure requires missing information.\n\n"
+        "Fix every reported issue and add focused regression coverage. Do not execute tests, validation, status or diff commands; "
+        "the trusted worker reruns checks. Mark unexecuted checks explicitly. Do not publish, activate or change "
+        "checkpoint-owned version/updated_at metadata.\n\n"
+        "A failing new test does not authorize weakening an established business invariant. Correct contradictory synthetic "
+        "fixtures without removing behavioral coverage; clarify unresolved intent. Skill tests run in that skill package alone, "
+        "without sibling scenarios. Cross-component UI tests belong under the scenario's tests. Preserve ordered command steps "
+        "in tests; a dictionary keyed by a shared command ID loses steps.\n\n"
+        + "\n".join(f"- {item}" for item in errors[:40])
+        + "\n\n# Admitted task reference\n\n"
+        + prompt
+    )
+
+
 class SubprocessCodexExecutor:
     """Run the installed Codex CLI without exposing AdaOS credentials in the prompt."""
 
@@ -3851,14 +3870,7 @@ class LocalSkillFactoryWorker:
             raise ValueError("preserved repair budget is exhausted")
 
         prompt = (input_dir / "task.md").read_text(encoding="utf-8")
-        repair_prompt = (
-            prompt
-            + "\n\n# Deterministic validation repair\n\n"
-            + "Continue in the preserved isolated workspace. Fix every deterministic error below, "
-            + "rerun relevant checks, and leave the workspace valid. Do not publish, activate, or "
-            + "change checkpoint-owned version/updated_at metadata.\n\n"
-            + "\n".join(f"- {item}" for item in errors[:40])
-        )
+        repair_prompt = _deterministic_repair_prompt(prompt, errors)
         attempt = len(previous_repairs) + 1
         result = self.executor(workspace=workspace, prompt=repair_prompt, output_dir=output_dir)
         self._record_codex_attempt(runtime_dir, result, attempt=attempt)
@@ -4279,18 +4291,7 @@ class LocalSkillFactoryWorker:
                 if repair_attempt >= validation_repair_limit:
                     break
                 self._progress(task_id, "in_progress", "Codex is repairing deterministic validation failures")
-                repair_prompt = (
-                    prompt
-                    + "\n\n# Deterministic validation repair\n\n"
-                    + "The previous implementation did not pass the worker checks below. Continue in the existing workspace, "
-                    + "fix every reported issue and add focused regression coverage. Do not execute tests or validation; "
-                    + "the trusted worker reruns them. Preserve unrelated behavior and mark unexecuted checks explicitly.\n\n"
-                    + "A failing newly generated test does not authorize changing an established business invariant. "
-                    + "When its synthetic fixture contradicts the accepted behavior, fix the fixture while retaining "
-                    + "behavioral coverage. Do not weaken validation or remove assertions just to make tests pass; "
-                    + "use the clarification outcome when the intended behavior cannot be resolved from the task.\n\n"
-                    + "\n".join(f"- {item}" for item in test_report["errors"][:40])
-                )
+                repair_prompt = _deterministic_repair_prompt(prompt, test_report["errors"])
                 repair_root_mcp = root_mcp
                 if root_mcp_evidence:
                     repair_prompt += (
