@@ -65,6 +65,27 @@ not persistence. README uses its existing edit/save/digest contract, with no
 automatic image generation. Builder may declare application-specific purpose
 and schema through this SDK without adding domain examples to Core prompts.
 
+## Application About
+
+Builder presents the public `README.md` in About together with the Application's
+existing publisher identity and icon. Publisher/owner information is a verified
+identity projection, not an editable ownership claim. README remains one
+co-owned user/LLM file with explicit draft review and digest-checked save.
+
+An icon can originate from an explicit upload or an independently metered image
+draft. A reusable Client crop surface provides a fixed aspect ratio, positioning
+and zoom, with explicit apply/cancel. It emits a media draft, never an automatic
+application source write. The reviewed icon becomes a portable packaged resource;
+temporary media URLs cannot serve as release identity. Local generation provenance
+and provider usage are not embedded into public Markdown or application state.
+
+Applying About changes targets editable DEV source, never an immutable Trial.
+The same README/resource identity must survive source checkpoints, Beta and
+Stable packaging. A locally editable project file alone does not satisfy that
+publication boundary. Permissions may later be projected into About through
+their own authoritative contracts; they must not be inferred from description
+text or an uploaded asset.
+
 ## Engineering Basis
 
 Use provider-native constrained output and explicit refusal handling as described

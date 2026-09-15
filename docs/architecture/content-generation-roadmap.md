@@ -37,3 +37,8 @@ Target: [Typed Content Generation](content-generation.md).
   Public SDK metadata exports content generation/polling, explicit image input,
   and text-document CAS. `content-generation-20260915-01` verifies a checklist
   schema and out-of-scope request on GPT-5 low with exact retry/terminal reads.
+- [ ] `[must]` CG-06: Complete Application About using the co-owned public README,
+  verified existing publisher identity, explicit icon upload/generation and a
+  generic Client crop/position/zoom surface. Qualify cancel, stale apply, portable
+  resource packaging and DEV-to-Beta-to-Stable round trips. Existing image drafts
+  and README generation are prerequisites, not closure of this integration.
