@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { chromium, expect } from '@playwright/test'
+import { revealPrototypeWidget } from './prototype-navigation.mjs'
 
 const { ADAOS_E2E_HUB_URL: hub, ADAOS_E2E_HUB_TOKEN: token, ADAOS_E2E_SCENARIO_ID: scenario,
   ADAOS_E2E_TASK_ID: task, ADAOS_E2E_SOURCE_SHA256: source, ADAOS_E2E_OUTPUT: output } = process.env
 assert.equal(process.env.ENV_TYPE, 'dev')
 assert.match(scenario, /^workbench_test_[a-z0-9_]+$/)
 assert.ok(task && source && hub && token && output)
+const raw = await fs.readFile(path.join(process.cwd(), `.adaos/dev/sn_6acf0c01/scenarios/${scenario}/webui.json`))
+assert.equal(createHash('sha256').update(raw).digest('hex'), source)
+function* objects(value) {
+  if (Array.isArray(value)) { for (const item of value) yield* objects(item) }
+  else if (value && typeof value === 'object') { yield value; for (const item of Object.values(value)) yield* objects(item) }
+}
+const widgets = [...objects(JSON.parse(raw))].filter(item => item.id && item.type)
+const specification = id => widgets.find(item => item.id === id)
 const webspace = process.env.ADAOS_E2E_WEBSPACE || 'desktop-dev-dev'
 const trial = process.env.ADAOS_E2E_TRIAL === '1'
 const report = { scope: 'Independent live Automation browser review, not Prototype or delivery', scenario, task,
@@ -35,11 +45,19 @@ try {
     page.on('pageerror', error => sample.errors.push(error.message))
     page.on('response', async response => {
       const body = response.request().postData()
-      if (body?.includes(`${scenario}_skill`)) sample.calls.push({ status: response.status(),
-        body: JSON.parse(body), response: await response.json().catch(() => null) })
+      if (body?.includes(`${scenario}_skill`)) {
+        const request = JSON.parse(body)
+        sample.calls.push({ status: response.status(), tool: request.tool || request.name })
+      }
     })
     const widget = id => page.locator(`[data-webui-widget-id="${id}"]`).filter({ visible: true }).first()
-    const field = (form, id) => widget(form).locator(`[data-webui-field-id="${id}"]`)
+    const field = (form, id) => {
+      const fields = specification(form)?.inputs?.fields || []
+      const matches = fields.filter(item => item.id === id || item.id === `books.${id}`)
+      assert.equal(matches.length, 1, `Unambiguous literal field ${form}:${id}`)
+      return widget(form).locator(`[data-webui-field-id=${JSON.stringify(matches[0].id)}]`)
+    }
+    const reveal = id => revealPrototypeWidget(page, widgets, specification(id))
     const close = async () => {
       const modal = page.locator('ion-modal.show-modal').last()
       await modal.getByRole('button', { name: /^(close|закрыть)$/i }).click()
@@ -63,8 +81,9 @@ try {
       const geometry = await page.evaluate(() => ({ viewport: innerWidth, width: document.documentElement.scrollWidth }))
       assert.ok(geometry.width <= geometry.viewport + 1, `Document overflow: ${name}`)
       const screenshot = path.join(screenshots, `${layout}-${name}.png`)
-      await page.screenshot({ path: screenshot, fullPage: true, animations: 'disabled' })
-      sample.checks.push({ id: `visual:${name}`, status: 'passed', geometry, screenshot })
+      if (!trial) await page.screenshot({ path: screenshot, fullPage: true, animations: 'disabled' })
+      sample.checks.push({ id: `visual:${name}`, status: 'passed', geometry,
+        screenshot: trial ? null : screenshot, privacy: trial ? 'Installed records are not captured' : 'DEV synthetic data' })
     }
     const mutate = async (tool, action) => {
       const pending = page.waitForResponse(response => response.request().postData()?.includes(`${scenario}_skill.${tool}`) ||
@@ -73,14 +92,14 @@ try {
       await action()
       const response = await pending
       const body = await response.json()
-      assert.ok(response.ok() && body.ok !== false && body.result?.ok !== false, JSON.stringify(body))
+      assert.ok(response.ok() && body.ok !== false && body.result?.ok !== false, `${tool}: HTTP ${response.status()} or rejected result`)
       if (trial) {
         assert.equal(response.headers()['x-adaos-runtime-source'], 'trial')
         assert.equal(response.headers()['x-adaos-release-digest'], process.env.ADAOS_E2E_RELEASE_DIGEST)
       }
       return body.result || body
     }
-    const mutations = () => sample.calls.filter(row => /create_book|update_book|delete_book/.test(row.body.tool || row.body.name || '')).length
+    const mutations = () => sample.calls.filter(row => /create_book|update_book|delete_book/.test(row.tool || '')).length
     const marker = `E2E-BROWSER-${layout}-${Date.now()}`
     try {
       if (trial) {
@@ -99,6 +118,8 @@ try {
         await tile.click()
         check('production-desktop-beta-launcher')
       }
+      await page.locator('[data-webui-widget-id]').first().waitFor({ timeout: 60000 })
+      await reveal('books_list')
       await widget('books_list').waitFor({ timeout: 60000 })
       if (trial) await availability('beta-open')
       await capture('initial')
@@ -140,6 +161,8 @@ try {
       await mutate('update_book', () => widget('book_editor').getByRole('button', { name: /^сохранить изменения$/i }).click())
       await widget('books_list').getByText(marker + '-updated', { exact: true }).waitFor()
       await page.reload({ waitUntil: 'domcontentloaded' })
+      await page.locator('[data-webui-widget-id]').first().waitFor({ timeout: 60000 })
+      await reveal('books_list')
       await widget('books_list').getByText(marker + '-updated', { exact: true }).waitFor({ timeout: 60000 })
       if (trial) await availability('beta-reload')
       await widget('books_list').getByText(marker + '-updated', { exact: true }).click()

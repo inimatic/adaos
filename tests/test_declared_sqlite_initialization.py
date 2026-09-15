@@ -1,4 +1,5 @@
 import asyncio
+import json
 from contextlib import closing
 from pathlib import Path
 import sqlite3
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from jsonschema import Draft202012Validator
 
 from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.applications.sqlite_data_transition import initialize_sqlite_schema, SQLiteDataTransition
@@ -13,6 +15,18 @@ from adaos.services.applications.sqlite_data_transition import initialize_sqlite
 
 CHAIN = (RelationalMigration(version=1, name="base", statements=("CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, title TEXT)",), dialects=("sqlite",)),
          RelationalMigration(version=2, name="metadata", statements=("ALTER TABLE items ADD COLUMN note TEXT",), dialects=("sqlite",)))
+
+
+def test_authoring_capsule_matches_admitted_capabilities_and_separates_test_double_evidence():
+    from adaos.services.applications.data_lifecycle import automation_data_contract
+
+    contract = automation_data_contract()
+    example = contract["capability_declaration"]["example"]
+    abi = json.loads((Path(__file__).resolve().parents[1] / "src/adaos/abi/skill.schema.json").read_text(encoding="utf-8"))
+    validator = Draft202012Validator(abi["properties"]["capabilities"])
+    validator.validate(example["capabilities"])
+    assert not validator.is_valid({"required": example["capabilities"]})
+    assert "does not verify Core migrations/checksums" in contract["initialization_contract"]["testing"]
 
 
 def columns(path):

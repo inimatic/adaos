@@ -1314,3 +1314,13 @@ the shared migration/configuration contract. This is input evidence, not a
 semantic or implementation acceptance. Existing DEV records are E2E-marked and
 distinct from the two privately retained Stable records. The old DEV fixture's
 separate migration ledger is not silently rewritten into Core history.
+
+Iteration 1 completed with one bounded manifest repair: `capabilities` had been
+invented as an object rather than the admitted string array. The authoring capsule
+now states its schema/shape explicitly and distinguishes SDK test doubles from
+Core migration evidence. Independent `migration-chain-02.json` runs the emitted
+SQL through Core on fresh, repeated, prior-version and synthetic legacy fixtures;
+all pass. Live HTTP/browser acceptance correctly stops on the retained diagnostic
+DEV database: metadata columns already exist under the previous custom ledger.
+This is not repaired by forging checksum history. Installed Stable remains
+unchanged; only the E2E-owned DEV fixture may be archived before clean qualification.

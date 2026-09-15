@@ -87,17 +87,20 @@ def main():
         response = client.post(hub + "/api/tools/call", json={"tool": identifier + "_skill:" + tool,
             "arguments": {"webspace_id": webspace, **values}}, timeout=30)
         body = response.json()
-        report["calls"].append({"tool": tool, "arguments": values, "status": response.status_code,
-                                "elapsed_ms": round((perf_counter() - started) * 1000, 2), "response": body})
+        # Installed reads may contain private records/settings. Retain outcomes,
+        # not response bodies; report.records contains only this stand's writes.
+        report["calls"].append({"tool": tool, "status": response.status_code,
+                                "elapsed_ms": round((perf_counter() - started) * 1000, 2),
+                                "ok": response.ok and body.get("ok") is not False})
         if trial and response.ok:
             assert response.headers.get("X-AdaOS-Runtime-Source") == "trial"
             assert response.headers.get("X-AdaOS-Release-Digest") == report["trial"]["release_digest"]
         if rejected:
-            assert response.status_code in (400, 422) or (response.ok and (body.get("ok") is False or body.get("result", {}).get("ok") is False)), body
+            assert response.status_code in (400, 409, 422) or (response.ok and (body.get("ok") is False or body.get("result", {}).get("ok") is False)), f"{tool}: expected rejection, HTTP {response.status_code}"
             return body
-        assert response.ok and body.get("ok") is not False, body
+        assert response.ok and body.get("ok") is not False, f"{tool}: HTTP {response.status_code} rejected"
         result = body.get("result", body)
-        assert result.get("ok") is not False, result
+        assert result.get("ok") is not False, f"{tool}: rejected tool result"
         return result
 
     def check(name, condition):
@@ -119,13 +122,20 @@ def main():
             for expected in previous["records"]:
                 actual = call("get_book", id=expected["id"])["item"]
                 check("restart-preserves:" + expected["id"], actual == expected)
+            if previous.get("settings_written"):
+                expected_settings = previous["settings_written"]
+                actual_settings = call("read_settings")["item"]
+                check("restart-preserves-settings", all(actual_settings.get(key) == value for key, value in expected_settings.items()))
             # Only records created by this review are removed, through public tools.
             for expected in previous["records"]:
                 call("delete_book", id=expected["id"], revision=expected["revision"])
                 check("cleanup:" + expected["id"], call("get_book", id=expected["id"])["item"] == {})
         else:
             initial = call("list_books")["items"]
-            check("fresh-runtime-has-no-prototype-seeds", initial == [])
+            if trial:
+                check("installed-read-succeeds-without-exporting-records", isinstance(initial, list))
+            else:
+                check("dev-has-only-owned-e2e-records", all("E2E-" in str(row.get("title", "")) for row in initial))
             denied = requests.post(hub + "/api/tools/call", json={"tool": identifier + "_skill:create_book",
                 "arguments": {"webspace_id": webspace, "values": {"title": "Must not create"}}}, timeout=30)
             check("unauthenticated-ingress-denied", denied.status_code in (401, 403))
@@ -163,6 +173,14 @@ def main():
             call("delete_book", id=disposable["id"], revision=disposable["revision"])
             check("delete-removes-only-selected", call("get_book", id=disposable["id"])["item"] == {} and
                   call("get_book", id=minimal["id"])["item"] == minimal and call("get_book", id=book["id"])["item"] == changed)
+            settings = call("read_settings")["item"]
+            desired = {"preferred_view": "cards" if settings["preferred_view"] == "table" else "table", "discovery_count": 10}
+            saved = call("update_settings", values=desired, revision=settings["revision"])["item"]
+            report["settings_written"] = {**desired, "revision": saved["revision"]}
+            check("settings-save-increments-revision", saved["revision"] > settings["revision"] and all(saved[key] == value for key, value in desired.items()))
+            call("update_settings", rejected=True, values={"discovery_count": 20}, revision=settings["revision"])
+            call("update_settings", rejected=True, values={"discovery_count": 20})
+            check("stale-or-missing-settings-revision-refused", call("read_settings")["item"] == saved)
         report["passed"] = bool(report["checks"]) and all(row["status"] == "passed" for row in report["checks"])
     except Exception as exc:
         report["failure"] = {"type": type(exc).__name__, "message": str(exc)}

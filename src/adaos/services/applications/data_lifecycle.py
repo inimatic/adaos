@@ -39,6 +39,11 @@ def automation_data_contract() -> dict[str, Any]:
     return {
         "manifest_field": "skill.yaml:data_lifecycle",
         "schema_ref": "abi:skill.schema.json#/properties/data_lifecycle",
+        "capability_declaration": {
+            "schema_ref": "abi:skill.schema.json#/properties/capabilities",
+            "shape": "skill.yaml capabilities is a flat unique string array, not an object with required/optional fields. Merge required SDK tokens without removing existing declarations.",
+            "example": {"capabilities": ["storage.relational", "configuration.read", "configuration.write"]},
+        },
         "declaration": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": []},
         "database_fields": {"path": "relative SQLite filename under this skill's SDK data root",
             "migrations": "full ordered list of {version: positive integer, name: string, statements: SQL string[]}"},
@@ -47,6 +52,7 @@ def automation_data_contract() -> dict[str, Any]:
             "async": "Async handlers use a_ensure_database(path).",
             "behavior": "Reads the active skill.yaml chain and uses the same Core checksum ledger as Beta migration. Initializes an empty store or verifies an already migrated one. Existing installed data with pending migrations is rejected; DEV synthetic stores can migrate in place.",
             "boundary": "Do not implement another ledger or duplicate migrations in handlers. A mismatched ledger is a blocker, never a reason to clear history or ignore an exception.",
+            "testing": "A mocked SDK can test caller ordering and consumer behavior, but does not verify Core migrations/checksums. Label such coverage as a test double. Independent acceptance executes the actual declared SQL chain with Core on synthetic fixtures, then qualifies installed migration separately.",
         },
         "configuration_contract": {
             "manifest": "configuration.schema is a JSON Schema for the non-secret values object; configuration.defaults must satisfy it.",
