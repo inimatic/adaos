@@ -493,11 +493,11 @@ Application list/search/component-owner reads.
 
 **Outcome:** startup can use a previous projection only after graceful seal.
 
-- [ ] `[must]` `APREG2-01` Write `projection_epoch` open/dirty state before
+- [x] `[must]` `APREG2-01` Write `projection_epoch` open/dirty state before
   normal runtime traffic.
-- [ ] `[must]` `APREG2-02` Implement graceful seal: drain, stop projection
+- [x] `[must]` `APREG2-02` Implement graceful seal: drain, stop projection
   mutations, flush, checkpoint, integrity evidence, and atomic closed receipt.
-- [ ] `[must]` `APREG2-03` Reject snapshot trust after absent, open, dirty,
+- [x] `[must]` `APREG2-03` Reject snapshot trust after absent, open, dirty,
   corrupt, schema-incompatible, or unsealed previous epochs.
 - [ ] `[must]` `APREG2-04` Surface startup status as
   `ready|warming|untrusted_rebuild|invalid|degraded`.
@@ -512,15 +512,15 @@ sealed path serves catalog/search from the prior snapshot.
 **Outcome:** process replacement does not accidentally certify projection
 trust.
 
-- [ ] `[must]` `APREG3-01` Add `shutdown_request_id` to runtime shutdown flow or
+- [x] `[must]` `APREG3-01` Add `shutdown_request_id` to runtime shutdown flow or
   an equivalent deterministic retirement token.
-- [ ] `[must]` `APREG3-02` Bind the projection seal receipt to the retiring
+- [x] `[must]` `APREG3-02` Bind the projection seal receipt to the retiring
   runtime epoch and shutdown request id.
-- [ ] `[must]` `APREG3-03` Treat successful `/api/admin/shutdown` plus process
+- [x] `[must]` `APREG3-03` Treat successful `/api/admin/shutdown` plus process
   exit as insufficient for snapshot trust when the seal receipt is absent.
 - [ ] `[must]` `APREG3-04` Ensure fallback process termination always leaves
   the next runtime in `untrusted_rebuild`.
-- [ ] `[should]` `APREG3-05` Expose seal status in shutdown diagnostics without
+- [x] `[should]` `APREG3-05` Expose seal status in shutdown diagnostics without
   making the HTTP response the source of trust.
 
 **Exit proof:** takeover tests cover graceful retire with seal, graceful request

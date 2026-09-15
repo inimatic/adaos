@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -1717,15 +1718,18 @@ def _request_graceful_shutdown(
     token: str | None,
     reason: str = "cli.stop",
     lifecycle_scope: str = "subnet",
+    shutdown_request_id: str | None = None,
 ) -> bool:
     url = f"http://{host}:{int(port)}/api/admin/shutdown"
     headers = {"Content-Type": "application/json"}
     if token:
         headers["X-AdaOS-Token"] = str(token)
+    request_id = str(shutdown_request_id or "").strip() or f"cli.shutdown.{uuid.uuid4().hex}"
     try:
         response = requests.post(
             url,
             json={
+                "shutdown_request_id": request_id,
                 "reason": reason,
                 "drain_timeout_sec": 5.0,
                 "signal_delay_sec": 0.2,

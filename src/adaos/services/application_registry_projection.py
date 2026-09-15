@@ -537,7 +537,7 @@ class ApplicationRegistryProjection:
                 ).fetchone()
                 if row is None:
                     raise ApplicationRegistryProjectionError(f"projection epoch not found: {epoch_id}")
-                source_watermark = self._source_watermark(con, DEVELOPMENT_PROJECT_MANIFEST_SOURCE_KIND)
+                source_watermark = self._source_watermark(con)
                 projection_digest = self._projection_digest(con)
                 integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
                 checkpoint = con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
@@ -1921,18 +1921,28 @@ class ApplicationRegistryProjection:
         )
 
     @staticmethod
-    def _source_watermark(con: sqlite3.Connection, source_kind: str) -> str:
-        rows = con.execute(
-            """
-            SELECT source_ref, content_digest, schema_digest, validation_status
-            FROM projection_source
-            WHERE source_kind=?
-            ORDER BY source_ref, source_path
-            """,
-            (source_kind,),
-        ).fetchall()
+    def _source_watermark(con: sqlite3.Connection, source_kind: str | None = None) -> str:
+        if source_kind is None:
+            rows = con.execute(
+                """
+                SELECT source_kind, source_ref, content_digest, schema_digest, validation_status
+                FROM projection_source
+                ORDER BY source_kind, source_ref, source_path
+                """
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """
+                SELECT source_kind, source_ref, content_digest, schema_digest, validation_status
+                FROM projection_source
+                WHERE source_kind=?
+                ORDER BY source_kind, source_ref, source_path
+                """,
+                (source_kind,),
+            ).fetchall()
         return _digest([
             {
+                "source_kind": row["source_kind"],
                 "source_ref": row["source_ref"],
                 "content_digest": row["content_digest"],
                 "schema_digest": row["schema_digest"],

@@ -901,6 +901,7 @@ def test_takeover_shutdown_uses_runtime_retire_scope(monkeypatch):
 
     assert stopped is True
     assert captured["json"]["lifecycle_scope"] == "runtime_retire"
+    assert str(captured["json"]["shutdown_request_id"]).startswith("cli.shutdown.")
 
 
 def test_api_stop_fails_for_non_local_hub_url(monkeypatch):

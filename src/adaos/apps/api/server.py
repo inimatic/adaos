@@ -166,6 +166,7 @@ import platform, time
 import signal
 import sys
 import threading
+import uuid
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -852,6 +853,10 @@ async def _run_core_update_shutdown(app: FastAPI, *, reason: str, drain_timeout_
     app.state.shutdown_requested = True
     app.state.shutdown_reason = reason
     app.state.shutdown_drain_timeout = float(drain_timeout_sec)
+    app.state.shutdown_request_id = (
+        str(getattr(app.state, "shutdown_request_id", "") or "").strip()
+        or _new_shutdown_request_id("core_update.shutdown")
+    )
     await _emit_shutdown_event(
         "subnet.stopping",
         {
@@ -1043,6 +1048,63 @@ def _api_state_dir() -> Path:
     return out
 
 
+def _new_shutdown_request_id(prefix: str = "runtime.shutdown") -> str:
+    token = str(prefix or "runtime.shutdown").strip().replace(":", ".")
+    return f"{token}.{uuid.uuid4().hex}"
+
+
+def _application_registry_projection_service():
+    from adaos.services.application_registry_projection import ApplicationRegistryProjection
+
+    return ApplicationRegistryProjection(_api_state_dir())
+
+
+def _start_application_registry_projection_epoch(app: FastAPI) -> dict[str, Any]:
+    service = _application_registry_projection_service()
+    previous_trust = service.snapshot_trust_state()
+    runtime = _runtime_identity_public_payload()
+    epoch = service.start_epoch(runtime_instance_id=runtime.get("runtime_instance_id"))
+    payload = {
+        "schema": "adaos.application.registry_projection.runtime_start.v1",
+        "previous_snapshot_trust": previous_trust,
+        "epoch": epoch,
+    }
+    app.state.application_registry_projection_epoch_id = epoch["epoch_id"]
+    app.state.application_registry_projection_startup = payload
+    app.state.application_registry_projection_previous_snapshot_trust = previous_trust
+    app.state.application_registry_projection_seal_receipt = None
+    app.state.application_registry_projection_seal_error = None
+    return payload
+
+
+def _seal_application_registry_projection_epoch(app: FastAPI) -> dict[str, Any] | None:
+    epoch_id = str(getattr(app.state, "application_registry_projection_epoch_id", "") or "").strip()
+    if not epoch_id:
+        return None
+    shutdown_request_id = str(getattr(app.state, "shutdown_request_id", "") or "").strip()
+    if not shutdown_request_id:
+        shutdown_request_id = _new_shutdown_request_id("runtime.signal")
+        app.state.shutdown_request_id = shutdown_request_id
+    try:
+        receipt = _application_registry_projection_service().seal_epoch(
+            epoch_id,
+            shutdown_request_id=shutdown_request_id,
+            shutdown_reason=str(getattr(app.state, "shutdown_reason", "signal") or "signal"),
+            shutdown_scope=str(getattr(app.state, "shutdown_lifecycle_scope", "subnet") or "subnet"),
+        )
+        app.state.application_registry_projection_seal_receipt = receipt
+        app.state.application_registry_projection_seal_error = None
+        return receipt
+    except Exception as exc:
+        error = {"error_type": type(exc).__name__, "error": str(exc)[:500]}
+        app.state.application_registry_projection_seal_error = error
+        logging.getLogger("adaos.application.registry_projection").warning(
+            "failed to seal Application registry projection epoch",
+            exc_info=True,
+        )
+        return None
+
+
 def _restart_marker_path_from_base(base_url: str | None) -> Path | None:
     raw = str(base_url or "").strip()
     if not raw:
@@ -1117,6 +1179,7 @@ async def _runtime_context(app: FastAPI):
         app.state.shutdown_reason = "signal"
         app.state.shutdown_drain_timeout = _DEFAULT_SHUTDOWN_DRAIN_SEC
         app.state.shutdown_lifecycle_scope = "subnet"
+        app.state.shutdown_request_id = None
         app.state.shutdown_stopping_emitted = False
         app.state.runtime_boot_readiness = {
             "state": "initializing",
@@ -1136,6 +1199,15 @@ async def _runtime_context(app: FastAPI):
         app.state.status_registry = app.state.ctx.status_registry
     except Exception:
         pass
+
+    try:
+        with _StartupTimer("application_registry_projection_epoch_open"):
+            _start_application_registry_projection_epoch(app)
+    except Exception:
+        logging.getLogger("adaos.application.registry_projection").warning(
+            "failed to open Application registry projection epoch",
+            exc_info=True,
+        )
 
     try:
         from adaos.services.runtime_executor import install_runtime_default_executor
@@ -1676,6 +1748,8 @@ async def _runtime_context(app: FastAPI):
                 await stop_realtime_sidecar_subprocess(getattr(app.state, "realtime_sidecar_proc", None))
             except Exception:
                 logging.getLogger("adaos.realtime").warning("failed to stop adaos-realtime sidecar", exc_info=True)
+        with _StartupTimer("application_registry_projection_epoch_seal"):
+            await asyncio.to_thread(_seal_application_registry_projection_epoch, app)
         await shutdown()
 
 
@@ -1812,6 +1886,7 @@ class ShutdownRequest(BaseModel):
     drain_timeout_sec: float = Field(default=_DEFAULT_SHUTDOWN_DRAIN_SEC, ge=0.0, le=30.0)
     signal_delay_sec: float = Field(default=_DEFAULT_SHUTDOWN_SIGNAL_DELAY_SEC, ge=0.0, le=5.0)
     lifecycle_scope: Literal["subnet", "runtime_retire"] = "subnet"
+    shutdown_request_id: str | None = Field(default=None, max_length=180)
 
 
 class ShutdownResponse(BaseModel):
@@ -1819,6 +1894,7 @@ class ShutdownResponse(BaseModel):
     accepted: bool
     reason: str
     drain_timeout_sec: float
+    shutdown_request_id: str | None = None
 
 
 class DrainRequest(BaseModel):
@@ -2129,15 +2205,19 @@ async def admin_shutdown(body: ShutdownRequest, background: BackgroundTasks):
             accepted=False,
             reason=str(getattr(app.state, "shutdown_reason", body.reason)),
             drain_timeout_sec=float(getattr(app.state, "shutdown_drain_timeout", body.drain_timeout_sec)),
+            shutdown_request_id=str(getattr(app.state, "shutdown_request_id", "") or "").strip() or None,
         )
 
+    shutdown_request_id = str(body.shutdown_request_id or "").strip() or _new_shutdown_request_id("api.shutdown")
     app.state.shutdown_requested = True
     app.state.shutdown_reason = body.reason
     app.state.shutdown_drain_timeout = float(body.drain_timeout_sec)
     app.state.shutdown_lifecycle_scope = body.lifecycle_scope
+    app.state.shutdown_request_id = shutdown_request_id
     profile_mode = str(os.getenv("ADAOS_SUPERVISOR_PROFILE_MODE") or "normal").strip().lower()
     shutdown_debug_payload: dict[str, Any] = {
         "entered_at": time.time(),
+        "shutdown_request_id": shutdown_request_id,
         "reason": body.reason,
         "drain_timeout_sec": float(body.drain_timeout_sec),
         "signal_delay_sec": float(body.signal_delay_sec),
@@ -2199,6 +2279,7 @@ async def admin_shutdown(body: ShutdownRequest, background: BackgroundTasks):
         accepted=True,
         reason=body.reason,
         drain_timeout_sec=body.drain_timeout_sec,
+        shutdown_request_id=shutdown_request_id,
     )
 
 
@@ -2250,6 +2331,18 @@ async def admin_lifecycle():
         "lifecycle": runtime_lifecycle_snapshot(),
         "runtime": _runtime_identity_public_payload(),
         "artifact_delayed_verification": observation_worker,
+        "application_registry_projection": {
+            "epoch_id": getattr(app.state, "application_registry_projection_epoch_id", None),
+            "startup": getattr(app.state, "application_registry_projection_startup", None),
+            "previous_snapshot_trust": getattr(
+                app.state,
+                "application_registry_projection_previous_snapshot_trust",
+                None,
+            ),
+            "seal_receipt": getattr(app.state, "application_registry_projection_seal_receipt", None),
+            "seal_error": getattr(app.state, "application_registry_projection_seal_error", None),
+            "shutdown_request_id": getattr(app.state, "shutdown_request_id", None),
+        },
     }
 
 

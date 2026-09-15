@@ -328,6 +328,8 @@ def test_runtime_retire_shutdown_skips_subnet_lifecycle(monkeypatch) -> None:
     )
 
     assert response.accepted is True
+    assert str(response.shutdown_request_id).startswith("api.shutdown.")
+    assert api_server.app.state.shutdown_request_id == response.shutdown_request_id
     assert emitted == []
     assert api_server.app.state.shutdown_lifecycle_scope == "runtime_retire"
     assert api_server.app.state.shutdown_stopping_emitted is True
