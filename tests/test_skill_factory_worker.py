@@ -7289,6 +7289,8 @@ def test_worker_admits_exact_bindings_for_incremental_scenario_automation(
         "storage.blob",
         "workspace.read",
     ]
+    assert contract["upload_tool"]["manifest"]["side_effects"] == "local_write"
+    assert contract["read_tool"]["manifest"]["side_effects"] == "read_only"
     prompt = (tmp_path / "input" / "task.md").read_text(encoding="utf-8")
     assert "Exact Automation binding contract" in prompt
     assert bindings_path.resolve().as_posix() in prompt

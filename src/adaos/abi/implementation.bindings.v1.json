@@ -58,7 +58,7 @@
         "manifest": {
           "permissions": ["storage.blob", "workspace.write"],
           "application_access": {"permission": "workspace.write"},
-          "side_effects": ["storage.write"]
+          "side_effects": "local_write"
         },
         "handler_order": [
           "require workspace.write before touching storage",
@@ -99,7 +99,7 @@
         "manifest": {
           "permissions": ["storage.blob", "workspace.read"],
           "application_access": {"permission": "workspace.read"},
-          "side_effects": ["none"]
+          "side_effects": "read_only"
         },
         "handler_order": [
           "require workspace.read before any storage lookup",

@@ -2537,7 +2537,7 @@ def test_checkpoint_discards_candidate_stale_only_because_automation_changed(
     assert checkpoint["delivery"]["rebase_plan"] is None
 
 
-def test_checkpoint_rejects_same_semantic_version_with_different_bytes(
+def test_checkpoint_rejects_same_artifact_version_with_different_bytes(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, _root = workflow_project
@@ -2547,23 +2547,63 @@ def test_checkpoint_rejects_same_semantic_version_with_different_bytes(
         "checkpoint_recorded",
         metadata={
             "change_id": "change-1",
+            "checkpoint_ref": "scenario:recipes",
             "version": "0.1.0",
             "package_digest": "sha256:" + "1" * 64,
             "source_revision": "a" * 40,
         },
     )
-    with pytest.raises(BuilderWorkflowError, match="semantic version already maps to different bytes"):
+    with pytest.raises(BuilderWorkflowError, match="artifact version already maps to different bytes"):
         service.transition(
             "scenario",
             "recipes",
             "checkpoint_recorded",
             metadata={
                 "change_id": "change-2",
+                "checkpoint_ref": "scenario:recipes",
                 "version": "0.1.0",
                 "package_digest": "sha256:" + "2" * 64,
                 "source_revision": "b" * 40,
             },
         )
+
+
+def test_checkpoint_versions_are_scoped_to_artifact_identity(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    first = service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "change_id": "change-scenario",
+            "checkpoint_ref": "scenario:recipes",
+            "version": "0.1.0",
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )["workflow"]
+    second = service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "change_id": "change-project",
+            "checkpoint_ref": "project:recipes",
+            "version": "0.1.0",
+            "package_digest": "sha256:" + "2" * 64,
+            "source_revision": "b" * 40,
+        },
+    )["workflow"]
+
+    assert first["checkpoint_versions"]["scenario:recipes@0.1.0"]["package_digest"] == (
+        "sha256:" + "1" * 64
+    )
+    assert second["checkpoint_versions"]["project:recipes@0.1.0"]["package_digest"] == (
+        "sha256:" + "2" * 64
+    )
+    assert second["delivery"]["checkpoint_ref"] == "project:recipes"
 
 
 def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(

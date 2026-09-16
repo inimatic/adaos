@@ -4340,6 +4340,7 @@ class BuilderAutomationService:
                     "package_digest": package_digest,
                     "source_revision": source_revision,
                     "version": project_checkpoint.get("version"),
+                    "checkpoint_ref": project_ref,
                     "task_id": repackage_session.get("current_task_id"),
                     "run_id": f"repackage:{operation_key}",
                     "idempotency_key": f"{operation_key}:checkpoint",
@@ -8643,6 +8644,7 @@ class BuilderAutomationService:
                                 "package_digest": package_digest,
                                 "source_revision": source_revision,
                                 "version": self._project_version(object_type, object_id),
+                                "checkpoint_ref": f"{object_type}:{object_id}",
                                 "task_id": current.get("current_task_id"),
                             },
                         )

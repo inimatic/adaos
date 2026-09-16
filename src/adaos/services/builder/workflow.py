@@ -6052,16 +6052,24 @@ class BuilderWorkflowService:
                     "checkpoint requires change, package, and source identities"
                 )
             checkpoint_version = str(metadata.get("version") or "").strip() or None
+            checkpoint_ref = str(metadata.get("checkpoint_ref") or "").strip() or None
             checkpoint_versions = _mapping(workflow.get("checkpoint_versions"))
             if checkpoint_version:
-                previous = _mapping(checkpoint_versions.get(checkpoint_version))
+                checkpoint_key = (
+                    f"{checkpoint_ref}@{checkpoint_version}"
+                    if checkpoint_ref
+                    else checkpoint_version
+                )
+                previous = _mapping(checkpoint_versions.get(checkpoint_key))
                 previous_digest = str(previous.get("package_digest") or "").strip()
                 if previous_digest and previous_digest != package_digest:
                     raise BuilderWorkflowError(
-                        "DEV checkpoint semantic version already maps to different bytes; "
+                        "DEV checkpoint artifact version already maps to different bytes; "
                         "bump the version before checkpointing"
                     )
-                checkpoint_versions[checkpoint_version] = {
+                checkpoint_versions[checkpoint_key] = {
+                    "checkpoint_ref": checkpoint_ref,
+                    "version": checkpoint_version,
                     "package_digest": package_digest,
                     "source_revision": source_revision,
                     "recorded_at": changed_at,
@@ -6082,6 +6090,7 @@ class BuilderWorkflowService:
                     "package_digest": package_digest,
                     "source_revision": source_revision,
                     "version": checkpoint_version,
+                    "checkpoint_ref": checkpoint_ref,
                     "checkpoint_at": changed_at,
                     "candidate_id": None,
                     "release_digest": None,

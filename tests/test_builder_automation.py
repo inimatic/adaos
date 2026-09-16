@@ -8280,6 +8280,7 @@ def test_checkpoint_repackage_advances_only_project_composition_without_codex(
     assert metadata["package_digest"] == package_digest
     assert metadata["source_revision"] == source_revision
     assert metadata["version"] == "0.3.8"
+    assert metadata["checkpoint_ref"] == "project:recipes"
     saved = service.get_session("scenario", "recipes")
     assert saved is not None
     assert saved["repackage_history"][-1]["operation_id"] == "release-abi-v2"
