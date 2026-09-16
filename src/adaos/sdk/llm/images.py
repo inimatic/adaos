@@ -39,4 +39,9 @@ def get(request_id: str) -> dict[str, Any]:
     return _service("workspace.read").get(request_id)
 
 
-__all__ = ["generate", "get"]
+def list_drafts(*, context: Mapping[str, Any], limit: int = 10) -> list[dict[str, Any]]:
+    """Observe current actor/skill drafts matching explicit local context without paid work."""
+    return _service("workspace.read").list_drafts(context=context, limit=limit)
+
+
+__all__ = ["generate", "get", "list_drafts"]

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import io
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -75,6 +76,7 @@ class ImageGenerationService:
                     return self._view(record)
             else:
                 record = {"schema": "adaos.image_draft.v1", "request_id": request_id, "input_digest": digest,
+                          "created_at": datetime.now(timezone.utc).isoformat(),
                           "request": request, "context": local_context, "status": "submitting",
                           "root_request_id": "image-" + _digest([str(self.root), request_id])}
                 atomic_write_json(path, record)
@@ -86,6 +88,24 @@ class ImageGenerationService:
             self._capture(record, job)
             atomic_write_json(path, record)
             return self._view(record)
+
+    def list_drafts(self, *, context: Mapping[str, Any], limit: int = 10) -> list[dict[str, Any]]:
+        """Observe retained owned drafts only; never poll or submit provider work."""
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
+            raise ValueError("Image draft limit must be 1..50")
+        if not isinstance(context, Mapping) or not context:
+            raise ValueError("An explicit nonempty image draft context is required")
+        records = []
+        for path in self.root.glob("*.json"):
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if record.get("schema") != "adaos.image_draft.v1":
+                continue
+            recorded_context = record.get("context") or {}
+            if all(key in recorded_context and recorded_context[key] == value for key, value in context.items()):
+                updated = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+                records.append((updated, record["request_id"], record))
+        records.sort(key=lambda row: (row[0], row[1]), reverse=True)
+        return [{**self._summary(record), "updated_at": updated} for updated, _, record in records[:limit]]
 
     def get(self, request_id: str) -> dict[str, Any]:
         path = self._path(request_id)
@@ -126,8 +146,12 @@ class ImageGenerationService:
         record["asset"] = {"sha256": digest, "suffix": suffix, "mime": mime, "width": size[0], "height": size[1], "size_bytes": len(raw)}
         record["message"] = ""
 
+    @staticmethod
+    def _summary(record: Mapping[str, Any]) -> dict[str, Any]:
+        return {key: record.get(key) for key in ("request_id", "root_request_id", "input_digest", "created_at", "status", "model", "usage", "metering_status", "context", "message")}
+
     def _view(self, record: Mapping[str, Any]) -> dict[str, Any]:
-        view = {key: record.get(key) for key in ("request_id", "root_request_id", "input_digest", "status", "model", "usage", "metering_status", "context", "message")}
+        view = self._summary(record)
         if record["status"] == "completed":
             asset = record["asset"]
             path = self.root / f"{asset['sha256']}.{asset['suffix']}"

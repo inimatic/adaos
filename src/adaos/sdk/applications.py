@@ -333,6 +333,17 @@ def get_application(application_id: str) -> dict[str, Any]:
     )
 
 
+def get_identity(application_id: str) -> dict[str, Any]:
+    """Read registered identity without catalog/runtime scans or creating a record."""
+    application = _service().store.get_application(application_id)
+    return {
+        "application_id": application.application_id,
+        "publisher_ref": application.publisher_ref,
+        "display_name": str(application.publisher.get("display_name") or application.publisher_ref),
+        "source": "application_registry",
+    }
+
+
 def list_catalog() -> list[dict[str, Any]]:
     return list_applications(catalog_only=True)
 
@@ -1042,6 +1053,7 @@ __all__ = [
     "apply_operation",
     "explain_plan",
     "get_application",
+    "get_identity",
     "get_development_report",
     "get_development_report_status",
     "get_development_report_triage",

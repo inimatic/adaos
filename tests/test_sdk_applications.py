@@ -33,6 +33,25 @@ class _Record:
         return dict(self.payload)
 
 
+def test_identity_read_is_bounded_and_does_not_scan_or_create(monkeypatch):
+    record = SimpleNamespace(application_id="example", publisher_ref="subnet:other",
+                             publisher={"display_name": "Registered publisher", "private": "not exported"})
+    calls = []
+    def get(application_id):
+        calls.append(application_id)
+        if application_id == "missing":
+            raise FileNotFoundError(application_id)
+        return record
+    monkeypatch.setattr(applications, "_service", lambda: SimpleNamespace(store=SimpleNamespace(get_application=get)))
+    monkeypatch.setattr(applications, "list_applications", lambda: pytest.fail("No catalog/runtime scan"))
+    assert applications.get_identity("example") == {
+        "application_id": "example", "publisher_ref": "subnet:other", "display_name": "Registered publisher",
+        "source": "application_registry"}
+    with pytest.raises(FileNotFoundError):
+        applications.get_identity("missing")
+    assert calls == ["example", "missing"]
+
+
 def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) -> None:
     stub = _StubService()
     monkeypatch.setattr(applications, "_service", lambda: stub)

@@ -57,7 +57,7 @@ _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
     "adaos.sdk.distributed": "Describe and operate governed distributed datasets and services.",
     "adaos.sdk.execution": "Declare and inspect bounded execution jobs and artifacts.",
     "adaos.sdk.llm.content": "Generate and poll durable typed form drafts through Root subscriptions; review before explicit application.",
-    "adaos.sdk.llm.images": "Generate and poll owner-scoped still-image drafts through durable Root jobs with an explicit image model. Requires verified caller workspace.read/write; never apply to assets automatically. Model availability, admission and actual modality usage come from Root, not a text-model fallback.",
+    "adaos.sdk.llm.images": "Generate and poll owner-scoped still-image drafts through durable Root jobs with an explicit image model. List retained draft metadata by explicit local context without provider calls. Requires verified caller workspace.read/write; never apply to assets automatically. Model availability, admission and actual modality usage come from Root, not a text-model fallback.",
     "adaos.sdk.llm.media": "Provide explicit bounded image inputs to vision-capable content requests; does not generate images.",
     "adaos.sdk.developer.documents": "Read and save DEV text documents with optimistic concurrency; never edit sealed Trials.",
     "adaos.sdk.research": "Use governed research inquiry, synthesis, and evidence workflows.",

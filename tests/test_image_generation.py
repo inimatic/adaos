@@ -122,7 +122,46 @@ def test_submission_recovery_uses_same_root_identity(tmp_path):
     assert broker.submits[0] == broker.submits[1]
 
 
-@pytest.mark.parametrize("action,right", [("generate", "workspace.write"), ("get", "workspace.read")])
+def test_draft_history_is_owned_context_scoped_bounded_and_never_polls(tmp_path):
+    broker = Broker()
+    service = ImageGenerationService(tmp_path, "owner", broker, publisher)
+    for number, project in enumerate(["one", "two", "one"]):
+        service.submit(request_id=f"draft-{number}", model="image-model", prompt="Private instruction",
+                       context={"project_ref": project, "purpose": "icon"})
+    reopened = ImageGenerationService(tmp_path, "owner", broker, publisher)
+    rows = reopened.list_drafts(context={"project_ref": "one", "purpose": "icon"})
+    assert [row["request_id"] for row in rows] == ["draft-2", "draft-0"]
+    assert reopened.list_drafts(context={"project_ref": "one"}, limit=1) == rows[:1]
+    assert not reopened.list_drafts(context={"missing": None})
+    assert "Private instruction" not in json.dumps(rows)
+    assert str(tmp_path) not in json.dumps(rows)
+    assert not ImageGenerationService(tmp_path, "another-owner", broker, publisher).list_drafts(context={"project_ref": "one"})
+    assert len(broker.submits) == 3 and not broker.polls
+    for limit in [0, 51, True, 1.5]:
+        with pytest.raises(ValueError, match="limit"):
+            reopened.list_drafts(context={"project_ref": "one"}, limit=limit)
+    with pytest.raises(ValueError, match="context"):
+        reopened.list_drafts(context={})
+
+
+def test_legacy_completed_draft_can_be_found_after_restart_without_provider(tmp_path):
+    broker = Broker()
+    broker.job.update(status="succeeded", response={"data": [{"b64_json": encoded_image()}]})
+    service = ImageGenerationService(tmp_path, "owner", broker, publisher)
+    service.submit(request_id="legacy", model="image-model", prompt="Icon", context={"project_ref": "one"})
+    path = next(tmp_path.rglob("*.json"))
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record.pop("created_at")
+    path.write_text(json.dumps(record), encoding="utf-8")
+    def no_media(*args, **kwargs):
+        pytest.fail("History must not rehash or publish every image")
+    rows = ImageGenerationService(tmp_path, "owner", broker, no_media).list_drafts(context={"project_ref": "one"})
+    assert len(rows) == 1 and rows[0]["created_at"] is None and rows[0]["updated_at"] and rows[0]["status"] == "completed"
+    assert "media" not in rows[0]
+    assert len(broker.submits) == 1 and not broker.polls
+
+
+@pytest.mark.parametrize("action,right", [("generate", "workspace.write"), ("get", "workspace.read"), ("list_drafts", "workspace.read")])
 def test_sdk_requires_verified_actor_before_accessing_context(monkeypatch, action, right):
     from adaos.sdk.llm import images
     calls = []
@@ -134,6 +173,8 @@ def test_sdk_requires_verified_actor_before_accessing_context(monkeypatch, actio
     with pytest.raises(PermissionError):
         if action == "generate":
             images.generate(request_id="one", model="gpt-image-1", prompt="Icon")
-        else:
+        elif action == "get":
             images.get("one")
+        else:
+            images.list_drafts(context={"project_ref": "one"})
     assert calls == [right]
