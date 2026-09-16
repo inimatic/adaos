@@ -629,6 +629,12 @@ UI ABI, capability catalog, runtime URL, DOM/console/network findings and
 screenshot digests. A failed receipt is projected into the implementing Codex
 context for at most two independently rechecked repairs. This path is DEV-only;
 it does not create case-specific webspaces or grant the model final acceptance.
+Applications and Users & Access now qualify this integrated route on wide and
+compact layouts. The gate exercises semantic tabs and compact region
+disclosure, rejects renderer error/unsupported states and invalid semantic
+toolbar order, and retains per-view evidence. Only the known local missing
+runtime-config bootstrap and unauthenticated status probe are warnings; other
+HTTP failures, including retryable runtime `503`, remain failures.
 
 - [x] `[must]` Expose candidate browser actions, DOM/accessibility, image bytes,
   console/network and synthetic data evidence through scoped check operations.
@@ -639,9 +645,8 @@ it does not create case-specific webspaces or grant the model final acceptance.
   optional visual taste must not become a hidden requirement. Qualify selected
   wide/compact journeys, persistence and image loading, not screenshots alone.
 
-Exit/remaining work: Qualify the integrated gate on retained Applications and
-Users & Access candidates, add stateful persistence and loaded-image journeys,
-and prove that stale/wrong-target evidence fails closed. Route exhausted or
+Exit/remaining work: Add stateful persistence and loaded-image journeys and
+prove that stale/wrong-target evidence fails closed. Route exhausted or
 platform-owned findings to Dev Tickets instead of repeatedly editing the
 Application. Two targeted review repairs are the initial review profile, not a
 universal fixed track; adjust only with recorded progress/budget evidence.

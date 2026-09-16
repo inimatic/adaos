@@ -115,6 +115,34 @@ try {
         return [...document.querySelectorAll('[data-webui-widget-id]')]
           .some(element => element.getClientRects().length > 0)
       }, undefined, { timeout: timeoutMs })
+      await page.screenshot({ path: path.join(output, `${layout}-initial.png`), fullPage: true })
+
+      if (layout === 'compact') {
+        const compactTriggers = page.locator('.layout-region-trigger')
+        const compactTriggerCount = await compactTriggers.count()
+        if (compactTriggerCount) {
+          const trigger = compactTriggers.first()
+          if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
+            await trigger.click()
+            await page.waitForTimeout(250)
+          }
+          const openRegions = page.locator('ada-layout-region.is-open')
+          if ((await trigger.getAttribute('aria-expanded')) !== 'true' || !(await openRegions.count())) {
+            sample.hard_failures.push('Compact detail/inspector disclosure did not open its semantic region')
+          } else {
+            sample.checks.push({ kind: 'compact-region-disclosure', count: compactTriggerCount })
+            await page.screenshot({ path: path.join(output, `${layout}-disclosure.png`), fullPage: true })
+            const close = openRegions.first().locator('.layout-region__header button').first()
+            if (await close.count()) {
+              await close.click()
+              await page.waitForTimeout(150)
+              if ((await trigger.getAttribute('aria-expanded')) !== 'false') {
+                sample.hard_failures.push('Compact detail/inspector disclosure did not close')
+              }
+            }
+          }
+        }
+      }
 
       const semanticTabs = page.locator('[role="tablist"] [role="tab"]')
       const tabCount = await semanticTabs.count()
@@ -123,9 +151,13 @@ try {
         if (!(await tab.isVisible())) continue
         await tab.focus()
         await tab.press('Enter')
+        await page.waitForTimeout(350)
         const selected = await tab.getAttribute('aria-selected')
         if (selected !== 'true') {
           sample.hard_failures.push(`Semantic tab ${index + 1} did not become selected`)
+        }
+        if (index < 6) {
+          await page.screenshot({ path: path.join(output, `${layout}-tab-${index + 1}.png`), fullPage: true })
         }
       }
       if (tabCount) sample.checks.push({ kind: 'semantic-tabs', count: tabCount })
@@ -151,6 +183,28 @@ try {
             role: element.getAttribute('role'),
             widget: element.closest('[data-webui-widget-id]')?.getAttribute('data-webui-widget-id') || null,
           }))
+        const rendererFailures = [...document.querySelectorAll(
+          '[data-webui-render-state="error"], [data-webui-render-state="unsupported"]',
+        )].map(element => ({
+          id: element.getAttribute('data-webui-widget-id'),
+          type: element.getAttribute('data-webui-widget-type'),
+          state: element.getAttribute('data-webui-render-state'),
+          text: String(element.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 500),
+        }))
+        const visibleRegions = [...document.querySelectorAll('ada-layout-region[data-region-role]')]
+          .filter(visible)
+          .map(element => {
+            const box = element.getBoundingClientRect()
+            return {
+              id: element.getAttribute('data-region-id'),
+              role: element.getAttribute('data-region-role'),
+              top: box.top,
+              bottom: box.bottom,
+            }
+          })
+        const toolbar = visibleRegions.find(region => region.role === 'toolbar')
+        const bodyRegions = visibleRegions.filter(region => ['collection', 'main', 'detail', 'inspector'].includes(region.role))
+        const toolbarAfterBody = toolbar && bodyRegions.some(region => toolbar.top > region.top + 2)
         const bodyText = String(document.body?.innerText || '')
         const blockingText = patternSources
           .map(source => new RegExp(source, 'i'))
@@ -165,6 +219,9 @@ try {
           visible_widget_ids: [...new Set(widgetIds)].slice(0, 160),
           visible_widget_count: widgetIds.length,
           unlabeled_interactives: unlabeled,
+          renderer_failures: rendererFailures,
+          visible_regions: visibleRegions,
+          toolbar_after_body: Boolean(toolbarAfterBody),
           blocking_text: blockingText,
         }
       }, blockingTextPatterns.map(pattern => pattern.source))
@@ -184,6 +241,14 @@ try {
       if (diagnostics.unlabeled_interactives.length) {
         sample.warnings.push(`${diagnostics.unlabeled_interactives.length} visible interactive controls have no accessible name`)
       }
+      for (const failure of diagnostics.renderer_failures) {
+        sample.hard_failures.push(
+          `Widget ${failure.id || failure.type || 'unknown'} is ${failure.state}: ${failure.text || 'no diagnostics'}`,
+        )
+      }
+      if (diagnostics.toolbar_after_body) {
+        sample.hard_failures.push('Semantic toolbar is rendered after the primary content region')
+      }
       await page.screenshot({ path: path.join(output, `${layout}.png`), fullPage: true })
     } catch (error) {
       sample.hard_failures.push(String(error?.message || error))
@@ -200,9 +265,24 @@ try {
 
 for (const sample of report.samples) {
   for (const error of sample.page_errors) sample.hard_failures.push(`Page error: ${error}`)
-  for (const error of sample.console_errors) sample.hard_failures.push(`Console error: ${error}`)
+  for (const error of sample.console_errors) {
+    if (/^Failed to load resource: the server responded with a status of (401|404)/i.test(error)) {
+      sample.warnings.push(`Browser bootstrap resource warning: ${error}`)
+    } else {
+      sample.hard_failures.push(`Console error: ${error}`)
+    }
+  }
   for (const failure of sample.request_failures) {
-    sample.hard_failures.push(`HTTP ${failure.status} ${failure.method} ${failure.url}`)
+    const target = new URL(failure.url)
+    const expectedDevBootstrapMiss = failure.status === 404 && target.pathname === '/runtime-config.json'
+    const expectedAuthProbe = failure.status === 401
+      && target.pathname === '/api/node/status'
+      && target.searchParams.get('profile') === 'probe'
+    if (expectedDevBootstrapMiss || expectedAuthProbe) {
+      sample.warnings.push(`Expected local bootstrap probe: HTTP ${failure.status} ${failure.method} ${failure.url}`)
+    } else {
+      sample.hard_failures.push(`HTTP ${failure.status} ${failure.method} ${failure.url}`)
+    }
   }
 }
 report.passed = report.samples.length === 2 && report.samples.every(sample => sample.hard_failures.length === 0)

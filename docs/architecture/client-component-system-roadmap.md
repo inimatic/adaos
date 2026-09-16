@@ -66,9 +66,12 @@ Layout baseline, 2026-09-16:
   inventory has 44 registered widget types. Tabs retain ARIA selection and
   roving keyboard focus, breadcrumbs retain the full accessible label, and
   overflow uses one bounded menu rather than clipped command text.
-- [ ] `[should]` Qualify richer adaptive-detail behavior against Applications
+- [x] `[should]` Qualify richer adaptive-detail behavior against Applications
   and Users & Access on wide/compact viewports. Explicit region presentation
-  remains authoritative; do not add a second inferred detail-layout contract.
+  remains authoritative; no second inferred detail-layout contract was added.
+  The retained Builder browser gate verifies semantic toolbar order and opens
+  and closes the compact detail/inspector disclosure, in addition to checking
+  renderer health, overflow, console/network failures and tab interaction.
 - [x] `[must]` Add cutover contract and browser conformance for every admitted
   Workspace layout at wide and compact sizes, including stable render-plan
   identity, geometry, clipping, overflow, page errors, and widget render
@@ -123,6 +126,11 @@ Cutover evidence, 2026-09-16:
   tab keyboard focus, automatic command overflow, breadcrumb current-location
   semantics, accordion state projection, and registry resolution. Core catalog
   tests verify the same identifiers and the complete typed form vocabulary.
+  Applications and Users & Access pass the generic Builder browser feedback
+  gate on 1440x1000 and 390x844 layouts. A discovered workbench ordering defect
+  was corrected generically: toolbar spans row one, primary/auxiliary content
+  occupies row two and footer occupies row three, with the equivalent compact
+  ordering. Product-specific renderer logic was not introduced.
 
 - [x] `[must]` Qualify generic schema-modal resize and fullscreen restoration on desktop
   and mobile. Persist current-user device/scenario/webspace scopes; resolve exact
