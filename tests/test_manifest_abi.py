@@ -531,6 +531,28 @@ def test_skill_schema_accepts_durable_tool_approval_scope() -> None:
     Draft7Validator(schema).validate(payload)
 
 
+def test_skill_schema_accepts_narrow_application_tool_access() -> None:
+    schema = _load_schema("skill.schema.json")
+    payload = {
+        "name": "roster_skill",
+        "version": "1.0.0",
+        "tools": [
+            {
+                "name": "save_assignment",
+                "side_effects": "local_write",
+                "permissions": ["workspace.write"],
+                "application_access": {
+                    "permission": "workspace.write",
+                    "capability": "roster.manage",
+                    "resource_argument": "assignment_id",
+                },
+            }
+        ],
+    }
+
+    Draft7Validator(schema).validate(payload)
+
+
 def test_scenario_schema_accepts_builder_authoring_hints() -> None:
     schema = _load_schema("scenario.schema.json")
     payload = {

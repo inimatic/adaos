@@ -92,6 +92,13 @@ def test_local_trial_acceptance_preserves_selection_on_stale_or_unconfirmed_publ
     monkeypatch.setattr(applications, "_application_service", lambda: service)
     monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:test")
     monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        applications,
+        "ApplicationAccessManagementService",
+        lambda _service: SimpleNamespace(
+            admit_release_stage=lambda *args, **kwargs: {"status": "passed"}
+        ),
+    )
     state = {"delivery": {"status": "accepted", "candidate_id": "other" if difference == "workflow" else "candidate",
                           "package_digest": "digest"}, "publication": {"status": "unknown"}}
     monkeypatch.setattr(workflow, "get_state", lambda *args: state)

@@ -628,7 +628,18 @@ def test_skill_manager_runtime_update_falls_back_to_repo_workspace(tmp_path: Pat
         encoding="utf-8",
     )
     (repo_skill / "skill.yaml").write_text(
-        "name: infrastate_skill\nversion: '0.1.0'\nentry: handlers/main.py\n",
+        """name: infrastate_skill
+version: '0.1.0'
+entry: handlers/main.py
+capabilities: [workspace.read]
+tools:
+  - name: get_snapshot
+    entry: handlers.main:get_snapshot
+    side_effects: read_only
+    application_access:
+      permission: workspace.read
+      capability: inventory.view
+""",
         encoding="utf-8",
     )
 
@@ -670,6 +681,12 @@ def test_skill_manager_runtime_update_falls_back_to_repo_workspace(tmp_path: Pat
         ".adaos/workspace/skills/infrastate_skill"
     )
     assert "repo-workspace-handler" in (runtime_skill / "handlers" / "main.py").read_text(encoding="utf-8")
+    resolved = json.loads(slot.resolved_manifest.read_text(encoding="utf-8"))
+    assert resolved["tools"]["get_snapshot"]["permissions"] == ["workspace.read"]
+    assert resolved["tools"]["get_snapshot"]["application_access"] == {
+        "permission": "workspace.read",
+        "capability": "inventory.view",
+    }
 
 
 def test_skill_manager_activate_runtime_prepares_repo_workspace_when_missing(tmp_path: Path, monkeypatch) -> None:

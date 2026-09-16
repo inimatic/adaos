@@ -798,12 +798,49 @@
           "enum": ["safe", "none", "read", "read_only", "readonly", "ui_navigation", "local_write", "runtime_write", "external_write", "device_control"],
           "description": "Trusted runtime intent class used for authorization and action-risk policy."
         },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+          },
+          "uniqueItems": true,
+          "description": "Narrow component capabilities supplied as evidence for this tool."
+        },
+        "application_access": {
+          "$ref": "#/$defs/applicationAccess",
+          "description": "Application permission and role-action mapping enforced before execution."
+        },
         "approval_scope": {
           "$ref": "#/$defs/approvalScope",
           "description": "Optional durable approval scope for repeated controller-to-resource actions."
         }
       },
       "required": ["name"]
+    },
+
+    "applicationAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["permission", "capability"],
+      "properties": {
+        "permission": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+        },
+        "capability": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+        },
+        "resource_argument": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "provider_argument": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        }
+      }
     },
 
     "approvalScope": {

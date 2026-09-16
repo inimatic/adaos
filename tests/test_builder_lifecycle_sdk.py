@@ -46,8 +46,24 @@ def test_prepare_trial_rejects_preview_target_before_starting_workflow(monkeypat
 
 
 def test_prepare_trial_uses_one_waiting_then_result_transition(monkeypatch) -> None:
+    from adaos.sdk.builder import applications
+
     transitions: list[tuple[str, dict]] = []
+    verification_calls: list[dict] = []
     monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: _checkpoint_state())
+    monkeypatch.setattr(
+        applications,
+        "verify_candidate_access",
+        lambda project_id, candidate_id, **kwargs: verification_calls.append(
+            {"project_id": project_id, "candidate_id": candidate_id, **kwargs}
+        )
+        or {
+            "required": True,
+            "status": "passed",
+            "application_id": "app_recipes",
+            "verification": {"report": {"report_digest": "sha256:" + "f" * 64}},
+        },
+    )
 
     def transition(_kind, _project, action, **kwargs):
         transitions.append((action, dict(kwargs.get("metadata") or {})))
@@ -80,6 +96,7 @@ def test_prepare_trial_uses_one_waiting_then_result_transition(monkeypatch) -> N
         "recipes",
         actor="user:test",
         idempotency_key="trial-1",
+        verification_evidence={"source_commit": "b" * 40},
     )
 
     assert [item[0] for item in transitions] == [
@@ -90,6 +107,15 @@ def test_prepare_trial_uses_one_waiting_then_result_transition(monkeypatch) -> N
     assert transitions[1][1]["idempotency_key"] == "trial-1:success"
     assert transitions[1][1]["candidate_id"] == "candidate-1"
     assert result["workflow"]["governed"]["state"] == "candidate_prepared"
+    assert result["application_verification"]["status"] == "passed"
+    assert verification_calls == [
+        {
+            "project_id": "recipes",
+            "candidate_id": "candidate-1",
+            "evidence": {"source_commit": "b" * 40},
+            "actor_ref": "user:test",
+        }
+    ]
     assert result["resumed"] is False
 
 
@@ -296,9 +322,23 @@ def test_prepare_trial_refreshes_generation_only_for_same_admitted_candidate(mon
 
     def place(*args, **kwargs):
         state["generation"] += 1
-        if changed:
-            state["delivery"][changed] = "different"
-        return {"ok": True, "trial_activation": activation}
+        admitted_activation = {
+            **activation,
+            "status": "active",
+            "candidate_ref": dict(candidate),
+        }
+        admitted_selection = {"release_digest": candidate["release_digest"]}
+        if changed == "status":
+            admitted_activation["status"] = "detached"
+        elif changed in {"candidate_id", "package_digest", "release_digest"}:
+            admitted_activation["candidate_ref"][changed] = "different"
+            if changed == "release_digest":
+                admitted_selection["release_digest"] = "different"
+        return {
+            "ok": True,
+            "trial_activation": admitted_activation,
+            "runtime_selection": admitted_selection,
+        }
 
     placements = []
 

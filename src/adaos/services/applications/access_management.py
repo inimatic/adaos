@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from adaos.domain.application import utc_now
+from adaos.domain.application import ApplicationRelease, utc_now
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.domain.application_access import (
@@ -112,6 +112,27 @@ class ApplicationAccessManagementService:
     def _document_path(self, collection: str, key: str) -> Path:
         digest = hashlib.sha256(str(key).encode("utf-8")).hexdigest()
         return self.store.root / collection / f"{digest}.json"
+
+    def _verification_release(
+        self,
+        application_id: str,
+        release_digest: str,
+        *,
+        candidate_release: ApplicationRelease | None,
+    ) -> ApplicationRelease:
+        """Resolve a persisted release or an immutable pre-publication projection."""
+
+        if candidate_release is None:
+            return self.store.get_release(application_id, release_digest)
+        if candidate_release.application_id != application_id:
+            raise ApplicationAccessError(
+                "candidate Application release belongs to another Application"
+            )
+        if candidate_release.release_digest != release_digest:
+            raise ApplicationAccessError(
+                "candidate Application release digest does not match verification target"
+            )
+        return candidate_release
 
     def resolve_runtime_context(
         self,
@@ -225,7 +246,10 @@ class ApplicationAccessManagementService:
         )
         permission = explicit_permission or next((item for item in preferred if item in admitted), "")
         permission = permission or permission_by_effect.get(effects, "")
-        capability = explicit_capability or "application.use"
+        # A simple Application may use its permission IDs as role actions. More
+        # expressive applications can override this with a domain capability in
+        # the tool's application_access declaration.
+        capability = explicit_capability or permission
         return permission, capability
 
     def record_runtime_observation(
@@ -788,8 +812,13 @@ class ApplicationAccessManagementService:
         observed_capabilities: Iterable[str] = (),
         inferred_capabilities: Iterable[str] = (),
         previous_release_digest: str | None = None,
+        candidate_release: ApplicationRelease | None = None,
     ) -> dict[str, Any]:
-        release = self.store.get_release(application_id, release_digest)
+        release = self._verification_release(
+            application_id,
+            release_digest,
+            candidate_release=candidate_release,
+        )
         declared = set(release.permission_profile.flat_permissions)
         observed = {str(item).strip().lower() for item in observed_capabilities if str(item).strip()}
         inferred = {str(item).strip().lower() for item in inferred_capabilities if str(item).strip()}
@@ -949,6 +978,7 @@ class ApplicationAccessManagementService:
         *,
         release_digest: str,
         stage: str,
+        candidate_release: ApplicationRelease | None = None,
     ) -> dict[str, Any]:
         """Require a matching passed report for access-aware release movement."""
 
@@ -961,7 +991,11 @@ class ApplicationAccessManagementService:
         }
         if required_scope not in allowed_scopes:
             raise ApplicationAccessError("unsupported Application release stage")
-        release = self.store.get_release(application_id, release_digest)
+        release = self._verification_release(
+            application_id,
+            release_digest,
+            candidate_release=candidate_release,
+        )
         composition = release.project_release.composition_lock
         if composition is None or composition.permission_profile is None:
             return {
@@ -1010,8 +1044,13 @@ class ApplicationAccessManagementService:
         redaction_evidence: Iterable[str],
         release_scope: str = "candidate",
         actor_ref: str = "system:builder",
+        candidate_release: ApplicationRelease | None = None,
     ) -> dict[str, Any]:
-        release = self.store.get_release(application_id, release_digest)
+        release = self._verification_release(
+            application_id,
+            release_digest,
+            candidate_release=candidate_release,
+        )
         disclosure_refs = tuple(str(item).strip() for item in disclosure_evidence if str(item).strip())
         redaction_refs = tuple(str(item).strip() for item in redaction_evidence if str(item).strip())
         regression_refs = tuple(

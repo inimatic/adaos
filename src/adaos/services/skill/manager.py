@@ -1279,6 +1279,11 @@ class SkillManager:
         skill_tools = manifest.get("tools") or []
         if not isinstance(skill_tools, list):
             return []
+        fallback_permissions = (
+            manifest.get("permissions")
+            or manifest.get("capabilities")
+            or base_permissions
+        )
 
         added: list[str] = []
         for entry in skill_tools:
@@ -1299,7 +1304,19 @@ class SkillManager:
                     if retries is not None and existing.get("retries") != retries:
                         existing["retries"] = retries
                         changed = True
-                    for meta_key in ("side_effects", "read_only", "yjs_governance", "approval_scope"):
+                    if "permissions" in entry and existing.get("permissions") != entry.get("permissions"):
+                        existing["permissions"] = entry.get("permissions")
+                        changed = True
+                    elif not existing.get("permissions") and fallback_permissions:
+                        existing["permissions"] = fallback_permissions
+                        changed = True
+                    for meta_key in (
+                        "side_effects",
+                        "read_only",
+                        "yjs_governance",
+                        "approval_scope",
+                        "application_access",
+                    ):
                         if meta_key in entry and existing.get(meta_key) != entry.get(meta_key):
                             existing[meta_key] = entry.get(meta_key)
                             changed = True
@@ -1322,10 +1339,16 @@ class SkillManager:
                     "input": input_schema,
                     "output": output_schema,
                 },
-                "permissions": base_permissions,
+                "permissions": entry.get("permissions") or fallback_permissions,
                 "secrets": base_secrets,
             }
-            for meta_key in ("side_effects", "read_only", "yjs_governance", "approval_scope"):
+            for meta_key in (
+                "side_effects",
+                "read_only",
+                "yjs_governance",
+                "approval_scope",
+                "application_access",
+            ):
                 if meta_key in entry:
                     tools[tool_name][meta_key] = entry.get(meta_key)
             added.append(tool_name)
@@ -5544,10 +5567,20 @@ class SkillManager:
                     "input": item.get("input_schema"),
                     "output": item.get("output_schema"),
                 },
-                "permissions": item.get("permissions") or manifest.get("permissions"),
+                "permissions": (
+                    item.get("permissions")
+                    or manifest.get("permissions")
+                    or manifest.get("capabilities")
+                ),
                 "secrets": self._preserve_secret_placeholders(item.get("secrets", [])),
             }
-            for meta_key in ("side_effects", "read_only", "yjs_governance", "approval_scope"):
+            for meta_key in (
+                "side_effects",
+                "read_only",
+                "yjs_governance",
+                "approval_scope",
+                "application_access",
+            ):
                 if meta_key in item:
                     tools[tool_name][meta_key] = item.get(meta_key)
 

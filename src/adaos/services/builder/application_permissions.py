@@ -55,6 +55,31 @@ def _authoring_contract() -> dict[str, Any]:
             "privacy_labels": "human- and policy-facing summary derived from data_practices; it does not replace canonical data category IDs",
             "retention": "optional concise text, at most 120 characters; a stable identifier such as until_record_deleted is preferred",
         },
+        "tool_runtime_contract": {
+            "permissions": (
+                "skill.tools[].permissions is trusted component evidence; narrow it to the "
+                "permission used by that tool. Skill-level capabilities remain a compatible "
+                "fallback, but apply to every tool."
+            ),
+            "application_access": {
+                "permission": (
+                    "permission_profile ID consumed by this tool; when omitted it is derived "
+                    "from side_effects"
+                ),
+                "capability": (
+                    "application action checked against application_roles[].grants; when omitted "
+                    "the permission ID is used"
+                ),
+            },
+            "example": {
+                "side_effects": "local_write",
+                "permissions": ["workspace.write"],
+                "application_access": {
+                    "permission": "workspace.write",
+                    "capability": "roster.manage",
+                },
+            },
+        },
         "platform_roles": ["owner", "co_owner", "admin", "member", "child", "guest"],
         "validation_boundary": (
             "The model may repair an invalid declaration, but the declaration grants no authority "
@@ -248,6 +273,7 @@ def application_permissions_context(
         "inference_sources": inference_sources,
         "authoring_requirements": [
             "Keep project permission_profile aligned with every owned skill capability.",
+            "Narrow each tool's permissions and map application_access capability to an application role grant when domain actions differ from permission IDs.",
             "Declare application_roles only when the application has differentiated rights; enforce rights in tools, not only in UI visibility.",
             "Add owner/member/child/guest access-matrix tests for every declared application role.",
             "Record secrets, external providers, model use, notifications, background work and data practices explicitly.",

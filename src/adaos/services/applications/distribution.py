@@ -235,7 +235,7 @@ class ApplicationDistributionService:
         upload.update({"status": "completed", "completed_via": "write_acknowledgement", "updated_at": self.clock()})
         self._save_operation(operation)
 
-    def _register_release(
+    def _release_projection(
         self,
         application_id: str,
         publisher_ref: str,
@@ -266,7 +266,7 @@ class ApplicationDistributionService:
                 }
             )
         )
-        release = ApplicationRelease(
+        return ApplicationRelease(
             application_id=application_id,
             publisher_ref=publisher_ref,
             project_release=plan.release,
@@ -277,7 +277,47 @@ class ApplicationDistributionService:
             lifecycle="trial",
             published_at=self.clock(),
         )
+
+    def _register_release(self, release: ApplicationRelease) -> ApplicationRelease:
         return self.applications.register_release(release)
+
+    def candidate_release_projection(
+        self,
+        application_id: str,
+        candidate_id: str,
+        *,
+        publisher_ref: str,
+    ) -> ApplicationRelease:
+        """Return a non-installable release view for pre-publication verification."""
+
+        application = self.applications.store.get_application(application_id)
+        if application.publisher_ref != publisher_ref:
+            raise ApplicationDistributionError(
+                "only the Application publisher may verify a candidate"
+            )
+        candidate = self.candidates.load(candidate_id)
+        if candidate.project_id != application.legacy_project_id:
+            raise ApplicationDistributionError(
+                "candidate belongs to another Application"
+            )
+        plan = self.releases.get_release(candidate.project_id, candidate.release_digest)
+        if candidate.release_digest != str(plan.release.release_digest):
+            raise ApplicationDistributionError(
+                "candidate and immutable ProjectRelease digests differ"
+            )
+        if not candidate.validation_evidence:
+            raise ApplicationDistributionError(
+                "candidate has no deterministic validation evidence"
+            )
+        return ApplicationRelease(
+            application_id=application_id,
+            publisher_ref=publisher_ref,
+            project_release=plan.release,
+            accepted_candidate_id=candidate.candidate_id,
+            acceptance_evidence=candidate.validation_evidence,
+            provenance_refs=(candidate.digest, candidate.release_digest),
+            lifecycle="candidate",
+        )
 
     def _validate_addressed_reports(
         self,
@@ -315,6 +355,7 @@ class ApplicationDistributionService:
                 release.application_id,
                 release_digest=release.release_digest,
                 stage=stage,
+                candidate_release=release,
             )
         except Exception as exc:
             raise ApplicationDistributionError(str(exc)) from exc
@@ -546,7 +587,7 @@ class ApplicationDistributionService:
             )
             _, binding = self._provenance(plan)
             operation = self._operation(application_id, candidate, binding)
-            release = self._register_release(
+            release = self._release_projection(
                 application_id, publisher_ref, candidate, plan, binding,
                 bounded_report_ids,
             )
@@ -554,6 +595,7 @@ class ApplicationDistributionService:
                 release,
                 stage="publication" if mode == "prerelease" else "trial",
             )
+            release = self._register_release(release)
             self._ensure_uploaded(operation, plan)
             publication: dict[str, Any] = {"mode": mode, "release": release.to_dict()}
             if mode == "prerelease":
@@ -653,7 +695,7 @@ class ApplicationDistributionService:
                 candidate.release_digest,
                 addresses_report_ids,
             )
-            release = self._register_release(
+            release = self._release_projection(
                 application_id, publisher_ref, candidate, plan, binding,
                 addresses_report_ids,
             )
@@ -661,6 +703,7 @@ class ApplicationDistributionService:
                 release,
                 stage="publication",
             )
+            release = self._register_release(release)
             channel = self._move_channel(
                 operation,
                 application_id=application_id,

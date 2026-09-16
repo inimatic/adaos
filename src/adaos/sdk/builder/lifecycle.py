@@ -103,6 +103,7 @@ def prepare_trial(
     target_webspace_id: str | None = None,
     publication_project_ref: str | None = None,
     permission_decision: bool | Mapping[str, Any] | None = None,
+    verification_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     state = workflow.get_state(object_type, object_id)
     delivery = _mapping(state.get("delivery"))
@@ -261,6 +262,73 @@ def prepare_trial(
             },
         )
         raise ValueError("Candidate preparation returned incomplete immutable identity")
+    try:
+        from adaos.sdk.builder import applications
+
+        access_verification = applications.verify_candidate_access(
+            str(release.get("project_id") or ""),
+            candidate_id,
+            evidence=verification_evidence,
+            actor_ref=actor,
+        )
+    except Exception as exc:
+        workflow.transition(
+            object_type,
+            object_id,
+            "candidate_preparation_failed",
+            actor=actor,
+            metadata={
+                "error": str(exc),
+                "candidate_id": candidate_id,
+                "release_digest": release_digest,
+                "idempotency_key": f"{idempotency_key}:access-verification-failure",
+            },
+        )
+        raise
+    result = {**dict(result), "application_verification": access_verification}
+    activation = _mapping(result.get("trial_activation"))
+    if object_type == "scenario" and activation:
+        from adaos.sdk.builder.applications import place_local_trial
+
+        try:
+            admitted = place_local_trial(
+                candidate_id,
+                webspace_id=trial_webspace,
+                actor_ref=actor,
+            )
+            admitted_activation = _mapping(admitted.get("trial_activation"))
+            admitted_candidate = _mapping(admitted_activation.get("candidate_ref"))
+            admitted_selection = _mapping(admitted.get("runtime_selection"))
+            if (
+                str(admitted_activation.get("status") or "") != "active"
+                or str(admitted_candidate.get("candidate_id") or "") != candidate_id
+                or str(admitted_candidate.get("package_digest") or "")
+                != package_digest
+                or str(admitted_candidate.get("release_digest") or "")
+                != release_digest
+                or str(admitted_selection.get("release_digest") or "")
+                != release_digest
+            ):
+                raise ValueError(
+                    "Trial decision or immutable identity changed during placement; "
+                    "reload Builder"
+                )
+        except Exception as exc:
+            workflow.transition(
+                object_type,
+                object_id,
+                "candidate_preparation_failed",
+                actor=actor,
+                metadata={
+                    "error": str(exc),
+                    "candidate_id": candidate_id,
+                    "release_digest": release_digest,
+                    "idempotency_key": f"{idempotency_key}:placement-failure",
+                },
+            )
+            raise
+        activation = admitted["trial_activation"]
+        result = dict(result) | admitted
     completed = workflow.transition(
         object_type,
         object_id,
@@ -276,18 +344,20 @@ def prepare_trial(
             "base_release_digest": candidate.get("base_release_digest"),
             "trial_workspace": result.get("trial_workspace"),
             "permission_decision": permission_decision,
+            "application_verification": {
+                "required": bool(access_verification.get("required")),
+                "status": access_verification.get("status"),
+                "application_id": access_verification.get("application_id"),
+                "report_digest": _mapping(
+                    access_verification.get("verification")
+                ).get("report", {}).get("report_digest"),
+            },
             "run_id": f"candidate:{candidate_id}:prepare",
             "idempotency_key": f"{idempotency_key}:success",
         },
     )
     completed_workflow = _mapping(completed.get("workflow"))
-    activation = _mapping(result.get("trial_activation"))
     if object_type == "scenario" and activation:
-        from adaos.sdk.builder.applications import place_local_trial
-
-        admitted = place_local_trial(candidate_id, webspace_id=trial_webspace, actor_ref=actor)
-        activation = admitted["trial_activation"]
-        result = dict(result) | admitted
         # Runtime refresh may record a Preview selection while placement is awaited.
         current = workflow.get_state(object_type, object_id)
         current_delivery = _mapping(current.get("delivery"))
@@ -621,6 +691,11 @@ def invoke_activity_command(
             permission_decision=(
                 details.get("permission_decision")
                 if isinstance(details.get("permission_decision"), (bool, Mapping))
+                else None
+            ),
+            verification_evidence=(
+                details.get("verification_evidence")
+                if isinstance(details.get("verification_evidence"), Mapping)
                 else None
             ),
         )

@@ -282,13 +282,18 @@ def _service(tmp_path: Path):
 
 def _verify_access_release(
     distribution: ApplicationDistributionService,
-    release_digest: str,
+    candidate,
     *,
     scope: str,
 ) -> dict:
+    projected = distribution.candidate_release_projection(
+        "app_recipes",
+        candidate.candidate_id,
+        publisher_ref="subnet:publisher",
+    )
     return ApplicationAccessManagementService(distribution.applications).final_verification(
         "app_recipes",
-        release_digest=release_digest,
+        release_digest=candidate.release_digest,
         source_commit="0123456789abcdef0123456789abcdef01234567",
         observed_capabilities=("workspace.read",),
         inferred_capabilities=("workspace.read",),
@@ -303,6 +308,7 @@ def _verify_access_release(
         disclosure_evidence=("test:install-update-disclosure",),
         redaction_evidence=("test:secret-redaction",),
         release_scope=scope,
+        candidate_release=projected,
     )
 
 
@@ -358,9 +364,13 @@ def test_access_aware_distribution_requires_trial_and_publication_verification(
             mode="link_only",
         )
     assert remote.upload_writes == 0
+    with pytest.raises(FileNotFoundError):
+        distribution.applications.store.get_release(
+            "app_recipes", candidate.release_digest
+        )
 
     trial_report = _verify_access_release(
-        distribution, candidate.release_digest, scope="trial"
+        distribution, candidate, scope="trial"
     )
     trial = distribution.publish_trial(
         "app_recipes",
@@ -379,7 +389,7 @@ def test_access_aware_distribution_requires_trial_and_publication_verification(
             expected_stable_digest=None,
         )
     publication_report = _verify_access_release(
-        distribution, candidate.release_digest, scope="publication"
+        distribution, candidate, scope="publication"
     )
     promoted = distribution.promote_stable(
         "app_recipes",

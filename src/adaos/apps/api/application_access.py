@@ -12,7 +12,10 @@ from adaos.services.applications.access_management import (
     ROLE_TEMPLATES,
     ApplicationAccessManagementService,
 )
-from adaos.services.applications.runtime import get_application_service
+from adaos.services.applications.runtime import (
+    get_application_distribution_service,
+    get_application_service,
+)
 from adaos.services.pending_actions import list_pending_actions_async, publish_pending_action_async
 from adaos.services.personalization_runtime import current_user_id, personalization_access_service
 
@@ -27,6 +30,16 @@ def _management(ctx: AgentContext) -> ApplicationAccessManagementService:
 
 def _issuer(ctx: AgentContext) -> str:
     return f"user:{current_user_id(ctx)}"
+
+
+def _candidate_release(application_id: str, candidate_id: str):
+    distribution = get_application_distribution_service()
+    application = distribution.applications.store.get_application(application_id)
+    return distribution.candidate_release_projection(
+        application_id,
+        candidate_id,
+        publisher_ref=application.publisher_ref,
+    )
 
 
 def _raise_access_error(exc: Exception) -> None:
@@ -96,6 +109,7 @@ class SnapshotImportRequest(BaseModel):
 
 class VerificationRequest(BaseModel):
     release_digest: str
+    candidate_id: str | None = None
     source_commit: str
     observed_capabilities: list[str] = Field(default_factory=list)
     inferred_capabilities: list[str] = Field(default_factory=list)
@@ -110,6 +124,7 @@ class VerificationRequest(BaseModel):
 
 class PermissionProfilerRequest(BaseModel):
     release_digest: str
+    candidate_id: str | None = None
     observed_capabilities: list[str] = Field(default_factory=list)
     inferred_capabilities: list[str] = Field(default_factory=list)
     previous_release_digest: str | None = None
@@ -325,10 +340,17 @@ def final_verification(
     ctx: AgentContext = Depends(get_ctx),
 ) -> dict[str, Any]:
     try:
+        payload = body.model_dump()
+        candidate_id = str(payload.pop("candidate_id") or "").strip()
         return _management(ctx).final_verification(
             application_id,
-            **body.model_dump(),
+            **payload,
             actor_ref=_issuer(ctx),
+            candidate_release=(
+                _candidate_release(application_id, candidate_id)
+                if candidate_id
+                else None
+            ),
         )
     except Exception as exc:
         _raise_access_error(exc)
@@ -341,7 +363,17 @@ def permission_profiler(
     ctx: AgentContext = Depends(get_ctx),
 ) -> dict[str, Any]:
     try:
-        return _management(ctx).permission_profiler(application_id, **body.model_dump())
+        payload = body.model_dump()
+        candidate_id = str(payload.pop("candidate_id") or "").strip()
+        return _management(ctx).permission_profiler(
+            application_id,
+            **payload,
+            candidate_release=(
+                _candidate_release(application_id, candidate_id)
+                if candidate_id
+                else None
+            ),
+        )
     except Exception as exc:
         _raise_access_error(exc)
 

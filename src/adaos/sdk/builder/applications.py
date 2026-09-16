@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 from adaos.domain.application import Application, utc_now
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.applications import (
+    ApplicationAccessManagementService,
     ApplicationDevelopmentCoordinator,
     StableSourceProjectionService,
     get_application_distribution_service,
@@ -44,6 +45,113 @@ def _state_dir() -> Path:
 
 def _application_service():
     return get_application_service(_state_dir())
+
+
+def _distribution_service():
+    try:
+        return get_application_distribution_service()
+    except RuntimeError as exc:
+        if "not configured" not in str(exc).lower():
+            raise
+        from adaos.services.project_deployment.default_runtime import (
+            configure_default_distributed_runtimes,
+        )
+
+        configure_default_distributed_runtimes(_ctx(), authoritative=False)
+        return get_application_distribution_service()
+
+
+def _application_for_project(project_id: str) -> Application | None:
+    matches = [
+        item
+        for item in _application_service().store.list_applications()
+        if item.legacy_project_id == str(project_id or "").strip()
+    ]
+    if len(matches) > 1:
+        raise ValueError("Project is bound to multiple Application aggregates")
+    return matches[0] if matches else None
+
+
+def verify_candidate_access(
+    project_id: str,
+    candidate_id: str,
+    *,
+    evidence: Mapping[str, Any] | None,
+    actor_ref: str,
+) -> dict[str, Any]:
+    """Run access-aware Builder verification before a Candidate becomes Trial."""
+
+    application = _application_for_project(project_id)
+    if application is None:
+        return {
+            "required": False,
+            "status": "not_applicable",
+            "reason": "project_has_no_application_aggregate",
+        }
+    distribution = _distribution_service()
+    release = distribution.candidate_release_projection(
+        application.application_id,
+        candidate_id,
+        publisher_ref=application.publisher_ref,
+    )
+    composition = release.project_release.composition_lock
+    if composition is None or composition.permission_profile is None:
+        return {
+            "required": False,
+            "status": "not_applicable",
+            "reason": "legacy_application_contract",
+            "application_id": application.application_id,
+            "release_digest": release.release_digest,
+        }
+    payload = dict(evidence) if isinstance(evidence, Mapping) else {}
+    if not payload:
+        raise ValueError(
+            "Access-aware Trial requires Builder Final Verification evidence"
+        )
+    management = ApplicationAccessManagementService(distribution.applications)
+    observed = tuple(payload.get("observed_capabilities") or ())
+    inferred = tuple(payload.get("inferred_capabilities") or ())
+    profiler = management.permission_profiler(
+        application.application_id,
+        release_digest=release.release_digest,
+        observed_capabilities=observed,
+        inferred_capabilities=inferred,
+        candidate_release=release,
+    )
+    verification = management.final_verification(
+        application.application_id,
+        release_digest=release.release_digest,
+        source_commit=str(payload.get("source_commit") or "").strip(),
+        observed_capabilities=observed,
+        inferred_capabilities=inferred,
+        regression_evidence=tuple(payload.get("regression_evidence") or ()),
+        access_matrix_evidence=tuple(payload.get("access_matrix_evidence") or ()),
+        pending_action_evidence=tuple(payload.get("pending_action_evidence") or ()),
+        audit_evidence=tuple(payload.get("audit_evidence") or ()),
+        disclosure_evidence=tuple(payload.get("disclosure_evidence") or ()),
+        redaction_evidence=tuple(payload.get("redaction_evidence") or ()),
+        release_scope=str(payload.get("release_scope") or "trial"),
+        actor_ref=actor_ref,
+        candidate_release=release,
+    )
+    if not verification.get("publication_allowed"):
+        failed = [
+            item["id"]
+            for item in verification.get("checklist") or ()
+            if item.get("result") in {"failed", "inconclusive"}
+        ]
+        raise ValueError(
+            "Application Final Verification did not pass: "
+            + ", ".join(failed)
+        )
+    return {
+        "required": True,
+        "status": "passed",
+        "application_id": application.application_id,
+        "release_digest": release.release_digest,
+        "permission_profile": profiler,
+        "verification": verification,
+    }
 
 
 def _coordinator() -> ApplicationDevelopmentCoordinator:
@@ -174,9 +282,8 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
         raise ValueError("Candidate release digest mismatch")
     service = _application_service()
     project_id = release.project_id
-    try:
-        application = service.store.get_application(project_id)
-    except FileNotFoundError:
+    application = _application_for_project(project_id)
+    if application is None:
         # Adopt existing composition metadata; this never creates application source.
         from adaos.sdk.developer import compositions
 
@@ -187,24 +294,27 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
                                     actor_ref=actor_ref, subnet_ref=publisher["publisher_ref"],
                                     capability="applications.develop", expected_revision=0,
                                     idempotency_key=f"trial-adopt:{project_id}")
-        application = service.store.get_application(project_id)
-    _admit_builder_mutation("create_trial", project_id, subnet_ref=publisher["publisher_ref"],
+        application = _application_for_project(project_id)
+        if application is None:
+            raise ValueError("Created Project has no Application aggregate")
+    _admit_builder_mutation("create_trial", application.application_id, subnet_ref=publisher["publisher_ref"],
                             capability="applications.develop")
     envelope = ApplicationRelease(application_id=application.application_id,
                                   publisher_ref=application.publisher_ref, project_release=release,
                                   accepted_candidate_id=candidate_id,
                                   acceptance_evidence=tuple(candidate["validation_evidence"]),
                                   provenance_refs=(release.release_digest,), lifecycle="trial")
-    registered_release = service.register_release(envelope)
     from adaos.services.applications.access_management import (
         ApplicationAccessManagementService,
     )
 
     verification = ApplicationAccessManagementService(service).admit_release_stage(
         application.application_id,
-        release_digest=registered_release.release_digest,
+        release_digest=envelope.release_digest,
         stage="trial",
+        candidate_release=envelope,
     )
+    service.register_release(envelope)
     data = bind_local_data_lifecycle(_ctx(), runtime, release)
     activations = TrialActivationStore(_state_dir() / "artifact_pipeline/trial-activations")
 
@@ -329,6 +439,13 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
     state = workflow.get_state("scenario", scenario_id)
     if lifecycle._candidate_identity(state) != (candidate_id, candidate_digest):
         raise ValueError("Builder Candidate changed; reopen its changelog")
+    access_verification = ApplicationAccessManagementService(
+        service
+    ).admit_release_stage(
+        application_id,
+        release_digest=selection.release_digest,
+        stage="publication",
+    )
     identity = {"expected_candidate_id": candidate_id, "expected_candidate_digest": candidate_digest}
     key = f"accept-local-trial:{application_id}:{candidate_id}"
     if (state.get("delivery") or {}).get("status") not in {"accepted", "published"}:
@@ -342,7 +459,11 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
         raise ValueError("Workspace publication is not confirmed; Trial selection is retained")
     placement = place_local_stable(application_id, webspace_id=webspace_id, candidate_id=candidate_id,
                                    candidate_digest=candidate_digest, actor_ref=actor_ref)
-    return {**placement, "publication": result}
+    return {
+        **placement,
+        "publication": result,
+        "application_verification": access_verification,
+    }
 
 
 def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: str,
@@ -369,6 +490,11 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
     release = service.store.get_release(application_id, digest)
     if release.accepted_candidate_id != candidate_id:
         raise ValueError("Published Application release belongs to another Candidate")
+    ApplicationAccessManagementService(service).admit_release_stage(
+        application_id,
+        release_digest=release.release_digest,
+        stage="publication",
+    )
     metadata_root = Path(_ctx().paths.workspace_dir()) / ".adaos"
     with mutation_lock(metadata_root / ".workspace-writer.lock", timeout_s=30):
         lock = WorkspaceLock.from_mapping(json.loads((metadata_root / "workspace.lock.json").read_text(encoding="utf-8")))
@@ -745,6 +871,7 @@ def create_trial(
     expected_revision: int,
     idempotency_key: str,
     permission_decision: bool | Mapping[str, Any] | None = None,
+    verification_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     intent = {
         "source_webspace_id": source_webspace_id,
@@ -753,6 +880,7 @@ def create_trial(
             if isinstance(permission_decision, Mapping)
             else permission_decision
         ),
+        "verification_evidence": dict(verification_evidence or {}),
     }
 
     def execute() -> Mapping[str, Any]:
@@ -767,6 +895,7 @@ def create_trial(
             source_webspace_id=source_webspace_id,
             publication_project_ref=f"project:{application.legacy_project_id}",
             permission_decision=permission_decision,
+            verification_evidence=verification_evidence,
         )
 
     return _execute_development(
@@ -832,7 +961,7 @@ def _publish_trial(
         application = _application(application_id, expected_revision)
         if application.publisher_ref != subnet_ref:
             raise ValueError("only the local Application publisher may publish a Trial")
-        return get_application_distribution_service().publish_trial(
+        return _distribution_service().publish_trial(
             application_id,
             candidate_id,
             publisher_ref=subnet_ref,
@@ -905,7 +1034,7 @@ def promote_stable(
         application = _application(application_id, expected_revision)
         if application.publisher_ref != subnet_ref:
             raise ValueError("only the local Application publisher may promote stable")
-        return get_application_distribution_service().promote_stable(
+        return _distribution_service().promote_stable(
             application_id,
             candidate_id,
             publisher_ref=subnet_ref,
@@ -1048,6 +1177,16 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
                 idempotency_key=idempotency_key,
                 source_webspace_id=str(intent.get("source_webspace_id") or "desktop"),
                 publication_project_ref=f"project:{application.legacy_project_id}",
+                permission_decision=(
+                    intent.get("permission_decision")
+                    if isinstance(intent.get("permission_decision"), (bool, Mapping))
+                    else None
+                ),
+                verification_evidence=(
+                    intent.get("verification_evidence")
+                    if isinstance(intent.get("verification_evidence"), Mapping)
+                    else None
+                ),
             )
         return lifecycle.decide_trial(
             "scenario",
@@ -1060,7 +1199,7 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
         application = _application(application_id, expected_revision)
         if application.publisher_ref != subnet_ref:
             raise ValueError("only the local Application publisher may recover publication")
-        distribution = get_application_distribution_service()
+        distribution = _distribution_service()
         candidate_id = str(intent.get("candidate_id") or "")
         try:
             distribution.reconcile(candidate_id)
@@ -1152,4 +1291,5 @@ __all__ = [
     "publisher_context",
     "reconcile_development_operation",
     "update_application_metadata",
+    "verify_candidate_access",
 ]

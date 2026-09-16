@@ -36,6 +36,25 @@ DIGEST_C = "sha256:" + "c" * 64
 SOURCE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
 
+def test_runtime_permission_supports_simple_and_domain_role_actions() -> None:
+    simple = ApplicationAccessManagementService.runtime_permission(
+        side_effects="read_only",
+        application_access={},
+        component_capabilities=("workspace.read",),
+    )
+    domain = ApplicationAccessManagementService.runtime_permission(
+        side_effects="local_write",
+        application_access={
+            "permission": "workspace.write",
+            "capability": "roster.manage",
+        },
+        component_capabilities=("workspace.write",),
+    )
+
+    assert simple == ("workspace.read", "workspace.read")
+    assert domain == ("workspace.write", "roster.manage")
+
+
 def _profile(*, updated: bool = False) -> ApplicationPermissionProfile:
     required = [
         {"id": "workspace.read", "purpose": "Read assigned household tasks."},

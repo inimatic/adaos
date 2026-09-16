@@ -1932,6 +1932,17 @@ async def _authorize_application_tool_call(
             )
         return body, None
 
+    # The cheap read-only path may skip manifest loading for legacy skills.
+    # Application authorization cannot inherit that shortcut: its permission
+    # must be derived from the active runtime contract, never from a tool name.
+    if not declared_side_effects:
+        declared_side_effects = await asyncio.to_thread(
+            _declared_tool_side_effects,
+            manager,
+            skill_name=skill_name,
+            public_tool=public_tool,
+            dev=False,
+        )
     if not component_capabilities:
         component_capabilities = await asyncio.to_thread(
             _declared_tool_permissions,

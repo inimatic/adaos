@@ -664,10 +664,23 @@ def _application_access_management():
     )
 
 
+def _application_candidate_release(application_id: str, candidate_id: str):
+    from adaos.services.applications import get_application_distribution_service
+
+    distribution = get_application_distribution_service()
+    application = distribution.applications.store.get_application(application_id)
+    return distribution.candidate_release_projection(
+        application_id,
+        candidate_id,
+        publisher_ref=application.publisher_ref,
+    )
+
+
 @app.command("application-permissions")
 def application_permissions(
     application_id: str = typer.Argument(...),
     release_digest: str = typer.Option(..., "--release"),
+    candidate_id: str | None = typer.Option(None, "--candidate"),
     observed: list[str] | None = typer.Option(None, "--observed"),
     inferred: list[str] | None = typer.Option(None, "--inferred"),
     previous_release_digest: str | None = typer.Option(None, "--previous-release"),
@@ -675,12 +688,18 @@ def application_permissions(
 ) -> None:
     """Profile declared, inferred and observed Application permissions."""
 
+    candidate_release = (
+        _application_candidate_release(application_id, candidate_id)
+        if candidate_id
+        else None
+    )
     report = _application_access_management().permission_profiler(
         application_id,
         release_digest=release_digest,
         observed_capabilities=observed or (),
         inferred_capabilities=inferred or (),
         previous_release_digest=previous_release_digest,
+        candidate_release=candidate_release,
     )
     if json_output:
         typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
@@ -696,6 +715,7 @@ def application_permissions(
 def application_verify(
     application_id: str = typer.Argument(...),
     release_digest: str = typer.Option(..., "--release"),
+    candidate_id: str | None = typer.Option(None, "--candidate"),
     source_commit: str = typer.Option("working-tree", "--source-commit"),
     observed: list[str] | None = typer.Option(None, "--observed"),
     inferred: list[str] | None = typer.Option(None, "--inferred"),
@@ -717,6 +737,11 @@ def application_verify(
 
     if release_scope not in {"dev", "candidate", "trial", "publication"}:
         raise typer.BadParameter("--scope must be dev, candidate, trial, or publication")
+    candidate_release = (
+        _application_candidate_release(application_id, candidate_id)
+        if candidate_id
+        else None
+    )
     result = _application_access_management().final_verification(
         application_id,
         release_digest=release_digest,
@@ -731,6 +756,7 @@ def application_verify(
         redaction_evidence=redaction_evidence or (),
         release_scope=release_scope,
         actor_ref="system:builder-cli",
+        candidate_release=candidate_release,
     )
     if output is not None:
         from adaos.services.artifact_pipeline.storage import atomic_write_json
