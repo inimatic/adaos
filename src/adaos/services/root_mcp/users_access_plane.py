@@ -31,6 +31,20 @@ _SCOPE_VALUES = [
     "user_private",
     "shared_workspace",
 ]
+_SUMMARY_SECTIONS = [
+    "people",
+    "guests",
+    "children",
+    "devices",
+    "sessions",
+    "application_access",
+    "activity",
+    "memberships",
+    "grants",
+    "invites",
+    "recovery_actions",
+    "audit",
+]
 
 
 def contracts() -> list[RootMcpToolContract]:
@@ -54,7 +68,15 @@ def contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="Read owner-governed people, invitations, roles, devices, sessions, Application access and redacted activity.",
             input_schema=schema_object(
-                properties={"audit_limit": {"type": "integer", "minimum": 1, "maximum": 200}}
+                properties={
+                    "audit_limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "sections": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": _SUMMARY_SECTIONS},
+                        "uniqueItems": True,
+                    },
+                    "detail": {"type": "string", "enum": ["compact", "full"]},
+                }
             ),
             output_schema=deepcopy(response),
             required_capability="users_access.read",
@@ -229,15 +251,44 @@ def _handle_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
         audit_limit=int(arguments.get("audit_limit") or 50),
     )
     surface = applications_sdk.get_users_access_surface(directory)
+    requested = {
+        str(item).strip()
+        for item in arguments.get("sections") or _SUMMARY_SECTIONS
+        if str(item).strip() in _SUMMARY_SECTIONS
+    }
+    detail = str(arguments.get("detail") or "full").strip().lower()
+
+    def compact_people(items: Any) -> list[dict[str, Any]]:
+        if detail != "compact" or not isinstance(items, list):
+            return list(items or [])
+        rows: list[dict[str, Any]] = []
+        for raw in items:
+            if not isinstance(raw, Mapping):
+                continue
+            access = raw.get("application_access")
+            rows.append(
+                {
+                    key: deepcopy(raw.get(key))
+                    for key in ("subject_ref", "kind", "profile", "memberships", "invite")
+                    if key in raw
+                }
+                | {"application_access_count": len(access) if isinstance(access, list) else 0}
+            )
+        return rows
+
+    surface_result = {
+        key: compact_people(value) if key in {"people", "guests", "children"} else deepcopy(value)
+        for key, value in surface.items()
+        if key in {"schema", "diagnostics"} or key in requested
+    }
+    administration = {
+        key: deepcopy(directory.get(key) or [])
+        for key in ("memberships", "grants", "invites", "recovery_actions", "audit")
+        if key in requested
+    }
     return {
-        "users_access": surface,
-        "administration": {
-            "memberships": directory.get("memberships") or [],
-            "grants": directory.get("grants") or [],
-            "invites": directory.get("invites") or [],
-            "recovery_actions": directory.get("recovery_actions") or [],
-            "audit": directory.get("audit") or [],
-        },
+        "users_access": surface_result,
+        "administration": administration,
     }
 
 

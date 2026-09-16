@@ -1519,7 +1519,9 @@ class PersonalizationAccessService:
         return {"grant": grant_data, "membership": membership_data}
 
     def admin_summary(self, *, actor: SubjectRef, audit_limit: int = 50) -> dict[str, Any]:
-        decision = self.evaluate(actor=actor, action="users.manage")
+        # Root MCP records the admitted read. Avoid adding one successful
+        # policy event per visible widget while preserving denied-read audit.
+        decision = self.evaluate(actor=actor, action="users.manage", audit_success=False)
         if decision.decision != "allow":
             raise PermissionError(f"policy denied: {decision.reason_code or 'users.manage'}")
         snapshot = self.store.snapshot()

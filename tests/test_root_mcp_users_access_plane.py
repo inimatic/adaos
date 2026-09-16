@@ -142,6 +142,48 @@ def test_summary_combines_personalization_and_application_access(service: _Servi
     assert service.calls == [("summary", "user:owner", 20)]
 
 
+def test_summary_projects_requested_compact_sections(service: _Service, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        plane.applications_sdk,
+        "get_users_access_surface",
+        lambda directory: {
+            "schema": "adaos.users_access.surface.v1",
+            "people": [
+                {
+                    "subject_ref": "user:owner",
+                    "kind": "user",
+                    "profile": {"display_name": "Owner"},
+                    "memberships": [],
+                    "application_access": [{"grant_id": "grant-1"}],
+                }
+            ],
+            "devices": [{"device_id": "phone"}],
+            "diagnostics": {"content_redacted": True},
+        },
+    )
+
+    result = plane.handlers()["users_access.summary"](
+        {
+            "sections": ["people"],
+            "detail": "compact",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert set(result["users_access"]) == {"schema", "people", "diagnostics"}
+    assert result["users_access"]["people"] == [
+        {
+            "subject_ref": "user:owner",
+            "kind": "user",
+            "profile": {"display_name": "Owner"},
+            "memberships": [],
+            "application_access_count": 1,
+        }
+    ]
+    assert result["administration"] == {}
+
+
 def test_grant_role_is_state_idempotent(service: _Service) -> None:
     arguments = {
         "subject_id": "member",
