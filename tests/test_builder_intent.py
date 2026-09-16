@@ -213,6 +213,25 @@ def test_excluded_feature_list_does_not_become_crud_obligations() -> None:
     assert {"create", "update"} <= {row["kind"] for row in brief["operations"]}
 
 
+def test_source_preservation_directive_does_not_become_crud_obligations() -> None:
+    statement = (
+        "Change the owner guide sentence. Do not add, remove, reorder, or rename "
+        "any widget, field, action, binding, resource, locale key, or layout region."
+    )
+
+    brief = compile_prototype_brief(statement)
+
+    assert [row["kind"] for row in brief["operations"]] == ["update"]
+    assert [row["statement"] for row in brief["exclusions"]] == [
+        "Do not add, remove, reorder, or rename any widget, field, action, binding, "
+        "resource, locale key, or layout region"
+    ]
+    assert all(
+        "Do not add" not in row["statement"]
+        for row in [*brief["principal_jobs"], *brief["residual_requirements"]]
+    )
+
+
 def test_brief_drives_generic_capabilities_without_internal_prompt_terms() -> None:
     selection = selected_ui_capabilities(
         "Team members need to scan work, open one item, add a request, "

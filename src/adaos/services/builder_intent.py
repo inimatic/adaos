@@ -228,6 +228,9 @@ _EXCLUSION_END_PATTERN = re.compile(
 )
 _EXCLUSION_START_PATTERN = re.compile(
     r"^(?:do\s+not|don't)\s+(?:implement|include)\b|"
+    r"^(?:do\s+not|don't)\s+(?:add|remove|delete|create|reorder|rename|change|modify)\b"
+    r".*\b(?:widgets?|fields?|actions?|bindings?|resources?|locale\s+keys?|layout\s+regions?|"
+    r"component\s+ids?|field\s+identifiers?)\b|"
     r"^не\s+(?:реализ\w*|включ\w*)\b", re.IGNORECASE
 )
 
