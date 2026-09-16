@@ -7932,6 +7932,8 @@ class BuilderAutomationService:
         failed_checkpoints: list[Mapping[str, Any]] = []
         existing_binding: dict[str, Any] = {}
         preview_target: Mapping[str, Any] | None = None
+        preview_host_active = True
+        preview_host_inactive_reason: str | None = None
         pending_transition = str(current.get("pending_workflow_transition") or "").strip()
         companion_skill_ids = self._session_changed_companion_skill_ids(session)
         session_links = (
@@ -8103,6 +8105,13 @@ class BuilderAutomationService:
                 workbench = BuilderWorkbenchService(state_dir=self.state_dir)
                 get_binding = getattr(workbench, "get_workspace_binding", None)
                 existing_binding = dict(get_binding(webspace_id) or {}) if callable(get_binding) else {}
+                resolve_builder_context = getattr(workbench, "resolve_builder_context", None)
+                if callable(resolve_builder_context):
+                    try:
+                        resolve_builder_context(webspace_id)
+                    except ValueError as exc:
+                        preview_host_active = False
+                        preview_host_inactive_reason = str(exc)
                 preview_target = (
                     existing_binding.get("preview_target")
                     if isinstance(existing_binding.get("preview_target"), Mapping)
@@ -8113,7 +8122,20 @@ class BuilderAutomationService:
                     if isinstance(readiness.get("aprobation"), Mapping)
                     else {}
                 )
-                if self._aprobation_trial_ready(aprobation_trial):
+                if not preview_host_active:
+                    readiness["materialization"] = {
+                        "ok": True,
+                        "skipped": "builder_host_inactive",
+                        "webspace_id": webspace_id,
+                        "preview_webspace_id": str(
+                            existing_binding.get("preview_webspace_id")
+                            or existing_binding.get("dev_webspace_id")
+                            or ""
+                        ).strip()
+                        or None,
+                        "reason": preview_host_inactive_reason,
+                    }
+                elif self._aprobation_trial_ready(aprobation_trial):
                     readiness["materialization"] = {
                         "ok": True,
                         "skipped": "isolated_trial_workspace_active",
@@ -8267,6 +8289,8 @@ class BuilderAutomationService:
                 preview_matches_project = True
             preview_binding_unchanged = self._preview_binding_unchanged(current, existing_binding)
             preview_should_follow = bool(
+                preview_host_active
+                and
                 preview_matches_project
                 and (
                     bool(preview_target.get("follow_active"))
@@ -8300,6 +8324,17 @@ class BuilderAutomationService:
                         if bool(preview_target.get("follow_active"))
                         else "unchanged_since_submit"
                     ),
+                }
+            elif (
+                object_type == "scenario"
+                and object_id
+                and preview_target
+                and not preview_host_active
+            ):
+                readiness["preview_transition"] = {
+                    "status": "preserved_user_selection",
+                    "stage": str(preview_target.get("stage") or "").strip() or None,
+                    "reason": "builder_host_inactive",
                 }
             elif object_type == "scenario" and object_id and preview_target:
                 readiness["preview_transition"] = {

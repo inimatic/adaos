@@ -36,7 +36,7 @@
         "concepts": ["ui", "kanban_board", "drag_drop", "resource_query", "resource_crud"],
         "surface_kinds": ["ui", "page", "modal", "widget", "panel", "view", "board"],
         "target_path_globs": ["**/webui.json", "**/skill.yaml", "**/handlers/*.py"],
-        "match_any": ["webui.json", "skill.yaml", "handlers/", "modal:", "widget:", "callskill", "data_source"]
+        "match_any": ["webui.json", "skill.yaml", "handlers/", "modal:", "widget:", "callskill", "data_source", "public tool", "side_effects", "read_only", "local_write"]
       },
       "rules": [
         "For every added or changed same-skill WebUI `callSkill`, skill `dataSource`, or handler callable, reconcile the exact name across `webui.json`, `skill.yaml` `tools`, `exports.tools`, the entry/`@tool` handler, and complete input/output schemas in the same patch.",
