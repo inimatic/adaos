@@ -42,6 +42,49 @@ def _confirmed(metadata: dict[str, object] | None = None) -> dict[str, object]:
     return {**dict(metadata or {}), "confirmed": True}
 
 
+def test_prototype_acceptance_request_is_scoped_to_user_facing_prototype_criteria() -> None:
+    change = {
+        "request": "Implement the application and prepare Trial.",
+        "request_addenda": ["Set dryRun to true on every MCP dataSource."],
+        "issues": [
+            {
+                "issue_id": "prototype-surface",
+                "title": "Provide a usable responsive list",
+                "lane": "prototype",
+                "status": "open",
+                "structural_status": "active",
+                "acceptance_criteria": [
+                    "The list is usable on wide and compact layouts.",
+                    "The Prototype visibly and coherently satisfies: Set dryRun to true on every MCP dataSource, as required by the read-only data-source ABI.",
+                ],
+            },
+            {
+                "issue_id": "implementation",
+                "title": "Persist saved records",
+                "lane": "automation",
+                "status": "open",
+                "structural_status": "active",
+                "acceptance_criteria": ["Saving persists after restart."],
+            },
+            {
+                "issue_id": "deferred-prototype",
+                "title": "Add a chart",
+                "lane": "prototype",
+                "status": "deferred",
+                "structural_status": "active",
+                "acceptance_criteria": ["A chart is visible."],
+            },
+        ],
+    }
+
+    request = BuilderWorkflowService._prototype_acceptance_request(change)
+
+    assert request == "Provide a usable responsive list"
+    assert "dryRun" not in request
+    assert "persists after restart" not in request
+    assert "chart" not in request
+
+
 def _prepare_candidate(
     service: BuilderWorkflowService,
     metadata: dict[str, object],
@@ -756,10 +799,16 @@ def test_strict_prototype_acceptance_requires_current_behavior_and_visual_eviden
             "application": {
                 "desktop": {
                     "pageSchema": {
-                        "id": "recipes",
-                        "layout": {
-                            "type": "single",
-                            "areas": [{"id": "main", "role": "main"}],
+                            "id": "recipes",
+                            "layout": {
+                                "version": 2,
+                                "pattern": "document",
+                                "density": "comfortable",
+                                "regions": [{
+                                    "id": "main",
+                                    "role": "main",
+                                    "presentation": {"wide": "pane", "compact": "stack"},
+                                }],
                         },
                         "widgets": [],
                     }
@@ -924,10 +973,16 @@ def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
                 },
                 "desktop": {
                     "pageSchema": {
-                        "id": "recipes",
-                        "layout": {
-                            "type": "single",
-                            "areas": [{"id": "main", "role": "main"}],
+                            "id": "recipes",
+                            "layout": {
+                                "version": 2,
+                                "pattern": "document",
+                                "density": "comfortable",
+                                "regions": [{
+                                    "id": "main",
+                                    "role": "main",
+                                    "presentation": {"wide": "pane", "compact": "stack"},
+                                }],
                         },
                         "widgets": [],
                     }
@@ -1079,10 +1134,16 @@ def test_optional_prototype_acceptance_is_preserved_for_automation(
             "application": {
                 "desktop": {
                     "pageSchema": {
-                        "id": "recipes",
-                        "layout": {
-                            "type": "single",
-                            "areas": [{"id": "main", "role": "main"}],
+                            "id": "recipes",
+                            "layout": {
+                                "version": 2,
+                                "pattern": "document",
+                                "density": "comfortable",
+                                "regions": [{
+                                    "id": "main",
+                                    "role": "main",
+                                    "presentation": {"wide": "pane", "compact": "stack"},
+                                }],
                         },
                         "widgets": [],
                     }

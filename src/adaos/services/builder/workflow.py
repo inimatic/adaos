@@ -2016,6 +2016,53 @@ class BuilderWorkflowService:
         )
         return "\n\n".join(item for item in parts if item)
 
+    @staticmethod
+    def _prototype_acceptance_request(change: Mapping[str, Any]) -> str:
+        """Return only user-facing Prototype obligations for UI qualification.
+
+        A Change spans Prototype, Automation, and delivery. Source-edit and
+        process constraints remain in the Change for traceability, but they
+        must not be reinterpreted as application CRUD during Prototype
+        acceptance.
+        """
+
+        from adaos.services.builder_intent import process_constraint_kind
+
+        requirements: list[str] = []
+        active_issues = [
+            issue
+            for issue in change.get("issues") or []
+            if isinstance(issue, Mapping)
+            and str(issue.get("structural_status") or "active").strip().lower() == "active"
+            and str(issue.get("status") or "open").strip().lower() != "deferred"
+        ]
+        for issue in active_issues:
+            if str(issue.get("lane") or "").strip().lower() != "prototype":
+                continue
+            title = str(issue.get("title") or "").strip()
+            if title and process_constraint_kind(title) is None:
+                requirements.append(title)
+                continue
+            # Legacy issue projections did not always preserve a title.
+            for value in issue.get("acceptance_criteria") or []:
+                fallback = str(value or "").strip()
+                if fallback and process_constraint_kind(fallback) is None:
+                    requirements.append(fallback)
+                    break
+        has_automation_lane = any(
+            str(issue.get("lane") or "").strip().lower() == "automation"
+            for issue in active_issues
+        )
+        if not has_automation_lane:
+            original = str(change.get("request") or "").strip()
+            if original and process_constraint_kind(original) is None:
+                requirements.insert(0, original)
+        if requirements:
+            return "\n".join(dict.fromkeys(requirements))
+        if change.get("issues"):
+            return "The current prototype is ready."
+        return BuilderWorkflowService._prototype_request(change)
+
     def _admit_current_prototype_acceptance(
         self,
         object_type: str,
@@ -2113,7 +2160,7 @@ class BuilderWorkflowService:
             change_id=str(change["change_id"]),
             revision=revision,
             webui=webui,
-            request=self._prototype_request(change),
+            request=self._prototype_acceptance_request(change),
             reviewer=reviewer,
             behavior_checks=behavior_checks,
             visual_checks=visual_checks,

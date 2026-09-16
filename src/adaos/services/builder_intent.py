@@ -24,6 +24,12 @@ def process_constraint_kind(statement: str) -> str | None:
     review, not by adding widgets. Ambiguous clauses stay UI requirements.
     """
     text = str(statement).strip().rstrip(".!;")
+    text = re.sub(
+        r"^the prototype visibly and coherently satisfies:\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
     rules = {
         "stage_boundary": (
             r"(?:do not|don't|never) (?:start|run|begin) (?:automation|codex)(?:\s*(?:,|or|and)\s*(?:automation|codex|beta preparation|trial preparation|publish|publication))*(?: automatically)?",
@@ -47,6 +53,12 @@ def process_constraint_kind(statement: str) -> str | None:
             r"do not rename the existing (?:resource )?field identifiers(?: merely to qualify references)?",
             r"reference qualification and field identity are different",
             r"use the existing languages(?: and preserve working behavior)?",
+            r"preserve the current .{1,160}\bwebui\.json\b.{0,320}",
+            r"preserve the current .{1,160}\bstructure and behavior\b",
+            r"set \bdryrun\b to (?:true|false) on every \bmcp datasource\b.{0,160}",
+            r"make exactly one copy edit in widget [a-z0-9_.-]+(?:,? item [a-z0-9_.-]+)?: .{1,360}",
+            r"(?:in )?widget [a-z0-9_.-]+(?: item [a-z0-9_.-]+)?,? change (?:only )?.{1,360}",
+            r"produce one coherent prototype revision(?: containing only .{1,240})?",
             r"(?:сохрани|используй) (?:существующие|текущие) языки(?: интерфейса)?",
             r"не переименовывай (?:существующие )?идентификаторы полей",
         ),

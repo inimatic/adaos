@@ -20,9 +20,14 @@ def _webui() -> dict:
                     "pageSchema": {
                         "id": "kanban",
                         "layout": {
-                            "type": "single",
-                            "pattern": "stack",
-                            "areas": [{"id": "main", "role": "main"}],
+                            "version": 2,
+                            "pattern": "board",
+                            "density": "comfortable",
+                            "regions": [{
+                                "id": "main",
+                                "role": "main",
+                                "presentation": {"wide": "pane", "compact": "stack"},
+                            }],
                         },
                         "initialState": {"searchQuery": ""},
                         "widgets": [
@@ -106,9 +111,14 @@ def _webui() -> dict:
                         "schema": {
                             "id": "create-card",
                             "layout": {
-                                "type": "single",
-                                "pattern": "stack",
-                                "areas": [{"id": "main", "role": "main"}],
+                                "version": 2,
+                                "pattern": "task-flow",
+                                "density": "comfortable",
+                                "regions": [{
+                                    "id": "main",
+                                    "role": "main",
+                                    "presentation": {"wide": "pane", "compact": "stack"},
+                                }],
                             },
                             "widgets": [
                                 {
@@ -150,9 +160,14 @@ def _webui() -> dict:
                         "schema": {
                             "id": "edit-card",
                             "layout": {
-                                "type": "single",
-                                "pattern": "stack",
-                                "areas": [{"id": "main", "role": "main"}],
+                                "version": 2,
+                                "pattern": "task-flow",
+                                "density": "comfortable",
+                                "regions": [{
+                                    "id": "main",
+                                    "role": "main",
+                                    "presentation": {"wide": "pane", "compact": "stack"},
+                                }],
                             },
                             "widgets": [
                                 {
