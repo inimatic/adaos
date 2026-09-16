@@ -5732,28 +5732,22 @@ def test_builder_prototype_preview_repairs_an_existing_zero_widget_empty_canvas(
     assert empty_canvas["ui"]["application"]["desktop"]["pageSchema"]["widgets"] == []
 
 
-def test_legacy_automation_preview_falls_back_to_current_dev_descriptor(monkeypatch, tmp_path: Path) -> None:
+def test_legacy_automation_preview_requires_exact_retained_snapshot(monkeypatch, tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
-    current = {
-        "schema": "adaos.webui.v1",
-        "ui": {"application": {"desktop": {"pageSchema": {"title": "Legacy automation"}}}},
-    }
     monkeypatch.setattr("adaos.services.runtime_paths.current_state_dir", lambda: state_dir)
     monkeypatch.setattr(
         webspace_runtime_module.scenarios_loader,
         "read_content",
-        lambda scenario_id, *, space: current,
+        lambda scenario_id, *, space: pytest.fail("Automation Preview must not fall back to mutable DEV source"),
     )
 
-    content, source_space = webspace_runtime_module._builder_preview_content_override(
-        "legacy-recipes",
-        stage="automation",
-        revision="current",
-        label=None,
-    )
-
-    assert source_space == "dev"
-    assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "active: Legacy automation"
+    with pytest.raises(ValueError, match="exact retained task revision|no DEV fallback is allowed"):
+        webspace_runtime_module._builder_preview_content_override(
+            "legacy-recipes",
+            stage="automation",
+            revision="current",
+            label=None,
+        )
 
 
 def test_builder_revision_apply_skips_superseded_source_binding(monkeypatch) -> None:
