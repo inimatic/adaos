@@ -2257,6 +2257,26 @@
         "multiple": { "type": "boolean" },
         "maxFiles": { "type": "integer", "minimum": 1 },
         "max_files": { "type": "integer", "minimum": 1 },
+        "maxBytes": { "type": "integer", "minimum": 1, "maximum": 10485760 },
+        "max_bytes": { "type": "integer", "minimum": 1, "maximum": 10485760 },
+        "fileStorage": {
+          "type": "string",
+          "enum": ["prototype", "skill"],
+          "description": "prototype is disposable Preview storage; skill uses permissioned production attachment tools and storage.blob."
+        },
+        "file_storage": { "type": "string", "enum": ["prototype", "skill"] },
+        "uploadTarget": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+\\.[A-Za-z0-9_.-]+$",
+          "description": "Qualified same-skill upload tool used when fileStorage=skill."
+        },
+        "upload_target": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+\\.[A-Za-z0-9_.-]+$" },
+        "readTarget": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+\\.[A-Za-z0-9_.-]+$",
+          "description": "Qualified same-skill read authorization tool used when fileStorage=skill."
+        },
+        "read_target": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+\\.[A-Za-z0-9_.-]+$" },
         "span": {
           "oneOf": [
             { "type": "integer", "minimum": 1, "maximum": 12 },

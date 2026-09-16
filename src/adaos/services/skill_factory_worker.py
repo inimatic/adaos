@@ -6311,7 +6311,22 @@ class LocalSkillFactoryWorker:
             "prompt_rule_capsules": prompt_rule_capsules,
             "prototype_resource_handoff": prototype_resource_handoff,
         }
-        if prototype_resource_handoff and prototype_resource_handoff.get("mode") == "implementation_blueprint":
+        handoff_completion = (
+            dict(prototype_resource_handoff.get("completion") or {})
+            if isinstance(prototype_resource_handoff, Mapping)
+            else {}
+        )
+        implementation_bindings_required = bool(
+            target_type == "scenario"
+            and workflow_transition != "return_to_prototype"
+            and not is_dev_ticket_repair
+            and (
+                not prototype_resource_handoff
+                or prototype_resource_handoff.get("mode") == "implementation_blueprint"
+                or handoff_completion.get("model_required") is True
+            )
+        )
+        if implementation_bindings_required:
             from adaos.sdk.web.ui_contract import implementation_binding_contract
 
             _write_json(input_dir / "implementation-bindings.json", implementation_binding_contract())
@@ -6560,6 +6575,18 @@ operations and do not read `ui_revisions` to reconstruct accepted data.
             if prototype_resource_handoff
             else ""
         )
+        if packet.get("implementation_bindings_ref") and not resource_implementation_section:
+            resource_implementation_section = """## Exact Automation binding contract
+
+Read `implementation-bindings.json` before implementation. It is the
+commit-bound, machine-readable contract for owned tool declarations, WebUI
+bindings, caller authorization, durable persistence and production attachments.
+The exact production attachment section defines upload/read tool inputs and
+outputs, the one-use binary SDK boundary, browser reference semantics and the
+required permission matrix. Treat it as authoritative over a stale remote
+descriptor. Use task-scoped descriptor discovery only for an independently
+missing contract.
+"""
         resource_implementation_section = resource_implementation_section.replace(
             "`prototype-resource-handoff.json`",
             f"`{(input_dir / 'prototype-resource-handoff.json').resolve().as_posix()}`",

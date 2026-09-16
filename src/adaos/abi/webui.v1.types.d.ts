@@ -347,6 +347,14 @@ export interface WebUiFormField {
   multiple?: boolean
   maxFiles?: number
   max_files?: number
+  maxBytes?: number
+  max_bytes?: number
+  fileStorage?: 'prototype' | 'skill'
+  file_storage?: 'prototype' | 'skill'
+  uploadTarget?: string
+  upload_target?: string
+  readTarget?: string
+  read_target?: string
   span?: number | 'full'
   columnSpan?: number | 'full'
   column_span?: number | 'full'

@@ -7221,6 +7221,80 @@ def test_worker_reports_progress_to_automation_callback(tmp_path: Path) -> None:
     assert projected == [("task.1", "tests_running", "Running validation")]
 
 
+def test_worker_admits_exact_bindings_for_incremental_scenario_automation(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    project_id = "existing_app"
+    companion = "existing_app_skill"
+    workspace = tmp_path / "workspace"
+    (workspace / "scenarios" / project_id).mkdir(parents=True)
+    (workspace / "skills" / companion).mkdir(parents=True)
+    (workspace / "scenarios" / project_id / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (workspace / "skills" / companion / "skill.yaml").write_text(
+        "name: existing_app_skill\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    assignment = {
+        "task_id": "task.incremental",
+        "target": {"type": "scenario", "id": project_id},
+        "forge": {
+            "sparse_paths": [
+                f"scenarios/{project_id}/",
+                f"skills/{companion}/",
+            ]
+        },
+        "realize_request": {
+            "artifacts": {
+                "companion_skill_ids": [companion],
+                "implementation_brief": "Add one durable production attachment.",
+                "context_packet": {
+                    "schema": "adaos.builder.context_packet.v1",
+                    "artifacts": {
+                        "prototype": {
+                            "acceptance": {
+                                "schema": "adaos.builder.prototype_acceptance.v1",
+                                "decision": "accepted",
+                                "revision": "002",
+                                "prototype_resources": [],
+                            }
+                        }
+                    },
+                },
+            }
+        },
+    }
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+
+    packet = worker._build_packet(assignment, workspace, tmp_path / "input")
+
+    assert packet["prototype_resource_handoff"] is None
+    bindings_path = tmp_path / "input" / "implementation-bindings.json"
+    bindings = json.loads(bindings_path.read_text(encoding="utf-8"))
+    contract = bindings["contracts"]["production_attachment"]
+    assert packet["implementation_bindings_ref"] == bindings_path.resolve().as_posix()
+    assert contract["upload_tool"]["manifest"]["permissions"] == [
+        "storage.blob",
+        "workspace.write",
+    ]
+    assert contract["read_tool"]["manifest"]["permissions"] == [
+        "storage.blob",
+        "workspace.read",
+    ]
+    prompt = (tmp_path / "input" / "task.md").read_text(encoding="utf-8")
+    assert "Exact Automation binding contract" in prompt
+    assert bindings_path.resolve().as_posix() in prompt
+    assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
+
+
 @pytest.mark.parametrize("aggregate_owner", [False, True])
 def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     tmp_path: Path,

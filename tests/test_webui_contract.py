@@ -17,6 +17,7 @@ from adaos.sdk.web import (
 )
 from adaos.services.webui_contract import (
     validate_form_action_bindings,
+    validate_production_attachment_fields,
     validate_skill_tool_references,
     validate_webui_contract,
 )
@@ -224,3 +225,67 @@ def test_validator_rejects_broken_modal_domain_contract() -> None:
     assert "webui.modal.domain.default_state_unknown" in codes
     assert "webui.modal.domain.state_route_unknown" in codes
     assert "webui.modal.domain.ownership_missing" in codes
+
+
+def test_production_attachment_field_requires_exact_browser_contract() -> None:
+    field = {
+        "id": "photo",
+        "type": "fileUpload",
+        "fileStorage": "skill",
+        "uploadTarget": "roster.upload_attachment",
+        "readTarget": "roster.read_attachment",
+        "maxBytes": 5 * 1024 * 1024,
+    }
+    webui = {"widgets": [{"id": "editor", "type": "ui.form", "inputs": {"fields": [field]}}]}
+
+    assert validate_production_attachment_fields(webui) == []
+    assert validate_webui_contract(webui) == []
+
+    field["readTarget"] = "other.read_attachment"
+    issues = validate_production_attachment_fields(webui)
+    assert [issue.code for issue in issues] == [
+        "webui.form.production_attachment_config_invalid"
+    ]
+    field["readTarget"] = "roster.upload_attachment"
+    assert validate_production_attachment_fields(webui)[0].code == (
+        "webui.form.production_attachment_config_invalid"
+    )
+    field["readTarget"] = "roster.read_attachment"
+    field["maxBytes"] = 10485761
+    assert validate_production_attachment_fields(webui)[0].code == (
+        "webui.form.production_attachment_config_invalid"
+    )
+
+
+def test_production_attachment_tools_must_be_declared_by_owned_skill() -> None:
+    webui = {
+        "widgets": [
+            {
+                "id": "editor",
+                "type": "ui.form",
+                "inputs": {
+                    "fields": [
+                        {
+                            "id": "photo",
+                            "type": "fileUpload",
+                            "fileStorage": "skill",
+                            "uploadTarget": "roster.upload_attachment",
+                            "readTarget": "roster.read_attachment",
+                            "maxBytes": 1024,
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+
+    issues = validate_skill_tool_references(
+        webui,
+        skill_id="roster",
+        declared_tools=["upload_attachment"],
+    )
+
+    assert [issue.code for issue in issues] == [
+        "webui.form.production_attachment_tool_unknown"
+    ]
+    assert "roster.read_attachment" in issues[0].message

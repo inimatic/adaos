@@ -19,6 +19,110 @@
     "attachments": "Prototype and production attachment storage are different contracts. fileStorage=prototype uploads only to disposable Preview resource storage. For durable app-owned bytes, declare storage.blob in the skill and Project permission profile, use fileStorage=skill, and set qualified uploadTarget and readTarget from the same owned skill. The upload tool is a mutating tool with narrow permissions [storage.blob, workspace.write], application_access permission workspace.write, and it calls adaos.sdk.data.blob.put_upload(<logical-store>) exactly once; bytes never appear in arguments. It returns that blob receipt directly or under blob. The read tool is read-only with narrow permissions [storage.blob, workspace.read], application_access permission workspace.read, accepts ref plus optional field_id/webspace_id, and returns {ok:true,ref:<the exact requested sha256 ref>} after applying app rules; Core then serves the verified content-addressed object. Form fields should set maxBytes <= 10485760 and an image accept filter when appropriate. Persist the returned /api/tools/... attachment reference in owned relational data and render it through normal media/attachment fields. Without fileStorage, forms collect metadata only. Missing upload/read tools, storage.blob, exact permission declarations, byte persistence tests, denied-writer tests, or authenticated read evidence is a blocking capability gap; never present metadata as an uploaded file or weaken the accepted requirement silently.",
     "discovery": "The supplied owned skill manifest and handlers define the local tool declaration pattern. Add tools to its exports and declarations with accurate read/write side effects; never infer caller rights from those effects. Consult targeted public SDK descriptors only for contracts still missing after this capsule. Preserve the accepted workflows, not Prototype storage or sample records. Larger new UX choices need review, not extra speculative hard acceptance requirements."
   },
+  "contracts": {
+    "production_attachment": {
+      "purpose": "Persist app-owned immutable bytes behind normal Application authorization without placing bytes or base64 in JSON tool calls.",
+      "limits": {
+        "core_max_bytes": 10485760,
+        "body_min_bytes": 1,
+        "digest": "sha256:<64 lowercase hex characters>",
+        "filename": "1..200 safe characters with no slash, backslash, colon or control character",
+        "field_id": "1..128 characters matching [A-Za-z0-9_.-]+",
+        "mime_policy": "The browser accept filter is UX only. The upload tool must reject MIME types outside the application's allowlist before put_upload()."
+      },
+      "webui_field": {
+        "type": "fileUpload",
+        "fileStorage": "skill",
+        "uploadTarget": "sample_skill.upload_attachment",
+        "readTarget": "sample_skill.read_attachment",
+        "accept": "image/png,image/jpeg,image/webp",
+        "maxBytes": 5242880,
+        "maxFiles": 1,
+        "multiple": false,
+        "target_rules": "Both targets are qualified <skill>.<tool> names, belong to the same owned skill and are distinct tools. maxBytes is positive and no greater than core_max_bytes."
+      },
+      "upload_tool": {
+        "invocation": "Core invokes this declared tool only through PUT /api/tools/{skill}/{upload_tool}/attachments after caller authentication and binary admission.",
+        "input_schema": {
+          "type": "object",
+          "required": ["filename", "field_id", "media_type", "size_bytes", "digest"],
+          "properties": {
+            "filename": {"type": "string"},
+            "field_id": {"type": "string"},
+            "media_type": {"type": "string"},
+            "size_bytes": {"type": "integer", "minimum": 1, "maximum": 10485760},
+            "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "webspace_id": {"type": "string"}
+          }
+        },
+        "manifest": {
+          "permissions": ["storage.blob", "workspace.write"],
+          "application_access": {"permission": "workspace.write"},
+          "side_effects": ["storage.write"]
+        },
+        "handler_order": [
+          "require workspace.write before touching storage",
+          "validate field_id, media_type and the application's narrower size policy from admitted metadata",
+          "call adaos.sdk.data.blob.put_upload(<logical-store>) exactly once",
+          "return the receipt directly or as {blob:<receipt>}"
+        ],
+        "output_schema": {
+          "type": "object",
+          "required": ["schema", "binding_id", "provider_id", "owner_ref", "ref", "key", "digest", "size_bytes", "media_type", "logical_name", "field_id", "filename"],
+          "properties": {
+            "schema": {"const": "adaos.storage.blob.object.v1"},
+            "owner_ref": {"description": "Must equal skill:<owned-skill>."},
+            "ref": {"description": "Internal adaos-blob identity; do not persist this as the UI field value."},
+            "digest": {"description": "Must equal the admitted input digest."},
+            "size_bytes": {"description": "Must equal the admitted body length."},
+            "logical_name": {"description": "Selected owned blob store."}
+          }
+        },
+        "one_use": "A second put_upload() in the same invocation raises and must not be retried inside the tool."
+      },
+      "browser_receipt": {
+        "shape": {"ok": true, "ref": "/api/tools/<skill>/<read-tool>/attachments/<logical-name>/<sha256-hex>/<filename>?webspace_id=<id>", "blob_ref": "adaos-blob:<binding>:sha256:<hex>", "sha256": "<hex>", "size_bytes": 123, "name": "photo.webp"},
+        "persistence": "The Client places ref, not blob_ref, into the file field before the form save action. Persist that string in owned relational data. A single-valued field is a string; multiple=true produces an array of strings.",
+        "failure": "A failed upload leaves the previous field value and editor open. A failed record save must also preserve the previous persisted photo reference."
+      },
+      "read_tool": {
+        "invocation": "Core invokes this declared tool before GET serves the content-addressed object.",
+        "input_schema": {
+          "type": "object",
+          "required": ["ref"],
+          "properties": {
+            "ref": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "field_id": {"type": "string"},
+            "webspace_id": {"type": "string"}
+          }
+        },
+        "manifest": {
+          "permissions": ["storage.blob", "workspace.read"],
+          "application_access": {"permission": "workspace.read"},
+          "side_effects": ["none"]
+        },
+        "handler_order": [
+          "require workspace.read before any storage lookup",
+          "apply app-owned visibility rules without trusting caller fields in arguments",
+          "return {ok:true,ref:<the exact requested sha256 ref>} when authorized"
+        ],
+        "output_schema": {
+          "type": "object",
+          "required": ["ok", "ref"],
+          "properties": {
+            "ok": {"const": true},
+            "ref": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          }
+        }
+      },
+      "permission_matrix": [
+        {"actor": "coordinator", "read": "allow", "upload": "allow", "record_mutation": "allow"},
+        {"actor": "viewer", "read": "allow when the record is visible", "upload": "deny before blob write", "record_mutation": "deny before relational write"},
+        {"actor": "missing caller", "read": "deny", "upload": "deny before blob write", "record_mutation": "deny before relational write"}
+      ],
+      "lifecycle": "Blob objects and relational references are both skill-owned runtime data. Stable-to-Beta forward migration copies/adopts them as one governed dataset; source/package files never contain uploaded bytes."
+    }
+  },
   "examples": {
     "board_move": {
       "on": "move", "type": "callSkill", "target": "sample_skill.move_record",

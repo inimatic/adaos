@@ -22,6 +22,16 @@ _DIAGNOSTIC_CATALOG: dict[str, dict[str, str]] = {
         "owner": "skill",
         "remediation": "For named form buttons, give every step in the command the same actions[*].id as inputs.buttons[*].id. on=submit alone does not bind it.",
     },
+    "webui.form.production_attachment_config_invalid": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "For fileStorage=skill, set distinct same-skill qualified uploadTarget/readTarget tools and maxBytes between 1 and 10485760.",
+    },
+    "webui.form.production_attachment_tool_unknown": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Declare both production attachment tools in the owned skill manifest or change the field targets.",
+    },
     "webui.interface.default_view_unknown": {
         "severity": "error",
         "owner": "skill",
@@ -199,12 +209,16 @@ def validate_webui_contract(
     registry = _mapping(raw.get("registry"))
     modals = _mapping(registry.get("modals"))
     widgets = _list(raw.get("widgets") or _mapping(raw.get("catalog")).get("widgets"))
-    return validate_form_action_bindings(raw, source=source) + _validate_contract(
-        interfaces=interfaces,
-        modals=modals,
-        widgets=widgets,
-        source=source,
-        default_skill=declared_skill,
+    return (
+        validate_form_action_bindings(raw, source=source)
+        + validate_production_attachment_fields(raw, source=source)
+        + _validate_contract(
+            interfaces=interfaces,
+            modals=modals,
+            widgets=widgets,
+            source=source,
+            default_skill=declared_skill,
+        )
     )
 
 
@@ -236,6 +250,55 @@ def validate_form_action_bindings(
     return issues
 
 
+def _production_attachment_target(value: Any) -> tuple[str, str] | None:
+    parts = str(value or "").strip().split(".")
+    if len(parts) != 2 or not all(parts):
+        return None
+    return parts[0], parts[1]
+
+
+def validate_production_attachment_fields(
+    webui: Mapping[str, Any] | None,
+    *,
+    source: str = "webui.json",
+) -> list[WebUiContractIssue]:
+    """Validate the browser-side half of permissioned production uploads."""
+
+    issues: list[WebUiContractIssue] = []
+    for path, field in _walk_mappings(_mapping(webui)):
+        field_type = str(field.get("type") or "").strip()
+        storage = str(field.get("fileStorage") or field.get("file_storage") or "").strip()
+        if field_type not in {"fileUpload", "file_upload", "file"} or storage != "skill":
+            continue
+        upload = _production_attachment_target(
+            field.get("uploadTarget") or field.get("upload_target")
+        )
+        read = _production_attachment_target(field.get("readTarget") or field.get("read_target"))
+        raw_max = field.get("maxBytes", field.get("max_bytes"))
+        valid_max = (
+            isinstance(raw_max, int)
+            and not isinstance(raw_max, bool)
+            and 1 <= raw_max <= 10485760
+        )
+        if (
+            not upload
+            or not read
+            or upload[0] != read[0]
+            or upload[1] == read[1]
+            or not valid_max
+        ):
+            issues.append(
+                _issue(
+                    "error",
+                    "webui.form.production_attachment_config_invalid",
+                    "Production attachment field requires distinct same-skill qualified upload/read tools and maxBytes <= 10 MiB.",
+                    f"{source}:{path}",
+                    source=source,
+                )
+            )
+    return issues
+
+
 def validate_skill_tool_references(
     webui: Mapping[str, Any] | None,
     *,
@@ -256,6 +319,28 @@ def validate_skill_tool_references(
     }
     issues: list[WebUiContractIssue] = []
     for path, item in _walk_mappings(raw):
+        field_type = str(item.get("type") or "").strip()
+        storage = str(item.get("fileStorage") or item.get("file_storage") or "").strip()
+        if field_type in {"fileUpload", "file_upload", "file"} and storage == "skill":
+            for key in ("uploadTarget", "readTarget"):
+                target = str(
+                    item.get(key)
+                    or item.get("upload_target" if key == "uploadTarget" else "read_target")
+                    or ""
+                ).strip()
+                parsed = _production_attachment_target(target)
+                if parsed and parsed[0] == skill and parsed[1] not in tools:
+                    issues.append(
+                        _issue(
+                            "error",
+                            "webui.form.production_attachment_tool_unknown",
+                            f"Production attachment field references undeclared tool '{target}'.",
+                            f"{source}:{path}.{key}",
+                            skill_id=skill,
+                            source=source,
+                        )
+                    )
+
         data_source = item.get("dataSource")
         if isinstance(data_source, Mapping) and str(data_source.get("kind") or "").strip() == "skill":
             target = str(data_source.get("name") or "").strip()

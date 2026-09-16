@@ -83,6 +83,7 @@ def test_sdk_resource_and_persistent_data_contracts_are_discoverable():
         ("adaos.sdk.access.caller", "adaos.sdk.access.caller"),
         ("adaos.sdk.access.require", "adaos.sdk.access.require"),
         ("adaos.sdk.data.lifecycle.ensure_database", "adaos.sdk.data.lifecycle.ensure_database"),
+        ("adaos.sdk.data.blob.put_upload", "adaos.sdk.data.blob.put_upload"),
         ("adaos.sdk.llm.images.generate", "adaos.sdk.llm.images.generate"),
     ):
         result = search_descriptors(query, descriptor_ids=["sdk_metadata"], limit=6)
@@ -107,3 +108,20 @@ def test_configuration_descriptor_states_runtime_and_secret_boundaries():
     assert "DEV" in detail["description"]
     write = get_descriptor_item("sdk_metadata", "adaos.sdk.data.configuration.write")["item"]
     assert "Credential bindings are preserved" in write["description"]
+
+
+def test_blob_upload_descriptor_states_binary_and_permission_boundaries():
+    detail = get_descriptor_item(
+        "sdk_metadata",
+        "adaos.sdk.data.blob.put_upload",
+    )["item"]
+    description = " ".join(detail["description"].split())
+
+    assert "one-use context" in description
+    assert "storage.blob" in description
+    assert "workspace.write" in description
+    assert "workspace.read" in description
+    assert "fileStorage: skill" in description
+    assert "/api/tools/.../attachments/..." in description
+    assert "persist" in description.lower()
+    assert detail["signature_detail"]["args"][0]["name"] == "name"
