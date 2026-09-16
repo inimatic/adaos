@@ -761,10 +761,14 @@ startup reduction, Client dependency-graph splitting, and the formal Client ABI
 impact gate remain open SHOULD work. Root
 ingress and cross-language release canonicalization were production-verified
 while checkpointing all 26 registry project manifests through
-`adaos project push`. The independent DEV sweep checkpointed 34 of 177
-projects; all 143 blocked entries are historical research/calibration fixtures
-that retain `project:adaos_research_platform` and require explicit migration or
-archival rather than an unsafe identity rewrite.
+`adaos project push`. That 2026-09-08 DEV sweep checkpointed 34 of 177 projects;
+143 entries were classified as historical research/calibration fixtures with
+the retired `project:adaos_research_platform` dependency. The 2026-09-16 Layout
+ABI cutover subsequently published all 25 current Workspace projects and all
+17 viable DEV projects. The current DEV projection contains 159 projects: the
+other 142 are retained fixtures in that same explicit migration-or-archival
+class and must not be silently renamed. Eighteen references to already absent
+smoke/E2E sources were removed from the legacy registry.
 The preparation gate remains in
 [Application Preparation Evidence - 2026-09-05](application-preparation-evidence-2026-09-05.md),
 and current dogfood evidence is in

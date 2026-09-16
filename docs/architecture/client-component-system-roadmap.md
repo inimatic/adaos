@@ -68,7 +68,7 @@ Layout baseline, 2026-09-16:
 - [x] `[must]` Migrate all authoritative local Workspace and DEV manifests,
   delete obsolete TEST/E2E projects, reject legacy layouts, and run Workspace
   browser qualification. DEV applications are qualified later when changed.
-- [ ] `[must]` Record successful `project push` and `dev project push` after
+- [x] `[must]` Record successful `project push` and `dev project push` after
   source validation; do not rewrite historical Trial/runtime/snapshot evidence.
 
 Cutover evidence, 2026-09-16:
@@ -87,6 +87,14 @@ Cutover evidence, 2026-09-16:
   suite. A monolithic `.adaos/workspace` pytest collection remains invalid
   because independently packaged skills reuse top-level Python module names;
   test orchestration must preserve package isolation.
+- `adaos project push` published all 25 current Workspace projects from exact
+  local checkpoint revisions. `adaos dev project push` published all 17 viable
+  DEV projects, including Applications, Builder, and the access-review sample.
+  The remaining 142 DEV entries are retained historical research/calibration
+  fixtures with the already retired `project:adaos_research_platform`
+  dependency; their explicit migration or archival remains separate work and
+  is not reported as a failed ABI cutover. Eighteen stale registry references
+  to already absent smoke/E2E sources were removed without deleting source.
 - Client `ng lint` remains blocked before source lint by the existing Nx/Angular
   `Workspaces is not a constructor` toolchain failure; build, tests, inventory,
   boundaries, and browser qualification are the current executable gates.
