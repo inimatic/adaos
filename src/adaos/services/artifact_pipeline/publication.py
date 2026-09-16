@@ -1910,6 +1910,7 @@ class ArtifactPublicationService:
         target_zone: str | None = None,
         target_subnet_id: str | None = None,
         idempotency_key: str | None = None,
+        permission_decision: bool | Mapping[str, Any] | None = None,
     ) -> PreparedCandidate:
         effective_validation_evidence = dict(validation_evidence)
         if kind == "skill":
@@ -2005,6 +2006,7 @@ class ArtifactPublicationService:
         trial_activation = trial_manager.activate(
             plan,
             idempotency_key=trial_idempotency_key,
+            permission_decision=permission_decision,
             audience=audience,
             data_mode=data_mode,
             data_ref=data_ref,
@@ -2115,6 +2117,7 @@ class ArtifactPublicationService:
         target_zone: str | None = None,
         target_subnet_id: str | None = None,
         idempotency_key: str | None = None,
+        permission_decision: bool | Mapping[str, Any] | None = None,
     ) -> PreparedCandidate:
         """Prepare one immutable Trial from a declarative Project closure."""
 
@@ -2287,6 +2290,7 @@ class ArtifactPublicationService:
         trial_activation = trial_manager.activate(
             plan,
             idempotency_key=trial_idempotency_key,
+            permission_decision=permission_decision,
             audience=audience,
             data_mode=data_mode,
             data_ref=data_ref,
@@ -2579,6 +2583,7 @@ class ArtifactPublicationService:
         target_zone: str | None = None,
         target_subnet_id: str | None = None,
         idempotency_key: str | None = None,
+        permission_decision: bool | Mapping[str, Any] | None = None,
     ) -> PreparedCandidate:
         stale = self.candidate_store.load(stale_candidate_id)
         if stale.status != "stale":
@@ -2615,6 +2620,7 @@ class ArtifactPublicationService:
             target_zone=target_zone,
             target_subnet_id=target_subnet_id,
             idempotency_key=idempotency_key,
+            permission_decision=permission_decision,
         )
 
     def promote(

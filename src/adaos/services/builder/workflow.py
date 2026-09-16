@@ -6145,6 +6145,13 @@ class BuilderWorkflowService:
                     "prepared_at": changed_at,
                     "decided_at": None,
                     "stale_reason": None,
+                    "permission_decision": (
+                        dict(metadata["permission_decision"])
+                        if isinstance(metadata.get("permission_decision"), Mapping)
+                        else {"approved": bool(metadata["permission_decision"])}
+                        if isinstance(metadata.get("permission_decision"), bool)
+                        else None
+                    ),
                 }
             )
             update_change_set(status="trial", gate="trial")

@@ -84,7 +84,13 @@ def _candidate_preparation_failure_is_known(exc: Exception) -> bool:
         status_code = int(getattr(exc, "status_code", 0) or 0)
     except (TypeError, ValueError):
         return False
-    return 400 <= status_code < 500 and status_code != 408
+    if 400 <= status_code < 500 and status_code != 408:
+        return True
+    exception_type = type(exc)
+    return (
+        exception_type.__module__.startswith("adaos.services.artifact_pipeline")
+        and exception_type.__name__.endswith("Error")
+    )
 
 
 def prepare_trial(
@@ -96,6 +102,7 @@ def prepare_trial(
     source_webspace_id: str = "desktop",
     target_webspace_id: str | None = None,
     publication_project_ref: str | None = None,
+    permission_decision: bool | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     state = workflow.get_state(object_type, object_id)
     delivery = _mapping(state.get("delivery"))
@@ -172,6 +179,7 @@ def prepare_trial(
                 target_zone=str(scope.get("zone") or "").strip() or None,
                 target_subnet_id=str(scope.get("subnet_id") or "").strip() or None,
                 idempotency_key=idempotency_key,
+                permission_decision=permission_decision,
             )
         elif stale_candidate:
             result = projects.prepare_rebased_candidate(
@@ -184,6 +192,7 @@ def prepare_trial(
                 target_zone=str(scope.get("zone") or "").strip() or None,
                 target_subnet_id=str(scope.get("subnet_id") or "").strip() or None,
                 idempotency_key=idempotency_key,
+                permission_decision=permission_decision,
             )
         else:
             result = projects.prepare_candidate(
@@ -196,6 +205,7 @@ def prepare_trial(
                 target_zone=str(scope.get("zone") or "").strip() or None,
                 target_subnet_id=str(scope.get("subnet_id") or "").strip() or None,
                 idempotency_key=idempotency_key,
+                permission_decision=permission_decision,
             )
     except Exception as exc:
         action = (
@@ -265,6 +275,7 @@ def prepare_trial(
             "base_release": candidate.get("base_release"),
             "base_release_digest": candidate.get("base_release_digest"),
             "trial_workspace": result.get("trial_workspace"),
+            "permission_decision": permission_decision,
             "run_id": f"candidate:{candidate_id}:prepare",
             "idempotency_key": f"{idempotency_key}:success",
         },
@@ -607,6 +618,11 @@ def invoke_activity_command(
             source_webspace_id=webspace_id,
             target_webspace_id=str(details.get("target_webspace_id") or "").strip()
             or None,
+            permission_decision=(
+                details.get("permission_decision")
+                if isinstance(details.get("permission_decision"), (bool, Mapping))
+                else None
+            ),
         )
     if token in {"accept_trial", "reject_trial"}:
         return decide_trial(

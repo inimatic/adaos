@@ -247,18 +247,25 @@ def test_prepare_trial_routes_component_checkpoint_through_owning_project(
         ),
     )
 
+    permission_decision = {
+        "approved": True,
+        "actor": "user:test",
+        "approval_id": "approval:trial-project-1",
+    }
     result = lifecycle.prepare_trial(
         "skill",
         "demo_metrics_skill",
         actor="builder.automation",
         idempotency_key="trial-project-1",
         publication_project_ref="project:semantic_ui_demo",
+        permission_decision=permission_decision,
     )
 
     assert captured["project_id"] == "semantic_ui_demo"
     assert captured["source_kind"] == "skill"
     assert captured["source_name"] == "demo_metrics_skill"
     assert captured["source_revision"] == "b" * 40
+    assert captured["permission_decision"] == permission_decision
     assert transitions == ["candidate_preparation_started", "candidate_prepared"]
     assert result["release"]["project_id"] == "semantic_ui_demo"
 

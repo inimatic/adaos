@@ -505,6 +505,7 @@ def prepare_candidate(
     target_zone: str | None = None,
     target_subnet_id: str | None = None,
     idempotency_key: str | None = None,
+    permission_decision: bool | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_kind = _kind(kind)
     normalized_id = _project_id(project_id)
@@ -522,6 +523,7 @@ def prepare_candidate(
             target_zone=target_zone,
             target_subnet_id=target_subnet_id,
             idempotency_key=idempotency_key,
+            permission_decision=permission_decision,
         )
     )
     _publish_content_changed(normalized_kind, normalized_id, reason="candidate_prepared")
@@ -575,6 +577,7 @@ def prepare_rebased_candidate(
     target_zone: str | None = None,
     target_subnet_id: str | None = None,
     idempotency_key: str | None = None,
+    permission_decision: bool | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     candidate_token = str(stale_candidate_id or "").strip()
     if not candidate_token:
@@ -592,6 +595,7 @@ def prepare_rebased_candidate(
             target_zone=target_zone,
             target_subnet_id=target_subnet_id,
             idempotency_key=idempotency_key,
+            permission_decision=permission_decision,
         )
     )
     _publish_content_changed(normalized_kind, normalized_id, reason="candidate_rebased")

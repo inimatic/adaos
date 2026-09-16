@@ -744,8 +744,16 @@ def create_trial(
     capability: str,
     expected_revision: int,
     idempotency_key: str,
+    permission_decision: bool | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    intent = {"source_webspace_id": source_webspace_id}
+    intent = {
+        "source_webspace_id": source_webspace_id,
+        "permission_decision": (
+            dict(permission_decision)
+            if isinstance(permission_decision, Mapping)
+            else permission_decision
+        ),
+    }
 
     def execute() -> Mapping[str, Any]:
         from . import lifecycle
@@ -758,6 +766,7 @@ def create_trial(
             idempotency_key=idempotency_key,
             source_webspace_id=source_webspace_id,
             publication_project_ref=f"project:{application.legacy_project_id}",
+            permission_decision=permission_decision,
         )
 
     return _execute_development(

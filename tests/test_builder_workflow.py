@@ -1958,9 +1958,19 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
             "package_digest": "sha256:" + "2" * 64,
             "base_release": "recipes@0.1.0",
             "trial_workspace": "trials/recipes/workspace",
+            "permission_decision": {
+                "approved": True,
+                "actor": "user:owner",
+                "approval_id": "approval:recipes-trial",
+            },
         },
     )
     assert trial["delivery"]["status"] == "trial"
+    assert trial["delivery"]["permission_decision"] == {
+        "approved": True,
+        "actor": "user:owner",
+        "approval_id": "approval:recipes-trial",
+    }
     assert trial["capabilities"]["can_decide_candidate"] is True
 
     accepted = service.transition(

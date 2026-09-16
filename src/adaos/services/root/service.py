@@ -2389,6 +2389,7 @@ class RootDeveloperService:
         target_zone: str | None = None,
         target_subnet_id: str | None = None,
         idempotency_key: str | None = None,
+        permission_decision: bool | Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         cfg = self._load_config()
         plural: Literal["skills", "scenarios"] = "skills" if kind == "skill" else "scenarios"
@@ -2410,6 +2411,7 @@ class RootDeveloperService:
             target_zone=target_zone,
             target_subnet_id=target_subnet_id,
             idempotency_key=idempotency_key,
+            permission_decision=permission_decision,
         )
         return {
             "ok": True,
@@ -2434,6 +2436,7 @@ class RootDeveloperService:
         target_zone: str | None = None,
         target_subnet_id: str | None = None,
         idempotency_key: str | None = None,
+        permission_decision: bool | Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         cfg = self._load_config()
         source_workspace = self._workspace_root(cfg)
@@ -2501,6 +2504,7 @@ class RootDeveloperService:
             target_zone=target_zone,
             target_subnet_id=target_subnet_id,
             idempotency_key=idempotency_key,
+            permission_decision=permission_decision,
         )
         return {
             "ok": True,
@@ -2522,6 +2526,7 @@ class RootDeveloperService:
         target_zone: str | None = None,
         target_subnet_id: str | None = None,
         idempotency_key: str | None = None,
+        permission_decision: bool | Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Prepare a Project Trial from its primary component's exact checkpoint."""
 
@@ -2564,6 +2569,7 @@ class RootDeveloperService:
             target_zone=target_zone,
             target_subnet_id=target_subnet_id,
             idempotency_key=idempotency_key,
+            permission_decision=permission_decision,
         )
 
     def project_release_versions(self, project_id: str) -> dict[str, str]:
@@ -2665,6 +2671,7 @@ class RootDeveloperService:
         target_zone: str | None = None,
         target_subnet_id: str | None = None,
         idempotency_key: str | None = None,
+        permission_decision: bool | Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         cfg = self._load_config()
         plural: Literal["skills", "scenarios"] = "skills" if kind == "skill" else "scenarios"
@@ -2686,6 +2693,7 @@ class RootDeveloperService:
             target_zone=target_zone,
             target_subnet_id=target_subnet_id,
             idempotency_key=idempotency_key,
+            permission_decision=permission_decision,
         )
         return {
             "ok": True,

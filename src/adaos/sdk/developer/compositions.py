@@ -1173,6 +1173,7 @@ def prepare_candidate(
     target_zone: str | None = None,
     target_subnet_id: str | None = None,
     idempotency_key: str | None = None,
+    permission_decision: bool | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Prepare an immutable Trial for the Project owning a changed component."""
 
@@ -1206,6 +1207,7 @@ def prepare_candidate(
         target_zone=target_zone,
         target_subnet_id=target_subnet_id,
         idempotency_key=idempotency_key,
+        permission_decision=permission_decision,
     )
 
 
