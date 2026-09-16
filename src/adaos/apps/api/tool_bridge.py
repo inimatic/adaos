@@ -4,16 +4,19 @@ import copy
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Literal, Mapping
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import anyio
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_tool_caller
@@ -2092,6 +2095,270 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
             return await _call_tool_with_identity(body, request, response, ctx)
         finally:
             clear_application()
+
+
+def _tool_attachment_result(value: Any) -> dict[str, Any]:
+    result = value.get("result") if isinstance(value, Mapping) and "result" in value else value
+    if isinstance(result, Mapping) and isinstance(result.get("blob"), Mapping):
+        result = result["blob"]
+    return dict(result) if isinstance(result, Mapping) else {}
+
+
+def _tool_attachment_ref(
+    *,
+    skill_name: str,
+    read_tool: str,
+    logical_name: str,
+    digest: str,
+    filename: str,
+    webspace_id: str,
+    dev: bool,
+) -> str:
+    hex_digest = digest.removeprefix("sha256:")
+    query = []
+    if webspace_id:
+        query.append(f"webspace_id={quote(webspace_id, safe='')}")
+    if dev:
+        query.append("dev=true")
+    suffix = f"?{'&'.join(query)}" if query else ""
+    return (
+        f"/api/tools/{quote(skill_name, safe='')}/{quote(read_tool, safe='')}/attachments/"
+        f"{quote(logical_name, safe='')}/{hex_digest}/{quote(filename, safe='')}{suffix}"
+    )
+
+
+async def _read_tool_attachment_body(request: Request) -> bytes:
+    from adaos.services.storage.upload_context import MAX_TOOL_ATTACHMENT_BYTES
+
+    content_length = str(request.headers.get("content-length") or "").strip()
+    if content_length:
+        try:
+            if int(content_length) > MAX_TOOL_ATTACHMENT_BYTES:
+                raise HTTPException(status_code=413, detail="attachment exceeds 10 MiB")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid content length") from exc
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > MAX_TOOL_ATTACHMENT_BYTES:
+            raise HTTPException(status_code=413, detail="attachment exceeds 10 MiB")
+        content.extend(chunk)
+    return bytes(content)
+
+
+@router.put(
+    "/tools/{skill_name}/{upload_tool}/attachments",
+    dependencies=[Depends(require_tool_caller)],
+)
+async def upload_tool_attachment(
+    skill_name: str,
+    upload_tool: str,
+    request: Request,
+    response: Response,
+    field_id: str,
+    filename: str,
+    read_tool: str,
+    webspace_id: str = "",
+    dev: bool = False,
+    ctx: AgentContext = Depends(get_ctx),
+) -> dict[str, Any]:
+    """Run an authorized binary-ingress tool and return an app-owned blob ref."""
+
+    from adaos.services.policy.application import clear_application
+    from adaos.services.policy.caller import verified_caller
+    from adaos.services.storage.upload_context import VerifiedToolUpload, verified_tool_upload
+
+    skill = str(skill_name or "").strip()
+    upload = str(upload_tool or "").strip()
+    read = str(read_tool or "").strip()
+    if not skill or not upload or not read or any(":" in item for item in (skill, upload, read)):
+        raise HTTPException(status_code=400, detail="invalid attachment tool identity")
+    try:
+        admitted = VerifiedToolUpload(
+            filename=filename,
+            field_id=field_id,
+            media_type=str(request.headers.get("content-type") or "application/octet-stream"),
+            content=await _read_tool_attachment_body(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    arguments = {**admitted.metadata(), "webspace_id": webspace_id}
+    body = ToolCall(
+        tool=f"{skill}:{upload}",
+        arguments=arguments,
+        context={"webspace_id": webspace_id, "binary_ingress": "attachment"},
+        intent="mutation",
+        dev=dev,
+    )
+    state = getattr(request, "state", None)
+    actor = getattr(state, "adaos_verified_caller", None)
+    scope = getattr(state, "adaos_verified_caller_scope", None)
+    with verified_caller(actor, scope), verified_tool_upload(admitted):
+        try:
+            envelope = await _call_tool_with_identity(body, request, response, ctx)
+        finally:
+            clear_application()
+    receipt = _tool_attachment_result(envelope)
+    if (
+        receipt.get("digest") != admitted.digest
+        or int(receipt.get("size_bytes") or -1) != admitted.size_bytes
+        or receipt.get("owner_ref") != f"skill:{skill}"
+        or not str(receipt.get("ref") or "").startswith("adaos-blob:")
+    ):
+        raise HTTPException(status_code=409, detail="attachment tool returned an invalid blob receipt")
+    logical_name = str(receipt.get("logical_name") or "").strip()
+    if not logical_name:
+        raise HTTPException(status_code=409, detail="attachment tool omitted its logical blob store")
+    return {
+        "ok": True,
+        "ref": _tool_attachment_ref(
+            skill_name=skill,
+            read_tool=read,
+            logical_name=logical_name,
+            digest=admitted.digest,
+            filename=admitted.filename,
+            webspace_id=webspace_id,
+            dev=dev,
+        ),
+        "blob_ref": receipt["ref"],
+        "sha256": admitted.digest.removeprefix("sha256:"),
+        "size_bytes": admitted.size_bytes,
+        "name": admitted.filename,
+    }
+
+
+async def _tool_attachment_store(
+    body: ToolCall,
+    *,
+    logical_name: str,
+    ctx: AgentContext,
+):
+    from adaos.domain.blob_storage import BlobStorageRequirements
+    from adaos.services.applications.runtime_selection import selected_trial
+    from adaos.services.skill.data_paths import resolve_skill_data_root
+    from adaos.services.storage.blob import get_blob_storage_broker
+
+    skill_name = body.tool.partition(":")[0]
+    webspace = _resolve_tool_webspace_id(body.arguments or {}, context=body.context)
+    trial_runtime = None if body.dev else await asyncio.to_thread(
+        selected_trial,
+        ctx,
+        webspace,
+        "skill",
+        skill_name,
+    )
+    manager = (
+        await asyncio.to_thread(trial_runtime.ready_manager, skill_name)
+        if trial_runtime is not None
+        else await _skill_manager_for_context(ctx)
+    )
+    implicit_dev = trial_runtime is None and not body.dev and await asyncio.to_thread(
+        _webspace_uses_dev_runtime,
+        body.arguments or {},
+    )
+    use_dev = body.dev or (
+        implicit_dev
+        and await asyncio.to_thread(_implicit_dev_runtime_available, ctx, manager, skill_name)
+    )
+    if use_dev:
+        await asyncio.to_thread(_maybe_sync_dev_runtime, ctx, manager, skill_name)
+        status = await asyncio.to_thread(manager.dev_runtime_status, skill_name)
+    else:
+        status = await asyncio.to_thread(manager.runtime_status, skill_name)
+    manifest_path = Path(str(status.get("resolved_manifest") or "")).resolve()
+    if not manifest_path.is_file():
+        raise FileNotFoundError("active skill runtime manifest is unavailable")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    source = Path(str(manifest.get("source") or "")).resolve()
+    if not source.is_dir():
+        raise FileNotFoundError("active skill runtime source is unavailable")
+    runtime_ctx = getattr(manager, "ctx", ctx)
+    data_root = resolve_skill_data_root(
+        runtime_ctx,
+        SimpleNamespace(name=skill_name, path=source),
+    )
+    broker = get_blob_storage_broker(runtime_ctx)
+    binding = broker.bind(
+        owner_ref=f"skill:{skill_name}",
+        logical_name=logical_name,
+        requirements=BlobStorageRequirements(),
+        scope_root=data_root / "files",
+    )
+    return broker, binding
+
+
+@router.get(
+    "/tools/{skill_name}/{read_tool}/attachments/{logical_name}/{digest}/{filename}",
+    dependencies=[Depends(require_tool_caller)],
+)
+async def download_tool_attachment(
+    skill_name: str,
+    read_tool: str,
+    logical_name: str,
+    digest: str,
+    filename: str,
+    request: Request,
+    response: Response,
+    webspace_id: str = "",
+    dev: bool = False,
+    ctx: AgentContext = Depends(get_ctx),
+) -> FileResponse:
+    """Authorize a read-tool before serving one verified app-owned blob."""
+
+    from adaos.services.policy.application import clear_application
+    from adaos.services.policy.caller import verified_caller
+    from adaos.services.storage.upload_context import attachment_filename
+
+    try:
+        safe_filename = attachment_filename(filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    hex_digest = str(digest or "").strip().lower()
+    if len(hex_digest) != 64 or any(character not in "0123456789abcdef" for character in hex_digest):
+        raise HTTPException(status_code=400, detail="invalid attachment digest")
+    body = ToolCall(
+        tool=f"{skill_name}:{read_tool}",
+        arguments={
+            "ref": f"sha256:{hex_digest}",
+            "field_id": "attachment",
+            "webspace_id": webspace_id,
+        },
+        context={"webspace_id": webspace_id, "binary_egress": "attachment"},
+        intent="read",
+        dev=dev,
+    )
+    state = getattr(request, "state", None)
+    actor = getattr(state, "adaos_verified_caller", None)
+    scope = getattr(state, "adaos_verified_caller_scope", None)
+    with verified_caller(actor, scope):
+        try:
+            envelope = await _call_tool_with_identity(body, request, response, ctx)
+        finally:
+            clear_application()
+    authorization = _tool_attachment_result(envelope)
+    if authorization.get("ref") != f"sha256:{hex_digest}" or authorization.get("ok") is False:
+        raise HTTPException(status_code=403, detail="attachment read tool did not authorize this object")
+    try:
+        broker, binding = await _tool_attachment_store(body, logical_name=logical_name, ctx=ctx)
+        path = await asyncio.to_thread(
+            broker.materialize_digest,
+            binding,
+            f"sha256:{hex_digest}",
+            owner_ref=f"skill:{skill_name}",
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="attachment not found") from exc
+    except (ValueError, NotImplementedError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    guessed = mimetypes.guess_type(safe_filename)[0] or "application/octet-stream"
+    allowed_inline = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+    return FileResponse(
+        path,
+        media_type=guessed if guessed in allowed_inline else "application/octet-stream",
+        filename=safe_filename,
+        content_disposition_type="inline" if guessed in allowed_inline else "attachment",
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600"},
+    )
 
 
 async def _authorize_scoped_tool_call(body: ToolCall, ctx: AgentContext, trial_runtime=None) -> None:

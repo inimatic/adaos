@@ -21,6 +21,22 @@ if "ypy_websocket" not in sys.modules:
 from adaos.apps.api import tool_bridge as tool_bridge_module
 
 
+class _BinaryRequest:
+    def __init__(self, content: bytes, *, content_type: str = "image/png") -> None:
+        self.headers = {
+            "content-length": str(len(content)),
+            "content-type": content_type,
+        }
+        self.state = SimpleNamespace(
+            adaos_verified_caller=None,
+            adaos_verified_caller_scope=None,
+        )
+        self._content = content
+
+    async def stream(self):
+        yield self._content
+
+
 @pytest.fixture(autouse=True)
 def _reset_tool_bridge_runtime_guards(monkeypatch) -> None:
     from adaos.services.applications import runtime_selection
@@ -84,6 +100,81 @@ def _fake_ctx() -> SimpleNamespace:
         settings=None,
         bus=None,
     )
+
+
+def test_binary_attachment_upload_runs_inside_the_normal_tool_ingress(monkeypatch) -> None:
+    from adaos.services.storage.upload_context import consume_verified_tool_upload
+
+    observed: dict[str, object] = {}
+
+    async def execute(body, _request, _response, _ctx):
+        upload = consume_verified_tool_upload()
+        observed["body"] = body
+        observed["metadata"] = upload.metadata()
+        return {
+            "ok": True,
+            "result": {
+                "schema": "adaos.storage.blob.object.v1",
+                "owner_ref": "skill:roster_skill",
+                "ref": f"adaos-blob:binding:{upload.digest}",
+                "digest": upload.digest,
+                "size_bytes": upload.size_bytes,
+                "logical_name": "portraits",
+            },
+        }
+
+    monkeypatch.setattr(tool_bridge_module, "_call_tool_with_identity", execute)
+    response = Response()
+    result = asyncio.run(
+        tool_bridge_module.upload_tool_attachment(
+            "roster_skill",
+            "upload_attachment",
+            _BinaryRequest(b"image-bytes"),
+            response,
+            field_id="photo",
+            filename="portrait.png",
+            read_tool="read_attachment",
+            webspace_id="desktop",
+            dev=False,
+            ctx=_fake_ctx(),
+        )
+    )
+
+    body = observed["body"]
+    assert body.tool == "roster_skill:upload_attachment"
+    assert body.intent == "mutation"
+    assert observed["metadata"] == {
+        "filename": "portrait.png",
+        "field_id": "photo",
+        "media_type": "image/png",
+        "size_bytes": 11,
+        "digest": result["blob_ref"].rsplit(":", 2)[-2] + ":" + result["blob_ref"].rsplit(":", 1)[-1],
+    }
+    assert result["ref"].startswith(
+        "/api/tools/roster_skill/read_attachment/attachments/portraits/"
+    )
+    assert result["ref"].endswith("/portrait.png?webspace_id=desktop")
+
+
+def test_binary_attachment_upload_rejects_a_forged_tool_receipt(monkeypatch) -> None:
+    async def execute(*_args, **_kwargs):
+        return {"ok": True, "result": {"owner_ref": "skill:other", "size_bytes": 1}}
+
+    monkeypatch.setattr(tool_bridge_module, "_call_tool_with_identity", execute)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            tool_bridge_module.upload_tool_attachment(
+                "roster_skill",
+                "upload_attachment",
+                _BinaryRequest(b"x"),
+                Response(),
+                field_id="photo",
+                filename="portrait.png",
+                read_tool="read_attachment",
+                ctx=_fake_ctx(),
+            )
+        )
+    assert error.value.status_code == 409
 
 
 def test_trial_owned_tool_cannot_fall_back_to_dev_or_workspace(tmp_path, monkeypatch):

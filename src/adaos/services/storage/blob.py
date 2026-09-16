@@ -152,6 +152,32 @@ class LocalBlobStorageProvider:
             raise ValueError("blob object digest verification failed")
         return target
 
+    def materialize_digest(
+        self,
+        binding: BlobStorageBinding,
+        digest: str,
+        *,
+        owner_ref: str,
+    ) -> Path:
+        if binding.owner_ref != validate_owner_ref(owner_ref):
+            raise ValueError("blob binding belongs to another owner")
+        normalized = str(digest or "").strip().lower()
+        if not normalized.startswith("sha256:") or len(normalized) != 71:
+            raise ValueError("invalid blob digest")
+        hex_digest = normalized.removeprefix("sha256:")
+        if any(character not in "0123456789abcdef" for character in hex_digest):
+            raise ValueError("invalid blob digest")
+        with self._lock:
+            root = self._targets[binding.binding_id]
+        matches = list((root / "objects" / hex_digest[:2]).glob(f"{hex_digest}.*"))
+        if len(matches) != 1 or not matches[0].is_file():
+            raise FileNotFoundError("blob object is unavailable")
+        target = matches[0].resolve()
+        target.relative_to(root)
+        if hashlib.sha256(target.read_bytes()).hexdigest() != hex_digest:
+            raise ValueError("blob object digest verification failed")
+        return target
+
 
 class ProvisionedBlobStorageProvider:
     provider_id = "object"
@@ -262,6 +288,21 @@ class BlobStorageBroker:
             raise NotImplementedError(f"blob provider {binding.provider_id!r} has no local materialization adapter")
         return operation(binding, blob, owner_ref=owner_ref)
 
+    def materialize_digest(
+        self,
+        binding: BlobStorageBinding,
+        digest: str,
+        *,
+        owner_ref: str,
+    ) -> Path:
+        provider = self._by_id.get(binding.provider_id)
+        operation = getattr(provider, "materialize_digest", None)
+        if not callable(operation):
+            raise NotImplementedError(
+                f"blob provider {binding.provider_id!r} has no digest materialization adapter"
+            )
+        return operation(binding, digest, owner_ref=owner_ref)
+
 
 class BlobStore:
     def __init__(self, service: "BlobStorageService", binding: BlobStorageBinding) -> None:
@@ -277,6 +318,9 @@ class BlobStore:
 
     def materialize_path(self, blob: Mapping[str, Any]) -> Path:
         return self._service.materialize_path(self.binding, blob)
+
+    def materialize_digest(self, digest: str) -> Path:
+        return self._service.materialize_digest(self.binding, digest)
 
 
 class BlobStorageService:
@@ -316,16 +360,25 @@ class BlobStorageService:
         return owner_ref
 
     def put_bytes(self, binding: BlobStorageBinding, *, name: str, data: bytes, media_type: str) -> dict[str, Any]:
-        return self._broker.put_bytes(
+        result = self._broker.put_bytes(
             binding,
             owner_ref=self._owner(binding),
             name=name,
             data=bytes(data),
             media_type=media_type,
         )
+        result["logical_name"] = binding.locator.rsplit("/", 1)[-1]
+        return result
 
     def materialize_path(self, binding: BlobStorageBinding, blob: Mapping[str, Any]) -> Path:
         return self._broker.materialize_path(binding, blob, owner_ref=self._owner(binding))
+
+    def materialize_digest(self, binding: BlobStorageBinding, digest: str) -> Path:
+        return self._broker.materialize_digest(
+            binding,
+            digest,
+            owner_ref=self._owner(binding),
+        )
 
 
 def build_default_blob_storage_broker() -> BlobStorageBroker:

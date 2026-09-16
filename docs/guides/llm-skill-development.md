@@ -582,6 +582,17 @@ on `ADAOS_SKILL_DATA_DIR` in business code. Relational records may retain the
 opaque blob ref and digest; they must not invent a second physical database or
 let a caller select a filesystem root.
 
+Browser uploads use the same ownership and permission boundary. A production
+`ui.form` file field declares `fileStorage: skill` plus qualified
+`uploadTarget` and `readTarget` tools from one owned skill. The mutating upload
+tool declares `storage.blob` and `workspace.write`, then calls
+`adaos.sdk.data.blob.put_upload()` to consume the one-use binary ingress. The
+read-only tool declares `storage.blob` and `workspace.read` and authorizes the
+exact requested digest before Core serves it. Bytes are never serialized into
+tool arguments or written into skill source. Prototype attachments remain
+disposable and use `fileStorage: prototype`; metadata-only file answers are not
+evidence that production upload works.
+
 When some source artifacts are withheld from a stage, use artifact item
 `context_policy` and request an audience-scoped Development Session. Do not
 rely on a prompt instruction such as "ignore initial-review.md" while exposing

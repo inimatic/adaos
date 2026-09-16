@@ -3,12 +3,13 @@ from pathlib import Path
 import pytest
 
 from adaos.domain.blob_storage import BlobStorageRequirements
-from adaos.sdk.data.blob import store
+from adaos.sdk.data.blob import put_upload, store
 from adaos.services.storage.blob import (
     BlobStorageBroker,
     LocalBlobStorageProvider,
     ProvisionedBlobStorageProvider,
 )
+from adaos.services.storage.upload_context import VerifiedToolUpload, verified_tool_upload
 
 
 def test_blob_broker_keeps_local_binding_opaque_and_owner_scoped(tmp_path: Path) -> None:
@@ -92,3 +93,34 @@ def test_sdk_blob_store_is_content_addressed_and_owner_isolated(_autocontext) ->
     assert beta.put_json("contract.json", {"accepted": True})["binding_id"] != blob["binding_id"]
     with pytest.raises(ValueError, match="another active skill"):
         alpha.materialize_path(blob)
+
+
+def test_sdk_blob_upload_consumes_only_trusted_binary_context(_autocontext) -> None:
+    ctx = _autocontext
+    source = Path(ctx.paths.skills_dir()) / "upload_skill"
+    source.mkdir(parents=True, exist_ok=True)
+    (source / "skill.yaml").write_text(
+        "name: upload_skill\nversion: 0.1.0\ncapabilities: [storage.blob]\n",
+        encoding="utf-8",
+    )
+    assert ctx.skill_ctx.set("upload_skill", source)
+
+    with pytest.raises(RuntimeError, match="context is unavailable"):
+        put_upload()
+
+    upload = VerifiedToolUpload(
+        filename="portrait.png",
+        field_id="photo",
+        media_type="image/png",
+        content=b"synthetic-image",
+    )
+    with verified_tool_upload(upload):
+        receipt = put_upload("portraits")
+        with pytest.raises(RuntimeError, match="already consumed"):
+            put_upload("portraits")
+
+    assert receipt["owner_ref"] == "skill:upload_skill"
+    assert receipt["logical_name"] == "portraits"
+    assert receipt["field_id"] == "photo"
+    assert receipt["filename"] == "portrait.png"
+    assert store("portraits").materialize_digest(receipt["digest"]).read_bytes() == b"synthetic-image"

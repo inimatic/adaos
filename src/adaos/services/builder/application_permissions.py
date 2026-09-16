@@ -274,6 +274,7 @@ def application_permissions_context(
         "authoring_requirements": [
             "Keep project permission_profile aligned with every owned skill capability.",
             "Narrow each tool's permissions and map application_access capability to an application role grant when domain actions differ from permission IDs.",
+            "For durable uploaded bytes declare storage.blob and separate authorized upload/read tools; workspace.write gates upload and workspace.read gates retrieval.",
             "Declare application_roles only when the application has differentiated rights; enforce rights in tools, not only in UI visibility.",
             "Add owner/member/child/guest access-matrix tests for every declared application role.",
             "Record secrets, external providers, model use, notifications, background work and data practices explicitly.",
