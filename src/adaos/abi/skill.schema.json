@@ -793,6 +793,11 @@
           "$ref": "#/$defs/jsonSchema",
           "description": "JSON Schema describing tool result shape."
         },
+        "side_effects": {
+          "type": "string",
+          "enum": ["safe", "none", "read", "read_only", "readonly", "ui_navigation", "local_write", "runtime_write", "external_write", "device_control"],
+          "description": "Trusted runtime intent class used for authorization and action-risk policy."
+        },
         "approval_scope": {
           "$ref": "#/$defs/approvalScope",
           "description": "Optional durable approval scope for repeated controller-to-resource actions."

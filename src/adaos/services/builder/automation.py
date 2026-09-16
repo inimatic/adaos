@@ -7923,6 +7923,7 @@ class BuilderAutomationService:
             "iteration": int(session.get("iteration") or 0),
             "skill": None,
             "skills": [],
+            "candidate_skills": [],
             "materialization": None,
             "aprobation": None,
             "vcs_checkpoints": [],
@@ -7972,15 +7973,16 @@ class BuilderAutomationService:
                     current,
                     readiness,
                     "activation",
-                    "Packaging, validating and activating the DEV skill runtime",
+                    "Packaging, validating and activating the candidate DEV skill runtime",
                 ):
-                    readiness["skills"] = [
+                    readiness["candidate_skills"] = [
                         self._prepare_and_activate_dev_skill(
                             skill_id,
                             webspace_id=webspace_id,
                         )
                         for skill_id in companion_skill_ids
                     ]
+                readiness["skills"] = list(readiness["candidate_skills"])
                 readiness["skill"] = readiness["skills"][0]
 
             if pending_transition != "return_to_prototype":
@@ -8036,6 +8038,50 @@ class BuilderAutomationService:
                     for item in failed_checkpoints
                 )
                 raise RuntimeError(f"Forge checkpoint failed for {failed_refs}")
+
+            checkpointed_skill_versions = self._checkpointed_skill_versions(
+                readiness["vcs_checkpoints"],
+                companion_skill_ids=companion_skill_ids,
+            )
+            if checkpointed_skill_versions:
+                # Forge owns the semantic-version bump. Candidate activation
+                # above proves behavior before a durable write; this second
+                # A/B switch makes Preview execute the exact checkpointed
+                # source identity instead of the now-stale candidate version.
+                with self._finalization_stage(
+                    current,
+                    readiness,
+                    "checkpoint_activation",
+                    "Activating the exact checkpointed DEV skill runtime",
+                ):
+                    checkpoint_activations = [
+                        self._prepare_and_activate_dev_skill(
+                            skill_id,
+                            webspace_id=webspace_id,
+                            expected_version=version,
+                            run_tests=False,
+                        )
+                        for skill_id, version in checkpointed_skill_versions.items()
+                    ]
+                readiness["checkpoint_skills"] = checkpoint_activations
+                by_id = {
+                    str(item.get("id") or ""): dict(item)
+                    for item in readiness["skills"]
+                    if isinstance(item, Mapping)
+                }
+                by_id.update(
+                    {
+                        str(item.get("id") or ""): dict(item)
+                        for item in checkpoint_activations
+                        if isinstance(item, Mapping)
+                    }
+                )
+                readiness["skills"] = [
+                    by_id[skill_id]
+                    for skill_id in companion_skill_ids
+                    if skill_id in by_id
+                ]
+                readiness["skill"] = readiness["skills"][0] if readiness["skills"] else None
 
             if snapshot_project_ref and readiness["vcs_checkpoints"]:
                 with self._finalization_stage(
@@ -8789,7 +8835,42 @@ class BuilderAutomationService:
                 pass
         return checkpoints
 
-    def _prepare_and_activate_dev_skill(self, skill_id: str, *, webspace_id: str) -> dict[str, Any]:
+    @staticmethod
+    def _checkpointed_skill_versions(
+        checkpoints: Sequence[Mapping[str, Any]],
+        *,
+        companion_skill_ids: Sequence[str],
+    ) -> dict[str, str]:
+        companion_ids = {
+            str(skill_id or "").strip()
+            for skill_id in companion_skill_ids
+            if str(skill_id or "").strip()
+        }
+        versions: dict[str, str] = {}
+        for checkpoint in checkpoints:
+            if not bool(checkpoint.get("ok")):
+                continue
+            if str(checkpoint.get("kind") or "").strip().lower().rstrip("s") != "skill":
+                continue
+            skill_id = str(checkpoint.get("name") or "").strip()
+            if skill_id not in companion_ids:
+                continue
+            version = str(checkpoint.get("version") or "").strip()
+            if not version:
+                raise RuntimeError(
+                    f"Forge checkpoint for skill {skill_id!r} is missing its exact version"
+                )
+            versions[skill_id] = version
+        return versions
+
+    def _prepare_and_activate_dev_skill(
+        self,
+        skill_id: str,
+        *,
+        webspace_id: str,
+        expected_version: str | None = None,
+        run_tests: bool = True,
+    ) -> dict[str, Any]:
         """Run package-external DEV lifecycle steps owned by the orchestrator."""
         from adaos.adapters.db import SqliteSkillRegistry
         from adaos.services.agent_context import get_ctx
@@ -8810,7 +8891,16 @@ class BuilderAutomationService:
         # activation. Worker-side source tests are an early repair rail, but
         # they cannot prove that owner-scoped paths, dependency resolution,
         # and slot metadata behave identically after ProjectRelease.
-        prepared = manager.prepare_dev_runtime(skill_id, run_tests=True)
+        prepared = manager.prepare_dev_runtime(
+            skill_id,
+            version_override=str(expected_version or "").strip() or None,
+            run_tests=bool(run_tests),
+        )
+        if expected_version and str(prepared.version) != str(expected_version):
+            raise RuntimeError(
+                f"DEV skill {skill_id!r} prepared version {prepared.version!r}; "
+                f"expected checkpoint version {expected_version!r}"
+            )
         binding = BuilderWorkbenchService(state_dir=self.state_dir).get_workspace_binding(webspace_id)
         preview_webspace_id = str(
             binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
@@ -8828,12 +8918,19 @@ class BuilderAutomationService:
         status = manager.dev_runtime_status(skill_id)
         if not bool(status.get("ready")) or not bool(status.get("active")):
             raise RuntimeError(f"DEV skill {skill_id!r} did not become active")
+        active_version = str(status.get("version") or "").strip()
+        if active_version != str(prepared.version):
+            raise RuntimeError(
+                f"DEV skill {skill_id!r} activated version {active_version!r}; "
+                f"expected {prepared.version!r}"
+            )
         return {
             "ok": True,
             "id": skill_id,
             "version": prepared.version,
             "slot": slot,
             "resolved_manifest": str(prepared.resolved_manifest),
+            "tests_rerun": bool(run_tests),
         }
 
     @staticmethod

@@ -40,6 +40,7 @@
       },
       "rules": [
         "For every added or changed same-skill WebUI `callSkill`, skill `dataSource`, or handler callable, reconcile the exact name across `webui.json`, `skill.yaml` `tools`, `exports.tools`, the entry/`@tool` handler, and complete input/output schemas in the same patch.",
+        "Every public `skill.yaml` tool must declare `side_effects`: use `read_only` for pure reads, `ui_navigation` for navigation only, and the narrowest of `local_write`, `runtime_write`, `external_write`, or `device_control` for actions. The API authorizes requested intent from this declaration and fails closed when it is absent.",
         "Do not conclude while a callable exists in code or UI but is absent from the public manifest graph. If a required counterpart is outside the authorized paths, stop and report that scope blocker instead of leaving a partial contract.",
         "Browser-read tools require a bounded declared `data_route`; action acknowledgements stay compact and do not duplicate projected data. Keep duplicated skill/scenario UI contracts in parity."
       ]

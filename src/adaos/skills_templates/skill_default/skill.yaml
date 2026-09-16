@@ -23,6 +23,7 @@ tools:
   - name: chat
     description: "Handle a skill-owned dialog turn using the canonical conversation ledger."
     entry: "handlers.main:chat"
+    side_effects: local_write
     input_schema:
       type: object
       properties:
@@ -39,6 +40,7 @@ tools:
   - name: ask_for_details
     description: "Ask a bounded follow-up question through adaos.sdk.chat.ask."
     entry: "handlers.main:ask_for_details"
+    side_effects: local_write
     input_schema:
       type: object
       properties:
@@ -57,6 +59,7 @@ tools:
   - name: remember_preference
     description: "Propose a consent-gated skill preference memory write."
     entry: "handlers.main:remember_preference"
+    side_effects: local_write
     input_schema:
       type: object
       required: [key, text]

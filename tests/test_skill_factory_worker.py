@@ -5140,6 +5140,58 @@ def test_worker_rejects_manifest_schema_errors_before_checkpoint(tmp_path):
     assert checks[0]["ok"] is True
 
 
+def test_worker_requires_tool_effects_on_changed_skill_manifests(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "demo"
+    skill_root.mkdir(parents=True)
+    manifest_path = skill_root / "skill.yaml"
+    manifest = {
+        "name": "demo",
+        "version": "0.1.0",
+        "tools": [
+            {"name": "list_items", "input_schema": {"type": "object"}},
+            {
+                "name": "save_item",
+                "input_schema": {"type": "object"},
+                "side_effects": "local_write",
+            },
+        ],
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    checks: list[dict[str, object]] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_changed_skill_tool_effects(
+        workspace,
+        checks,
+        errors,
+        changed_paths={"skills/demo/skill.yaml"},
+    )
+
+    assert checks == []
+    assert errors and "list_items: missing side_effects" in errors[0]
+
+    manifest["tools"][0]["side_effects"] = "read_only"
+    manifest_path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    checks, errors = [], []
+    LocalSkillFactoryWorker._validate_changed_skill_tool_effects(
+        workspace,
+        checks,
+        errors,
+        changed_paths={"skills/demo/skill.yaml"},
+    )
+
+    assert errors == []
+    assert checks == [
+        {
+            "kind": "skill.public_tool_effects.strict",
+            "path": "skills/demo/skill.yaml",
+            "ok": True,
+            "tools": 2,
+        }
+    ]
+
+
 def test_worker_treats_browser_data_route_warnings_as_strict_errors(
     tmp_path: Path,
 ) -> None:

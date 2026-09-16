@@ -7112,6 +7112,12 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             changed_paths=changed_paths,
         )
         self._validate_skill_manifests(workspace, checks, errors)
+        self._validate_changed_skill_tool_effects(
+            workspace,
+            checks,
+            errors,
+            changed_paths=changed_paths,
+        )
         self._validate_declared_sqlite_initialization(workspace, checks, errors)
         self._validate_skill_webui_contracts(workspace, checks, errors)
         self._validate_skill_data_routes(workspace, checks, errors)
@@ -7860,6 +7866,74 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 continue
             errors.extend(f"{relative}: {issue.code}: {issue.message} ({issue.where})" for issue in issues)
             checks.append({"kind": "skill.manifest.schema", "path": relative, "ok": not issues})
+
+    @staticmethod
+    def _validate_changed_skill_tool_effects(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+        *,
+        changed_paths: set[str],
+    ) -> None:
+        """Require executable intent metadata on every changed public tool.
+
+        The API authorizes read and write intent from the resolved manifest,
+        not from tool names or candidate code. Keep legacy untouched skills
+        installable, but never checkpoint a newly authored manifest that would
+        deterministically fail its first browser call.
+        """
+
+        allowed = {
+            "safe",
+            "none",
+            "read",
+            "read_only",
+            "readonly",
+            "ui_navigation",
+            "local_write",
+            "runtime_write",
+            "external_write",
+            "device_control",
+        }
+        for path in sorted(workspace.glob("skills/*/skill.yaml")):
+            relative = path.relative_to(workspace).as_posix()
+            if relative not in changed_paths:
+                continue
+            try:
+                manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                continue
+            tools = manifest.get("tools") if isinstance(manifest, Mapping) else []
+            if not isinstance(tools, list):
+                continue
+            violations: list[str] = []
+            for index, item in enumerate(tools):
+                if not isinstance(item, Mapping):
+                    continue
+                tool_name = str(item.get("name") or f"tools[{index}]").strip()
+                side_effects = str(item.get("side_effects") or "").strip().lower().replace("-", "_")
+                if not side_effects:
+                    violations.append(f"{tool_name}: missing side_effects")
+                elif side_effects not in allowed:
+                    violations.append(
+                        f"{tool_name}: unsupported side_effects {side_effects!r}"
+                    )
+            if violations:
+                errors.append(
+                    f"{relative}: public tool effect contract is incomplete: "
+                    + "; ".join(violations)
+                    + ". Declare read_only for reads and the narrowest applicable "
+                    "write/navigation class for actions."
+                )
+            else:
+                checks.append(
+                    {
+                        "kind": "skill.public_tool_effects.strict",
+                        "path": relative,
+                        "ok": True,
+                        "tools": len(tools),
+                    }
+                )
 
     def _validate_declared_sqlite_initialization(self, workspace, checks, errors):
         from adaos.services.applications.data_lifecycle import declared_databases

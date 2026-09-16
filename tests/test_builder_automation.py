@@ -5285,6 +5285,15 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
         or [
             {
                 "ok": True,
+                "kind": "skill",
+                "name": "recipes_skill",
+                "version": "0.1.1",
+                "commit": "forge-skill-1",
+                "package_digest": "sha256:" + "2" * 64,
+                "source_revision": "forge-skill-1",
+            },
+            {
+                "ok": True,
                 "kind": "scenario",
                 "name": "recipes",
                 "commit": "forge-1",
@@ -5296,8 +5305,16 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
     monkeypatch.setattr(
         BuilderAutomationService,
         "_prepare_and_activate_dev_skill",
-        lambda self, skill_id, **kwargs: calls.append(f"activate:{skill_id}")
-        or {"ok": True, "slot": "B"},
+        lambda self, skill_id, **kwargs: calls.append(
+            f"activate:{skill_id}:{kwargs.get('expected_version') or 'candidate'}:"
+            f"{kwargs.get('run_tests', True)}"
+        )
+        or {
+            "ok": True,
+            "id": skill_id,
+            "version": kwargs.get("expected_version") or "0.1.0",
+            "slot": "B",
+        },
     )
 
     class FakeWorkbench:
@@ -5332,11 +5349,20 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
         }
     )
 
-    assert calls == ["activate:recipes_skill", "checkpoint", "ensure", "notify"]
+    assert calls == [
+        "activate:recipes_skill:candidate:True",
+        "checkpoint",
+        "activate:recipes_skill:0.1.1:False",
+        "ensure",
+        "notify",
+    ]
     assert saved[-1]["completion_readiness"]["ok"] is True
     assert saved[-1]["completion_readiness"]["materialization"]["preview_webspace_id"] == "desktop-dev"
     assert saved[-1]["completion_readiness"]["task_id"] == "task.1"
-    assert saved[-1]["completion_readiness"]["vcs_checkpoints"][0]["commit"] == "forge-1"
+    assert saved[-1]["completion_readiness"]["vcs_checkpoints"][1]["commit"] == "forge-1"
+    assert saved[-1]["completion_readiness"]["candidate_skills"][0]["version"] == "0.1.0"
+    assert saved[-1]["completion_readiness"]["checkpoint_skills"][0]["version"] == "0.1.1"
+    assert saved[-1]["completion_readiness"]["skills"][0]["version"] == "0.1.1"
     assert (
         saved[-1]["completion_readiness"]["workflow_checkpoint"]["workflow"]["delivery"]["status"]
         == "checkpoint"
@@ -7519,6 +7545,7 @@ def test_finalize_reenters_failed_workflow_for_checkpoint_reconciliation(
                 "ok": True,
                 "kind": "skill",
                 "name": "research_skill",
+                "version": "0.1.1",
                 "commit": "forge-1",
                 "package_digest": "sha256:" + "1" * 64,
                 "source_revision": "forge-1",
@@ -7720,8 +7747,8 @@ def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(
         def __init__(self, **kwargs):  # noqa: ARG002
             pass
 
-        def prepare_dev_runtime(self, skill_id, *, run_tests):
-            calls.append(("prepare", skill_id, run_tests))
+        def prepare_dev_runtime(self, skill_id, *, version_override, run_tests):
+            calls.append(("prepare", skill_id, version_override, run_tests))
             return SimpleNamespace(
                 version="0.1.0",
                 slot="B",
@@ -7734,7 +7761,7 @@ def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(
 
         def dev_runtime_status(self, skill_id):
             calls.append(("status", skill_id))
-            return {"ready": True, "active": True}
+            return {"ready": True, "active": True, "version": "0.1.0"}
 
     class FakeWorkbench:
         def __init__(self, **kwargs):  # noqa: ARG002
@@ -7761,10 +7788,11 @@ def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(
 
     assert result["ok"] is True
     assert calls == [
-        ("prepare", "research_skill", True),
+        ("prepare", "research_skill", None, True),
         ("activate", "research_skill", "B"),
         ("status", "research_skill"),
     ]
+    assert result["tests_rerun"] is True
 
 
 def test_finalize_stops_before_checkpoint_when_consumer_acceptance_fails(
