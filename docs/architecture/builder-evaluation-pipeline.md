@@ -250,6 +250,58 @@ without a receipt or any profile/domain-pack mismatch makes the case
 inconclusive as invalid evidence. Compact validated receipts are copied into
 the run bundle before scenario cleanup.
 
+## Feedback Loop Comparison
+
+The [Automation feedback contract](builder-automation-skill.md#candidate-verification-and-feedback)
+applies within implementation as well as between completed attempts. The runner
+records each selected check, observation and correction; worker completion is not
+the outcome metric. Author-controlled feedback tools do not replace independent
+final checks or add hidden UX requirements to a minimal working Prototype.
+
+Start with a visible retained application regression, not the sealed holdout.
+Reading List motivates generic cases for setting -> actual view -> reload,
+media binding -> loaded image in cards/details, and accepted implementation ->
+next semantic input preservation. Use synthetic records and fixed input snapshots;
+do not copy Stable user data or put these domain solutions into generic prompts.
+
+Compare predeclared arms from the same source/Brief and clean data state:
+
+1. Current worker checks plus its post-turn deterministic repair feedback.
+2. The same task with agent-requested scoped tests and validation during work.
+3. The same task with additional candidate browser/runtime observations, including
+   images delivered to the implementing model when relevant.
+
+Freeze model/reasoning settings, source/SDK/Client/ABI, fixtures, locale/viewports,
+network/cache conditions, independent gates and repetition count. The declared
+feedback capability is the experimental difference, not a silent change to task
+detail or test difficulty. Retain tool policy and exact observed inputs/outputs
+for each arm. Report early failures and every repair; best-of-N is not first-pass
+reliability. Complete each comparison batch before platform remediation unless a
+real execution blocker prevents continuation, retaining the partial failed batch.
+
+Measure time and model/tool cost to independent acceptance, including failed
+attempts, test startup, browser work and repair; report success rate alongside
+cost so cheap failures cannot win. Also report first-pass and final success,
+escaped regressions, human interventions, false diagnoses, retries, context volume,
+fresh/cached/output tokens and phase timings. Small samples are diagnostic and
+cannot establish a universal speedup. Promote a feedback profile only with measured
+benefit and no weakened authority/preservation gates; then repeat the visible cohort.
+
+Final acceptance checks actual effects, not an agent's prose, saved setting alone,
+HTTP 200 alone or a generated test that merely finds a string in a binding. Include
+negative controls for inert actions, unsupported expression evaluation, stale
+runtime identity, missing images and a setting that saves but changes no view.
+Keep infrastructure failure, missing evidence and failed application assertions
+distinct. Each repair invalidates receipts for changed source; reusing matching
+hermetic results follows the runner's explicit cache policy, never a stale UI pass.
+
+An optional separate visual LLM evaluator remains BIP-34. Feeding browser evidence
+to the implementation model is part of BIP-21 and does not wait for that evaluator.
+Use wide/compact task probes for UI-bearing qualification, not a mandatory second
+model call or full browser suite after every line edit. Feedback to a candidate is
+bounded evidence, not access to protected grader code, sealed cases or reference
+solutions. Exposed evaluation material follows the existing dataset lifecycle.
+
 ## Metric Model
 
 ### Outcome and truthfulness
@@ -401,10 +453,11 @@ Prototype SDK execution still uses a legacy skill adapter; `sdk.v1` is not
 proof of Core ownership. Separate stand journeys must be brought under the same
 resolved lifecycle contract before claiming one complete E2E rail.
 
-Current gaps: full-stage billing/latency reconciliation, interruption/re-entry
+Current gaps: integrated candidate-selected checks and browser feedback, matched
+feedback-loop comparisons, full-stage billing/latency reconciliation, interruption/re-entry
 qualification, calibrated human labels, full browser/a11y/authority coverage,
 sealed evaluation and installed lifecycle. Owners are BIP-03 through BIP-06,
-BIP-15 through BIP-18 and BIP-28 in the
+BIP-13, BIP-15 through BIP-18, BIP-21, BIP-27 and BIP-28 in the
 [corrective register](builder-intent-to-prototype-roadmap.md#current-task-register).
 Dated measurements belong only in the [engineering journal](builder-engineering-journal.md).
 

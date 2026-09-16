@@ -1756,3 +1756,34 @@ without reinstallation. Focused suites pass 156 Client and 105 Core tests;
 the reload fixture now supplies its existing runtime paths contract rather
 than weakening Trial selection. CG-06 crop/apply and release packaging remain
 open.
+
+### 2026-09-16: Automation Feedback and Acceptance Audit
+
+Read-only review of Reading List Stable `0.1.8` found that the view preference was
+stored but its updateState value used an unsupported JavaScript ternary; initial
+state also selected a fixed view. Existing checks verified storage or a substring,
+not resulting tab visibility. Cover identifiers still existed in the data, while
+cards/details image bindings disappeared between revision `006` before/after UI.
+The retained prototype request admitted an older semantic baseline without those
+bindings. These are escaped regressions, not evidence of lost book records or a
+failed image server. Earlier lifecycle evidence remains valid only for its scope.
+
+Worker task `task.01M2KEV7ZRMFEVJ18VXAXRY62Z` retained successful package/schema
+checks but no candidate-driven browser proof. The worker already returns
+deterministic errors to Codex for bounded repair; it is not wholly open loop.
+The no-tests/no-validation/no-status/no-diff instruction was introduced in commit
+`548e82b26` while bounding discovery and remains in normal and repair prompts.
+That instruction is not evidence of a measured accepted-outcome speedup.
+
+The same audit distinguishes local Prototype hash receipts, remote Automation
+component commits and local composition reservation from a full remote DEV
+ProjectRelease after acceptance. Local executor polling preserves task identity
+on `node_busy`, but does not establish fair queuing or serialize every finalizer.
+
+Target decisions now live in Automation's candidate feedback/contention contract,
+the intent architecture's incremental baseline contract and the SDK full-project
+acceptance checkpoint contract. BIP-11/BIP-13/BIP-16/BIP-21/BIP-26/BIP-27 and SDK-04
+retain the open implementation/qualification work; BIP-05 owns matched feedback
+experiments. Optional separate visual judges remain conditional BIP-34. This
+documentation increment implements none of those runtime changes, performs no
+new paid generation and does not mutate Stable data, publish or restart services.

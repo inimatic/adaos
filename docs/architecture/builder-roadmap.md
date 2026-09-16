@@ -3,7 +3,7 @@
 Status: active target delivery roadmap; implemented mechanisms do not imply
 complete user, lifecycle or production acceptance.
 
-Last reviewed: 2026-09-15.
+Last reviewed: 2026-09-16.
 
 ## Document Ownership Audit
 
@@ -27,7 +27,7 @@ cannot change a gate or define a competing target; link decisions back here.
 | [Evaluation pipeline](builder-evaluation-pipeline.md) | One technological CLI, immutable evidence, metrics and dataset lifecycle |
 | [Conversational development](builder-conversational-development.md) | Project/Change/Issue/Run, interactions, authority and context |
 | [SDK boundary](builder-sdk-boundary.md) | SDK contract and its remaining migration checklist |
-| [Automation skill](builder-automation-skill.md) | Skill/SDK/worker contract, finalization versus acceptance |
+| [Automation skill](builder-automation-skill.md) | Skill/SDK/worker, candidate feedback/isolation, executor contention, finalization versus acceptance |
 | [Preview runtime](builder-preview-runtime.md) | Paired topology, exact identity, reconciliation and materialization |
 | [Streaming patches](builder-streaming-patches.md) | Transport/journal/atomic commit; renderer JSONL is compatibility only |
 | [Scenario development guide](../guides/builder-scenario-development.md) | Normative stage-aware authoring procedure, not experimental results |
@@ -61,6 +61,12 @@ The functional parity JSON remains unchanged because tests consume it.
 
 1. Reconcile contracts and evidence, then stabilize frozen small DEV
    Prototype/Automation behavior and execution latency.
+   Check actual semantic/implementation baseline parity before another increment
+   (BIP-11). Enable scoped self-checks and browser feedback without transferring
+   final acceptance authority (BIP-13/BIP-21), then measure on a retained synthetic
+   regression before repeating the frozen cohort (BIP-05/BIP-27). Complete the
+   full-project acceptance checkpoint gate (SDK-04) and contention qualification
+   (BIP-26); do not add parallel execution as a prerequisite.
 2. Establish clean baseline prerequisites and an undisclosed 40-prompt EN/RU
    set across eight other archetypes before tuning on its results.
 3. Complete ownership, Brief, component, semantic and context contracts with
@@ -123,12 +129,23 @@ topology SDK: registered W -> W-dev, with only DEV Builder allowed W-dev-dev.
 Sequential cases reuse a preview. Implementation exists; remaining reliability
 and cleanup are BIP-03, BIP-16 and BIP-22.
 
+The [candidate feedback contract](builder-automation-skill.md#candidate-verification-and-feedback)
+allows the implementing model to observe and check its own result. A separate
+optional visual model reviewer is BIP-34, not a prerequisite for browser evidence
+or a reason to ban scoped self-checks. Independent final acceptance remains owned
+by Builder; successful storage or transport is not proof of a visible user outcome.
+
 ## Phase 5. Human-In-The-Loop Apply
 
 Review binds an exact revision, authority and acceptance evidence. Rejection
 creates scoped follow-up work without rewriting the accepted artifact.
 Prototype approval does not authorize external effects or accept undeclared
 Automation obligations.
+
+Each accepted Prototype and Automation must also obtain the complete remote DEV
+Project checkpoint under SDK-04. Keep the recorded human decision distinct from
+checkpoint completion; a local hash or component commit is not the project-level
+VCS receipt. Preserve/retry the same accepted snapshot without another model call.
 
 - [ ] `[deferred]` Add delegated Pending Actions response-handler subscription;
   retain explicit `response_route` in the first supported path.
@@ -158,6 +175,12 @@ Convert failures into owning-layer Issues/Dev Tickets, retain exact candidate
 and first attempt, and repair only the admitted scope. BIP-13/BIP-21 own
 scoped repairs and bounded review. Reusable guidance requires evidence-gated
 promotion; failure text must not become an unconditional model rule.
+
+Use existing trusted checks as callable feedback during implementation and after
+independent review. BIP-13 owns executor self-check/repair contracts; BIP-21 owns
+runtime/browser evidence; BIP-05/BIP-27 own matched benefit and regression evidence.
+The target is lower total cost/time to a valid accepted change, not fewer commands
+or shorter isolated answers. Do not hide infrastructure failures with more retries.
 
 ## Phase 8. Product Experience
 
@@ -195,6 +218,12 @@ last-resort patch-repair fallback.
 The bounded worker consumes exact owned source and a typed implementation
 brief, then validates and reports evidence. Finalization is not independent
 acceptance. No runtime fixture seeding or hidden public-service simulation.
+
+Current local work has one active Codex task per executor, not a qualified global
+FIFO queue. A second project's request waits with its own immutable identity;
+same-project conflicting work is refused. BIP-26 owns busy/reconnect/cancellation
+and finalization/preview contention qualification. Advanced scheduling remains
+outside this correction; a process-local lock is not an interprocess delivery lock.
 
 - [ ] `[could]` Add multi-node pools, placement and parallel tasks after
   one-task-per-node isolation and the separately deferred queue/topology

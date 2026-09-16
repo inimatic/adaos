@@ -113,11 +113,47 @@ Skills do not persist workbench bindings or call webspace runtime services.
 The SDK returns the stable automation projection, not a
 `BuilderAutomationService` instance.
 
+Target verification operations expose the existing trusted runner to the admitted
+candidate: inspect scoped changes, select checks, observe/cancel an owned check
+and retrieve typed evidence or permitted browser observations. Use the same
+validators, task identity and receipts as final verification, with separate
+authority to select mandatory gates. A caller cannot nominate another project's
+runtime or extend network/filesystem access. Route and ABI implementation is owned
+by [BIP-13](builder-intent-to-prototype-roadmap.md#bip-13) and
+[BIP-21](builder-intent-to-prototype-roadmap.md#bip-21), not a second runner in the
+skill. This is a target surface, not a claim that callable tools already exist.
+
 ### Builder artifacts and conversation evidence
 
 `adaos.sdk.builder.artifacts` owns artifact checkpoints. Conversation SDK
 operations own Builder topic creation and Builder Change lookup/upsert. Pending
 Actions and event publication use their existing SDK surfaces.
+
+After each accepted Prototype and accepted Automation, the workflow must obtain
+the service equivalent of `adaos dev project push`, without `--local-only`, for
+that exact DEV Project composition. This private development checkpoint is not
+Trial publication, Workspace installation or public registry publication. It
+does not require pushing the AdaOS or Client source repositories or triggering
+their CI merely to preserve an application revision.
+
+Keep three explicit evidence classes: local revision/hash receipt, remote component
+commit, and complete remote ProjectRelease. Only the last closes the accepted
+project's VCS obligation. Retain Project/Change/stage/accepted revision, owned-member
+source digests, composition/package digest, version and durable remote identity.
+Package source, tests, schemas, locales and source-owned assets; never runtime
+databases, user settings values, secrets or temporary verification files.
+
+Checkpoint the immutable accepted snapshot, not whatever is latest when upload
+finishes. Reuse a matching confirmed full-project receipt idempotently. On failure,
+retain the human decision and local source but expose checkpoint pending/failed
+and block dependent acceptance completion or promotion. Recovery retries the same
+operation without another model call, duplicate version bump or duplicate upload;
+offline/local-only work must not be labelled remotely persisted.
+
+Current Prototype local checkpoints, Automation component pushes and composition
+version reservation do not implement this complete acceptance hook. Qualification
+belongs to SDK-04 below; [BIP-23](builder-intent-to-prototype-roadmap.md#bip-23)
+owns related retention, not a weaker alternative durability gate.
 
 This checkpoint/evidence API is distinct from the target Skill SDK
 model-facing source context. `ctx.artifacts` enumerates and resolves manifested
@@ -190,6 +226,12 @@ or general from-zero Builder autonomy.
   failure. Changed archive bytes are not acknowledgement; finalization must
   fail on stale/unconfirmed metadata. Share evidence with BIP-23, not another
   checkpoint implementation.
+- [ ] `[must]` **SDK-04 acceptance hook** Obtain a full remote DEV ProjectRelease
+  after each Prototype and Automation acceptance, using existing project-push
+  services. Verify all owned members and distinguish local/component/project
+  receipts in Builder. Cover duplicate approval, stale source, disconnect after
+  remote commit, restart/resume and failure without loss of the accepted snapshot.
+  A pending receipt must not become a successful transition or trigger regeneration.
 - [ ] `[should]` **SDK-05** Preserve widget identity on no-op semantic reloads;
   prove fingerprint convergence and browser reconnect/reload soak behavior.
 - [ ] `[should]` **SDK-06** Make `runtime.sdk_only` the default in new skill

@@ -593,6 +593,31 @@ Existing `adaos.builder.semantic_ui_change.v1` remains the bounded edit
 contract. It should target semantic refs first and compile the affected slice,
 rather than forcing the model to author RFC 6902 paths.
 
+#### Incremental Baseline Integrity
+
+Before a follow-up, bind the semantic source to the actual accepted implementation,
+not merely to a matching semantic digest stored in old WebUI metadata. Admission
+retains the source-authority mode, accepted revision, semantic input, compiler and
+Client/ABI versions, generated artifact digest and any admitted implementation
+overlay. Compare the effective compiled result with current accepted UI/commands;
+exclude only explicitly declared runtime-derived fields from that comparison.
+
+Automation must not leave a managed semantic source silently describing an older
+interface. A supported UI change updates semantic authoring plus any versioned
+implementation binding overlay through the owning compiler contract. An unsupported
+mapping produces a capability gap or explicit reviewed authority conversion, not
+an inferred reverse compilation or a stale semantic-only follow-up. Retain the
+accepted implementation as read-only preservation evidence in either case.
+
+Material drift blocks new generation until reconciliation. The model receives the
+current task and the necessary authoritative slices, with exact source/renderer
+refs available on demand; a title, stale marker or full-document size limit cannot
+justify silently omitting existing behavior. Settings-driven visibility, media
+bindings, selection/editing semantics, layout and locale assets are preservation
+dimensions, not domain-specific compiler rules. Cross-stage regression tests must
+cover Prototype -> Automation -> accepted implementation -> next Prototype and
+detect loss before a model is asked to modify the application.
+
 ### 5. Runtime Artifact And Evidence
 
 Large-prototype readiness is a deferred admission dimension. A future plan must assign

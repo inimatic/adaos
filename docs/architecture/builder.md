@@ -160,11 +160,12 @@ The target pipeline is a vertical slice across existing AdaOS architecture:
    templates through a separate Builder-only path.
 6. **Static validation**: AdaOS validates schemas, manifests, route plans,
    imports, handler boundaries, and unsafe runtime patterns.
-7. **VCS checkpoint**: after a complete validated LLM result is materialized,
-   Builder invokes the core `adaos dev skill|scenario push` service contract.
-   The LLM `comment` is normalized into the Forge commit message, and the
-   returned commit SHA is attached to the local revision evidence and the
-   turn's Builder Change.
+7. **Source checkpoint**: retain the complete validated candidate and its
+   source receipts. Local revision evidence, component Forge commits and a
+   complete remote DEV ProjectRelease are distinct facts. Each Prototype or
+   Automation acceptance requires the full-project durable checkpoint described
+   in the [SDK contract](builder-sdk-boundary.md#builder-artifacts-and-conversation-evidence);
+   a digest-only local receipt cannot certify VCS delivery.
 8. **Preview**: AdaOS runs phrase probes, action previews, UI/materialization
    previews, and install/test dry-runs where available.
 9. **Review gate**: a human, policy rule, or narrower auto-apply profile
@@ -200,8 +201,8 @@ functional request may use `automation_direct`; Builder records the set and
 requires an explicit implementation brief before isolated Codex starts. A
 heuristic classification is never sufficient to launch Codex by itself.
 
-Builder still has one mutable process at a time. `Prototype` and `Automation`
-are the only possible values of `workflow.active_phase`; `Publication` is an
+Each project's workflow still has one mutable process at a time. `Prototype`
+and `Automation` are the only possible values of `workflow.active_phase`; `Publication` is an
 immutable release snapshot and is never an active editing phase. The
 authoritative persisted contract is `adaos.builder.workflow.v1` in the DEV
 project's `prompt_state.json`, with the active change set embedded in that
@@ -271,8 +272,13 @@ The bounded binding contract describes both editing and creation, including
 state initialization, visible parent choice, cancellation and failed writes.
 Do not imply that literal form defaults resolve expressions or that an empty
 record read initializes a child form. Contract examples must be backed by
-Client tests. Codex implements and adds coverage; the trusted worker executes
-package checks; independent review owns browser and deployed-runtime evidence.
+Client tests. Codex implements, adds coverage and requests scoped verification
+through the trusted runner. It can consume tests and browser/runtime observations
+while correcting its candidate; Builder still owns independent final acceptance.
+The target [feedback loop](builder-automation-skill.md#candidate-verification-and-feedback)
+supersedes the blanket no-tests/no-diff prompt policy, not the isolation or
+publication boundaries. Interactive verification remains unqualified until the
+owning BIP tasks close.
 The model must mark unexecuted checks explicitly, not turn implementation
 claims into successful acceptance. A correction gets a newly admitted context;
 never rewrite the input files of an already running task.
@@ -799,22 +805,23 @@ Builder also exposes an operational CLI facade over the existing dev lifecycle:
   Forge dev push path. It does not replace activation, install, approval, or
   runtime apply gates.
 
-The same lifecycle is mandatory for non-CLI entrypoints. Builder chat creates
-artifacts through `RootDeveloperService.create_skill/create_scenario`. Once all
-files from a successful LLM turn are written and validated, it calls
-`RootDeveloperService.push_skill/push_scenario` with the normalized LLM
-`comment`. `ui_revisions/NNN.json -> vcs_checkpoint` records the attempt,
-message, Forge commit, digest, and remote path. A remote push failure is
-reported but does not erase or invalidate the already validated local
-revision; retry and recovery remain possible from the dev workspace.
-Automation completion applies the same rule to every materialized artifact:
-a scenario and its companion skill receive separate Forge checkpoints using
-the terminal implementation-result summary as their commit message before
-runtime preparation begins. The workflow advances to `checkpoint_recorded`
-only when the primary artifact checkpoint contains a change id, package
-digest, and source revision. An explicit recovery path can reuse those durable
-receipts after an interrupted finalization; it never reruns isolated Codex or
-repeats an already confirmed Forge push.
+The same source-owner lifecycle is required for non-CLI entrypoints. Builder chat
+creates artifacts through `RootDeveloperService.create_skill/create_scenario`.
+Current Prototype generation retains local revision/checkpoint evidence; this
+does not establish a remote commit. Automation finalization calls component Forge
+pushes and records source/task receipts plus a local composition checkpoint.
+These mechanisms do not yet prove full-project remote persistence after each
+Prototype and Automation acceptance.
+
+The target [acceptance checkpoint contract](builder-sdk-boundary.md#builder-artifacts-and-conversation-evidence)
+requires the service equivalent of `adaos dev project push` for the exact accepted
+composition, with a durable full-project receipt. Component receipts remain useful
+members, not substitutes. Remote failure preserves the reviewed local revision and
+decision but keeps the transition's checkpoint obligation pending/failed. Recovery
+reuses exact confirmed receipts and source identity; it must neither rerun Codex
+nor repeat an acknowledged push. Runtime finalization order is owned by
+[Automation delivery](builder-automation-skill.md#delivery-and-recovery), not by a
+prose claim that every checkpoint precedes every DEV activation.
 
 Candidate dependency resolution considers every approved checkpoint member of
 the active change set, not only the most recent primary-artifact receipt. This

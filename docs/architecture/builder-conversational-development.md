@@ -193,6 +193,14 @@ principal's command context, not a project-wide lock:
 command, Run, and delivery decision. It does not mean that a project can have
 only one open Change.
 
+This target concurrency model does not claim parallel local Automation support.
+The supported local slice admits one mutating task per project and one active
+Codex task per executor. Another project's session may wait; focus changes never
+retarget that session. Waiting, cancellation/recovery and shared finalization or
+preview contention follow the [Automation contract](builder-automation-skill.md#execution-contention)
+and BIP-26 qualification. Additional open Changes do not imply a fair FIFO queue,
+parallel model execution or extra preview webspaces.
+
 ### Run
 
 A `Run` is one attempt by an LLM, Codex, deterministic transformer, evaluator,
@@ -1343,6 +1351,15 @@ widget/field refs. Constraints live under the canonical Change, enter every
 later development capsule, and are re-evaluated after each Prototype revision.
 A violation returns the Change to `changes_requested`; an evaluator never
 silently repairs the interface or grants approval.
+
+An independent evaluator may return findings to a separately recorded scoped
+implementation repair. This does not grant it write or acceptance authority.
+The implementing model can request trusted checks and inspect candidate browser
+evidence under the [feedback contract](builder-automation-skill.md#candidate-verification-and-feedback).
+Review shows exact candidate/check state and evidence, not a generic green verdict
+from an empty requirement set. After human Prototype or Automation acceptance,
+the [full DEV checkpoint obligation](builder-sdk-boundary.md#builder-artifacts-and-conversation-evidence)
+remains visible until its exact durable receipt is confirmed.
 
 Client memory or local storage may cache an unsent text draft only. On Review
 Apply, `builder_skill` promotes each structured browser comment into a stable

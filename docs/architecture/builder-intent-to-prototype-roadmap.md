@@ -4,7 +4,7 @@ Status: active corrective roadmap. Small generic Prototype and DEV Automation
 slices work; target ownership, repeatable reliability and installed lifecycle
 acceptance remain incomplete.
 
-Last reviewed: 2026-09-14.
+Last reviewed: 2026-09-16.
 
 Architecture: [Intent-to-Prototype](builder-intent-to-prototype.md).
 Cross-document owner: [Builder Roadmap](builder-roadmap.md).
@@ -47,13 +47,17 @@ The parent roadmap and SDK migration retain their distinct obligations.
 | Semantic Prototype | Typed multi-resource candidates, relations, state proof, requirement bindings, deterministic WebUI/locale/fixture compilation | Total admitted-component coverage, general incremental preservation and reliable unseen tasks |
 | Local UI substrate | CRUD, live choices, filtering, editor surfaces, sections, board/tree/chart/accordion/settings and display policies in qualified subsets | Uniform action cancellation/error semantics and complete compact/a11y/i18n acceptance |
 | Preview | Explicit production/DEV self-host topology and one paired preview | All deletion/reconnect/idempotency and readiness paths qualified |
-| Automation | Frozen-Prototype implementation and independent local HTTP/browser plans, owned persistence and bounded attempt archives | Media external scope, repeated latency qualification, installed delegated roles |
+| Automation | Frozen-Prototype implementation, post-turn deterministic repair feedback, independent local HTTP/browser plans, owned persistence and bounded attempt archives | Candidate-selected checks/browser feedback, cross-stage baseline integrity, full-project acceptance checkpoints, repeated latency qualification and installed delegated roles |
 | Evaluation | Public CLI, immutable reports and model-input archives, component and browser probes | All stand paths under one lifecycle runner, calibrated holdout and complete cost accounting |
 
 ## Current Sequence
 
 1. Stabilize loaded runtime, Client action semantics and requirement provenance
    on retained applications: BIP-03, BIP-10, BIP-16, BIP-27.
+   First qualify semantic/implementation baseline integrity (BIP-11), scoped
+   self-checks and executable feedback (BIP-13/BIP-21), with independent final
+   gates and matched evaluation (BIP-05/BIP-06/BIP-27). Full DEV acceptance
+   checkpoints remain the must-level SDK-04 gate; BIP-26 covers node contention.
 2. Meet clean-baseline prerequisites and measure before further tuning:
    BIP-01, BIP-04 through BIP-06; Client C0/C1 plus truthful C2 subset.
 3. Complete ownership, Brief, component, semantic and context contracts:
@@ -278,6 +282,11 @@ integration, not closure of the remaining interaction/continuation obligations.
   task/source-bound evidence shown by Review. Distinguish automatic Forge
   checkpointing from reviewer acceptance; an empty consumer requirement set
   must not appear as independently verified user outcomes.
+- [ ] `[must]` Project executor waiting, active self-check, automatic repair and
+  independent acceptance separately in the existing Process/Result surfaces.
+  Show the inspected revision, check coverage/failures and governed evidence refs;
+  keep unavailable/not-run results and pending full DEV checkpoint visible.
+  Reuse generic Client controls and avoid inventing a second process tracker.
 - [ ] `[must]` Qualify OpenSpec-aligned application specification and Change
   deltas with version/digest preconditions, explicit acceptance and preserved
   historical inputs. Do not introduce an independently mutable second tracker.
@@ -369,6 +378,15 @@ Implementation boundary: Public CLI/SDK execution, attribution checks, independe
 
 Exit/remaining work: Run adversarial/mutation, accessibility, authority, preservation and task probes through one resolved E2E contract. Verify attribution before grading, unify metrics/comparison/resume, and retain first attempts plus missing-evidence flags. Historical incomplete cohorts cannot become pristine baselines.
 
+- [ ] `[must]` Integrate versioned per-check receipts and model-visible feedback
+  into the existing E2E attempt archive. Preserve candidate/environment identity,
+  complete retrievable diagnostics, actual multimodal inputs, missing evidence
+  and application/platform/infrastructure failure classes.
+- [ ] `[must]` Run the matched feedback-loop comparison in the evaluation contract:
+  current worker repair, scoped self-checks, then added browser observations.
+  Freeze the same task/base/profile and repetitions; report end-to-end accepted
+  outcome cost, failed attempts, regression escape and human interventions.
+
 ### BIP-06
 
 - [ ] `[must]` **Independent Grader Calibration**. Status: `partial`.
@@ -458,6 +476,15 @@ Owner/dependencies: Core semantic compiler + Client mappings.
 
 Implementation boundary: Semantic-v2 multi-resource generation, typed links, structural state proof, source maps and lookup-only resources exist. This is not a total contract for the admitted component set or proof of one-way semantic authority on all managed edits.
 
+- [ ] `[must]` Bind each incremental input to the actual accepted implementation
+  and effective compiled UI, not an old semantic metadata marker. Reconcile
+  supported Automation edits through semantic source/declared binding overlays;
+  unsupported drift blocks generation with a typed gap or reviewed conversion.
+- [ ] `[must]` Qualify Prototype -> Automation -> next Prototype preservation of
+  media, settings-driven visibility, layout, interactions and locales. Retain
+  actual model inputs and both source identities; never hide drift by regenerating
+  from a title or silently reverse-compiling arbitrary renderer JSON.
+
 Exit/remaining work: Complete the supported semantic ABI and requirement-to-runtime mapping; qualify empty-state reachability, granularity, typed gaps, reference/display capacity and incremental preservation. Retain atomic full-artifact promotion; no lossy fallback or forced collection screen for lookup-only data.
 
 ### BIP-12
@@ -480,9 +507,22 @@ Implementation boundary: Binding/reference/state repairs, additive visibility, v
 
 - [x] `[must]` Present deterministic repair as its own current phase, leading
   with observed failures and preserving the full admitted task as reference.
-  Keep verification ownership consistent in ordinary and preserved repair;
-  candidate models do not rerun worker tests. Local prompt regressions qualify
-  ordering and preservation, not reduced latency or complete repair reliability.
+  Local prompt regressions qualify this ordering and preservation only. The
+  former blanket no-tests/no-diff instruction is superseded by the target feedback
+  contract below; its removal and interactive verification are not implemented.
+- [ ] `[must]` Replace conflicting normal/repair instructions with one scoped
+  self-check contract: Codex can inspect its changes and request the existing
+  trusted runner's tests/schema/install-strict checks during implementation.
+  Enforce admitted paths, fixtures, network and resource policy in the backend;
+  the model cannot modify independent gate definitions or certify acceptance.
+- [ ] `[must]` Feed actionable, candidate-bound findings into scoped repairs with
+  retrievable full evidence and immutable per-turn inputs. Aggregate independent
+  failures before remediation; mark blocked/unexecuted checks truthfully. Prove
+  repair -> recheck -> independent final acceptance without an operator relay.
+- [ ] `[should]` Select checks by affected contracts and hypotheses, deduplicate
+  in-flight work and reuse only exact hermetic receipts. Tune configurable repair
+  budgets from measured progress; do not impose a fixed model-call sequence or
+  claim lower latency merely by forbidding checks or shortening timeouts.
 
 Exit/remaining work: Aggregate all independent findings before selecting scope; qualify fixture/value/binding repair, exact replay and unchanged accepted semantics on fresh repeated runs. Compare authoritative slices with full-context/full-regeneration controls before reducing payloads.
 
@@ -515,6 +555,11 @@ Owner/dependencies: Client runtime + Core compiler/acceptance.
 Implementation boundary: Forms, live related options, ID/display separation, layouts and media surfaces have real probes. item.details named-command sequencing is fixed, but PageActionService can still return success after cancelled non-form confirmations.
 
 Exit/remaining work: Qualify one action success/cancel/failure contract across used widgets, hydration races, failed drafts and create/update/delete. Verify fresh relationship creation/rename/reopen and actual generated wide/compact artifacts; outcomes derive from record effects, not CRUD verb names.
+
+- [ ] `[must]` Reject unsupported expression/binding semantics and prove setting
+  change -> intended view visibility -> reload hydration. Verify loaded images in
+  cards/details with empty/error states; a retained media ID, HTTP 200 or substring
+  assertion cannot replace a rendered outcome. Keep tests/component fixes generic.
 
 ### BIP-17
 
@@ -562,9 +607,18 @@ Exit/remaining work: Curate applicable, explained recommendations with alternati
 
 Owner/dependencies: Evaluation + Builder review/Dev Tickets.
 
-Implementation boundary: DOM/screenshot/task probes exist, including actual media visibility. An integrated DOM/accessibility/screenshot review with bounded owning-layer feedback is not qualified.
+Implementation boundary: DOM/screenshot/task probes exist, including actual media visibility. Their presence in external stands does not expose them to the candidate Codex session. Integrated DOM/accessibility/screenshot feedback is not qualified.
 
-Exit/remaining work: Attach exact source/renderer identity, run deterministic/browser checks first and permit at most two targeted review repairs. Convert unresolved platform findings to owning-layer tickets. The optional model reviewer is BIP-34, not an excuse to defer deterministic review.
+- [ ] `[must]` Expose candidate browser actions, DOM/accessibility, image bytes,
+  console/network and synthetic data evidence through scoped check operations.
+  Bind source/Client/ABI/runtime/fixture identities; reject stale/wrong targets,
+  redact private data and preserve one paired preview without new case webspaces.
+- [ ] `[must]` Return independent runtime/UI failures to the implementing Codex
+  without manual copying. Protect final gates and revalidate the corrected digest;
+  optional visual taste must not become a hidden requirement. Qualify selected
+  wide/compact journeys, persistence and image loading, not screenshots alone.
+
+Exit/remaining work: Qualify bounded owning-layer feedback using the shared runner. Two targeted review repairs are the initial review profile, not a universal fixed track; adjust only with recorded progress/budget evidence. Route unresolved platform findings to Dev Tickets. BIP-34 is a separate optional model reviewer, not a prerequisite for Codex to observe its own result.
 
 ### BIP-22
 
@@ -582,9 +636,13 @@ Exit/remaining work: Qualify idempotent deletion admission/completion, absence a
 
 Owner/dependencies: Developer SDK + Root source persistence.
 
-Implementation boundary: Checkpoint validation and actual Automation source receipts exist. Invalid-source quarantine, sparse checkout hydration, attachment GC and durable scenario-checkpoint fault qualification are not all closed.
+Implementation boundary: Prototype local revision/hash receipts and Automation remote component receipts plus local composition reservation exist. They do not establish full remote DEV ProjectRelease checkpoints after each stage acceptance. Invalid-source quarantine, sparse checkout hydration, attachment GC and durable scenario-checkpoint fault qualification are not all closed.
 
 Exit/remaining work: Qualify version/task-bound durable acknowledgements and recovery without double version bumps; preserve exact source/task identity through transport failures. Add non-promotable diagnostic checkpoints, safe hydration and owner/revision-bound attachment reclamation. Preserve the must-level durable-checkpoint gate in builder-sdk-boundary.md.
+
+The full-project acceptance hook and its failure/recovery gate are owned once in
+[SDK-04](builder-sdk-boundary.md#roadmap-and-checklist); this should-level retention
+package does not downgrade that must requirement or equate a local hash with VCS.
 
 ### BIP-24
 
@@ -616,6 +674,15 @@ Implementation boundary: Frozen Equipment and the remaining cohort exercise expl
 
 Exit/remaining work: Complete stage-specific acceptance, fixture/installed authority, source presentation and exact recovery identity across all routes. Validate real declared capabilities and scope before implementation; preserve accepted prototypes. Trial obligation closure and delegated authority remain BIP-28.
 
+- [ ] `[must]` Qualify two projects contending for one local executor: exact-task
+  `node_busy` wait, no duplicate paid submission, same-project idempotency/conflict,
+  cancellation and restart/resume. Preserve project/Change/input identity while
+  the user switches focus. Do not describe retry polling as a fair FIFO queue.
+- [ ] `[must]` Prove source/checkpoint generation guards and shared-preview target
+  protection during finalization after the executor becomes free. A node's active
+  Codex lock is not whole-pipeline serialization; contention must not replace
+  another application's preview or source.
+
 ### BIP-27
 
 - [ ] `[must]` **Frozen Automation Cohort**. Status: `partial`.
@@ -625,6 +692,14 @@ Owner/dependencies: Builder + independent acceptance.
 Implementation boundary: All seven retained local HTTP/browser workflows have passing evidence; six qualify the agreed DEV-local scope. Media passes locally but external notification remains unresolved, and intermittent runtime stalls remain.
 
 Exit/remaining work: Resolve Media's requirement provenance/recipient/channel scope through BIP-10, not a fabricated notification. Repeat unchanged applications after BIP-03/BIP-16; distinguish local partial success from full acceptance. Do not regenerate accepted Prototype 002 or manually patch application source.
+
+- [ ] `[must]` Requalify retained Reading List settings/view and cover preservation
+  on synthetic data with independent outcome checks. Prior lifecycle passes do
+  not cover these escaped regressions. Diagnose model input freshness separately
+  from model output and Client/runtime defects; implement fixes through Builder.
+- [ ] `[must]` After the feedback pilot, repeat the frozen small Automation cohort
+  with one matched profile and protected final checks. Report repairs and human
+  interventions, not a union of historical green tests or best revisions.
 
 ### BIP-28
 
@@ -767,7 +842,7 @@ Owner/dependencies: Builder review + evaluation.
 
 Implementation boundary: Deterministic browser evidence is available; autonomous visual repair remains distinct.
 
-Exit/remaining work: After BIP-21, evaluate an opt-in screenshot model with at most two targeted iterations, exact evidence and ticket routing. Automatic acceptance and unbounded visual loops remain deferred.
+Exit/remaining work: After BIP-21, compare an opt-in additional visual model reviewer with the implementing agent's existing browser feedback, initially at most two targeted review iterations. Require measured benefit, exact evidence, calibrated judgments and ticket routing. This could is not the implementing Codex's permission to see screenshots. Automatic acceptance and unbounded visual loops remain deferred.
 
 ### BIP-35
 

@@ -62,6 +62,144 @@ contract, without installation records, setting values or secret bindings. Audit
 the retained model prompt as well as the packet; a correct provider answer cannot
 qualify a run whose input prescribed the wrong stage.
 
+## Candidate Verification And Feedback
+
+Target decision: let Codex inspect, execute scoped checks and correct the isolated
+candidate during implementation. Verification authority is not observation
+authority. The trusted worker owns execution policy and authoritative receipts;
+Builder owns acceptance and delivery gates. Neither role requires hiding test or
+browser results from the implementing model. This supersedes the blanket prompt
+ban on tests, validation, status and diff commands, including repair prompts.
+
+The current worker already feeds deterministic validation errors into a bounded
+Codex repair turn. It does not yet provide the target interactive check/browser
+loop. The default repair count and existing prompt tests establish a mechanism,
+not an optimal quality, cost or latency policy. Implementation and qualification
+belong to [BIP-13](builder-intent-to-prototype-roadmap.md#bip-13) and
+[BIP-21](builder-intent-to-prototype-roadmap.md#bip-21).
+
+### Three Verification Levels
+
+1. **Implementation self-checks.** Codex may inspect its scoped diff/status,
+   request syntax/schema/install-strict checks and run selected hermetic tests,
+   reproduce a failure, then verify its correction before returning. Reuse the
+   existing validators and runner through task-scoped SDK/MCP operations; do not
+   implement a second validator or restrict contract discovery to one tool call.
+2. **Executable candidate review.** For affected UI/runtime behavior, expose the
+   actual candidate through browser actions, DOM/accessibility snapshots,
+   screenshots, sanitized console/network diagnostics and synthetic data
+   postconditions. Use the matching Client build and admitted SDK/ABI. A screenshot
+   filename alone is not image input: record which image bytes the model received.
+3. **Independent final acceptance.** Builder runs the required checks against the
+   frozen final candidate. Candidate-authored tests supplement protected platform
+   and consumer checks; the candidate cannot modify the gate, its required tests,
+   expected results or receipts to obtain a pass. Return actionable failures for
+   a new scoped repair, then re-establish acceptance for the resulting digest.
+
+The same observation principle applies to Prototype generation, but its checks
+remain stage-specific: compiled UI and disposable interactions, not production
+persistence or external effects that belong to Automation. A pending Automation
+obligation must not silently become a Prototype rejection or a fabricated pass.
+
+Independence concerns ownership of criteria and verdicts, not withholding
+diagnostics or requiring another LLM. Ordinary implementation failures can loop
+without a human turn; ambiguous intent, new permissions, unsupported platform
+capabilities and exhausted repair budgets retain their clarification/escalation
+routes. Human Prototype/Automation approval and Trial/Stable publication remain
+separate decisions. Optional aesthetic advice is not a new acceptance requirement.
+
+### Evidence And Context Contract
+
+Use existing task/Run and artifact identities for a versioned check receipt:
+
+- project, Change, task/Run, attempt, candidate source digest and exact base;
+- check identity/version, runner, SDK/ABI/Client build, runtime and fixture digests,
+  locale/viewport when relevant, execution time and permitted side effects;
+- requirement or platform-invariant ref, reproduction steps, expected and actual
+  outcomes, failing source/semantic refs and diagnostic owner;
+- result (`passed`, `failed`, `not_run`, `inconclusive` or `unavailable`), with an
+  explicit application/platform/infrastructure cause rather than one error bucket;
+- immutable UTF-8 log/test/trace/DOM/image refs with digests, redaction metadata,
+  usage and the evidence actually admitted to each model turn.
+
+Give the model a concise, actionable finding summary and retrievable complete
+details. Aggregate independent findings up to a genuine execution blocker before
+choosing a repair scope; mark unexecuted dependent checks instead of inventing
+their results. Do not silently discard diagnostics beyond a prompt item limit.
+Keep the initial Brief, accepted preservation constraints and full outputs
+recoverable without repeating all history in every repair. Retrieved page text,
+logs and external content are untrusted evidence, never execution instructions.
+
+A successful request, saved preference or retained media ID does not establish
+the requested user outcome. Verify action -> resulting UI/data -> reload/reopen
+where persistence is claimed. Settings must affect the intended presentation;
+media checks require a rendered, successfully loaded image and appropriate empty
+or failure behavior. Static substring checks are not executable binding proof.
+Context freshness follows the
+[semantic baseline contract](builder-intent-to-prototype.md#incremental-baseline-integrity);
+post-generation feedback cannot compensate for a silently obsolete input model.
+
+### Isolation And Adaptive Execution
+
+Checks run in the admitted disposable candidate with synthetic data and scoped
+artifacts. They may not read Stable records/secrets, alter immutable Trial, publish,
+or restart the user's API. Enforce file/process/network and resource boundaries in
+the execution backend, not merely in prompt prose. Explicitly admitted external
+read-only integration checks remain distinct from hermetic fixture tests; a fixture
+does not certify that an external service works.
+
+Reuse the one paired Builder preview when a browser check needs the real Client;
+hold its exact target for the check and report contention rather than replace
+another selected project. Candidate isolation does not create per-task user
+webspaces or a parallel desktop Beta. An unavailable target is missing evidence,
+not permission to test a different loaded application.
+
+Select checks by changed contracts, affected behavior and reported failures, with
+mandatory final coverage retained. This is not a fixed series of model requests,
+mandatory screenshots for non-UI edits, or a mandatory multi-agent evaluator.
+Keep stage timings and configurable tool/model/repair budgets; change them using
+measured progress and complete inputs/outputs, not to mask transport or context
+defects. Do not truncate model output merely to shorten a turn.
+
+Deduplicate in-flight checks. Reuse a deterministic result only when source, tests,
+runner/dependencies, configuration and fixture identity match and policy permits
+reuse; mutable runtime/network observations require fresh evidence. Warm runtime
+reuse must reset test state. Optimize total time/cost per independently accepted,
+regression-free change, not the number of commands or duration of one model call.
+The [evaluation pipeline](builder-evaluation-pipeline.md#feedback-loop-comparison)
+owns the matched experiment and retention contract.
+
+### Engineering References
+
+- OpenAI's [harness engineering](https://openai.com/index/harness-engineering/)
+  exposes running applications, browser observations and telemetry to Codex in an
+  isolated development environment.
+- Anthropic's [long-running agent harness](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)
+  uses browser-driven end-to-end testing to catch behavior missed by code and
+  narrow tests.
+- Anthropic's [application-development harness comparison](https://www.anthropic.com/engineering/harness-design-long-running-apps)
+  motivates measuring evaluator overhead and adapting the loop to task/model
+  capability rather than assuming every extra review improves the result.
+
+These are engineering inputs, not AdaOS performance guarantees, provider
+dependencies or permission to copy domain-specific evaluation solutions into Core.
+
+## Execution Contention
+
+Current local admission allows one active implementation task per executor node.
+A second project's session can exist but its worker observes `node_busy` and waits
+for its own task; this is not a qualified FIFO queue or independent parallel Codex
+execution. Same-project duplicate admission is idempotent; conflicting active work
+is rejected. Project focus never retargets an admitted task.
+
+The target supported path exposes waiting versus running, the responsible task,
+elapsed wait and recovery/cancellation without resubmission. Qualify two-project
+contention, process restart and exact-task resumption. Executor release alone does
+not serialize all finalization: protect same-project source application/checkpoints
+and shared preview with their existing identity/generation guards. Never infer
+whole-pipeline serialization from a process-local worker lock. Multi-node queues,
+parallel previews and fair scheduling remain separately deferred/conditional work.
+
 ## Model Selection And Accounting
 
 Prototype and Automation have separate model preferences. Codex selection is
@@ -136,6 +274,10 @@ Worker completion is not the terminal Automation state. The session remains
 4. rematerializes the paired DEV scenario.
 
 Only then does it become `completed` as an implementation/finalization result.
+Component Forge receipts and local composition reservation do not certify the
+separate full-project DEV checkpoint required on stage acceptance. Its target
+hook and recovery semantics are owned by
+[SDK-04](builder-sdk-boundary.md#roadmap-and-checklist).
 This does not certify user outcomes, installed authorization or Trial/release
 acceptance. The frozen Prototype, declared implementation scope and independent
 HTTP/browser evidence remain separate gates. An unconfirmed checkpoint becomes a
@@ -175,7 +317,7 @@ singular compatibility alias.
 - execution is the bounded local worker; remote isolated dev-node dispatch is
   the compatible target, not part of this slice;
 - one implementation task may be active for a project at a time;
-- cancellation, retry policy controls, diff review, staging, and activation are
+- user-facing cancellation/retry policy controls, diff review, staging, and activation are
   intentionally not invented in the skill before their core contracts exist;
 - the projection is a backend contract; the final Builder Automation screen
   may compose it with chat, artifacts, tests, and dev-preview status.
