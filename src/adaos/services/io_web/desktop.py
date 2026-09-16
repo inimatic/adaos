@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -659,6 +660,44 @@ class WebDesktopService:
         if not has_overlay:
             return []
         return items
+
+    def get_icon_media(self, webspace_id: Optional[str] = None) -> Dict[str, Any]:
+        webspace = self._resolve_webspace(webspace_id)
+        return _clone_json_dict(workspace_index.get_workspace_desktop_overlay(webspace).get("iconMediaOverrides"))
+
+    async def set_icon_media(self, item_id: str, media: Optional[Dict[str, Any]], webspace_id: Optional[str] = None) -> None:
+        webspace = self._resolve_webspace(webspace_id)
+        if workspace_index.get_workspace(webspace) is None:
+            raise ValueError("Desktop Webspace does not exist")
+        if not item_id or len(item_id) > 240 or item_id in {"__proto__", "constructor", "prototype"}:
+            raise ValueError("A bounded exact catalog item id is required")
+        if media is not None:
+            if (set(media) != {"path", "mime", "sha256"}
+                    or not re.fullmatch(r"/media/files/content/[A-Za-z0-9_.-]+\.(png|jpg|jpeg|webp)", str(media.get("path", "")))
+                    or media.get("mime") not in {"image/png", "image/jpeg", "image/webp"}
+                    or not re.fullmatch(r"[a-f0-9]{64}", str(media.get("sha256", "")))):
+                raise ValueError("A digest-bound local raster media descriptor is required")
+        overlay = workspace_index.get_workspace_desktop_overlay(webspace)
+        overrides = _clone_json_dict(overlay.get("iconMediaOverrides"))
+        if media is None:
+            overrides.pop(item_id, None)
+        else:
+            overrides[item_id] = _clone_json_dict(media)
+        overlay["iconMediaOverrides"] = overrides
+        workspace_index.set_workspace_desktop_overlay(webspace, overlay)
+
+        def apply(doc: Any, txn: Any) -> None:
+            data = doc.get_map("data")
+            desktop = _coerce_dict(data.get("desktop") or {})
+            desktop["iconMediaOverrides"] = overrides
+            _set_json_map_value(data, txn, "desktop", desktop)
+
+        mutate_live_room(webspace, apply, root_names=["data"], source="io_web.desktop",
+                         owner="core:desktop", channel="core.desktop.live_room")
+        async with _desktop_async_write_meta():
+            async with async_get_ydoc(webspace) as doc:
+                with doc.begin_transaction() as txn:
+                    apply(doc, txn)
 
     async def get_hidden_sections_async(self, webspace_id: Optional[str] = None) -> List[str]:
         webspace = self._resolve_webspace(webspace_id)

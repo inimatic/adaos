@@ -1736,3 +1736,23 @@ read-only public-tool checks. Private comparisons again retain all three user
 records and all three settings, with no exported values. BIP-28 now records the
 completed local subset as partial rather than leaving the whole item blocked;
 broader delivery, successive Beta loss consent and common acceptance remain open.
+
+### 2026-09-16: Local Raster Desktop Icon
+
+The previously approved Reading List PNG is attached to its exact desktop item
+as a persistent Webspace appearance override. The Stable 0.1.8 release and its
+source remain unchanged; private comparisons retain three user records and
+three settings. No new provider generation was requested. This is not portable
+About publication or evidence of credential transfer.
+
+The first browser checks exposed two integration defects: the shared resolver
+cache omitted the new overlay, and hiding an unloaded image with `display:none`
+prevented lazy-load observation. Both are corrected without disabling caching
+or lazy loading. Shared-cache isolation is regression-tested. Review 04 under
+`e2e/artifacts/builder/desktop-raster-icon-20260916` passes on 1440/390px with
+nonblank pixels, fixed 48px contain geometry, vector fallback and reload.
+Screenshots were visually inspected. The preference survives API restart
+without reinstallation. Focused suites pass 156 Client and 105 Core tests;
+the reload fixture now supplies its existing runtime paths contract rather
+than weakening Trial selection. CG-06 crop/apply and release packaging remain
+open.

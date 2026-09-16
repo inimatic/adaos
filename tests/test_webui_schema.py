@@ -12,6 +12,18 @@ def _load_schema() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize("definition", ["widgetConfig", "widgetCatalogEntry"])
+@pytest.mark.parametrize("media,valid", [
+    ("/assets/icon.png", True), ({"path": "/media/files/content/icon.png"}, True),
+    (None, True), (True, False), (42, False), ([], False),
+])
+def test_collection_grid_icon_media_overrides(definition, media, valid):
+    schema = _load_schema()
+    validator = Draft202012Validator({"$ref": f"#/$defs/{definition}", "$defs": schema["$defs"]})
+    assert validator.is_valid({"id": "tiles", "type": "collection.grid", "area": "main",
+                               "inputs": {"iconMediaOverrides": {"item": media}}}) is valid
+
+
 @pytest.mark.parametrize("value,valid", [(True, True), (False, True), ("$state.archived", True),
                                          ("$state.filters.archived", True), ("false", False), (1, False), ({}, False)])
 def test_standalone_toggle_preserves_supported_state_binding(value, valid):

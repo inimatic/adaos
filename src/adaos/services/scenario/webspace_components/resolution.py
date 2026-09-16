@@ -190,6 +190,7 @@ class WebspaceResolutionService:
                         "topbar": list(getattr(row, "topbar_overlay", []) or []),
                         "pageSchema": operations.coerce_dict(getattr(row, "page_schema_overlay", {}) or {}),
                         "iconOrder": list(getattr(row, "icon_order_overlay", []) or []),
+                        "iconMediaOverrides": operations.coerce_dict(getattr(row, "desktop_overlay", {}).get("iconMediaOverrides") or {}),
                         "widgetOrder": list(getattr(row, "widget_order_overlay", []) or []),
                         "hiddenSections": list(getattr(row, "hidden_sections_overlay", []) or []),
                         "source": "workspace_manifest_overlay",
@@ -805,6 +806,7 @@ class WebspaceResolutionService:
             merged_widgets,
         )
         desktop_config["iconOrder"] = list(overlay_icon_order)
+        desktop_config["iconMediaOverrides"] = operations.coerce_dict((inputs.overlay_snapshot or {}).get("iconMediaOverrides") or {})
         desktop_config["widgetOrder"] = list(overlay_widget_order)
         desktop_config["hiddenSections"] = list(overlay_hidden_sections)
         app_with_modals["desktop"] = desktop_config
@@ -840,6 +842,7 @@ class WebspaceResolutionService:
         desktop_next["pageSchema"] = operations.coerce_dict(desktop_config.get("pageSchema") or {})
         desktop_next["pinnedWidgets"] = list(desktop_config.get("pinnedWidgets") or [])
         desktop_next["iconOrder"] = list(desktop_config.get("iconOrder") or [])
+        desktop_next["iconMediaOverrides"] = operations.coerce_dict(desktop_config.get("iconMediaOverrides") or {})
         desktop_next["widgetOrder"] = list(desktop_config.get("widgetOrder") or [])
         desktop_next["hiddenSections"] = list(desktop_config.get("hiddenSections") or [])
 

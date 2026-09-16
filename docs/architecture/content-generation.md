@@ -99,6 +99,24 @@ publication boundary. Permissions may later be projected into About through
 their own authoritative contracts; they must not be inferred from description
 text or an uploaded asset.
 
+### Local Desktop Appearance
+
+A user may explicitly attach an existing raster image to a desktop tile before
+the portable About pipeline is complete. This is a Webspace presentation
+preference, not a modification of Stable/Trial source or its release identity.
+`web.desktop.set_icon_media` accepts a local raster media descriptor with SHA-256;
+`None` removes that exact override. It cannot create a missing Webspace.
+The authoritative workspace overlay retains `desktop.iconMediaOverrides` by
+exact catalog item id. Rebuilds project it into `data/desktop`; they do not copy
+the current Application's page schema into the home desktop.
+
+Shared `collection.grid` items accept `iconMedia` through the existing media
+resolver and retain `icon` as their vector fallback. Optional widget-local
+`inputs.iconMediaOverrides` uses the same exact-id selection. Media is contained
+in a fixed 48px square without changing tile geometry; failed media restores the
+vector. Local references do not establish remote asset portability or release
+integrity; those remain part of CG-06.
+
 ## Engineering Basis
 
 Use provider-native constrained output and explicit refusal handling as described

@@ -3538,6 +3538,7 @@ def _apply_webspace_overlay_to_resolved(
     )
     for key, normalizer in (
         ("iconOrder", _dedupe_str_list),
+        ("iconMediaOverrides", _coerce_dict),
         ("widgetOrder", _dedupe_str_list),
         ("hiddenSections", _dedupe_str_list),
     ):
@@ -3553,6 +3554,7 @@ def _apply_webspace_overlay_to_resolved(
         "pageSchema",
         "pinnedWidgets",
         "iconOrder",
+        "iconMediaOverrides",
         "widgetOrder",
         "hiddenSections",
     ):

@@ -116,7 +116,7 @@ def _patch_reload_dependencies(
         def publish(self, _event) -> None:
             return None
 
-    fake_ctx = SimpleNamespace(bus=_Bus())
+    fake_ctx = SimpleNamespace(bus=_Bus(), paths=get_ctx().paths)
     fake_state = {"ui": _FakeMap()}
     if current_scenario:
         fake_state["ui"]["current_scenario"] = current_scenario

@@ -11,6 +11,8 @@ directly.
 
 from .desktop import (
     desktop_get_installed,
+    desktop_get_icon_media,
+    desktop_set_icon_media,
     desktop_get_snapshot,
     desktop_get_pinned_widgets,
     desktop_get_topbar,
@@ -76,6 +78,8 @@ __all__ = [
     "application_set_pinned_panels",
     "application_set_snapshot",
     "desktop_get_installed",
+    "desktop_get_icon_media",
+    "desktop_set_icon_media",
     "desktop_get_snapshot",
     "desktop_set_installed",
     "desktop_get_pinned_widgets",

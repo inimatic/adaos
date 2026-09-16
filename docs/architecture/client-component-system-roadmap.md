@@ -610,6 +610,13 @@ declared locale rather than changing a user's browser preference implicitly.
   surface using authenticated local/routed endpoints, without per-Application
   URL conversion. Scope descriptor caches to the selected hub route. Ten focused
   Client tests and About's wide/compact existing-draft pixel/reopen checks pass.
+- [x] `[must]` Support raster collection icons with a vector fallback and fixed
+  geometry. Persist explicit local desktop overrides independently of Application
+  releases; qualify shared-cache Webspace isolation and restart/rebuild retention.
+  The focused suites pass 156 Client and 105 Core tests. Browser evidence in
+  `e2e/artifacts/builder/desktop-raster-icon-20260916/review-04` passes nonblank
+  image, fallback and reload checks at 1440/390px. This local appearance option
+  does not close portable About asset publication.
 - [ ] `[must]` Qualify the generic crop/position/zoom draft and explicit apply
   boundary described in `content-generation.md` (CG-06). An image that renders
   correctly is not proof of portable Application asset publication.

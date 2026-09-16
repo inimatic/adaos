@@ -3604,6 +3604,11 @@ class WebspaceDesktopUpdateRequest(BaseModel):
     hiddenSections: list[str] | None = None
 
 
+class WebspaceIconMediaRequest(BaseModel):
+    item_id: str = Field(..., min_length=1, max_length=240)
+    media: dict[str, Any] | None = None
+
+
 class InfrastateActionRequest(BaseModel):
     id: str = Field(..., min_length=1)
     name: str | None = None
@@ -6239,6 +6244,25 @@ async def node_yjs_desktop_state(webspace_id: str) -> dict[str, Any]:
             webspace_id=target_webspace_id,
         ),
     }
+
+
+@router.get("/yjs/webspaces/{webspace_id}/desktop/icon-media", dependencies=[Depends(require_token)])
+async def node_yjs_desktop_icon_media(webspace_id: str) -> dict[str, Any]:
+    target = _coerce_node_webspace_id(webspace_id)
+    return {"ok": True, "webspace_id": target, "items": WebDesktopService().get_icon_media(target)}
+
+
+@router.put("/yjs/webspaces/{webspace_id}/desktop/icon-media", dependencies=[Depends(require_token)])
+async def node_yjs_set_desktop_icon_media(webspace_id: str, payload: WebspaceIconMediaRequest) -> dict[str, Any]:
+    target = _coerce_node_webspace_id(webspace_id)
+    if str(load_config().role or "").strip().lower() != "hub":
+        return {"ok": False, "accepted": False, "error": "hub_role_required"}
+    try:
+        await WebDesktopService().set_icon_media(payload.item_id, payload.media, target)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True, "accepted": True, "webspace_id": target,
+            "items": WebDesktopService().get_icon_media(target)}
 
 
 @router.get("/yjs/webspaces/{webspace_id}/catalog/{kind}", dependencies=[Depends(require_token)])

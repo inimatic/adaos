@@ -827,6 +827,17 @@
       }
     },
 
+    "collectionGridInputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "iconMediaOverrides": {
+          "type": "object",
+          "description": "Optional widget-scoped media overrides by exact item id. Values use the shared browser-media URL/descriptor contract; null restores the vector fallback. Source items may supply iconMedia directly. This is presentation, not a published Application asset.",
+          "additionalProperties": { "type": ["string", "object", "null"] }
+        }
+      }
+    },
     "widgetCatalogEntry": {
       "type": "object",
       "additionalProperties": true,
@@ -848,6 +859,10 @@
         "interaction": { "$ref": "#/$defs/interactionBehavior" }
       },
       "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "collection.grid" } } },
+          "then": { "properties": { "inputs": { "$ref": "#/$defs/collectionGridInputs" } } }
+        },
         {
           "if": { "properties": { "type": { "const": "visual.frameViewer" } } },
           "then": {
@@ -1247,6 +1262,10 @@
         "interaction": { "$ref": "#/$defs/interactionBehavior" }
       },
       "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "collection.grid" } } },
+          "then": { "properties": { "inputs": { "$ref": "#/$defs/collectionGridInputs" } } }
+        },
         {
           "if": { "properties": { "type": { "const": "visual.frameViewer" } } },
           "then": {

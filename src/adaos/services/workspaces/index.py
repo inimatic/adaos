@@ -333,6 +333,8 @@ def _normalize_ui_overlay_payload(value: Any) -> dict[str, Any]:
         desktop["widgetOrder"] = widget_order
     if has_hidden_sections or hidden_sections:
         desktop["hiddenSections"] = hidden_sections
+    if "iconMediaOverrides" in desktop_raw:
+        desktop["iconMediaOverrides"] = _clone_overlay_json_dict(desktop_raw["iconMediaOverrides"])
     if desktop:
         overlay["desktop"] = desktop
     workspace_overlay: dict[str, Any] = {}
@@ -507,6 +509,8 @@ class WebspaceManifest:
             out["widgetOrder"] = _clone_overlay_text_list(desktop.get("widgetOrder"))
         if "hiddenSections" in desktop:
             out["hiddenSections"] = _clone_overlay_text_list(desktop.get("hiddenSections"))
+        if "iconMediaOverrides" in desktop:
+            out["iconMediaOverrides"] = _clone_overlay_json_dict(desktop["iconMediaOverrides"])
         return out
 
     @property

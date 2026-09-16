@@ -6,6 +6,16 @@ from adaos.sdk.core.decorators import tool
 from adaos.services.io_web.desktop import WebDesktopService, WebDesktopInstalled, WebDesktopSnapshot
 
 
+@tool("web.desktop.set_icon_media", summary="Set or clear a local raster icon for one desktop catalog item; does not modify an Application release.", stability="experimental")
+async def desktop_set_icon_media(item_id: str, media: Optional[dict[str, Any]], webspace_id: Optional[str] = None) -> None:
+    await WebDesktopService().set_icon_media(item_id, media, webspace_id)
+
+
+@tool("web.desktop.get_icon_media", summary="Read persisted local desktop icon media overrides.", stability="experimental")
+def desktop_get_icon_media(webspace_id: Optional[str] = None) -> dict[str, Any]:
+    return WebDesktopService().get_icon_media(webspace_id)
+
+
 @tool(
     "web.desktop.toggle_install",
     summary="Install or uninstall a desktop catalog item for a webspace.",
