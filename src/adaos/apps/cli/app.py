@@ -445,7 +445,7 @@ from adaos.apps.cli.commands import secret
 from adaos.apps.cli.commands import sandbox as sandbox_cmd
 from adaos.apps.cli.commands import setup as setup_cmd
 
-app = typer.Typer(help=_("cli.help"))
+app = typer.Typer(help=_("cli.help"), pretty_exceptions_show_locals=False)
 
 # -------- helpers --------
 
