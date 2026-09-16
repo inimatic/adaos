@@ -6358,7 +6358,10 @@ Report missing/ambiguous contracts, conflicting context, SDK cost or validation 
 After an actual method/resource attempt only, add `application_trace`
 (`adaos.development.application_trace.v1`): `contract_ref`, `operation_id`,
 redacted `input_summary`, `expected_behavior`, `observed_behavior`,
-`validation_result`, optional `user_response`, bounded `trace_refs`.
+`validation_result` using exactly `passed`, `failed`, `unknown`, or `not_run`,
+optional `user_response`, and bounded `trace_refs` objects shaped as
+`{"type":"trace","ref":"trace-id"}`. Do not put prose in
+`validation_result` and do not use bare strings in `trace_refs`.
 Documentation inspection is not an execution trace. Never include secrets.
 
 For an unresolved contract, use the same schema with `blocking:true` and name

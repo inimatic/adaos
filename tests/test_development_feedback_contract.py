@@ -16,6 +16,22 @@ def test_feedback_normalizes_unambiguous_sdk_symbols_only(ref):
     assert "kind:identifier" in development_feedback_model_rules()["target_refs"]
 
 
+def test_feedback_model_rules_expose_complete_application_trace_shape():
+    trace = development_feedback_model_rules()["application_trace"]
+
+    assert trace["schema"] == "adaos.development.application_trace.v1"
+    assert trace["validation_result"] == ["passed", "failed", "unknown", "not_run"]
+    assert trace["trace_refs"]["item"] == {
+        "type": "trace reference kind",
+        "ref": "bounded reference",
+    }
+    assert set(trace["required"]) >= {
+        "contract_ref",
+        "observed_behavior",
+        "validation_result",
+    }
+
+
 @pytest.mark.parametrize("ref", ["access.require", "adaos.sdk.", "adaos.sdk.access.require()", "adaos.sdk.access require"])
 def test_feedback_rejects_ambiguous_bare_references(ref):
     envelope = {"schema": "adaos.development_feedback_output.v1", "items": [
