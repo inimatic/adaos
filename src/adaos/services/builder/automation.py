@@ -6774,6 +6774,26 @@ class BuilderAutomationService:
                 (self.dev_scenarios_root if kind == "scenario" else self.dev_skills_root) / project_id,
             )
         ]
+        application_project_ref = self._context_project_ref(
+            session=session,
+            component_ref=f"{kind}:{project_id}",
+            fallback_project_id=project_id,
+        )
+        application_project_id = (
+            application_project_ref.split(":", 1)[1]
+            if application_project_ref.startswith("project:")
+            else ""
+        )
+        application_project_root = (
+            self.dev_scenarios_root.parent / "projects" / application_project_id
+            if application_project_id
+            else None
+        )
+        if application_project_root is not None and application_project_root.is_dir():
+            sparse_paths.append(f"projects/{application_project_id}/")
+            source_artifacts.append(
+                ("project", application_project_id, application_project_root)
+            )
         if kind == "scenario":
             for skill_id in companions:
                 sparse_paths.append(f"skills/{skill_id}/")
@@ -6866,7 +6886,11 @@ class BuilderAutomationService:
             for ref in issue.get("semantic_refs") or []
             if str(ref).strip()
         ]
-        required_context_facets = ["data_policy", "execution_authority"]
+        required_context_facets = [
+            "application_permissions",
+            "data_policy",
+            "execution_authority",
+        ]
         if semantic_refs:
             required_context_facets = [
                 "target_structure",
@@ -6878,6 +6902,7 @@ class BuilderAutomationService:
             kind,
             project_id,
             execution_phase="automation",
+            application_project_ref=application_project_ref,
             allowed_paths=[
                 *sparse_paths,
                 "prompt_state.json",

@@ -31,6 +31,7 @@ from adaos.services.skill_factory_worker import (
     CodexRunResult,
     LocalSkillFactoryWorker,
     SubprocessCodexExecutor,
+    _candidate_check_report,
     _codex_budget_exceeded_receipt,
     _codex_failure_detail,
     _codex_budget_observed_tokens,
@@ -59,10 +60,103 @@ def test_validation_repair_leads_with_failures_and_keeps_full_reference():
     assert prompt.startswith("# Deterministic validation repair")
     assert prompt.index("ordered steps were collapsed") < prompt.index(original)
     assert prompt.count(original) == 1
-    assert "Do not execute tests, validation, status or diff" in prompt
+    assert "candidate checks are diagnostic rather than acceptance" in prompt
     assert "Skill tests run in that skill package alone" in prompt
     assert "not repeat initial implementation" in prompt
     assert "weakening an established business invariant" in prompt
+
+
+def test_candidate_check_report_records_tests_without_claiming_acceptance() -> None:
+    events = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "command_execution",
+                        "command": "python -m pytest tests/test_demo.py -q",
+                        "aggregated_output": "1 passed",
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "command_execution",
+                        "command": "Get-Content skill.yaml",
+                        "aggregated_output": "name: demo",
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            ),
+        ]
+    )
+
+    report = _candidate_check_report(events, attempt=0)
+
+    assert report["authority"] == "candidate_diagnostic_only"
+    assert report["attempted"] is True
+    assert report["ok"] is True
+    assert [item["kind"] for item in report["checks"]] == ["test"]
+    assert report["checks"][0]["output_digest"].startswith("sha256:")
+
+
+def test_trusted_worker_requires_project_permissions_to_match_skill_capabilities(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    project = workspace / "projects" / "chores"
+    skill = workspace / "skills" / "chores_skill"
+    project.mkdir(parents=True)
+    skill.mkdir(parents=True)
+    (project / "project.yaml").write_text(
+        """id: chores
+components:
+  owned:
+    - ref: scenario:chores
+    - ref: skill:chores_skill
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required: []
+  optional: []
+""",
+        encoding="utf-8",
+    )
+    (skill / "skill.yaml").write_text(
+        "name: chores_skill\nversion: 0.1.0\ncapabilities: [storage.relational]\n",
+        encoding="utf-8",
+    )
+    assignment = {
+        "target": {"type": "scenario", "id": "chores"},
+        "realize_request": {
+            "artifacts": {
+                "context_packet": {
+                    "facets": {
+                        "application_permissions": {
+                            "project_ref": "project:chores",
+                            "manifest_ref": "projects/chores/project.yaml",
+                        }
+                    }
+                }
+            }
+        },
+    }
+    checks: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_application_permissions(
+        assignment, workspace, checks, errors
+    )
+
+    assert errors == [
+        "projects/chores/project.yaml: owned skill capabilities are not declared in permission_profile: storage.relational"
+    ]
+    assert checks[1]["kind"] == "application_permissions.declared_vs_inferred"
+    assert checks[1]["ok"] is False
 
 
 def test_codex_jsonl_usage_accepts_reasoning_output_tokens(tmp_path: Path) -> None:
@@ -856,6 +950,63 @@ def test_projected_snapshot_activation_preserves_owner_artifacts(
         encoding="utf-8"
     ) == "owner evidence"
     assert (skill / "prompt_state.json").is_file()
+
+
+def test_projected_snapshot_activation_syncs_owning_project_manifest(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    dev_skills = tmp_path / "dev" / "skills"
+    dev_scenarios = tmp_path / "dev" / "scenarios"
+    skill = dev_skills / "chores_skill"
+    project = tmp_path / "dev" / "projects" / "chores"
+    skill.mkdir(parents=True)
+    project.mkdir(parents=True)
+    (skill / "skill.yaml").write_text(
+        "name: chores_skill\nversion: 0.1.0\n", encoding="utf-8"
+    )
+    (project / "project.yaml").write_text(
+        "id: chores\nversion: 0.1.0\n", encoding="utf-8"
+    )
+    snapshot = capture_source_snapshot(
+        state_dir=state_dir,
+        artifacts=(
+            ("skill", "chores_skill", skill),
+            ("project", "chores", project),
+        ),
+        created_at="2026-09-16T00:00:00Z",
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    materialize_source_snapshot(
+        state_dir=state_dir,
+        reference=snapshot,
+        workspace=workspace,
+    )
+    (workspace / "projects" / "chores" / "project.yaml").write_text(
+        "id: chores\nversion: 0.1.0\npermission_profile:\n  schema: adaos.application.permission_profile.v1\n  required: []\n  optional: []\n",
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=state_dir,
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=dev_scenarios,
+        runs_root=tmp_path / "runs",
+    )
+
+    worker._sync_artifacts(
+        {
+            "target": {"type": "skill", "id": "chores_skill"},
+            "forge": {
+                "source_snapshot": snapshot,
+                "sparse_paths": ["skills/chores_skill/", "projects/chores/"],
+            },
+        },
+        workspace,
+    )
+
+    assert "permission_profile" in (project / "project.yaml").read_text(encoding="utf-8")
 
 
 def test_filewise_artifact_activation_rolls_back_all_sources(
@@ -2054,7 +2205,7 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "at most 120 lines and 8192 bytes" in prompt
     assert "Never use `rg -A`, `rg -B`, or `rg -C`" in prompt
     assert "at most 400 source lines before the first edit" in prompt
-    assert "Do not run tests or validation commands in the Codex turn" in prompt
+    assert "trusted worker reruns" in prompt
     assert "same-skill WebUI `callSkill`" in prompt
     assert "reconcile the exact name across `webui.json`, `skill.yaml` `tools`" in prompt
     assert "`exports.tools`" in prompt
@@ -2402,8 +2553,8 @@ def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_pat
     assert len(failure["details"]["development_feedback_refs"]) == 1
     assert len(model_calls) == (2 if during_repair else 1)
     if during_repair:
-        assert "Do not execute tests, validation, status or diff commands" in model_calls[-1]
-        assert "the trusted worker reruns checks" in model_calls[-1]
+        assert "candidate checks are diagnostic rather than acceptance" in model_calls[-1]
+        assert "trusted worker reruns authoritative checks" in model_calls[-1]
 
 
 def test_worker_links_final_validator_feedback_to_failed_task(
@@ -3112,7 +3263,8 @@ def test_fully_qualified_surgical_ui_prompt_forbids_model_discovery(
 
     assert packet["repair_target_context"]["coverage"]["complete"] is True
     assert "Apply the exact patch directly in one file-change operation" in prompt
-    assert "Do not run discovery, source-read, diff, status, test, or validation commands" in prompt
+    assert "Do not repeat discovery" in prompt
+    assert "one named focused hermetic check" in prompt
     assert "Locate one exact target ID" not in prompt
 
 
@@ -4678,7 +4830,8 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     assert "same schema with `blocking:true`" in prompt
     from adaos.domain.development_feedback import development_feedback_model_rules
     assert json.dumps(development_feedback_model_rules(), separators=(",", ":")) in prompt
-    assert "Do not run tests, validation, status, or diff commands" in prompt
+    assert "Candidate checks are diagnostic" in prompt
+    assert "application_permissions context facet" in prompt
     assert "every textual `Get-Content`" in prompt
     assert "`-Encoding UTF8`" in prompt
     assert "UTF-8" in prompt
@@ -4688,7 +4841,7 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     assert "workflow.json validates" in prompt
     assert "complete TransitionDescriptor contract" in prompt
     assert "skill_data_root()" in prompt
-    assert "test allowance is 180 seconds" in prompt
+    assert "within 180 seconds" in prompt
     assert "install-strict" in prompt
     assert "trusted worker owns finalization" in prompt
     assert "ADAOS_TASK_RUNTIME_DIR" in prompt

@@ -4557,6 +4557,7 @@ class BuilderWorkflowService:
         object_type: str,
         object_id: str,
         *,
+        application_project_ref: str | None = None,
         allowed_paths: list[str] | tuple[str, ...] | None = None,
         instruction_refs: list[str] | tuple[str, ...] | None = None,
         conversation_context: Mapping[str, Any] | None = None,
@@ -5163,6 +5164,9 @@ class BuilderWorkflowService:
                         }
                     )
             from adaos.services.builder.repair import BuilderRepairService
+            from adaos.services.builder.application_permissions import (
+                application_permissions_context,
+            )
             from adaos.services.ui_capabilities import selected_ui_capabilities
 
             repair_context = BuilderRepairService(
@@ -5189,6 +5193,12 @@ class BuilderWorkflowService:
                 "conversational_definition": conversational_definition,
                 "executable_prototype": executable_prototype,
                 "repair_context": repair_context,
+                "application_permissions": application_permissions_context(
+                    component_ref=f"{kind}:{project_id}",
+                    requested_project_ref=application_project_ref,
+                    dev_projects_root=Path(self.dev_projects_root),
+                    dev_skills_root=Path(self.dev_skills_root),
+                ),
                 "execution_authority": {
                     "status": "present" if selected_paths else "missing",
                     "allowed_paths": selected_paths,
@@ -5228,6 +5238,7 @@ class BuilderWorkflowService:
                     "manifest_ref": manifest_name,
                     "manifest_version": str(manifest.get("version") or "").strip() or None,
                     "manifest_digest": f"sha256:{hashlib.sha256(manifest_raw).hexdigest()}",
+                    "application_project_ref": str(application_project_ref or "").strip() or None,
                 },
                 "change": {
                     "change_id": change["change_id"],

@@ -120,6 +120,79 @@ def test_requested_automation_context_precedes_transition_without_reusing_mock_m
     assert projected["facets"]["execution_authority"]["observed_phase"] == "prototype"
 
 
+def test_automation_context_exposes_project_permission_and_role_contract(
+    service: BuilderWorkflowService,
+) -> None:
+    from adaos.services.skill_factory_worker import context_packet_prompt_projection
+
+    project_root = service.dev_projects_root / "recipes_app"
+    project_root.mkdir(parents=True)
+    (project_root / "project.yaml").write_text(
+        """schema: adaos.project.v1
+kind: project
+id: recipes_app
+version: 0.1.0
+components:
+  owned:
+    - ref: scenario:recipes
+      role: primary
+    - ref: skill:recipes_skill
+      role: implementation
+  dependencies: []
+entrypoints:
+  - id: main
+    presentation: scenario:recipes
+    default: true
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: storage.relational
+      purpose: Store recipes owned by the application.
+    - id: network.read
+      purpose: Search a public recipe catalog.
+  optional: []
+application_roles:
+  - id: viewer
+    title: Viewer
+    grants: [recipes.read]
+    assignable_to: [owner, member, child, guest]
+    default_for: {guest: viewer}
+    requires_permissions: [network.read]
+""",
+        encoding="utf-8",
+    )
+    skill_root = service.dev_skills_root / "recipes_skill"
+    skill_root.mkdir()
+    (skill_root / "skill.yaml").write_text(
+        """name: recipes_skill
+version: 0.1.0
+capabilities:
+  - storage.relational
+  - network.read
+""",
+        encoding="utf-8",
+    )
+    _plan(service, "widget:recipe-title")
+
+    packet = service.build_context_packet(
+        "scenario",
+        "recipes",
+        execution_phase="automation",
+        application_project_ref="project:recipes_app",
+        required_facets=["application_permissions"],
+        enforce_context_coverage=True,
+    )
+
+    permissions = packet["facets"]["application_permissions"]
+    assert permissions["declaration_status"] == "present"
+    assert permissions["statically_inferred"] == ["network.read", "storage.relational"]
+    assert permissions["undeclared_inferred"] == []
+    assert permissions["role_matrix"]["guest"] == ["viewer"]
+    projected = context_packet_prompt_projection(packet)["facets"]["application_permissions"]
+    assert projected["manifest_ref"] == "projects/recipes_app/project.yaml"
+    assert projected["roles"][0]["id"] == "viewer"
+
+
 def test_unknown_context_phase_is_rejected(service):
     _plan(service, "widget:recipe-title")
     with pytest.raises(BuilderWorkflowError, match="execution context phase"):

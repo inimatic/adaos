@@ -1336,6 +1336,27 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
                 for key in ("status", "profile_id", "mode", "mapping_count", "missing", "ready")
                 if mapping.get(key) not in (None, "", [], {})
             }
+        elif facet_name == "application_permissions":
+            for key in (
+                "project_ref",
+                "manifest_ref",
+                "manifest_digest",
+                "declaration_status",
+                "profile_digest",
+                "profile",
+                "roles",
+                "role_matrix",
+                "declared",
+                "statically_inferred",
+                "undeclared_inferred",
+                "undeclared_high_risk",
+                "unused_declared",
+                "inference_sources",
+                "authoring_requirements",
+                "diagnostics",
+            ):
+                if facet.get(key) not in (None, "", [], {}):
+                    common[key] = copy.deepcopy(facet[key])
         else:
             for key in ("missing", "ambiguous", "diagnostics", "metrics"):
                 if facet.get(key) not in (None, "", [], {}):
@@ -2888,14 +2909,78 @@ def _codex_failure_detail(result: CodexRunResult, *, limit: int = 2000) -> str:
     return detail[-max(200, int(limit)) :]
 
 
+def _candidate_check_report(events: str, *, attempt: int) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    for line in str(events or "").splitlines():
+        try:
+            event = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(event, Mapping) or event.get("type") != "item.completed":
+            continue
+        item = event.get("item")
+        if not isinstance(item, Mapping) or item.get("type") != "command_execution":
+            continue
+        command = str(item.get("command") or "").strip()
+        lowered = command.lower()
+        kind = None
+        if "-m pytest" in lowered or re.search(r"(^|[\s'\";&])pytest(?:\.exe)?([\s'\";&]|$)", lowered):
+            kind = "test"
+        elif any(
+            marker in lowered
+            for marker in (
+                "-m compileall",
+                "-m py_compile",
+                " install-strict",
+                " validate-scenario",
+                " validate_skill",
+                " validate-skill",
+                " jsonschema",
+            )
+        ):
+            kind = "validation"
+        if kind is None:
+            continue
+        output = str(item.get("aggregated_output") or "")
+        exit_code = item.get("exit_code")
+        try:
+            parsed_exit_code = int(exit_code)
+        except (TypeError, ValueError):
+            parsed_exit_code = None
+        status = str(item.get("status") or "").strip().lower()
+        ok = parsed_exit_code == 0 and status in {"completed", "success", "succeeded"}
+        checks.append(
+            {
+                "kind": kind,
+                "command": command[:2000],
+                "status": status or None,
+                "exit_code": parsed_exit_code,
+                "ok": ok,
+                "output_bytes": len(output.encode("utf-8")),
+                "output_digest": f"sha256:{hashlib.sha256(output.encode('utf-8')).hexdigest()}",
+                "failure_excerpt": output[-1200:] if not ok and output else None,
+            }
+        )
+    return {
+        "schema": "adaos.skill_factory.candidate_check_report.v1",
+        "attempt": int(attempt),
+        "authority": "candidate_diagnostic_only",
+        "attempted": bool(checks),
+        "ok": bool(checks) and all(item["ok"] for item in checks),
+        "checks": checks[:40],
+    }
+
+
 def _deterministic_repair_prompt(prompt: str, errors: list[str]) -> str:
     return (
         "# Deterministic validation repair\n\n"
         "Current phase: repair the reported failures in the existing isolated candidate, not repeat initial implementation. "
         "Keep already working changes. Read the failing source/test locations first; consult the admitted reference below "
         "only for necessary contracts. Do not repeat discovery unless a reported failure requires missing information.\n\n"
-        "Fix every reported issue and add focused regression coverage. Do not execute tests, validation, status or diff commands; "
-        "the trusted worker reruns checks. Mark unexecuted checks explicitly. Do not publish, activate or change "
+        "Fix every reported issue and add focused regression coverage. Run only bounded hermetic checks relevant to the "
+        "reported failures, using ADAOS_PYTHON when Python is needed. You may inspect the scoped diff/status. The trusted "
+        "worker reruns authoritative checks, so candidate checks are diagnostic rather than acceptance. Mark unexecuted "
+        "checks explicitly. Do not publish, activate or change "
         "checkpoint-owned version/updated_at metadata.\n\n"
         "A failing new test does not authorize weakening an established business invariant. Correct contradictory synthetic "
         "fixtures without removing behavioral coverage; clarify unresolved intent. Skill tests run in that skill package alone, "
@@ -4366,8 +4451,32 @@ class LocalSkillFactoryWorker:
             evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
             evidence_root = self._task_evidence_root(output_dir)
             evidence_root.mkdir(parents=True, exist_ok=True)
+            candidate_check_reports: list[dict[str, Any]] = []
+            for path in sorted(runtime_dir.glob("candidate-checks*.json")):
+                try:
+                    value = json.loads(path.read_text(encoding="utf-8-sig"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if isinstance(value, Mapping):
+                    candidate_check_reports.append(dict(value))
+            attempted_candidate_checks = [
+                item for item in candidate_check_reports if bool(item.get("attempted"))
+            ]
+            candidate_check_summary = {
+                "schema": "adaos.skill_factory.candidate_check_summary.v1",
+                "authority": "candidate_diagnostic_only",
+                "status": (
+                    "failed"
+                    if any(not bool(item.get("ok")) for item in attempted_candidate_checks)
+                    else "passed"
+                    if attempted_candidate_checks
+                    else "not_run"
+                ),
+                "attempts": candidate_check_reports,
+            }
             (evidence_root / "changed_files.txt").write_text("\n".join(changed_paths) + "\n", encoding="utf-8")
             shutil.copy2(output_dir / "test_report.json", evidence_root / "test_report.json")
+            _write_json(evidence_root / "candidate_checks.json", candidate_check_summary)
             if root_mcp_evidence:
                 _write_json(evidence_root / "root_mcp_evidence.json", root_mcp_evidence)
             provenance = {
@@ -4389,6 +4498,7 @@ class LocalSkillFactoryWorker:
                 "root_mcp": _public_root_mcp_profile(root_mcp),
                 "root_mcp_evidence": root_mcp_evidence,
                 "continuation": continuation or None,
+                "candidate_checks": candidate_check_summary,
                 "execution_strategy": (
                     "core_capability_escalation"
                     if development_escalations
@@ -4419,6 +4529,7 @@ class LocalSkillFactoryWorker:
                     item["feedback_id"] for item in development_feedback
                 ],
                 "tests": test_report,
+                "candidate_checks": candidate_check_summary,
                 "packet": packet,
             }
             _write_json(evidence_root / "result.json", result_manifest)
@@ -4446,6 +4557,7 @@ class LocalSkillFactoryWorker:
                 "changed_paths": final_changed_paths,
                 "no_source_change": not bool(final_changed_paths),
                 "tests": {"status": "passed", "report": str(output_dir / "test_report.json")},
+                "candidate_checks": candidate_check_summary,
                 "provenance": provenance,
                 "evidence": self._evidence_manifest(evidence_root, evidence_paths),
                 "summary": codex_result.final_message.strip(),
@@ -4852,6 +4964,10 @@ class LocalSkillFactoryWorker:
             )
         if result.token_budget:
             _write_json(runtime_dir / f"codex-token-budget{suffix}.json", result.token_budget)
+        _write_json(
+            runtime_dir / f"candidate-checks{suffix}.json",
+            _candidate_check_report(result.events, attempt=attempt),
+        )
 
     def _progress(self, task_id: str, status: str, message: str) -> None:
         self.factory.report_progress(
@@ -6302,7 +6418,7 @@ when a governed Dev Ticket repair explicitly supplies its separate contract.
         if surgical_ui:
             if qualified_repair_complete:
                 required_result = """1. This is source work inside an existing AdaOS skill, not Codex skill authoring. Do not load generic skill-creator instructions.
-2. Qualified target slices cover every authorized file. Apply the exact patch directly in one file-change operation. Do not run discovery, source-read, diff, status, test, or validation commands; the trusted worker owns those checks.
+2. Qualified target slices cover every authorized file. Apply the exact patch directly in one file-change operation. Do not repeat discovery. After editing, inspect only the scoped diff and run at most one named focused hermetic check; the trusted worker owns authoritative acceptance.
 3. Apply only the requested visible UI change; do not explore AdaOS core or unrelated project files.
 4. Update only the focused regression assertion named by the acceptance checks.
 5. Do not edit manifest version/updated_at, publish, activate, or access external services.
@@ -6312,7 +6428,7 @@ when a governed Dev Ticket repair explicitly supplies its separate contract.
 2. Locate one exact target ID at a time with `rg -n --max-count 12` in one file. Every discovery command must return at most {command_output_lines} lines and {command_output_bytes} bytes. Never use `rg -A`, `rg -B`, or `rg -C` across a manifest, multiple patterns, or multiple files. Read at most one 120-line surrounding slice after each exact match, and at most {discovery_lines} source lines before the first edit. Narrow a query instead of printing more output.
 3. Apply only the requested visible UI change; do not explore AdaOS core or unrelated project files.
 4. Add or update only the focused regression assertion named by the acceptance checks.
-5. Do not run tests or validation commands in the Codex turn. Stop after the diff; the trusted worker runs package validation and records evidence.
+5. Inspect the scoped diff and run only the named focused hermetic check. The trusted worker reruns package validation and records authoritative evidence.
 6. Do not edit manifest version/updated_at, publish, activate, or access external services.
 7. Stop immediately after the requested diff and focused check succeed."""
         elif bounded_repair:
@@ -6321,7 +6437,7 @@ when a governed Dev Ticket repair explicitly supplies its separate contract.
 2. Qualified source slices cover every authorized file. Use them as the first and authoritative inspection context. Do not rediscover structures already shown there. If one acceptance edit point is absent, run at most one narrow source-read command for one exact pattern in one file, returning no more than {command_output_lines} lines and {command_output_bytes} bytes. Do not use alternation, `rg -A`, `rg -B`, or `rg -C`; narrow the query instead. Then apply the complete patch.
 3. Implement only the scoped resource/data change in the exact authorized files. Use existing public AdaOS SDK/API contracts and preserve unrelated behavior.
 4. For subnet data, use only the admitted typed provider route and degrade without failing when it is unavailable. Do not invent or persist provider data.
-5. Add or update only focused regression coverage for the acceptance checks. Do not run tests or validation commands in the Codex turn; the trusted worker runs them and records evidence.
+5. Add or update only focused regression coverage for the acceptance checks. Run bounded relevant hermetic checks and inspect the scoped diff; the trusted worker reruns authoritative validation.
 6. Do not edit manifest version/updated_at, publish, activate, or access services not admitted by the ticket.
 7. Stop immediately after the scoped diff and focused check succeed."""
             else:
@@ -6329,7 +6445,7 @@ when a governed Dev Ticket repair explicitly supplies its separate contract.
 2. Locate one exact target ID at a time with `rg -n --max-count 12` in one file. Every discovery command must return at most {command_output_lines} lines and {command_output_bytes} bytes. Never use `rg -A`, `rg -B`, or `rg -C` across a manifest, multiple patterns, or multiple files. Read at most one 120-line surrounding slice after each exact match, and at most {discovery_lines} source lines before the first edit. Narrow a query instead of printing more output.
 3. Implement only the scoped resource/data change in the exact authorized files. Use existing public AdaOS SDK/API contracts and preserve unrelated behavior.
 4. For subnet data, use only the admitted typed provider route and degrade without failing when it is unavailable. Do not invent or persist provider data.
-5. Add or update only focused regression coverage for the acceptance checks. Do not run tests or validation commands in the Codex turn; the trusted worker runs them and records evidence.
+5. Add or update only focused regression coverage for the acceptance checks. Run bounded relevant hermetic checks and inspect the scoped diff; the trusted worker reruns authoritative validation.
 6. Do not edit manifest version/updated_at, publish, activate, or access services not admitted by the ticket.
 7. Stop immediately after the scoped diff and focused check succeed."""
         elif is_dev_ticket_repair:
@@ -6356,9 +6472,10 @@ when a governed Dev Ticket repair explicitly supplies its separate contract.
 4. Inspect manifests/handlers, UI bindings, and tests in exact files or JSON slices: at most {command_output_lines} lines and {command_output_bytes} bytes per response; there is no fixed first-edit line quota for a full implementation. Do not scan the complete SDK, repository, or task tree.
 5. Search compact MCP headers, then read the selected method. Repeat for independently needed contracts and reuse prior results. Empty search/catalog headers are not proof of a missing capability: narrow the query or read the admitted public symbol before reporting a blocker.
 6. Use `ADAOS_PYTHON`, commit-bound `ADAOS_REPO_ROOT`/`PYTHONPATH`, `skill_data_root()` and ContentRef. Runtime files belong under `ADAOS_BASE_DIR`/`ADAOS_TASK_RUNTIME_DIR`. Declare imports, tools and data routes.
-7. Implement the requested behavior and add focused hermetic regression coverage; the trusted worker test allowance is {generated_test_timeout_seconds} seconds. Do not run tests, validation, status, or diff commands. The trusted worker executes tests and install-strict validation; independent acceptance owns browser journeys and deployed-runtime checks.
-8. No publication, installation, activation or external IO beyond the admitted read-only MCP discovery; the trusted worker owns finalization and rollback evidence.
-9. Report each acceptance point as implemented, coverage added, or blocked, with the relevant source/test reference. These are implementation claims, not passing checks. Explicitly mark checks not executed in this turn; never claim browser, restart, authorization or test success without execution evidence. Report unsupported requirements rather than silently replacing them."""
+7. Implement the behavior and focused hermetic coverage. Use `ADAOS_PYTHON` for bounded checks within {generated_test_timeout_seconds} seconds; inspect only scoped diff/status. Candidate checks are diagnostic. The trusted worker reruns tests and install-strict validation; independent acceptance owns browser journeys and deployed-runtime checks.
+8. Honor the application_permissions context facet: align Project declarations with inferred capabilities, enforce roles in tools, and test the access matrix.
+9. No publication, installation, activation or external IO beyond the admitted read-only MCP discovery; the trusted worker owns finalization and rollback evidence.
+10. Map each acceptance point to source/test or a blocker. These are implementation claims, not passing checks. Explicitly mark checks not executed. Never claim browser, restart or authorization success without evidence; report unsupported requirements."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
@@ -6890,6 +7007,90 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                                ".builder_current_publication", ".builder_previous_automation", "ui_revisions"}
                        for part in path.relative_to(workspace).parts)
 
+    @staticmethod
+    def _validate_application_permissions(
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        request = assignment.get("realize_request")
+        artifacts = request.get("artifacts") if isinstance(request, Mapping) else {}
+        packet = artifacts.get("context_packet") if isinstance(artifacts, Mapping) else {}
+        facets = packet.get("facets") if isinstance(packet, Mapping) else {}
+        supplied = facets.get("application_permissions") if isinstance(facets, Mapping) else None
+        if not isinstance(supplied, Mapping):
+            return
+        project_ref = str(supplied.get("project_ref") or "").strip()
+        manifest_ref = str(supplied.get("manifest_ref") or "").strip()
+        if not project_ref.startswith("project:") or not manifest_ref:
+            checks.append(
+                {
+                    "kind": "application_permissions.profile",
+                    "ok": True,
+                    "status": "skipped",
+                    "reason": "owning Project permission profile is unavailable",
+                }
+            )
+            return
+
+        from adaos.services.builder.application_permissions import (
+            application_permissions_context,
+        )
+
+        target = assignment.get("target") if isinstance(assignment.get("target"), Mapping) else {}
+        component_ref = f"{str(target.get('type') or '').strip()}:{str(target.get('id') or '').strip()}"
+        report = application_permissions_context(
+            component_ref=component_ref,
+            requested_project_ref=project_ref,
+            dev_projects_root=workspace / "projects",
+            dev_skills_root=workspace / "skills",
+        )
+        declaration_status = str(report.get("declaration_status") or "unavailable")
+        declaration_ok = report.get("status") == "present" and declaration_status == "present"
+        checks.append(
+            {
+                "kind": "application_permissions.profile",
+                "path": manifest_ref,
+                "ok": declaration_ok,
+                "status": declaration_status,
+                "profile_digest": report.get("profile_digest"),
+                "diagnostics": list(report.get("diagnostics") or []),
+            }
+        )
+        if not declaration_ok:
+            detail = "; ".join(str(item) for item in report.get("diagnostics") or [])
+            errors.append(
+                f"{manifest_ref}: a valid permission_profile is required"
+                + (f": {detail}" if detail else "")
+            )
+            return
+        undeclared = [str(item) for item in report.get("undeclared_inferred") or []]
+        checks.append(
+            {
+                "kind": "application_permissions.declared_vs_inferred",
+                "path": manifest_ref,
+                "ok": not undeclared,
+                "declared": list(report.get("declared") or []),
+                "statically_inferred": list(report.get("statically_inferred") or []),
+                "undeclared": undeclared,
+            }
+        )
+        if undeclared:
+            errors.append(
+                f"{manifest_ref}: owned skill capabilities are not declared in permission_profile: "
+                + ", ".join(undeclared)
+            )
+        checks.append(
+            {
+                "kind": "application_permissions.roles",
+                "path": manifest_ref,
+                "ok": True,
+                "roles": [str(item.get("id") or "") for item in report.get("roles") or []],
+                "role_matrix": dict(report.get("role_matrix") or {}),
+            }
+        )
+
     def _validate_workspace(
         self,
         assignment: Mapping[str, Any],
@@ -6919,6 +7120,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         self._validate_skill_webui_contracts(workspace, checks, errors)
         self._validate_skill_data_routes(workspace, checks, errors)
         self._validate_skill_dependency_isolation(workspace, checks, errors)
+        self._validate_application_permissions(assignment, workspace, checks, errors)
         self._validate_brief_contract_requirements(assignment, workspace, checks, errors)
         self._validate_admitted_operation_schemas(assignment, workspace, checks, errors)
         self._validate_prototype_resource_handoff(
@@ -8393,6 +8595,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         target = dict(assignment.get("target") or {})
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
         sources: list[tuple[Path, Path]] = []
+        dev_projects_root = self.dev_scenarios_root.parent / "projects"
         if target.get("type") == "scenario":
             sources.append((workspace / "scenarios" / target_id, self.dev_scenarios_root / target_id))
             sources.extend(
@@ -8401,6 +8604,27 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             )
         else:
             sources.append((workspace / "skills" / target_id, self.dev_skills_root / target_id))
+        for sparse_path in (assignment.get("forge") or {}).get("sparse_paths") or []:
+            normalized = str(sparse_path or "").strip().replace("\\", "/").strip("/")
+            if not normalized.startswith("projects/"):
+                continue
+            parts = normalized.split("/")
+            if len(parts) == 2 and parts[1]:
+                project_id = _safe_token(parts[1], fallback="")
+                if project_id:
+                    pair = (workspace / "projects" / project_id, dev_projects_root / project_id)
+                    if pair not in sources:
+                        sources.append(pair)
+
+        def artifact_relative(destination: Path) -> str:
+            if destination.parent == self.dev_scenarios_root:
+                return f"scenarios/{destination.name}"
+            if destination.parent == self.dev_skills_root:
+                return f"skills/{destination.name}"
+            if destination.parent == dev_projects_root:
+                return f"projects/{destination.name}"
+            raise SourceSnapshotError(f"unsupported mutable source destination: {destination}")
+
         snapshot_reference = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
         if snapshot_reference:
             manifest = verify_source_snapshot(state_dir=self.state_dir, reference=snapshot_reference)
@@ -8410,11 +8634,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 if isinstance(item, Mapping)
             }
             for _source, destination in sources:
-                relative = (
-                    f"scenarios/{destination.name}"
-                    if destination.parent == self.dev_scenarios_root
-                    else f"skills/{destination.name}"
-                )
+                relative = artifact_relative(destination)
                 descriptor = snapshot_artifacts.get(relative)
                 if not descriptor:
                     raise SourceSnapshotError(f"task snapshot does not contain mutable source {relative}")
@@ -8428,16 +8648,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     )
             expected_by_destination = {
                 destination: (
-                    str(snapshot_artifacts[
-                    f"scenarios/{destination.name}"
-                    if destination.parent == self.dev_scenarios_root
-                    else f"skills/{destination.name}"
-                    ].get("digest") or ""),
-                    source_projection_excluded_dirs(snapshot_artifacts[
-                        f"scenarios/{destination.name}"
-                        if destination.parent == self.dev_scenarios_root
-                        else f"skills/{destination.name}"
-                    ]),
+                    str(snapshot_artifacts[artifact_relative(destination)].get("digest") or ""),
+                    source_projection_excluded_dirs(
+                        snapshot_artifacts[artifact_relative(destination)]
+                    ),
                 )
                 for _source, destination in sources
             }
