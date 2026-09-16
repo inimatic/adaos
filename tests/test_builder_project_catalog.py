@@ -10,7 +10,9 @@ from adaos.apps.api.auth import require_token
 from adaos.services.builder.project_catalog import BuilderProjectCatalogService
 
 
-def test_project_catalog_reads_only_manifest_and_prompt_summary(monkeypatch, tmp_path: Path) -> None:
+def test_project_catalog_reads_only_manifest_and_prompt_summary(
+    monkeypatch, tmp_path: Path
+) -> None:
     scenarios = tmp_path / "scenarios"
     skills = tmp_path / "skills"
     scenarios.mkdir()
@@ -29,7 +31,9 @@ def test_project_catalog_reads_only_manifest_and_prompt_summary(monkeypatch, tmp
     tz.mkdir()
     (tz / "base_tz.md").write_text("x" * 100_000, encoding="utf-8")
     (skills / "test_skill").mkdir()
-    (skills / "test_skill" / "skill.yaml").write_text("name: test_skill\nversion: 1.0.0\n", encoding="utf-8")
+    (skills / "test_skill" / "skill.yaml").write_text(
+        "name: test_skill\nversion: 1.0.0\n", encoding="utf-8"
+    )
 
     reads: list[Path] = []
     original_read_text = Path.read_text
@@ -41,7 +45,9 @@ def test_project_catalog_reads_only_manifest_and_prompt_summary(monkeypatch, tmp
     monkeypatch.setattr(Path, "read_text", _read_text)
     binding = tmp_path / "state" / "builder" / "workbench" / "bindings"
     binding.mkdir(parents=True)
-    (binding / "dev1.json").write_text('{"preview_webspace_id": "preview-one"}', encoding="utf-8")
+    (binding / "dev1.json").write_text(
+        '{"preview_webspace_id": "preview-one"}', encoding="utf-8"
+    )
     service = BuilderProjectCatalogService(
         skills_root=skills,
         scenarios_root=scenarios,
@@ -103,6 +109,28 @@ def test_project_catalog_api_forwards_bounded_query() -> None:
             "include_archived": False,
         }
     ]
+
+
+def test_project_catalog_sdk_facade_delegates(monkeypatch) -> None:
+    from adaos.sdk.builder import project_catalog
+
+    calls: list[dict] = []
+
+    class _Catalog:
+        def list_projects(self, **kwargs):
+            calls.append(kwargs)
+            return [{"id": "project:demo", "title": "Demo"}]
+
+    monkeypatch.setattr(
+        BuilderProjectCatalogService,
+        "from_context",
+        classmethod(lambda cls: _Catalog()),
+    )
+
+    assert project_catalog.list_projects(kind="project", limit=5) == [
+        {"id": "project:demo", "title": "Demo"}
+    ]
+    assert calls == [{"kind": "project", "limit": 5}]
 
 
 def test_project_catalog_includes_composition_projects(tmp_path: Path) -> None:
@@ -246,7 +274,10 @@ def test_project_catalog_reuses_registry_projection_for_project_queries(
         state_dir=tmp_path / "state",
         projects_root=projects,
     )
-    assert service.list_projects(kind="project", query="Fast")[0]["object_id"] == "fast_search"
+    assert (
+        service.list_projects(kind="project", query="Fast")[0]["object_id"]
+        == "fast_search"
+    )
 
     def fail_project_manifest_read(path: Path, *args, **kwargs):
         if path.name == "project.yaml":
@@ -256,10 +287,15 @@ def test_project_catalog_reuses_registry_projection_for_project_queries(
     original_read_text = Path.read_text
     monkeypatch.setattr(Path, "read_text", fail_project_manifest_read)
 
-    assert service.list_projects(kind="project", query="Indexed")[0]["object_id"] == "fast_search"
+    assert (
+        service.list_projects(kind="project", query="Indexed")[0]["object_id"]
+        == "fast_search"
+    )
 
 
-def test_project_catalog_hides_archived_projects_unless_requested(tmp_path: Path) -> None:
+def test_project_catalog_hides_archived_projects_unless_requested(
+    tmp_path: Path,
+) -> None:
     scenarios = tmp_path / "scenarios"
     project = scenarios / "archived_scene"
     project.mkdir(parents=True)
