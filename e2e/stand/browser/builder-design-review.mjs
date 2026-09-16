@@ -54,9 +54,9 @@ try {
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 })
       if (workspaceOnly) {
-        await page.locator('[data-webui-widget-id="project-header"]').waitFor({ timeout: 60000 })
-        await page.getByRole('button', { name: /choose project|выбрать проект/i }).waitFor({ timeout: 30000 })
-        if (await command('specimens').count()) throw new Error('Design specimen replaced Workspace Builder')
+        await page.locator('[data-webui-widget-id="design-workbench-header"]').waitFor({ timeout: 60000 })
+        await command('applications').waitFor({ timeout: 30000 })
+        if (await page.getByText(/^Builder design prototype/).count()) throw new Error('Design specimen replaced Workspace Builder')
         await capture('workspace-preserved')
         report.checks.push({ profile, check: 'workspace_operational_surface_preserved', passed: true })
       } else {

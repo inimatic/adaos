@@ -132,6 +132,12 @@ review/start/delivery forms are reused. Capability parity is checked across page
 and modal surfaces, not by restoring the obsolete layout. This is partial live
 integration, not closure of the remaining interaction/continuation obligations.
 
+The exact candidate was promoted to local Workspace as `builder@0.2.159` after
+492 owned tests; its current operational shell renders without page errors or
+horizontal overflow in wide and compact browser smoke checks. That activation
+does not prove recovery from every stale/terminal historical selection or close
+the unchecked projection items below.
+
 - [x] `[must]` Exercise retained TEST/non-test picker filters and native template
   creation in the browser; preserve the acknowledged Project/primary selection
   instead of clearing canonical state after the creation response arrives.

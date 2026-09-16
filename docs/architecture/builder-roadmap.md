@@ -85,6 +85,12 @@ qualify a second chat-created Application, permission-aware Automation,
 relational plus blob migration, delegated viewer/coordinator checks and local
 Trial/Stable placement. This is not blanket permission to publish unrelated
 applications or evidence for public prerelease/consumer installation.
+The resulting DEV Builder was separately checkpointed and promoted through an
+immutable Candidate into Workspace as `builder@0.2.159` with release digest
+`sha256:293e72ab133640d9259f98529420441d912e6e96fb97cf44ef44bc27f738481f`.
+All 492 owned scenario/control/Builder tests and wide/compact Workspace browser
+smoke checks pass. This qualifies that exact local publication path; it does not
+close BIP-02 status/recovery, remote consumer delivery or public distribution.
 Do not manually repair generated application code,
 regenerate approved prototypes, introduce subject-specific Core/Client logic
 or remove compatibility without rollback evidence.

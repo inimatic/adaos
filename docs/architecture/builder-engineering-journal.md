@@ -1787,3 +1787,31 @@ retain the open implementation/qualification work; BIP-05 owns matched feedback
 experiments. Optional separate visual judges remain conditional BIP-34. This
 documentation increment implements none of those runtime changes, performs no
 new paid generation and does not mutate Stable data, publish or restart services.
+
+### 2026-09-16: Permission-Aware Volunteer Cycles And Builder Promotion
+
+Volunteer Roster completed two bounded Builder cycles through Stable `0.1.5`
+and `0.1.7`. The second cycle retained relational rows and uploaded photo blobs,
+declared one publisher-owner role, installed the exact-digest managed owner grant,
+and enforced viewer/coordinator read, mutation, upload and private-contact
+boundaries in both Trial and Workspace. Wide/compact Stable browser acceptance
+passed 42 checks with `workspace` runtime provenance. These results do not cover
+guest/child identities, remote consumers, background workers or public prerelease.
+
+DEV Builder then passed 26 scenario, 119 SDK-control and 347 Builder-skill tests.
+The first publication retry correctly rejected reuse of `0.2.158` after its
+content changed: an immutable release already owned that version. A normal DEV
+patch checkpoint produced `builder@0.2.159`; Candidate
+`builder-0-2-159-bc27f738481f` was accepted and activated in Workspace at release
+digest `sha256:293e72ab133640d9259f98529420441d912e6e96fb97cf44ef44bc27f738481f`.
+Activation health matched scenario `0.2.91`, Builder skill `0.3.173` and control
+skill `0.1.117`.
+
+The existing Workspace smoke initially failed for a test-contract reason rather
+than a product load failure: it waited for removed widget `project-header` and
+treated the now-operational `specimens` Process command as a design-fixture marker.
+The check now binds to `design-workbench-header`, the Applications command and the
+actual design-prototype title. Re-run evidence passes at 1440x1000 and 390x844
+without page errors or horizontal overflow. The visible selected historical
+Automation remains terminal `cancelled`; publication success does not establish
+all remaining BIP-02 status and recovery behavior.
