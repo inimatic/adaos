@@ -241,5 +241,6 @@ await fs.writeFile(path.join(output, 'review.json'), JSON.stringify({
 }, null, 2) + '\n', 'utf8')
 console.log(JSON.stringify(samples.map(({ text, ...sample }) => sample), null, 2))
 if (samples.some(sample => sample.failure || sample.errors.length || sample.requestFailures.some(
-  failure => failure.path.startsWith('/api/resources/'),
+  failure => failure.path.startsWith('/api/resources/')
+    || (reviewStage !== 'prototype' && failure.path === '/api/tools/call'),
 ))) process.exitCode = 1
