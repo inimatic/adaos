@@ -606,15 +606,15 @@ source-first option. No editor dependency is part of `webui.v1` until those
 round-trip, accessibility, mobile, clipboard, and collaborative-editing gates
 are proven.
 
-### Persistent command regions
+### Command regions
 
-A layout area with `role: footer` is the semantic bottom command region. When
-it contains only command/status widgets (`input.commandBar`, its `ui.actions`
-alias, or `feedback.statusBar`), Desktop docks it to the viewport bottom and
-reserves content space above it. Scenario authors should use this region for
-workflow-wide commands that must remain reachable while the main and auxiliary
-panes scroll. A `toolbar` role remains an in-flow local toolbar and must not be
-used merely to obtain fixed positioning.
+A layout region with `role: commands` owns workflow commands and status. The
+role does not imply fixed positioning: page regions remain in the declared
+layout flow, so a large command surface cannot cover collection or detail
+content. Modal shells may place their command region in the modal footer as a
+container-level convention. A future persistent page command bar requires an
+explicit presentation value and bounded height/overflow contract; the Client
+must not infer it from a role, widget type, or region id.
 
 Validation must be declarative:
 
@@ -1161,14 +1161,23 @@ Recommended demo data shape:
 
 ### 8. Cleanup and Migration
 
-- [ ] migrate every authoritative Workspace and DEV `webui.json` on the
-  development node to Layout & Interaction ABI v2; remove old E2E projects
-  instead of carrying compatibility for them
-- [ ] reject legacy page layouts after the migration; runtime snapshots,
+- [x] migrate every authoritative Workspace and DEV `webui.json` and embedded
+  active `scenario.json` on the development node to Layout & Interaction ABI
+  v2; remove old E2E projects instead of carrying compatibility for them
+- [x] reject legacy page layouts after the migration; runtime snapshots,
   Trials, and historical evidence remain immutable and are not rewritten
 - [ ] migrate existing concrete widget types gradually to semantic view kinds
 - [ ] remove browser-core special cases once semantic equivalents are proven
-- [ ] keep no page-layout compatibility parser after the coordinated cutover
+- [x] keep no page-layout compatibility parser after the coordinated cutover
+
+Cutover evidence: `scripts/check_webui_conformance.py` validates 151 active
+documents with zero findings and `scripts/migrate_webui_layout_v2.py --check`
+is idempotent. The active-source scan includes referenced scenario descriptors
+and Android seeds, but excludes Builder revisions, prompt/LLM working state,
+runtime snapshots, Trials, and recovery evidence. Browser qualification opens
+all 18 Workspace scenarios at wide and compact sizes. Registry-backed scenario
+resolution is required when an installed folder name differs from its manifest
+id; direct `folder == id` lookup is not a valid runtime assumption.
 
 ### 8a. Contract Hardening
 

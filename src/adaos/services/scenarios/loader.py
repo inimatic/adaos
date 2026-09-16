@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Tuple
 import yaml
 
 from adaos.services.agent_context import get_ctx
+from adaos.services.workspace_registry import resolve_workspace_registry_install_name
 
 _log = logging.getLogger("adaos.scenarios.loader")
 _CONTENT_CACHE: Dict[Tuple[str, str], Tuple[Tuple[str, int, int], Dict[str, Any]]] = {}
@@ -65,6 +66,26 @@ def _scenario_root_for_space(scenario_id: str, space: str) -> Path:
         base = ctx.paths.dev_scenarios_dir()
     else:
         base = ctx.paths.scenarios_dir()
+    base = Path(base).expanduser().resolve()
+    workspace_root = base.parent
+    try:
+        install_name, entry = resolve_workspace_registry_install_name(
+            workspace_root,
+            kind="scenarios",
+            name_or_id=scenario_id,
+            fallback_to_scan=False,
+        )
+    except Exception:
+        install_name, entry = scenario_id, None
+        _log.debug(
+            "failed to resolve scenario root through registry id=%s space=%s",
+            scenario_id,
+            space,
+            exc_info=True,
+        )
+    resolved = base / str(install_name or scenario_id).strip()
+    if entry is not None or resolved.exists():
+        return resolved
     return base / scenario_id
 
 
@@ -75,7 +96,13 @@ def _repo_workspace_scenario_root(scenario_id: str) -> Path | None:
         repo_root = repo_root_attr() if callable(repo_root_attr) else repo_root_attr
         if not repo_root:
             return None
-        return Path(repo_root).expanduser().resolve() / ".adaos" / "workspace" / "scenarios" / scenario_id
+        return (
+            Path(repo_root).expanduser().resolve()
+            / ".adaos"
+            / "workspace"
+            / "scenarios"
+            / scenario_id
+        )
     except Exception:
         return None
 
@@ -159,9 +186,15 @@ def read_content(scenario_id: str, *, space: str = "workspace") -> Dict[str, Any
                 reader=yaml.safe_load,
                 encoding="utf-8",
             )
-            manifest_ui = manifest.get("ui") if isinstance(manifest.get("ui"), dict) else {}
+            manifest_ui = (
+                manifest.get("ui") if isinstance(manifest.get("ui"), dict) else {}
+            )
             if str(manifest_ui.get("manifest") or "").strip():
-                _log.debug("reading scenario '%s' UI from YAML manifest %s", scenario_id, manifest_path)
+                _log.debug(
+                    "reading scenario '%s' UI from YAML manifest %s",
+                    scenario_id,
+                    manifest_path,
+                )
                 return _resolve_ui_manifest(manifest, scenario_root=root)
 
         # Compatibility only: older scenarios stored their complete runtime
@@ -169,7 +202,11 @@ def read_content(scenario_id: str, *, space: str = "workspace") -> Dict[str, Any
         # source of truth and reference the adjacent webui.json from there.
         content_path = root / "scenario.json"
         if content_path.is_file():
-            _log.debug("reading legacy scenario '%s' content from %s", scenario_id, content_path)
+            _log.debug(
+                "reading legacy scenario '%s' content from %s",
+                scenario_id,
+                content_path,
+            )
             content = _read_cached_mapping_file(
                 cache=_CONTENT_CACHE,
                 key=key,
@@ -180,7 +217,9 @@ def read_content(scenario_id: str, *, space: str = "workspace") -> Dict[str, Any
             return _resolve_ui_manifest(content, scenario_root=root)
         if manifest:
             return _resolve_ui_manifest(manifest, scenario_root=root)
-    _log.debug("scenario '%s' has no canonical manifest in any candidate roots", scenario_id)
+    _log.debug(
+        "scenario '%s' has no canonical manifest in any candidate roots", scenario_id
+    )
     _CONTENT_CACHE.pop(key, None)
     return {}
 
@@ -212,16 +251,28 @@ def scenario_source_fingerprint(scenario_id: str, *, space: str = "workspace") -
                 raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
             except Exception:
                 raw = {}
-            ui = raw.get("ui") if isinstance(raw, dict) and isinstance(raw.get("ui"), dict) else {}
-            manifest_name = str(ui.get("manifest") or "").strip() if isinstance(ui, dict) else ""
+            ui = (
+                raw.get("ui")
+                if isinstance(raw, dict) and isinstance(raw.get("ui"), dict)
+                else {}
+            )
+            manifest_name = (
+                str(ui.get("manifest") or "").strip() if isinstance(ui, dict) else ""
+            )
         content_path = root / "scenario.json"
         if not manifest_name and content_path.is_file():
             try:
                 raw = json.loads(content_path.read_text(encoding="utf-8-sig") or "{}")
             except Exception:
                 raw = {}
-            ui = raw.get("ui") if isinstance(raw, dict) and isinstance(raw.get("ui"), dict) else {}
-            manifest_name = str(ui.get("manifest") or "").strip() if isinstance(ui, dict) else ""
+            ui = (
+                raw.get("ui")
+                if isinstance(raw, dict) and isinstance(raw.get("ui"), dict)
+                else {}
+            )
+            manifest_name = (
+                str(ui.get("manifest") or "").strip() if isinstance(ui, dict) else ""
+            )
         if manifest_name:
             try:
                 manifest_path = (root / manifest_name).resolve()
@@ -241,11 +292,15 @@ def scenario_source_fingerprint(scenario_id: str, *, space: str = "workspace") -
         "space": normalized_space,
         "files": files,
     }
-    encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    encoded = json.dumps(
+        snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
     return hashlib.sha1(encoded).hexdigest()[:16]
 
 
-def _resolve_ui_manifest(content: Dict[str, Any], *, scenario_root: Path) -> Dict[str, Any]:
+def _resolve_ui_manifest(
+    content: Dict[str, Any], *, scenario_root: Path
+) -> Dict[str, Any]:
     """Resolve a Builder-owned scenario ``webui.json`` into runtime content.
 
     Builder keeps the complete editable UI descriptor next to ``scenario.json``.
@@ -266,10 +321,14 @@ def _resolve_ui_manifest(content: Dict[str, Any], *, scenario_root: Path) -> Dic
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     except Exception:
-        _log.warning("failed to read scenario UI manifest %s", manifest_path, exc_info=True)
+        _log.warning(
+            "failed to read scenario UI manifest %s", manifest_path, exc_info=True
+        )
         return content
     if not isinstance(manifest, dict) or not isinstance(manifest.get("ui"), dict):
-        _log.warning("scenario UI manifest must contain an object ui branch: %s", manifest_path)
+        _log.warning(
+            "scenario UI manifest must contain an object ui branch: %s", manifest_path
+        )
         return content
 
     resolved = copy.deepcopy(content)
@@ -284,7 +343,11 @@ def _resolve_ui_manifest(content: Dict[str, Any], *, scenario_root: Path) -> Dic
         if isinstance(data, dict):
             for raw_path, value in defaults.items():
                 parts = [part for part in str(raw_path).strip("/").split("/") if part]
-                if not parts or parts[0] != "data" or any(part in {".", ".."} for part in parts):
+                if (
+                    not parts
+                    or parts[0] != "data"
+                    or any(part in {".", ".."} for part in parts)
+                ):
                     continue
                 cursor = data
                 for part in parts[1:-1]:
@@ -311,7 +374,9 @@ def scenario_exists(scenario_id: str, *, space: str = "workspace") -> bool:
     return False
 
 
-def invalidate_cache(*, scenario_id: str | None = None, space: str | None = None) -> None:
+def invalidate_cache(
+    *, scenario_id: str | None = None, space: str | None = None
+) -> None:
     """
     Invalidate cached canonical manifests and resolved runtime content. This is
     required for workflows like desktop.webspace.reload which expect updated

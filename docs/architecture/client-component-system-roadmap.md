@@ -48,23 +48,48 @@ Layout baseline, 2026-09-16:
   architecture: inferred roles, three renderer strategies, global compact
   stacking, weak pane sizing, heuristic demotion/inlining, canvas-like tool
   placement, variant drift, and incomplete conformance evidence.
-- [ ] `[must]` Publish and validate Layout & Interaction ABI v2 as the only
+- [x] `[must]` Publish and validate Layout & Interaction ABI v2 as the only
   page-layout contract. Keep `webui.json` canonical; a normalized LayoutGraph is
   derived and immutable, never a second authored document.
-- [ ] `[must]` Upgrade the coherent Taiga UI package family and add only the
+- [x] `[must]` Upgrade the coherent Taiga UI package family and add only the
   layout/table modules used by universal Client components.
 - [ ] `[must]` Implement universal semantic surface, region, collection-tools,
   adaptive detail/inspector, command-overflow, and disclosure components. No
   component may contain product ids, labels, endpoint rules, or workflow state.
+  The generic semantic region/surface and Taiga table slice is complete;
+  collection-tools, command overflow, and the complete adaptive detail API
+  remain open.
 - [ ] `[must]` Add contract and browser conformance for each admitted pattern at
   wide and compact sizes, including long EN/RU content, keyboard/focus,
   overflow, empty/loading/error/permission states, DOM/a11y/screenshot evidence,
-  and stable render-plan identity.
-- [ ] `[must]` Migrate all authoritative local Workspace and DEV manifests,
+  and stable render-plan identity. Render-plan identity and structural/browser
+  geometry are covered; the complete state, keyboard, a11y, and locale matrix
+  remains open.
+- [x] `[must]` Migrate all authoritative local Workspace and DEV manifests,
   delete obsolete TEST/E2E projects, reject legacy layouts, and run Workspace
   browser qualification. DEV applications are qualified later when changed.
 - [ ] `[must]` Record successful `project push` and `dev project push` after
   source validation; do not rewrite historical Trial/runtime/snapshot evidence.
+
+Cutover evidence, 2026-09-16:
+
+- Core conformance covers 151 authoritative `webui.json`, `scenario.json`,
+  Android scenario, and Android seed documents with zero findings; a second
+  migration pass changes zero files/pages.
+- All 18 Workspace scenarios materialize in Chrome at 1440x960 and 390x844
+  without page errors, clipping, horizontal overflow, or unintended region
+  overlap. Compact drawers/sheets are intentional overlays and are evaluated
+  separately from in-flow regions.
+- Client `0.0.398` passes 1426 tests, a production-compatible local build, the
+  21-source generic boundary check, and the 41-widget inventory check. Taiga UI
+  packages are aligned at `5.24.0`.
+- Workspace Builder scenario/skill/control tests pass as a component-scoped
+  suite. A monolithic `.adaos/workspace` pytest collection remains invalid
+  because independently packaged skills reuse top-level Python module names;
+  test orchestration must preserve package isolation.
+- Client `ng lint` remains blocked before source lint by the existing Nx/Angular
+  `Workspaces is not a constructor` toolchain failure; build, tests, inventory,
+  boundaries, and browser qualification are the current executable gates.
 
 - [x] `[must]` Qualify generic schema-modal resize and fullscreen restoration on desktop
   and mobile. Persist current-user device/scenario/webspace scopes; resolve exact

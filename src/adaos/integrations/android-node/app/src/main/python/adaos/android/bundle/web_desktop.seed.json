@@ -31,14 +31,29 @@
         "id": "desktop",
         "title": "AdaOS Android",
         "layout": {
-          "type": "single",
-          "pattern": "stack",
-          "areas": [
+          "version": 2,
+          "pattern": "collection",
+          "density": "comfortable",
+          "contentWidth": "fluid",
+          "scroll": "page",
+          "regions": [
             {
               "id": "main",
-              "role": "main"
+              "role": "collection",
+              "priority": 100,
+              "scroll": "page",
+              "presentation": {
+                "wide": "pane",
+                "compact": "stack"
+              }
             }
-          ]
+          ],
+          "interaction": {
+            "selection": "single",
+            "rowActivation": "select",
+            "filters": "inline",
+            "actions": "adaptive"
+          }
         },
         "widgets": [
           {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -23,7 +24,14 @@ SCHEMA_PATH = ROOT / "src" / "adaos" / "abi" / "webui.v1.schema.json"
 EXCLUDED_PATH_PARTS = {
     ".git",
     ".runtime",
+    ".tmp",
+    ".venv",
+    "__pycache__",
+    "artifacts",
+    "build",
+    "dist",
     "history",
+    "node_modules",
     "recovery",
     "snapshots",
     "state",
@@ -36,17 +44,36 @@ def _paths(inputs: list[str]) -> list[Path]:
     for raw in inputs:
         path = Path(raw)
         if path.is_dir():
-            result.extend(
-                item
-                for item in sorted(path.rglob("*webui.json"))
-                if item.name != "semantic.webui.json"
-                and not EXCLUDED_PATH_PARTS.intersection(item.parts)
-            )
-        elif path.is_file() and (
-            path.name == "webui.json" or path.name.endswith(".webui.json")
-        ) and path.name != "semantic.webui.json":
+            discovered: list[Path] = []
+            for root, directories, files in os.walk(path):
+                directories[:] = sorted(
+                    name for name in directories if name not in EXCLUDED_PATH_PARTS
+                )
+                discovered.extend(
+                    Path(root) / name
+                    for name in sorted(files)
+                    if name.endswith(".json")
+                    and _is_authoritative_ui_document(Path(root) / name)
+                )
+            result.extend(sorted(discovered))
+        elif path.is_file() and _is_authoritative_ui_document(path):
             result.append(path)
     return list(dict.fromkeys(item.resolve() for item in result))
+
+
+def _is_webui_document(path: Path) -> bool:
+    return (
+        path.name == "webui.json" or path.name.endswith(".webui.json")
+    ) and path.name != "semantic.webui.json"
+
+
+def _is_authoritative_ui_document(path: Path) -> bool:
+    return (
+        _is_webui_document(path)
+        or path.name == "scenario.json"
+        or path.name.endswith(".scenario.json")
+        or path.name == "web_desktop.seed.json"
+    )
 
 
 def _pages(value: Any, path: str = "$") -> Iterator[tuple[str, Mapping[str, Any]]]:
@@ -71,17 +98,21 @@ def check_path(path: Path, validator: Draft202012Validator) -> list[dict[str, An
         return [{"code": "webui.json_invalid", "path": "$", "message": str(exc)}]
 
     findings: list[dict[str, Any]] = []
-    for error in sorted(validator.iter_errors(document), key=lambda item: list(item.path)):
-        location = "$" + "".join(
-            f"[{item}]" if isinstance(item, int) else f".{item}" for item in error.path
-        )
-        findings.append(
-            {
-                "code": "webui.schema_invalid",
-                "path": location,
-                "message": error.message,
-            }
-        )
+    if _is_webui_document(path):
+        for error in sorted(
+            validator.iter_errors(document), key=lambda item: list(item.path)
+        ):
+            location = "$" + "".join(
+                f"[{item}]" if isinstance(item, int) else f".{item}"
+                for item in error.path
+            )
+            findings.append(
+                {
+                    "code": "webui.schema_invalid",
+                    "path": location,
+                    "message": error.message,
+                }
+            )
     for page_path, page in _pages(document):
         findings.extend(layout_v2_findings(page, schema_path=page_path))
     return findings

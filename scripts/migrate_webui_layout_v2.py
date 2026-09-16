@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -24,7 +26,14 @@ FORM_WIDGETS = {"ui.form", "input.text", "input.selector", "input.toggle"}
 EXCLUDED_PATH_PARTS = {
     ".git",
     ".runtime",
+    ".tmp",
+    ".venv",
+    "__pycache__",
+    "artifacts",
+    "build",
+    "dist",
     "history",
+    "node_modules",
     "recovery",
     "snapshots",
     "state",
@@ -171,15 +180,19 @@ def _density(page: Mapping[str, Any]) -> str:
 
 def _interaction(page: Mapping[str, Any], roles: list[str]) -> dict[str, str]:
     widgets = [
-        widget
-        for widget in page.get("widgets") or []
-        if isinstance(widget, Mapping)
+        widget for widget in page.get("widgets") or [] if isinstance(widget, Mapping)
     ]
     has_selection = any(
-        any(str(action.get("on") or "") == "select" for action in widget.get("actions") or [] if isinstance(action, Mapping))
+        any(
+            str(action.get("on") or "") == "select"
+            for action in widget.get("actions") or []
+            if isinstance(action, Mapping)
+        )
         for widget in widgets
     )
-    has_filters = any(str(widget.get("type") or "") == "ui.queryToolbar" for widget in widgets)
+    has_filters = any(
+        str(widget.get("type") or "") == "ui.queryToolbar" for widget in widgets
+    )
     result = {
         "selection": "single" if has_selection else "none",
         "rowActivation": "select" if has_selection else "none",
@@ -268,7 +281,9 @@ def _migrate_layout(
                 "status": 50,
                 "utility": 40,
             }[role],
-            "scroll": "region" if role in {"navigation", "detail", "inspector"} else "page",
+            "scroll": "region"
+            if role in {"navigation", "detail", "inspector"}
+            else "page",
             "presentation": _presentation(role),
         }
         if area.get("label") is not None:
@@ -278,16 +293,31 @@ def _migrate_layout(
             region["size"] = size
         regions.append(region)
     if not primary_assigned:
-        regions[0]["role"] = "collection" if pattern in {"collection", "collection-detail"} else "main"
+        regions[0]["role"] = (
+            "collection" if pattern in {"collection", "collection-detail"} else "main"
+        )
         regions[0]["priority"] = 100
         regions[0]["scroll"] = "page"
         regions[0]["presentation"] = _presentation(regions[0]["role"])
+    roles = {str(region["role"]) for region in regions}
+    if pattern == "collection-detail" and not {"collection", "detail"}.issubset(roles):
+        pattern = (
+            "collection"
+            if "collection" in roles
+            else "master-detail"
+            if "navigation" in roles
+            else "workbench"
+            if len(roles) > 1
+            else "document"
+        )
     result: dict[str, Any] = {
         "version": 2,
         "pattern": pattern,
         "density": _density(page),
         "contentWidth": "fluid",
-        "scroll": "regions" if pattern in {"collection-detail", "master-detail", "workbench"} else "page",
+        "scroll": "regions"
+        if pattern in {"collection-detail", "master-detail", "workbench"}
+        else "page",
         "regions": regions,
         "interaction": _interaction(page, [str(item["role"]) for item in regions]),
     }
@@ -295,7 +325,9 @@ def _migrate_layout(
     if isinstance(presentation, Mapping):
         profiles = presentation.get("profiles")
         desktop = profiles.get("desktop") if isinstance(profiles, Mapping) else None
-        maximum = desktop.get("maxContentWidthPx") if isinstance(desktop, Mapping) else None
+        maximum = (
+            desktop.get("maxContentWidthPx") if isinstance(desktop, Mapping) else None
+        )
         if isinstance(maximum, (int, float)):
             result["contentWidth"] = "bounded"
             result["maxContentWidthPx"] = min(2400, max(480, int(maximum)))
@@ -322,7 +354,11 @@ def migrate_document(value: Any) -> int:
     if isinstance(value, dict):
         layout = value.get("layout")
         widgets = value.get("widgets")
-        if isinstance(layout, Mapping) and isinstance(widgets, list) and value.get("id"):
+        if (
+            isinstance(layout, Mapping)
+            and isinstance(widgets, list)
+            and value.get("id")
+        ):
             migrated = _migrate_layout(value, layout, include_variants=True)
             if migrated != layout:
                 value["layout"] = migrated
@@ -336,11 +372,14 @@ def migrate_document(value: Any) -> int:
 
 
 def migrate_path(path: Path, *, check: bool) -> tuple[int, bool]:
-    value = json.loads(path.read_text(encoding="utf-8-sig"))
+    source = path.read_text(encoding="utf-8-sig")
+    value = json.loads(source)
     changed = migrate_document(value)
     if changed and not check:
+        indent_match = re.search(r"\n([ \t]+)\S", source)
+        indent: int | str = indent_match.group(1) if indent_match else 2
         path.write_text(
-            json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+            json.dumps(value, ensure_ascii=False, indent=indent) + "\n",
             encoding="utf-8",
             newline="\n",
         )
@@ -352,17 +391,34 @@ def _paths(inputs: list[str]) -> list[Path]:
     for raw in inputs:
         path = Path(raw)
         if path.is_dir():
-            result.extend(
-                item
-                for item in sorted(path.rglob("*webui.json"))
-                if item.name != "semantic.webui.json"
-                and not EXCLUDED_PATH_PARTS.intersection(item.parts)
-            )
-        elif (
-            path.name == "webui.json" or path.name.endswith(".webui.json")
-        ) and path.name != "semantic.webui.json":
+            discovered: list[Path] = []
+            for root, directories, files in os.walk(path):
+                directories[:] = sorted(
+                    name for name in directories if name not in EXCLUDED_PATH_PARTS
+                )
+                discovered.extend(
+                    Path(root) / name
+                    for name in sorted(files)
+                    if name.endswith(".json")
+                    and _is_authoritative_ui_document(Path(root) / name)
+                )
+            result.extend(sorted(discovered))
+        elif path.is_file() and _is_authoritative_ui_document(path):
             result.append(path)
     return list(dict.fromkeys(item.resolve() for item in result))
+
+
+def _is_authoritative_ui_document(path: Path) -> bool:
+    name = path.name
+    return (
+        (
+            (name == "webui.json" or name.endswith(".webui.json"))
+            and name != "semantic.webui.json"
+        )
+        or name == "scenario.json"
+        or name.endswith(".scenario.json")
+        or name == "web_desktop.seed.json"
+    )
 
 
 def main() -> int:
