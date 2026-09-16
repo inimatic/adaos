@@ -157,6 +157,97 @@ class ApplicationRuntimeTransition:
                 connection.commit()
             return record
 
+    def reject_completed(self, operation_id: str, *, contract_digest: str,
+                         steps: Sequence[TransitionStep],
+                         source_guard: Callable = nullcontext) -> dict[str, Any]:
+        """Compensate a completed Beta selection without reversing Beta data.
+
+        The original Stable data was only snapshotted during Beta preparation,
+        so rejection restores the retained source channel and deactivates Beta
+        configuration while leaving isolated Beta data available for diagnosis.
+        An unpublished Application has an empty source channel.
+        """
+        if not steps or any(not step.step_id for step in steps) or len({step.step_id for step in steps}) != len(steps):
+            raise ValueError("Beta rejection requires unique verified steps")
+        with mutation_lock(self.channel.path.with_suffix(".transition.lock")), source_guard():
+            origin = self.get(operation_id)
+            if not origin or origin["intent"]["contract_digest"] != contract_digest:
+                raise RuntimeChannelConflict("Beta rejection requires the exact retained transition contract")
+            if not origin["completed"] or origin.get("aborted"):
+                raise RuntimeChannelConflict("Only a completed Beta selection can be rejected")
+            expected = tuple(RuntimeSelection.from_mapping(item) for item in origin["intent"]["expected"])
+            target = RuntimeSelection.from_mapping(origin["intent"]["target"])
+            selected = tuple([
+                replace(item, source=target.source, release_digest=target.release_digest,
+                        runtime_root_ref=target.runtime_root_ref, revision=item.revision + 1,
+                        updated_at=target.updated_at)
+                for item in expected if item.webspace_id != target.webspace_id
+            ] + [target])
+            active_by_webspace = {item.webspace_id: item for item in selected}
+            restored = tuple(
+                replace(item, revision=active_by_webspace[item.webspace_id].revision + 1,
+                        updated_at=target.updated_at)
+                for item in expected
+            )
+            rejection_id = operation_id + ":rejected"
+            intent = {
+                "contract_digest": contract_digest,
+                "source_operation_id": operation_id,
+                "expected": [item.to_dict() for item in selected],
+                "restored": [item.to_dict() for item in restored],
+                "steps": [step.step_id for step in steps],
+            }
+            fingerprint = hashlib.sha256(_json(intent).encode("utf-8")).hexdigest()
+            with self.channel._connection() as connection:
+                connection.execute("BEGIN EXCLUSIVE")
+                connection.execute("CREATE TABLE IF NOT EXISTS transitions (operation_id TEXT PRIMARY KEY, completed INTEGER NOT NULL, document TEXT NOT NULL)")
+                row = connection.execute("SELECT document FROM transitions WHERE operation_id=?", (rejection_id,)).fetchone()
+                if row:
+                    record = json.loads(row[0])
+                    if record["fingerprint"] != fingerprint:
+                        raise RuntimeChannelConflict("Beta rejection operation was reused with different intent")
+                    connection.commit()
+                else:
+                    self.channel._assert_available(connection)
+                    actual = self.channel._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
+                    if actual != selected:
+                        raise RuntimeChannelConflict("Application channel changed before Beta rejection")
+                    record = {
+                        "schema": "adaos.application.runtime_rejection.v1",
+                        "operation_id": rejection_id,
+                        "fingerprint": fingerprint,
+                        "intent": intent,
+                        "completed": False,
+                        "receipts": {},
+                        "running_step": None,
+                    }
+                    connection.execute("INSERT INTO transitions VALUES (?, 0, ?)", (rejection_id, _json(record)))
+                    connection.commit()
+            if record["completed"]:
+                return record
+            for step in steps:
+                if step.step_id in record["receipts"]:
+                    continue
+                record["running_step"] = step.step_id
+                self._write(rejection_id, record)
+                key = hashlib.sha256(_json([rejection_id, fingerprint, step.step_id]).encode("utf-8")).hexdigest()
+                receipt = dict(step.apply(key))
+                if receipt.get("ok") is not True or len(_json(receipt).encode("utf-8")) > 65536:
+                    raise RuntimeChannelConflict("Beta rejection is not verified; runtime remains fenced")
+                record["receipts"][step.step_id] = receipt
+                record["running_step"] = None
+                self._write(rejection_id, record)
+            with self.channel._connection() as connection:
+                connection.execute("BEGIN EXCLUSIVE")
+                actual = self.channel._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
+                if actual != selected:
+                    raise RuntimeChannelConflict("Application channel changed during Beta rejection")
+                record["completed"] = True
+                connection.execute("UPDATE channel SET document=? WHERE id=1", (self.channel._encode(restored),))
+                connection.execute("UPDATE transitions SET completed=1, document=? WHERE operation_id=?", (_json(record), rejection_id))
+                connection.commit()
+            return record
+
     def _begin(self, operation_id, fingerprint, intent, expected):
         with self.channel._connection() as connection:
             self.channel._initialize(connection, expected)

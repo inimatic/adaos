@@ -1,5 +1,4 @@
 from contextlib import closing
-from dataclasses import replace
 import sqlite3
 
 import pytest
@@ -203,6 +202,51 @@ def test_failed_beta_activation_can_restore_stable_settings_without_touching_dat
     assert lifecycle.abort_beta_preparation(verify_source=lambda _: pytest.fail("No duplicate recovery")) == result
     with pytest.raises(RuntimeChannelConflict, match="cancelled"):
         lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: pytest.fail("Do not reuse cancelled Candidate"))
+
+
+def test_rejected_completed_beta_restores_stable_channel_and_retains_beta_data(tmp_path):
+    state, stable, channel = seed(tmp_path)
+    lifecycle = coordinator(tmp_path, 1)
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    beta = tmp_path / "beta1/data/records.sqlite"
+    sql(beta, "INSERT INTO records(id,value) VALUES(2,'beta-only')")
+    config = ApplicationConfigurationStore(state, "sample", "skill:worker")
+    assert config.read()["beta"]["active"] is True
+
+    result = lifecycle.reject_beta(webspace_id="desktop", verify_source=lambda _: {"ok": True})
+
+    selected = channel.read()
+    assert result["completed"] and selected is not None
+    assert len(selected) == 1
+    assert selected[0].runtime_root_ref == "workspace"
+    assert selected[0].release_digest == DIGEST
+    assert selected[0].revision == 3
+    assert config.read()["beta"]["active"] is False
+    assert sql(stable / "records.sqlite", "SELECT id,value FROM records") == [(1, "original")]
+    assert sql(beta, "SELECT id,value FROM records ORDER BY id") == [(1, "original"), (2, "beta-only")]
+    with channel.execution("workspace", DIGEST):
+        pass
+    assert lifecycle.reject_beta(
+        webspace_id="desktop", verify_source=lambda _: pytest.fail("No duplicate compensation")
+    ) == result
+
+
+def test_rejected_first_beta_clears_unpublished_runtime_channel(tmp_path):
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=tmp_path / "state",
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate1",
+        release_digest="sha256:" + "1" * 64,
+        stable_digest=None,
+        components=(),
+    )
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    assert lifecycle.channel.read()[0].runtime_root_ref == "trial:candidate1"
+
+    lifecycle.reject_beta(webspace_id="desktop", verify_source=lambda _: {"ok": True})
+
+    assert lifecycle.channel.read() == ()
 
 
 def test_recovery_cannot_cancel_after_stable_adoption_started(tmp_path):

@@ -352,3 +352,34 @@ class LocalApplicationDataLifecycle:
         return runner.abort(operation, contract_digest=self._contract(), steps=[
             TransitionStep("deactivate_configuration", configure), TransitionStep("verify_source", verify_source)],
             source_guard=source_guard)
+
+    def reject_beta(self, *, webspace_id: str,
+                    verify_source: Callable[[str], Mapping[str, Any]],
+                    source_guard: Callable = nullcontext):
+        """Deselect a reviewed Beta while retaining its isolated data evidence."""
+        runner = ApplicationRuntimeTransition(self.channel)
+        operation = f"application-beta:{self.application_id}:{self.candidate_id}"
+        record = runner.get(operation)
+        if (not record or not record["completed"]
+                or record["intent"]["target"]["webspace_id"] != webspace_id
+                or record["intent"]["target"]["runtime_root_ref"] != f"trial:{self.candidate_id}"):
+            raise RuntimeChannelConflict("Reject only the exact completed Beta selection")
+        stable = runner.get(f"application-stable:{self.application_id}:{self.candidate_id}")
+        if stable is not None:
+            raise RuntimeChannelConflict("Stable adoption has started; recover that exact publication instead")
+
+        def configure(_key):
+            for component in self.components:
+                store = ApplicationConfigurationStore(self.state, self.application_id, component.component_ref)
+                state = store.read()
+                beta = state.get("beta")
+                if beta and beta["active"]:
+                    if beta["candidate_id"] != self.candidate_id:
+                        raise RuntimeChannelConflict("Another Candidate owns the active configuration")
+                    store.deactivate_beta(candidate_id=self.candidate_id, expected_revision=state["revision"])
+            return {"ok": True, "overrides_retained": True}
+
+        return runner.reject_completed(operation, contract_digest=self._contract(), steps=[
+            TransitionStep("deactivate_configuration", configure),
+            TransitionStep("verify_source", verify_source),
+        ], source_guard=source_guard)

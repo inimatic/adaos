@@ -106,6 +106,85 @@ def bind_local_data_lifecycle(owner, runtime, release):
         return lifecycle
 
 
+def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str):
+    """Finish local runtime compensation after authoritative Candidate rejection."""
+    from dataclasses import replace
+
+    from adaos.domain.artifact_release import ArtifactPackageRef, ProjectRelease, WorkspaceLock
+    from adaos.services.applications.trial_runtime import NativeTrialRuntime
+    from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+
+    state = Path(owner.paths.state_dir()).resolve()
+    workspace = Path(owner.paths.workspace_dir()).resolve()
+    activation = TrialActivationStore(state / "artifact_pipeline/trial-activations").load(candidate_id)
+    rollback = dict((activation or {}).get("rollback") or {})
+    archive_value = str(rollback.get("archive") or "").strip()
+    if not activation or activation.get("status") != "detached" or not archive_value:
+        return {"ok": True, "status": "not_local_or_not_detached"}
+    root = Path(archive_value).resolve()
+    archive_root = (state / "artifact_pipeline/trial-rollbacks").resolve()
+    if not root.is_dir() or not root.is_relative_to(archive_root):
+        raise ValueError("Rejected Trial archive is outside the retained recovery root")
+    binding = root / ".adaos/data-transition.json"
+    if not binding.is_file():
+        return {"ok": True, "status": "no_local_data_transition"}
+    release_path = root / ".adaos/releases" / f"{release_digest.split(':')[-1]}.json"
+    release = ProjectRelease.from_mapping(json.loads(release_path.read_text(encoding="utf-8"))).seal()
+    if release.release_digest != release_digest:
+        raise ValueError("Rejected Trial release identity changed")
+    packages = tuple(ArtifactPackageRef.from_mapping(item) for item in activation.get("package_refs") or [])
+    runtime = NativeTrialRuntime(owner, candidate_id, release_digest, root, packages,
+                                 project_id=release.project_id)
+    lifecycle = bind_local_data_lifecycle(owner, runtime, release)
+    original_root = Path(str((activation.get("runtime_binding") or {}).get("path") or "")).resolve()
+    expected_root = (workspace.parent / "trials" / candidate_id).resolve()
+    if original_root != expected_root:
+        raise ValueError("Rejected Trial retained a different original runtime root")
+    original_components = tuple(
+        replace(component, beta_root=original_root / component.beta_root.relative_to(root))
+        for component in lifecycle.components
+    )
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=lifecycle.state,
+        private_root=lifecycle.private,
+        application_id=lifecycle.application_id,
+        candidate_id=lifecycle.candidate_id,
+        release_digest=lifecycle.release_digest,
+        stable_digest=lifecycle.stable_digest,
+        components=original_components,
+    )
+    webspace_id = str((activation.get("target") or {}).get("webspace_id") or "").strip()
+    if not webspace_id:
+        raise ValueError("Rejected Trial has no production Webspace identity")
+    metadata = workspace / ".adaos"
+
+    def verify(_key):
+        lock = WorkspaceLock.from_mapping(json.loads((metadata / "workspace.lock.json").read_text(encoding="utf-8")))
+        slots = [slot for slot in lock.slots if slot.project_id == release.project_id]
+        store = ApplicationStore(state)
+        if lifecycle.stable_digest:
+            installation = store.get_installation(release.project_id)
+            if (installation.status != "active"
+                    or installation.installed_release_digest != lifecycle.stable_digest
+                    or len(slots) != 1 or slots[0].release_digest != lifecycle.stable_digest):
+                raise ValueError("Stable code/installation changed during Trial rejection")
+        elif slots:
+            raise ValueError("Workspace installation appeared during Trial rejection")
+        return {"ok": True, "release_digest": lifecycle.stable_digest}
+
+    result = lifecycle.reject_beta(
+        webspace_id=webspace_id,
+        verify_source=verify,
+        source_guard=lambda: mutation_lock(metadata / ".workspace-writer.lock", timeout_s=30),
+    )
+    return {
+        "ok": True,
+        "status": "rejected",
+        "operation_id": result["operation_id"],
+        "restored_selections": list(result["intent"]["restored"]),
+    }
+
+
 def promote_with_local_data(owner, candidate_id, promote):
     """Run native publication inside an admitted local Beta data transaction.
 

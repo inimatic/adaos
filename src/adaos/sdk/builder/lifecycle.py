@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from adaos.sdk import navigation
-from adaos.sdk.builder import automation, preview, workflow
+from adaos.sdk.builder import automation, workflow
 from adaos.sdk.developer import compositions, projects
 
 
@@ -319,19 +319,45 @@ def decide_trial(
     candidate_id, candidate_digest = _candidate_identity(state)
     if expected_candidate_id is not None and (candidate_id, candidate_digest) != (expected_candidate_id, expected_candidate_digest):
         raise ValueError("The reviewed Candidate changed; reopen its changelog")
-    decided = projects.decide_candidate(
-        candidate_id,
-        accepted=accepted,
-        observations=[
-            {
-                "actor": actor,
-                "decision": "accepted_for_publication"
-                if accepted
-                else "changes_requested",
-                "idempotency_key": idempotency_key,
-            }
-        ],
-    )
+    try:
+        decided = projects.decide_candidate(
+            candidate_id,
+            accepted=accepted,
+            observations=[
+                {
+                    "actor": actor,
+                    "decision": "accepted_for_publication"
+                    if accepted
+                    else "changes_requested",
+                    "idempotency_key": idempotency_key,
+                }
+            ],
+        )
+    except Exception:
+        # The authoritative decision can succeed before local compensation or
+        # workflow projection. Resume only when the exact immutable Candidate
+        # already records the requested terminal decision.
+        observed = projects.get_candidate(candidate_id)
+        observed_candidate = _mapping(observed.get("candidate"))
+        expected_status = "accepted" if accepted else "rejected"
+        if (str(observed_candidate.get("candidate_id") or "") != candidate_id
+                or str(observed_candidate.get("status") or "") != expected_status
+                or str(observed_candidate.get("package_digest") or "") != candidate_digest):
+            raise
+        decided = observed
+    local_compensation = None
+    if not accepted:
+        from adaos.sdk.core._ctx import require_ctx
+        from adaos.services.applications.local_release_transition import (
+            reconcile_rejected_local_trial,
+        )
+
+        decided_candidate = _mapping(decided.get("candidate"))
+        local_compensation = reconcile_rejected_local_trial(
+            require_ctx("sdk.builder.lifecycle"),
+            candidate_id,
+            str(decided_candidate.get("release_digest") or "").strip(),
+        )
     transitioned = workflow.transition(
         object_type,
         object_id,
@@ -346,7 +372,11 @@ def decide_trial(
             "idempotency_key": idempotency_key,
         },
     )
-    return {**dict(decided), "workflow": transitioned.get("workflow")}
+    return {
+        **dict(decided),
+        "workflow": transitioned.get("workflow"),
+        "local_compensation": local_compensation,
+    }
 
 
 def publish_candidate(
