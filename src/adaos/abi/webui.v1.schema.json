@@ -609,7 +609,10 @@
         "collection.board",
         "collection.grid",
         "collection.tree",
+        "disclosure.accordion",
+        "navigation.breadcrumbs",
         "navigation.outline",
+        "navigation.tabs",
         "visual.taigaCollectionGrid",
         "visual.taigaMetricChart",
         "visual.taigaTree",
@@ -928,7 +931,7 @@
           }
         },
         {
-          "if": { "properties": { "type": { "enum": ["ui.actions", "input.commandBar"] } } },
+          "if": { "properties": { "type": { "enum": ["ui.actions", "input.commandBar", "navigation.tabs"] } } },
           "then": {
             "properties": {
               "inputs": { "$ref": "#/$defs/actionsInputs" }
@@ -938,6 +941,14 @@
         {
           "if": { "properties": { "type": { "const": "ui.queryToolbar" } } },
           "then": { "properties": { "inputs": { "$ref": "#/$defs/queryToolbarInputs" } }, "required": ["inputs"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "navigation.breadcrumbs" } } },
+          "then": { "properties": { "inputs": { "$ref": "#/$defs/breadcrumbInputs" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "disclosure.accordion" } } },
+          "then": { "properties": { "inputs": { "$ref": "#/$defs/accordionInputs" } } }
         },
         {
           "if": { "properties": { "type": { "const": "input.toggle" } } },
@@ -1356,7 +1367,7 @@
           "then": { "properties": { "inputs": { "$ref": "#/$defs/queryToolbarInputs" } }, "required": ["inputs"] }
         },
         {
-          "if": { "properties": { "type": { "enum": ["ui.actions", "input.commandBar"] } } },
+          "if": { "properties": { "type": { "enum": ["ui.actions", "input.commandBar", "navigation.tabs"] } } },
           "then": {
             "properties": {
               "inputs": { "$ref": "#/$defs/actionsInputs" }
@@ -1370,6 +1381,14 @@
               "inputs": { "$ref": "#/$defs/toggleInputs" }
             }
           }
+        },
+        {
+          "if": { "properties": { "type": { "const": "navigation.breadcrumbs" } } },
+          "then": { "properties": { "inputs": { "$ref": "#/$defs/breadcrumbInputs" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "disclosure.accordion" } } },
+          "then": { "properties": { "inputs": { "$ref": "#/$defs/accordionInputs" } } }
         }
       ]
     },
@@ -1984,11 +2003,63 @@
         "buttons": { "$ref": "#/$defs/actionButtonList" },
         "variant": {
           "type": "string",
-          "enum": ["tabs", "segmented", "toolbar", "adaptiveToolbar", "stack", "header"]
+          "enum": ["tabs", "segmented", "toolbar", "adaptiveToolbar", "autoOverflow", "stack", "header"]
         },
         "size": {
           "type": "string",
           "enum": ["small", "default", "medium"]
+        }
+      }
+    },
+
+    "breadcrumbInputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "ariaLabel": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["id", "label"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "label": { "type": "string" },
+              "label_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+              "current": { "type": "boolean" },
+              "disabled": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+
+    "accordionInputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "multiple": { "type": "boolean", "default": false },
+        "expandedStateKey": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "density": { "type": "string", "enum": ["compact", "comfortable"] },
+        "emptyText": { "type": "string" },
+        "fields": { "type": "array", "items": { "type": "object", "additionalProperties": true, "required": ["path"] } },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["id", "title"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "title": { "type": "string" },
+              "title_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+              "subtitle": { "type": "string" },
+              "content": { "type": "string" },
+              "expanded": { "type": "boolean" },
+              "disabled": { "type": "boolean" }
+            }
+          }
         }
       }
     },

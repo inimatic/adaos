@@ -71,6 +71,24 @@ def test_catalog_covers_every_webui_widget_type() -> None:
     assert get_ui_capability("collection.board")["kind"] == "component"
 
 
+def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
+    catalog = ui_capability_catalog()
+    component_ids = {item["id"] for item in catalog["components"]}
+
+    assert catalog["catalog_version"] == "3.1.0"
+    assert {
+        "navigation.tabs",
+        "navigation.breadcrumbs",
+        "disclosure.accordion",
+    } <= component_ids
+    form = get_ui_capability("ui.form")
+    assert {"dateRange", "chips", "checkboxGrid", "staticContent"} <= set(
+        form["manifest"]["supported_field_types"]
+    )
+    actions = get_ui_capability("ui.actions")
+    assert "autoOverflow" in actions["interactions"]["overflow"]
+
+
 def test_multilingual_search_selects_kanban_recipe() -> None:
     result = search_ui_capabilities("Покажи задачи канбан-доской в трех колонках")
 

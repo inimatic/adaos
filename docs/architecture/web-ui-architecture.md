@@ -192,6 +192,23 @@ Representative kinds:
 This layer is the primary contract between skill/scenario authoring, runtime,
 LLM tooling, and browser renderers.
 
+The admitted composition vocabulary also includes semantic controls that must
+not be recreated from product-specific buttons and visibility expressions:
+
+- `navigation.tabs` for peer sections, with one active section and roving
+  keyboard focus;
+- `navigation.breadcrumbs` for a hierarchy path with one current location;
+- `disclosure.accordion` for bounded information sections, single-open by
+  default;
+- `ui.actions` with `variant=autoOverflow` when commands must remain compact
+  as the container narrows;
+- `ui.form` typed fields for text, numeric, temporal, choice, range, rating,
+  attachment, grid, section, and static-content input.
+
+These are generic ABI primitives. Applications and Users & Access may compose
+them, but their labels, roles, permission ids, endpoints, and workflow state
+remain in application manifests and shared access services.
+
 The current `webui.v1` compatibility slice exposes a smaller domain interface
 for this layer:
 

@@ -57,12 +57,18 @@ Layout baseline, 2026-09-16:
   components without product ids, labels, endpoint rules, or workflow state:
   region/surface, compact disclosure, collection search/filter tools, table,
   detail/inspector placement, and explicit command menus. The capability
-  catalog exposes nine layout patterns and eleven component contracts, all of
+  catalog exposes nine layout patterns and the initial eleven component contracts, all of
   which have Client renderers.
-- [ ] `[should]` Extend the admitted library only from measured reuse: automatic
-  command overflow, richer adaptive-detail behavior, tabs/accordion,
-  breadcrumbs, and the remaining typed form controls are candidates, not
-  implicit requirements of the completed ABI v2 cutover.
+- [x] `[should]` Admit the first measured post-cutover candidates without
+  product semantics: automatic command overflow, semantic tabs, breadcrumbs,
+  accordion disclosure, and the already implemented typed form controls. UI
+  capability catalog `3.1.0` exposes fourteen component contracts; the Client
+  inventory has 44 registered widget types. Tabs retain ARIA selection and
+  roving keyboard focus, breadcrumbs retain the full accessible label, and
+  overflow uses one bounded menu rather than clipped command text.
+- [ ] `[should]` Qualify richer adaptive-detail behavior against Applications
+  and Users & Access on wide/compact viewports. Explicit region presentation
+  remains authoritative; do not add a second inferred detail-layout contract.
 - [x] `[must]` Add cutover contract and browser conformance for every admitted
   Workspace layout at wide and compact sizes, including stable render-plan
   identity, geometry, clipping, overflow, page errors, and widget render
@@ -113,6 +119,10 @@ Cutover evidence, 2026-09-16:
 - Client `ng lint` remains blocked before source lint by the existing Nx/Angular
   `Workspaces is not a constructor` toolchain failure; build, tests, inventory,
   boundaries, and browser qualification are the current executable gates.
+- The post-cutover navigation/disclosure tranche has focused Client tests for
+  tab keyboard focus, automatic command overflow, breadcrumb current-location
+  semantics, accordion state projection, and registry resolution. Core catalog
+  tests verify the same identifiers and the complete typed form vocabulary.
 
 - [x] `[must]` Qualify generic schema-modal resize and fullscreen restoration on desktop
   and mobile. Persist current-user device/scenario/webspace scopes; resolve exact

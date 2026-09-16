@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.0.0",
+  "catalog_version": "3.1.0",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -583,6 +583,35 @@
           "combobox",
           "fileUpload"
         ],
+        "supported_field_types": [
+          "shortText",
+          "longText",
+          "number",
+          "integer",
+          "email",
+          "url",
+          "phone",
+          "password",
+          "date",
+          "time",
+          "datetime",
+          "dateRange",
+          "timeRange",
+          "toggle",
+          "dropdown",
+          "combobox",
+          "chips",
+          "singleChoice",
+          "multiChoice",
+          "slider",
+          "linearScale",
+          "rating",
+          "fileUpload",
+          "singleChoiceGrid",
+          "checkboxGrid",
+          "section",
+          "staticContent"
+        ],
         "single_boolean_field_types": [
           "boolean",
           "toggle",
@@ -707,7 +736,7 @@
       "id": "ui.actions",
       "kind": "component",
       "title": "Command surface",
-      "summary": "Explicit toolbar, segmented, stack, or compact commands.",
+      "summary": "Explicit toolbar, segmented, stack, compact, or automatically overflowing commands.",
       "aliases": {
         "en": [
           "actions",
@@ -737,11 +766,12 @@
         "select:<buttonId>"
       ],
       "interactions": {
-        "menu": "adaptiveToolbar buttons with options use a viewport-bounded overlay. Selection emits select:<buttonId> with the option as $event (id/value/menu_id), not $event.option. displaySelectedLabel=false keeps a short authored trigger label; optionMetaPaths chooses localized secondary option fields. An option with current=true marks the actual current step in bold and with aria-current, independently of the selected item being inspected. disabled=true prevents selecting an unavailable option. Selection does not execute another command implicitly."
+        "menu": "adaptiveToolbar buttons with options use a viewport-bounded overlay. Selection emits select:<buttonId> with the option as $event (id/value/menu_id), not $event.option. displaySelectedLabel=false keeps a short authored trigger label; optionMetaPaths chooses localized secondary option fields. An option with current=true marks the actual current step in bold and with aria-current, independently of the selected item being inspected. disabled=true prevents selecting an unavailable option. Selection does not execute another command implicitly.",
+        "overflow": "variant=autoOverflow keeps required and higher-priority plain commands visible, moves remaining commands into one keyboard-accessible More menu, and recomputes on container resize. Mark a command overflow=never when it owns a nested option menu or must remain visible."
       },
       "responsive": {
         "desktop": "bounded command group",
-        "compact": "wraps without overlapping"
+        "compact": "wraps or uses one explicit overflow menu without overlapping"
       },
       "postconditions": [
         "Every declared button has an executable or explicitly disabled action contract.",
@@ -859,6 +889,72 @@
       },
       "postconditions": [
         "The selected value maps to one declared option value."
+      ]
+    },
+    {
+      "id": "navigation.tabs",
+      "kind": "component",
+      "title": "Section tabs",
+      "summary": "A semantic tab list for switching peer sections within one surface.",
+      "aliases": {
+        "en": ["tabs", "sections", "views"],
+        "ru": ["вкладки", "разделы", "представления"]
+      },
+      "manifest": {
+        "widget_type": "navigation.tabs",
+        "selection": "Use selectedStateKey on buttons and click:<buttonId> actions to update the active section."
+      },
+      "data_shape": { "kind": "none" },
+      "events": ["click:<buttonId>"],
+      "responsive": {
+        "desktop": "one horizontal tab list",
+        "compact": "bounded horizontal tab list"
+      },
+      "postconditions": [
+        "The active tab is exposed through aria-selected.",
+        "ArrowLeft, ArrowRight, Home, and End move keyboard focus between enabled tabs."
+      ]
+    },
+    {
+      "id": "navigation.breadcrumbs",
+      "kind": "component",
+      "title": "Breadcrumb navigation",
+      "summary": "A compact hierarchy path with an explicit current location.",
+      "aliases": {
+        "en": ["breadcrumbs", "path", "hierarchy path"],
+        "ru": ["хлебные крошки", "путь", "иерархия"]
+      },
+      "manifest": { "widget_type": "navigation.breadcrumbs" },
+      "data_shape": { "kind": "items" },
+      "events": ["click", "click:<itemId>"],
+      "responsive": {
+        "desktop": "single compact path",
+        "compact": "horizontally scrollable path without label overlap"
+      },
+      "postconditions": [
+        "The last or explicitly current item uses aria-current=page.",
+        "Navigation labels may truncate visually but retain their full accessible name."
+      ]
+    },
+    {
+      "id": "disclosure.accordion",
+      "kind": "component",
+      "title": "Accordion disclosure",
+      "summary": "A bounded list of independently disclosed information sections.",
+      "aliases": {
+        "en": ["accordion", "disclosure", "expandable sections"],
+        "ru": ["аккордеон", "раскрывающиеся разделы", "секции"]
+      },
+      "manifest": { "widget_type": "disclosure.accordion" },
+      "data_shape": { "kind": "items" },
+      "events": ["toggle", "toggle:<itemId>"],
+      "responsive": {
+        "desktop": "bounded disclosure list",
+        "compact": "full-width disclosure list"
+      },
+      "postconditions": [
+        "Each trigger exposes aria-expanded and owns one labelled region.",
+        "Single-open is the default; multiple=true explicitly enables multiple open sections."
       ]
     },
     {
