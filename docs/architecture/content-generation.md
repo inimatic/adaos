@@ -46,6 +46,13 @@ Image request fingerprints include API and subnet scope; another subnet cannot
 retrieve the job. The node SDK also scopes drafts to the verified invocation
 subject and executing skill, not a configured owner fallback.
 
+`adaos.sdk.llm.images.list_drafts` observes bounded draft metadata for explicit
+local context (for example a selected project and purpose). It neither submits
+nor polls provider work, nor republishes every image in the history. Opening an
+exact draft uses `get`; reopening its terminal result must not debit generation
+again. Context filtering supplements verified actor/skill ownership; it cannot
+grant access to another actor's draft. Legacy drafts remain discoverable.
+
 `adaos.sdk.llm.images.generate/get` stages one PNG/JPEG/WebP draft with bounded
 encoded bytes and decoded pixels. The image is stored by content digest and
 published as a browser media descriptor, never as a local path or token-bearing
@@ -71,6 +78,12 @@ Builder presents the public `README.md` in About together with the Application's
 existing publisher identity and icon. Publisher/owner information is a verified
 identity projection, not an editable ownership claim. README remains one
 co-owned user/LLM file with explicit draft review and digest-checked save.
+
+`adaos.sdk.applications.get_identity` reads the registered publisher directly,
+without creating an Application or scanning installed runtime/catalog state.
+An unregistered development source shows no invented owner. A manifest's free
+text owner field is not authoritative, and a foreign publisher must never be
+replaced by the local subnet merely because its sources are open in Builder.
 
 An icon can originate from an explicit upload or an independently metered image
 draft. A reusable Client crop surface provides a fixed aspect ratio, positioning

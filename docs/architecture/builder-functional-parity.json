@@ -134,13 +134,14 @@
         "new-project-form": "ui.form",
         "design-component-picker": "ui.list",
         "design-file-tree": "collection.tree",
-        "design-process": "collection.tree",
+        "design-process": "ui.list",
         "design-conversation-full-task": "ui.chat"
       },
       "forward_required_modal_ids": ["prototype-review", "design-settings", "design-revisions", "design-readme-editor", "design-delta"],
       "forward_binding_replacements": {
         "builder_sdk_control_skill.transition_workflow": "builder_sdk_control_skill.accept_prototype",
-        "builder_sdk_control_skill.save_project_file": "builder_sdk_control_skill.save_readme"
+        "builder_sdk_control_skill.save_project_file": "builder_sdk_control_skill.save_readme",
+        "builder_sdk_control_skill.get_process_tree": "builder_sdk_control_skill.get_process_stages"
       },
       "forward_required_bindings": [
         "builder_sdk_control_skill.list_projects", "builder_sdk_control_skill.get_workbench",
@@ -148,7 +149,7 @@
         "builder_sdk_control_skill.get_model_settings", "builder_sdk_control_skill.get_codex_options",
         "builder_sdk_control_skill.set_codex_profile", "builder_sdk_control_skill.get_workbench_messages",
         "builder_sdk_control_skill.append_discussion", "builder_sdk_control_skill.save_specification_delta",
-        "builder_sdk_control_skill.read_readme", "builder_sdk_control_skill.open_preview"
+        "builder_sdk_control_skill.get_about", "builder_sdk_control_skill.open_preview"
       ],
       "migration_decisions": {
         "layout": "Accepted two-area Basic/Detailed layout replaces the three-panel layout, without copying mock state.",

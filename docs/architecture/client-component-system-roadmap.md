@@ -604,6 +604,16 @@ declared locale rather than changing a user's browser preference implicitly.
   long UTC interval labels are truthful but truncated by the native control;
   functional Automation acceptance is not unconditional visual approval.
 
+## Media Descriptor Compatibility
+
+- [x] `[must]` Render the SDK browser-media `path` descriptor in the shared image
+  surface using authenticated local/routed endpoints, without per-Application
+  URL conversion. Scope descriptor caches to the selected hub route. Ten focused
+  Client tests and About's wide/compact existing-draft pixel/reopen checks pass.
+- [ ] `[must]` Qualify the generic crop/position/zoom draft and explicit apply
+  boundary described in `content-generation.md` (CG-06). An image that renders
+  correctly is not proof of portable Application asset publication.
+
 ## Deferred
 
 - [ ] `[deferred]` Generate or ship arbitrary Angular/JavaScript renderer code

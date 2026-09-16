@@ -10,7 +10,8 @@ if (!hub || !token || !output || process.env.ENV_TYPE !== 'dev') throw new Error
 const inspectOnly = process.argv.includes('--inspect')
 const exerciseIndex = process.argv.indexOf('--exercise-test')
 const exerciseId = exerciseIndex >= 0 ? process.argv[exerciseIndex + 1] : null
-const report = { checks: [], errors: [], captures: [], requests: [], passed: false, mode: inspectOnly ? 'inspect' : 'read-only-controls' }
+const locale = process.env.ADAOS_E2E_LOCALE === 'en' ? 'en' : 'ru'
+const report = { checks: [], errors: [], captures: [], requests: [], passed: false, locale, mode: inspectOnly ? 'inspect' : 'read-only-controls' }
 const browser = await chromium.launch({ headless: true })
 await fs.mkdir(output, { recursive: true })
 try {
@@ -20,17 +21,17 @@ try {
     if (process.env.ADAOS_E2E_ACCEPT_TRIAL && profile !== 'wide') continue
     if (process.env.ADAOS_E2E_OBSERVE_PROTOTYPE && profile !== 'wide') continue
     if (process.env.ADAOS_E2E_ANSWER_CLARIFICATION && profile !== 'wide') continue
-    const context = await browser.newContext({ viewport, locale: 'ru-RU', colorScheme: 'dark' })
-    await context.addInitScript(({ hub, token }) => {
+    const context = await browser.newContext({ viewport, locale: locale === 'ru' ? 'ru-RU' : 'en-US', colorScheme: 'dark' })
+    await context.addInitScript(({ hub, token, locale }) => {
       window.__ADAOS_DEBUG__ = true
       window.__ADAOS_BASE__ = hub
       window.__ADAOS_TOKEN__ = token
       for (const [key, value] of Object.entries({
-        adaos_device_id: 'builder-live-review', adaos_webspace_id: 'desktop-dev', adaos_lang: 'ru',
+        adaos_device_id: 'builder-live-review', adaos_webspace_id: 'desktop-dev', adaos_lang: locale,
         adaos_hub_base: hub, adaos_local_hub_base: hub, adaos_try_local_hub: '1', adaos_hub_token: token,
         adaos_local_subnet_id: 'sn_6acf0c01', adaos_selected_zone: 'lo', adaos_last_used_zone: 'lo',
       })) localStorage.setItem(key, value)
-    }, { hub, token })
+    }, { hub, token, locale })
     const page = await context.newPage()
     page.setDefaultTimeout(15000)
     page.on('pageerror', error => report.errors.push({ profile, error: error.message }))
@@ -111,6 +112,11 @@ try {
       }) })
       await capture('initial')
       report.checks.push({ profile, check: 'live_workbench_render', passed: true })
+      if (process.env.ADAOS_E2E_ABOUT) {
+        const { reviewAbout } = await import('./builder-about-review.mjs')
+        await reviewAbout({ page, widget, command, closeModal, capture, report, profile })
+        continue
+      }
       if (process.env.ADAOS_E2E_ANSWER_CLARIFICATION) {
         const { reviewClarification } = await import('./builder-clarification-review.mjs')
         await reviewClarification({ page, widget, capture, report, output,
@@ -432,8 +438,8 @@ try {
         for (const [section, expected] of [['brief', 'design-task-brief'], ['inputs', 'technical-spec-editor'], ['files', 'design-file-tree'], ['readme', 'design-readme'], ['development-feedback', 'development-feedback-list'], ['process', 'design-process'], ['checks', 'design-checks']]) {
           await command(section).click()
           await widget(expected).waitFor()
-          const tool = { inputs: 'get_prompt_context', files: 'list_project_file_tree', readme: 'read_readme',
-            'development-feedback': 'list_development_feedback', process: 'get_process_tree' }[section]
+          const tool = { inputs: 'get_prompt_context', files: 'list_project_file_tree', readme: 'get_about',
+            'development-feedback': 'list_development_feedback', process: 'get_process_stages' }[section]
           if (tool) {
             await page.waitForResponse(response => response.request().postData()?.includes(`:${tool}`) && response.status() === 200, { timeout: 30000 })
               .catch(() => {})

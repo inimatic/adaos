@@ -1676,3 +1676,63 @@ without generating or deleting fixtures. It deliberately does not count as
 mutation acceptance or migration/adoption proof. Reading List has no credential
 slots, so this live result is not evidence of credential migration. About and
 portable image resources remain CG-06 work.
+
+### 2026-09-16: Critical Review of the Managed Lifecycle Evidence
+
+Stable `0.1.4` and `0.1.8` establish two locally completed Reading List increments
+with independent browser/HTTP/restart/migration review and retained private data.
+They do not establish first-attempt success, unattended completion, a sealed
+holdout result, or general release readiness. Multiple corrections and an
+independent engineering reviewer were needed. Input completeness, executable
+form commands, published migration immutability and exact release selection are
+stronger gates now; several checks still live in separate E2E stands.
+
+Prioritize moving these proven checks into the common acceptance/recovery
+contract, retaining attempt-level input, repair count, timings and cost, and
+then repeat an unchanged brief on another small application. Keep successive
+Beta replacement/loss consent, background/all-room authority, real credential
+transfer and consumer installation explicitly open. Reading List has no secret
+slots. Do not weaken a gate to label two corrected journeys autonomous success.
+
+### 2026-09-16: About Draft Review and Shared Media Compatibility
+
+DEV Builder now exposes About with the actual public README and registered
+publisher, preserving existing edit/generate/review and digest-checked save.
+Image history is caller/skill/project scoped; reading metadata neither polls a
+provider nor republishes every image. Unknown publisher remains unknown.
+
+Browser review 01 encountered the previous materialized UI after skill activation.
+`refresh-dev-builder.py --ui` explicitly validates/materializes current source
+through the owner in the existing paired Preview, without creating a Webspace,
+changing project selection or accepting a revision. Review now checks the loaded
+binding instead of spending a timeout waiting for a tool the old UI never calls.
+
+Review 02 exposed a real shared Client contract gap: the image SDK's `path`
+descriptor was ignored. Shared normalization now recognizes the bounded media
+path and keeps local/routed authentication and hub-specific caches. Review 03
+passes 12 checks across 1440/390px: About, existing README controls and opening/
+reopening the same previously approved image with nonblank pixels. No provider
+generation or source save occurred. Ten Client and 55 generation/Application SDK
+tests pass. Upload, crop, stale asset apply, portable packaging and their combined
+Beta/Stable qualification remain open; do not advertise a draft as a saved icon.
+
+The first local DEV checkpoint attempt correctly rejected changed content at an
+already occupied Project version (`--bump none`). A normal patch checkpoint
+succeeds; version immutability was not relaxed. The unexpected CLI exception
+also exposed an unsafe diagnostic default: Rich included frame locals containing
+runtime configuration. CLI exception rendering now omits locals, retaining the
+stack and actual error; a privacy regression and 19 project CLI tests pass.
+Keep local content-addressed checkpoints distinct from remote Forge/Git delivery.
+
+Final About reviews `review-04-ru` and `review-05-en` pass 12 checks each on the
+same source, including localized draft status and metering. Screenshots were
+visually reviewed; public README and publisher names remain source content, not
+automatically translated. This does not certify locale coverage of shared chat
+or modal chrome. Local DEV checkpoint `about-20260916/checkpoint-01` retains
+Builder `0.2.151`; it is not a remote push or Workspace publication.
+
+After the final API restart, `cycle-2/stable-restart-observation-02.json` passes
+read-only public-tool checks. Private comparisons again retain all three user
+records and all three settings, with no exported values. BIP-28 now records the
+completed local subset as partial rather than leaving the whole item blocked;
+broader delivery, successive Beta loss consent and common acceptance remain open.

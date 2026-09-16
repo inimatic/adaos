@@ -289,10 +289,16 @@ integration, not closure of the remaining interaction/continuation obligations.
   usage/cost coverage. Populate the operator policy without changing access rules;
   absent tariffs remain explicitly unpriced. Live Subscriptions/UI qualification
   stays open.
-- [ ] `[must]` Exercise the accepted live Builder on one isolated TEST
+- [x] `[must]` Exercise the accepted live Builder on one isolated TEST
   application from conversational creation through Prototype, Automation,
   independent verification and local delivery; record actual limits separately
   from successful steps. Keep the single paired preview topology.
+  Reading List creation `workbench-automation-20260914/journey-01` and managed
+  increments `reading-list-migrations-20260915/cycle-1/stable-01` and
+  `cycle-2/stable-02` close the bounded local journey at Stable `0.1.4`/`0.1.8`.
+  Independent HTTP/browser/migration/restart checks pass without hand-editing
+  application source. Multiple repairs and engineering review were needed;
+  this is not unattended, first-attempt or general delivery qualification.
 - [ ] `[deferred]` Expand read-only artifact inspection into a full file IDE,
   binary/diff editors, bulk asset transformations and collaborative editing.
   This is a BIP-02 sub-scope, not another independent top-level package.
@@ -622,11 +628,11 @@ Exit/remaining work: Resolve Media's requirement provenance/recipient/channel sc
 
 ### BIP-28
 
-- [ ] `[must]` **Installed Lifecycle And Delivery**. Status: `blocked`.
+- [ ] `[must]` **Installed Lifecycle And Delivery**. Status: `partial`.
 
 Owner/dependencies: Builder lifecycle + delivery + delegated authorization.
 
-Implementation boundary: Local Trial/promotion mechanisms and historical Equipment/Builder receipts exist. The retained native TEST journey is explicitly resumed; other delivery remains paused. Personal DEV rejecting delegated credentials does not qualify installed reader/writer behavior. Candidate materialization and an active placement do not establish isolated skill execution.
+Implementation boundary: Two native local Reading List increments complete at Stable `0.1.4` and `0.1.8`, with independent execution, migration, browser and restart evidence. Other delivery remains paused. Multiple repairs and engineering review prevent an unattended-success claim. Local owner execution does not qualify delegated reader/writer behavior, consumer installation or all-room/background cutover.
 
 - [x] `[must]` Reconcile an exact retained placement without repeating activation
   after a stale workflow response. Changed candidate, target, runtime or safety
@@ -653,6 +659,12 @@ Implementation boundary: Local Trial/promotion mechanisms and historical Equipme
   replacement is permitted. Consume the exclusive cutover in `AP4-20` and
   `APP1-13`: one effective channel/desktop representation, no parallel
   verification Beta, including through old links or background execution.
+- [x] `[must]` Qualify the local foreground cutover subset through the native
+  Builder command, without a separate Applications approval: one desktop tile,
+  local Beta flag, unchanged external prerelease subscription and exact replay
+  without reseeding data. Reading List `cycle-2/beta-replay-01` retains the
+  `0.1.8` Candidate and all six Beta records. All-room/background authority stays
+  under the preceding open gate.
 - [ ] `[must]` Include versioned data schemas, semantics and invariants in
   Automation context without real user records. Require algorithmic forward
   migrations tested on synthetic data and clarification of ambiguous mappings;
@@ -686,6 +698,13 @@ Implementation boundary: Local Trial/promotion mechanisms and historical Equipme
   Also expose and qualify possible loss when a new Beta starts from Stable
   again instead of carrying forward records entered in the preceding Beta.
   Backward migration remains deferred under `APP1-12`/`APD-11`.
+- [x] `[must]` Qualify local native changelog acceptance of the retained Beta
+  with its working data and configuration. `cycle-2/stable-02` and
+  `stable-data-http-01.json` prove adoption before removing only the three
+  E2E-owned records; all three user records and three settings remain, including
+  the original two records from cycle 1. Read-only post-restart observation and
+  private comparisons pass. This application has no credential slots; successive
+  Beta replacement, rollback loss consent and real secret transfer remain open.
 - [x] `[must]` Admit local `empty` Trial data to native skill execution with its
   own context, declarations, runtime slots and store, using original node policy.
   Verify package/lock/release identity; preserve DEV data across Trial writes and
@@ -698,7 +717,7 @@ Implementation boundary: Local Trial/promotion mechanisms and historical Equipme
   long-running services, expiry/revocation and recovery. Unsupported data modes
   and remote forwarding fail closed; local owner CRUD is not this broader proof.
 
-Exit/remaining work: Qualify the resumed TEST Trial against its release lock, then source publication, consumer install/update, retained records, real reader/writer use, human EN/RU compact/wide review and live projection identity. Cover node-status/recovery failures. This is blocked non-deferred work, not waived or silently deferred.
+Exit/remaining work: Move independent migration/fixture and review checks into common acceptance, then qualify successive Beta replacement/loss consent, source publication and consumer install/update, real credentials and delegated readers/writers, all-room/background authority and node-status/recovery failures. About portability remains CG-06. Two repaired local journeys do not close these non-deferred obligations.
 
 ### BIP-29
 

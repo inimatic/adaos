@@ -182,3 +182,16 @@ profiles read-only queries against that local Prototype. It does append normal
 resource traces. Its cProfile timings include instrumentation overhead and are
 neither HTTP latency nor LLM latency; compare separately measured wall-clock calls
 before claiming an optimization.
+
+`refresh-dev-builder.py --ui` prepares the selected Builder skills and explicitly
+materializes current Builder source in its existing `desktop-dev` Preview. It
+refuses a different project selection and records the source digest; it does not
+accept a Prototype or publish into Workspace. Skill activation alone is not
+proof that the UI projection has been replaced.
+
+`review-builder-workbench.py --inspect --about --select-created <creation-receipt>
+--output <new-directory>` reviews registered publisher/README and reopens an
+already completed, caller-owned image draft on desktop/mobile. It never generates
+an image or saves source. Absence of an owned draft is an explicit prerequisite
+failure, not permission to make a paid request. Use a new evidence directory on
+each run and keep draft review distinct from crop/apply/release qualification.

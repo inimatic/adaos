@@ -13,6 +13,8 @@ from adaos.apps.cli.active_control import resolve_control_token
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inspect", action="store_true")
+    parser.add_argument("--about", action="store_true", help="Read About and reopen an existing owned image draft without generating or saving")
+    parser.add_argument("--locale", choices=("en", "ru"), default="ru", help="Locale of the isolated review browser, not the user's preferences")
     parser.add_argument("--refinement", action="store_true", help="Review Process, modal resizing and one README draft on the owned TEST")
     parser.add_argument("--modal-settings-only", action="store_true", help="Review shared modal preferences and explicit DEV defaults without another LLM request")
     parser.add_argument("--select-created", type=Path, help="Read-only review of the TEST application from a creation receipt")
@@ -44,6 +46,9 @@ def main():
         parser.error("Independent evidence overrides require Trial review")
     if args.inspect and args.exercise_test:
         parser.error("Inspect-only mode cannot create, refine or automate a TEST application")
+    if args.about:
+        if not args.inspect or not args.select_created or args.refinement or args.open_trial or args.trial_evidence or args.answer_clarification:
+            parser.error("About review requires exclusive inspect-only TEST selection")
     load_dotenv()
     if os.getenv("ENV_TYPE") != "dev":
         parser.error("Requires ENV_TYPE=dev")
@@ -52,7 +57,10 @@ def main():
            "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub),
            "ADAOS_E2E_OUTPUT": str(args.output.resolve())}
     env["ADAOS_E2E_CODEX_MODEL"] = args.codex_model
+    env["ADAOS_E2E_LOCALE"] = args.locale
     env["ADAOS_E2E_ACCEPTED_REVISION"] = args.accepted_revision
+    if args.about:
+        env["ADAOS_E2E_ABOUT"] = "1"
     if args.new_change:
         if not args.resume_created or not args.prototype_prompt or not args.base_revision:
             parser.error("A successor Change requires provenance, an explicit prompt and exact base revision")

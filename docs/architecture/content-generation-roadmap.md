@@ -48,3 +48,12 @@ Target: [Typed Content Generation](content-generation.md).
   Bounded UTF-8, private-key rejection, tamper and legacy-candidate tests pass.
   This source projection is not remote release packaging: guest installation,
   portable icons, crop UI and the combined About browser proof remain open.
+  About now preserves the existing README edit/generate/review/CAS flow and reads
+  only registered publisher identity. Owner-scoped image history survives modal
+  reopening without provider calls. `about-20260916/review-04-ru` and
+  `review-05-en` qualify the final source in both locales, with 12 checks each;
+  `review-03` retains the first passing shared-media correction. They qualify the
+  existing approved image in 1440/390px browsers, including nonblank pixel checks
+  and identical reopen digest. The shared Client now understands SDK media `path`
+  descriptors on local/routed transports; no Builder-specific renderer was added.
+  This is read-only draft review, not upload/crop/apply or package qualification.
