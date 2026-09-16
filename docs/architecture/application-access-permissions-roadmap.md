@@ -3,7 +3,7 @@
 Status: policy/runtime V1 implemented; product-surface and full browser
 qualification reopened for Layout & Interaction ABI v2 migration.
 
-Last reviewed: 2026-09-16.
+Last reviewed: 2026-09-17.
 
 Target architecture:
 [Application Access, Permissions, and Roles](application-access-permissions.md).
@@ -99,6 +99,13 @@ Evidence:
   model to Applications, Users & Access, Builder, API, SDK, Root MCP, and
   conversation entry points. Connected-account values are metadata-only and
   secret-redacted.
+- `src/adaos/services/root_mcp/users_access_plane.py` exposes owner-governed,
+  actor-bound read/invite/manage operations over the same
+  `PersonalizationAccessService` and Application-access projection. The DEV
+  `users_access` project composes the first separate EN/RU product surface with
+  people, invitations, roles, devices, sessions, Application access, and
+  activity. This is implementation evidence, not yet the AAPR4-04 exit proof:
+  Trial projection and wide/compact browser journeys remain required.
 - `src/adaos/services/builder/domain_packs/application_manager_legacy.py` and
   `applications.compatibility.v1.json` publish the DEV Applications and Users
   & Access surfaces, including assignment/change/revoke, simulation, privacy,
@@ -287,9 +294,13 @@ Application-centric and subject-centric views.
   delegates all writes to platform APIs.
 
 **Current boundary:** the shared management API, projections, generated DEV
-surfaces, and bounded contract probes exist. The exit proof is not met: the
-Workspace products, complete navigation, role/permission management UX, and
-wide/compact browser journeys are still required without direct database edits.
+surfaces, a dedicated Root MCP Users & Access plane, the first standalone DEV
+Users & Access application, and bounded contract probes exist. The exit proof
+is not met: Applications integration, Trial products, complete user-detail and
+Pending Actions routing, and wide/compact browser journeys are still required
+without direct database edits. AdaOS Connect keeps claim, pairing, and recovery
+entry flows; its duplicate owner administration panels are removed only after
+the Users & Access beta is accepted.
 
 ## AAPR5. Builder Final Verification
 

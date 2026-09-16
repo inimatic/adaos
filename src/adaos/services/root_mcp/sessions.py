@@ -28,6 +28,14 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "applications.publisher.triage",
         "applications.recover",
     ],
+    "UsersAccessOperator": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "users_access.read",
+        "users_access.invite",
+        "users_access.manage",
+        "applications.read",
+        "applications.apply",
+    ],
     "ContextAgent": [
         *DEFAULT_BEARER_CAPABILITIES,
         "context.read",

@@ -64,6 +64,8 @@ from .targets import managed_target_registry_summary
 from .tokens import access_token_registry_summary, get_access_token_record, issue_access_token, list_access_tokens, revoke_access_token
 from .applications_plane import contracts as application_tool_contracts
 from .applications_plane import handlers as application_tool_handlers
+from .users_access_plane import contracts as users_access_tool_contracts
+from .users_access_plane import handlers as users_access_tool_handlers
 
 
 _DESCRIPTIVE_TOOL_CACHE_TTL_S = max(0.0, float(os.getenv("ADAOS_ROOT_MCP_DESCRIPTIVE_CACHE_TTL_S", "30") or "30"))
@@ -2143,6 +2145,7 @@ def list_tool_contracts(*, surface: str | None = None, plane_id: str | None = No
     items = [
         *_implemented_tool_contracts(),
         *application_tool_contracts(),
+        *users_access_tool_contracts(),
         *_placeholder_operational_contracts(),
     ]
     if surface:
@@ -4220,6 +4223,7 @@ def _handle_context_propose_memory(arguments: dict[str, Any], *, dry_run: bool) 
 
 _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     **application_tool_handlers(),
+    **users_access_tool_handlers(),
     "development.describe_foundation": lambda arguments, dry_run=False: _handle_describe_foundation(arguments, dry_run=dry_run),
     "development.list_contracts": lambda arguments, dry_run=False: _handle_list_contracts(arguments, dry_run=dry_run),
     "development.list_planes": lambda arguments, dry_run=False: _handle_list_planes(arguments, dry_run=dry_run),

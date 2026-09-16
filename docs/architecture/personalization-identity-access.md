@@ -560,18 +560,22 @@ access policy.
 
 Current implementation note: the browser header/settings panel now consume the
 current-user settings API for profile, locale, timezone, theme, membership, and
-device context. AdaOS Connect also exposes the owner/admin join, device pairing,
-recovery, grant, and revoke surface. Guest/targeted links extend the AdaOS
+device context. AdaOS Connect currently exposes owner/admin join, device
+pairing, recovery, grant, and revoke controls. Its target boundary is narrower:
+claim an incoming invitation, pair/recover a device, and hand ongoing
+administration to Users & Access. Guest/targeted links extend the AdaOS
 Connect `intent=connect.register&user_code=...&zone=...` flow: root stores invite
 parameters in a temporary purpose-tagged code session, and the URL carries only
 code and zone. Deeper privacy-zone enforcement and skill/tool SDK enforcement
 remain separate roadmap phases.
 
-## User management skill
+## Users & Access application
 
-AdaOS should provide an owner/admin-facing user management skill or control
-plane surface. It should operate through shared runtime services, not own the
-authorization model.
+AdaOS provides an owner/admin-facing full-screen Users & Access application.
+It operates through shared runtime services and Root MCP adapters; it does not
+own a second authorization model. Applications remains responsible for
+application-specific permission and role mutations, while Users & Access shows
+the subject-centric cross-application projection.
 
 Capabilities:
 

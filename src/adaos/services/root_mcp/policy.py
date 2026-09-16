@@ -99,6 +99,27 @@ def list_capability_classes() -> list[dict[str, Any]]:
             default_grants=["owner_token", "bearer"],
         ),
         _capability_entry(
+            "users_access.read",
+            surface="operations",
+            risk="medium",
+            summary="Read owner-governed people, invitations, roles, devices, sessions, Application access and redacted activity.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
+            "users_access.invite",
+            surface="operations",
+            risk="high",
+            summary="Create bounded guest or targeted access invitations for an explicit local scope.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
+            "users_access.manage",
+            surface="operations",
+            risk="high",
+            summary="Grant platform roles and revoke invitations, devices, or sessions through the shared access service.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
             "applications.plan",
             surface="operations",
             risk="medium",

@@ -701,11 +701,18 @@ Applications
 
 Users & Access
   -> People
+  -> Invitations
   -> Guests
   -> Children
   -> Devices and sessions
+  -> Application access
   -> Access reviews
   -> Activity
+
+AdaOS Connect
+  -> claim an incoming invitation
+  -> pair or recover a device
+  -> hand off ongoing administration to Users & Access
 
 Pending Actions
   -> per-decision card
@@ -719,8 +726,19 @@ Builder
 ```
 
 Applications owns the Application-centric projection. Users & Access owns the
-subject-centric projection. Pending Actions owns time-sensitive decisions.
-Builder owns authoring observability. All four call the same policy services.
+subject-centric projection and the owner-governed platform-role, invitation,
+device, session, and access-review controls. AdaOS Connect is the bounded entry
+surface for joining, pairing, and recovery; it is not a second administration
+console. Pending Actions owns time-sensitive decisions. Builder owns authoring
+observability. All of these surfaces call the same policy services and must not
+persist independent authorization facts.
+
+The first Users & Access product uses the Root MCP `users_access.*` plane as a
+typed UI adapter over `PersonalizationAccessService` plus the shared
+Application-access projection. Read and mutation tools require an authenticated
+typed actor, an explicit subnet/scope, owner-granted capabilities, idempotency
+for writes, and redacted operation results. Application-specific role changes
+remain in Applications; Users & Access may show those grants across subjects.
 
 ## Non-Goals for the First Implementation
 
