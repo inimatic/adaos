@@ -319,6 +319,8 @@ application_roles:
     title: Editor
     grants: [app.view, app.write]
     assignable_to: [owner, co_owner, admin, member]
+    default_for:
+      owner: editor
     requires_permissions: [workspace.write]
 
   - id: moderator
@@ -331,6 +333,10 @@ application_roles:
 Rules:
 
 - Role ids are immutable within a release and versioned with the Application.
+- A role-bearing Application declares exactly one owner-compatible
+  `default_for.owner`. Builder may use a unique maximal owner-compatible role
+  only for a legacy release; incomparable owner roles block Trial placement
+  until the declaration is explicit.
 - Unknown roles and unknown app capabilities fail closed.
 - A role grants only Application-local capabilities. Platform capabilities
   still require platform grants.
@@ -396,6 +402,16 @@ Install or first use shows the Application permission profile:
   Builder verification report exists;
 - child and guest default behavior.
 
+The local publisher path uses the same policy records. Before Builder places
+its own Candidate as Beta, it shows the exact profile, role model, data
+practices, diff and Final Verification result. The admitted placement creates
+or updates one managed grant for the verified local owner, selects only the
+declared owner-default role and binds the grant to that exact permission-profile
+digest. This is part of the reviewed Builder transition and does not require a
+second Applications approval. It does not grant another user or subnet access.
+An elevated profile, ambiguous owner role or missing verification blocks the
+transition instead of falling back to node-owner authority.
+
 Runtime action flow:
 
 1. The tool/action gate reads the installed Application context and normalized
@@ -408,6 +424,11 @@ Runtime action flow:
 5. If policy denies, the action fails closed with a reason that can be shown in
    Applications, Users & Access, Builder, chat, or logs.
 
+Successful local tool and attachment responses expose the selected runtime
+source plus exact release/package provenance. Independent acceptance verifies
+these headers; UI rendering or an active desktop tile alone is not execution
+evidence.
+
 Update flow:
 
 - Removed permissions reduce authority immediately or on next activation.
@@ -419,6 +440,9 @@ Update flow:
 - Old grants are bound to the permission profile digest they reviewed. They may
   continue for unchanged permissions, but they do not silently cover newly
   added or elevated permissions.
+- Builder updates its managed publisher-owner grant only after the new release
+  passes the same review/admission boundary. Manually assigned member, child or
+  guest grants remain independent and follow the normal update-impact flow.
 
 ## Multi-User, Child, and Guest Access
 

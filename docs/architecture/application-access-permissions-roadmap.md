@@ -105,6 +105,12 @@ Evidence:
   checklist. Trial/publication admission consumes persisted reports and the
   release evidence bundle, including deterministic in-toto-compatible
   statement digests.
+- `adaos.sdk.builder.applications` now materializes one managed local
+  publisher-owner grant after the exact Trial/publication verification gate.
+  New role-bearing Applications declare `default_for.owner`; only a unique
+  maximal owner-compatible role is accepted as a legacy fallback. The grant is
+  rebound to the reviewed profile digest on a later release and does not alter
+  independently assigned subject grants.
 - `docs/examples/application-access/project.yaml` provides the complete
   owner/member/child/guest declaration fixture. The focused tests include
   `test_application_access_v1_end_to_end_evidence_bundle`, runtime integration,
@@ -354,6 +360,14 @@ install, grant, runtime, audit, and revoke flows.
   approval routed to Pending Actions or trusted device for sensitive changes.
 - [x] `[could]` `AAPR6-09` Telegram keyboard mirrors low-risk Pending Action
   decisions with the same grant and audit records.
+- [x] `[must]` `AAPR6-10` Run two local Builder cycles on a second generated
+  Application with real runtime enforcement. Volunteer Roster proves managed
+  publisher-owner access, separate viewer/coordinator credentials, denied
+  writes/uploads/private-contact reads, allowed public reads and coordinator
+  mutations, exact Trial/Workspace provenance, and profile-bound audit facts.
+  Wide/compact Stable browser acceptance also preserves uploaded photo bytes.
+  This proof is local and does not claim child/guest, remote consumer or public
+  prerelease qualification.
 
 **Exit proof:** one evidence bundle captures release/profile digests, grants,
 role assignments, runtime decisions, Pending Actions, child/guest cases,

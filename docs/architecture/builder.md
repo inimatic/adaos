@@ -1109,6 +1109,15 @@ The mandatory Application checks cover:
 - auditability for allow, deny, approve, revoke, child, guest, secret, and
   update-blocked decisions.
 
+For a publisher-owned local Application, the Trial review also resolves one
+explicit `default_for.owner` Application role. After the exact verification
+report is admitted, Builder materializes or rebinds one managed local-owner
+grant to the release's permission-profile digest before runtime placement.
+A unique maximal owner-compatible role is a legacy compatibility fallback,
+not an authoring recommendation; ambiguous roles stop delivery. This grant
+does not replace independent viewer/coordinator/child/guest matrix evidence,
+and it cannot authorize an undeclared component capability.
+
 DEV prototypes may carry warnings and incomplete checks. Trial, publication,
 and marketplace submission must fail closed on hard-gate failures or
 inconclusive mandatory checks for their release scope.

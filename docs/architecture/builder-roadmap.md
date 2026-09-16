@@ -79,9 +79,12 @@ The functional parity JSON remains unchanged because tests consume it.
    leasing remain deferred.
 
 Current work permits sequential DEV development in one existing Builder and
-its single owned preview. The user has resumed local Trial/Stable qualification
-for two Reading List increments, including private data migration and settings
-inheritance. This is not blanket permission to publish unrelated applications.
+its single owned preview. Two Reading List increments qualify private data
+migration and settings inheritance. Two subsequent Volunteer Roster cycles
+qualify a second chat-created Application, permission-aware Automation,
+relational plus blob migration, delegated viewer/coordinator checks and local
+Trial/Stable placement. This is not blanket permission to publish unrelated
+applications or evidence for public prerelease/consumer installation.
 Do not manually repair generated application code,
 regenerate approved prototypes, introduce subject-specific Core/Client logic
 or remove compatibility without rollback evidence.

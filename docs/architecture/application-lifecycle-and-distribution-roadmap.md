@@ -182,8 +182,10 @@ Project/Application identity collapse.
   Local native Builder placement and Root candidate publication now use this
   journal for declared SQLite stores and typed configuration. Synthetic tests
   are prerequisites, not live qualification. Two Reading List Stable/Beta/Stable
-  increments now pass the bounded live proof below; general storage adapters
-  and Beta-to-Beta recovery/loss confirmation remain open.
+  increments now pass the bounded live proof below. Volunteer Roster adds two
+  independent local cycles and qualifies bounded content-addressed photo-blob
+  snapshot/adoption alongside SQLite rows. Service/shared-store adapters and
+  Beta-to-Beta recovery/loss confirmation remain open.
   Failed preparation now has exact-contract SDK cancellation back to the
   unchanged Stable, with durable recovery fencing and retained private evidence.
   This is not post-adoption rollback or loss-confirmed Beta replacement.
@@ -658,8 +660,12 @@ hermetic-service level; the clean guest/publisher proof remains `APP6`.
 **Outcome:** the main single-publisher track is proven before security and
 collaboration scope expands.
 
-- [ ] `[must]` `APP6-01` Create a fresh non-system Application from chat through
+- [x] `[must]` `APP6-01` Create a fresh non-system Application from chat through
   Builder and complete DEV preview, Candidate, Trial, and acceptance.
+  Volunteer Roster completes two local cycles without hand-editing generated
+  source; the second reaches exact Stable `0.1.7` with permission, relational,
+  blob and wide/compact browser evidence. This closes only the local lifecycle;
+  link delivery and clean consumer installation begin at `APP6-02`.
 - [ ] `[must]` `APP6-02` Publish the accepted release as a link-only Trial,
   install it on a clean trusted same-zone subnet, and prove stable Workspace
   isolation.

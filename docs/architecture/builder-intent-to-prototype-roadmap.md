@@ -707,7 +707,7 @@ Exit/remaining work: Resolve Media's requirement provenance/recipient/channel sc
 
 Owner/dependencies: Builder lifecycle + delivery + delegated authorization.
 
-Implementation boundary: Two native local Reading List increments complete at Stable `0.1.4` and `0.1.8`, with independent execution, migration, browser and restart evidence. Other delivery remains paused. Multiple repairs and engineering review prevent an unattended-success claim. Local owner execution does not qualify delegated reader/writer behavior, consumer installation or all-room/background cutover.
+Implementation boundary: Two native local Reading List increments complete at Stable `0.1.4` and `0.1.8`, with independent execution, migration, browser and restart evidence. A separate Volunteer Roster reaches Stable `0.1.5` and `0.1.7` through two Builder cycles. Its second cycle adds owned photos, forward relational/blob adoption, exact runtime provenance and delegated viewer/coordinator role checks in both Trial and Stable. Multiple repairs and engineering review prevent an unattended-success claim. Consumer installation, all-room/background cutover and public prerelease remain open.
 
 - [x] `[must]` Reconcile an exact retained placement without repeating activation
   after a stale workflow response. Changed candidate, target, runtime or safety
@@ -780,6 +780,16 @@ Implementation boundary: Two native local Reading List increments complete at St
   the original two records from cycle 1. Read-only post-restart observation and
   private comparisons pass. This application has no credential slots; successive
   Beta replacement, rollback loss consent and real secret transfer remain open.
+- [x] `[must]` Qualify a second Application's permission-aware local delivery
+  across two complete Builder cycles without hand-editing generated source.
+  Volunteer Roster records the reviewed permission profile and access matrix,
+  automatically provisions the publisher's exact-digest owner grant, enforces
+  viewer/coordinator boundaries, preserves relational rows and photo blobs, and
+  passes wide/compact Stable browser persistence with `workspace` provenance.
+  Evidence: `permissions-volunteer-20260916-cycle2-automation-retry1`,
+  `cycle2-permission-runtime-v3`, `cycle2-stable-permission-runtime-v2`, and
+  `cycle2-stable-browser-acceptance-v2`. This does not close consumer, child,
+  guest, background-worker or public-distribution scope.
 - [x] `[must]` Admit local `empty` Trial data to native skill execution with its
   own context, declarations, runtime slots and store, using original node policy.
   Verify package/lock/release identity; preserve DEV data across Trial writes and
