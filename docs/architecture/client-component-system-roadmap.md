@@ -53,18 +53,25 @@ Layout baseline, 2026-09-16:
   derived and immutable, never a second authored document.
 - [x] `[must]` Upgrade the coherent Taiga UI package family and add only the
   layout/table modules used by universal Client components.
-- [ ] `[must]` Implement universal semantic surface, region, collection-tools,
-  adaptive detail/inspector, command-overflow, and disclosure components. No
-  component may contain product ids, labels, endpoint rules, or workflow state.
-  The generic semantic region/surface and Taiga table slice is complete;
-  collection-tools, command overflow, and the complete adaptive detail API
-  remain open.
-- [ ] `[must]` Add contract and browser conformance for each admitted pattern at
-  wide and compact sizes, including long EN/RU content, keyboard/focus,
-  overflow, empty/loading/error/permission states, DOM/a11y/screenshot evidence,
-  and stable render-plan identity. Render-plan identity and structural/browser
-  geometry are covered; the complete state, keyboard, a11y, and locale matrix
-  remains open.
+- [x] `[must]` Implement the admitted cutover tranche of universal semantic
+  components without product ids, labels, endpoint rules, or workflow state:
+  region/surface, compact disclosure, collection search/filter tools, table,
+  detail/inspector placement, and explicit command menus. The capability
+  catalog exposes nine layout patterns and eleven component contracts, all of
+  which have Client renderers.
+- [ ] `[should]` Extend the admitted library only from measured reuse: automatic
+  command overflow, richer adaptive-detail behavior, tabs/accordion,
+  breadcrumbs, and the remaining typed form controls are candidates, not
+  implicit requirements of the completed ABI v2 cutover.
+- [x] `[must]` Add cutover contract and browser conformance for every admitted
+  Workspace layout at wide and compact sizes, including stable render-plan
+  identity, geometry, clipping, overflow, page errors, and widget render
+  health. Every widget host exposes `data-webui-render-state`; `error`,
+  `unsupported`, or unresolved `loading` fails the browser gate even when the
+  affected region is currently disclosed or hidden.
+- [ ] `[should]` Expand conformance beyond the cutover gate with the complete
+  long EN/RU, keyboard/focus, accessibility-tree, empty/loading/error/
+  permission-state, and screenshot comparison matrix.
 - [x] `[must]` Migrate all authoritative local Workspace and DEV manifests,
   delete obsolete TEST/E2E projects, reject legacy layouts, and run Workspace
   browser qualification. DEV applications are qualified later when changed.
@@ -77,10 +84,18 @@ Cutover evidence, 2026-09-16:
   Android scenario, and Android seed documents with zero findings; a second
   migration pass changes zero files/pages.
 - All 18 Workspace scenarios materialize in Chrome at 1440x960 and 390x844
-  without page errors, clipping, horizontal overflow, or unintended region
+  without page errors, renderer fallback, unsupported widgets, unresolved
+  renderer loading, clipping, horizontal overflow, or unintended region
   overlap. Compact drawers/sheets are intentional overlays and are evaluated
-  separately from in-flow regions.
-- Client `0.0.398` passes 1426 tests, a production-compatible local build, the
+  separately from in-flow regions. The permanent gate is
+  `e2e/stand/browser/workspace-layout-conformance.mjs`; it reads both JSON and
+  YAML scenario descriptors and writes retained evidence under `e2e/artifacts/`.
+- The first geometry-only report was invalidated after
+  `visual.taigaCollectionGrid` visibly failed against the Taiga 5 table-row
+  contract. The adapter, an Angular DOM regression, and the gate were corrected
+  before retaining the cutover result; a visible renderer fallback is never
+  acceptable technical debt.
+- Client `0.0.399` passes 1427 tests, a production-compatible local build, the
   21-source generic boundary check, and the 41-widget inventory check. Taiga UI
   packages are aligned at `5.24.0`.
 - Workspace Builder scenario/skill/control tests pass as a component-scoped

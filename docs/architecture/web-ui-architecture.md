@@ -813,6 +813,13 @@ Each semantic view kind maps to a renderer entry that declares:
 - feature flags
 - device-profile compatibility
 
+Every instantiated widget host also exposes one machine-readable render state:
+`loading`, `ready`, `error`, or `unsupported`. A fallback can remain visible to
+help a developer diagnose a broken manifest or renderer, but it is a failed
+conformance result, not a successful degraded rendering mode. Browser gates
+must inspect host state directly; absence of an uncaught `pageerror` is not
+evidence that all renderers loaded.
+
 The target client should use lazy `import()` for semantic renderer entries.
 
 Every registry entry must be generated from one versioned component contract
@@ -1175,7 +1182,11 @@ documents with zero findings and `scripts/migrate_webui_layout_v2.py --check`
 is idempotent. The active-source scan includes referenced scenario descriptors
 and Android seeds, but excludes Builder revisions, prompt/LLM working state,
 runtime snapshots, Trials, and recovery evidence. Browser qualification opens
-all 18 Workspace scenarios at wide and compact sizes. Registry-backed scenario
+all 18 Workspace scenarios at wide and compact sizes through
+`e2e/stand/browser/workspace-layout-conformance.mjs`. The gate discovers JSON
+and YAML descriptors and rejects widget-host `error`, `unsupported`, and
+unresolved `loading` states in addition to page errors and layout geometry.
+Registry-backed scenario
 resolution is required when an installed folder name differs from its manifest
 id; direct `folder == id` lookup is not a valid runtime assumption.
 
