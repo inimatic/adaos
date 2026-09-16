@@ -272,6 +272,39 @@ def test_registry_projection_indexes_development_permission_profiles_and_roles(
     assert roles[0]["capabilities"] == ["app.view", "app.write"]
 
 
+def test_registry_projection_isolates_invalid_permission_profile_from_catalog_rebuild(
+    tmp_path: Path,
+) -> None:
+    projects = tmp_path / "projects"
+    valid = _project("valid", "scenario:valid")
+    valid["permission_profile"] = _permission_profile()
+    broken = _project("broken_profile", "scenario:broken_profile")
+    broken["permission_profile"] = _permission_profile()
+    broken["permission_profile"]["data_practices"]["collected"] = [
+        "private phone and email"
+    ]
+    broken["application_roles"] = _application_roles()
+    _write_project(projects, valid)
+    _write_project(projects, broken)
+    service = ApplicationRegistryProjection(tmp_path / "state")
+
+    result = _rebuild(service, projects)
+
+    assert result["status"] == "completed"
+    assert {item["id"] for item in service.list_development_projects()} == {
+        "broken_profile",
+        "valid",
+    }
+    profile = service.application_permission_profiles(
+        "broken_profile", source_kind="dev_project"
+    )[0]
+    assert profile["validation_status"] == "invalid"
+    assert profile["permission_profile_digest"] is None
+    assert profile["declaration_summary"]["repair_required"] is True
+    assert "canonical identifier" in profile["declaration_summary"]["error"]
+    assert service.application_roles("broken_profile", source_kind="dev_project") == []
+
+
 def test_registry_projection_rebuild_reuses_unchanged_sources_without_manifest_parse(
     tmp_path: Path,
 ) -> None:

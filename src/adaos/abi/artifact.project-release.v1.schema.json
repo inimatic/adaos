@@ -205,7 +205,12 @@
         },
         "entrypoints": { "type": "array", "items": { "type": "object" } },
         "compatibility": { "type": "object" },
-        "lifecycle": { "type": "object" }
+        "lifecycle": { "type": "object" },
+        "permission_profile": { "type": "object" },
+        "application_roles": {
+          "type": "array",
+          "items": { "type": "object" }
+        }
       }
     },
     "projectMemberLock": {

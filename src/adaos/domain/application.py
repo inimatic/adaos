@@ -381,16 +381,25 @@ class ApplicationRelease:
         if not refs:
             raise ApplicationContractError("ApplicationRelease requires provenance refs")
         object.__setattr__(self, "provenance_refs", refs)
+        composition = sealed.composition_lock
+        locked_profile = (
+            composition.permission_profile if composition is not None else None
+        )
+        locked_roles = composition.application_roles if composition is not None else ()
         if isinstance(self.permission_profile, ApplicationPermissionProfile):
             permission_profile = self.permission_profile
         else:
             permission_profile = ApplicationPermissionProfile.from_mapping(
-                self.permission_profile,
+                self.permission_profile or locked_profile,
                 legacy_permissions=sealed.permissions,
+            )
+        if set(permission_profile.flat_permissions) != set(sealed.permissions):
+            raise ApplicationContractError(
+                "Application permission profile must match ProjectRelease permissions"
             )
         object.__setattr__(self, "permission_profile", permission_profile)
         roles = normalize_application_roles(
-            tuple(self.application_roles or ()),
+            tuple(self.application_roles or locked_roles),
             known_permissions=permission_profile.flat_permissions,
         )
         object.__setattr__(self, "application_roles", roles)

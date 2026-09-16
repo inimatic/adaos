@@ -753,6 +753,8 @@ class ProjectCompositionLock:
     entrypoints: tuple[Mapping[str, Any], ...]
     compatibility: Mapping[str, Any]
     lifecycle: Mapping[str, Any]
+    permission_profile: Mapping[str, Any] | None = None
+    application_roles: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -792,9 +794,34 @@ class ProjectCompositionLock:
         )
         object.__setattr__(self, "compatibility", dict(self.compatibility))
         object.__setattr__(self, "lifecycle", dict(self.lifecycle))
+        if self.permission_profile is not None and not isinstance(
+            self.permission_profile, Mapping
+        ):
+            raise ArtifactReleaseContractError(
+                "ProjectCompositionLock permission_profile must be an object"
+            )
+        if any(not isinstance(item, Mapping) for item in self.application_roles):
+            raise ArtifactReleaseContractError(
+                "ProjectCompositionLock application_roles must be objects"
+            )
+        object.__setattr__(
+            self,
+            "permission_profile",
+            dict(self.permission_profile) if self.permission_profile is not None else None,
+        )
+        object.__setattr__(
+            self,
+            "application_roles",
+            tuple(
+                sorted(
+                    (dict(item) for item in self.application_roles),
+                    key=lambda item: str(item.get("id") or ""),
+                )
+            ),
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "schema": PROJECT_COMPOSITION_LOCK_SCHEMA,
             "project_definition_digest": self.project_definition_digest,
             "profiles": list(self.profiles),
@@ -804,10 +831,16 @@ class ProjectCompositionLock:
             "compatibility": dict(self.compatibility),
             "lifecycle": dict(self.lifecycle),
         }
+        if self.permission_profile is not None:
+            payload["permission_profile"] = dict(self.permission_profile)
+            payload["application_roles"] = [
+                dict(item) for item in self.application_roles
+            ]
+        return payload
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ProjectCompositionLock":
-        fields = {
+        required_fields = {
             "schema",
             "project_definition_digest",
             "profiles",
@@ -817,11 +850,16 @@ class ProjectCompositionLock:
             "compatibility",
             "lifecycle",
         }
+        fields = {
+            *required_fields,
+            "permission_profile",
+            "application_roles",
+        }
         _require_mapping_contract(
             value,
             schema=PROJECT_COMPOSITION_LOCK_SCHEMA,
             allowed=fields,
-            required=fields,
+            required=required_fields,
             field="ProjectCompositionLock",
         )
         profiles = value.get("profiles")
@@ -854,6 +892,12 @@ class ProjectCompositionLock:
             entrypoints=tuple(entrypoints),
             compatibility=dict(compatibility),
             lifecycle=dict(lifecycle),
+            permission_profile=(
+                dict(value["permission_profile"])
+                if isinstance(value.get("permission_profile"), Mapping)
+                else None
+            ),
+            application_roles=tuple(value.get("application_roles") or ()),
         )
 
 

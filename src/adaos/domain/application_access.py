@@ -881,6 +881,20 @@ def evaluate_application_access(
         return decision("pending_action", "device_trust_required", "Application grant requires a trusted device.")
     if grant.constraints.get("requires_trusted_session") and not chain.get("session_trusted"):
         return decision("pending_action", "session_trust_required", "Application grant requires a trusted session.")
+    expected_holder = str(grant.constraints.get("holder_ref") or "").strip()
+    actual_holder = str(chain.get("session_ref") or chain.get("device_ref") or "").strip()
+    if expected_holder and actual_holder != expected_holder:
+        return decision("deny", "holder_scope_mismatch", "Application grant is bound to another holder.")
+    expected_session = str(grant.constraints.get("session_ref") or "").strip()
+    actual_session = str(chain.get("session_ref") or "").strip()
+    if expected_session and actual_session != expected_session:
+        return decision("deny", "session_scope_mismatch", "Application grant is bound to another session.")
+    expected_device = str(grant.constraints.get("device_ref") or "").strip()
+    actual_device = str(chain.get("device_ref") or "").strip()
+    if expected_device and actual_device != expected_device:
+        return decision("deny", "device_scope_mismatch", "Application grant is bound to another device.")
+    if grant.constraints.get("session_bound") and not actual_session:
+        return decision("deny", "session_scope_required", "Application grant requires a bound session.")
 
     role_map = {item.role_id: item for item in roles}
     selected_roles = [role_map[role_id] for role_id in grant.application_roles if role_id in role_map]
@@ -969,6 +983,7 @@ class ApplicationVerificationReport:
     warnings: tuple[str, ...] = ()
     attestations: tuple[Mapping[str, Any], ...] = ()
     residual_risks: tuple[str, ...] = ()
+    release_scope: str = "candidate"
     created_at: str = field(default_factory=utc_now)
     report_digest: str | None = None
 
@@ -987,6 +1002,8 @@ class ApplicationVerificationReport:
         object.__setattr__(self, "warnings", tuple(str(item) for item in self.warnings if str(item).strip()))
         object.__setattr__(self, "attestations", tuple(dict(item) for item in self.attestations))
         object.__setattr__(self, "residual_risks", tuple(str(item) for item in self.residual_risks if str(item).strip()))
+        if self.release_scope not in {"dev", "candidate", "trial", "publication"}:
+            raise ApplicationAccessContractError("verification release_scope is invalid")
         object.__setattr__(self, "created_at", _timestamp(self.created_at, "created_at"))
         if self.report_digest is not None:
             if self.report_digest != self.computed_digest():
@@ -1015,6 +1032,7 @@ class ApplicationVerificationReport:
             "warnings": list(self.warnings),
             "attestations": [dict(item) for item in self.attestations],
             "residual_risks": list(self.residual_risks),
+            "release_scope": self.release_scope,
             "created_at": self.created_at,
         }
 
@@ -1032,6 +1050,7 @@ class ApplicationVerificationReport:
             warnings=self.warnings,
             attestations=self.attestations,
             residual_risks=self.residual_risks,
+            release_scope=self.release_scope,
             created_at=self.created_at,
             report_digest=self.computed_digest(),
         )
@@ -1058,6 +1077,7 @@ class ApplicationVerificationReport:
                 "warnings",
                 "attestations",
                 "residual_risks",
+                "release_scope",
                 "created_at",
                 "report_digest",
             },
@@ -1086,6 +1106,7 @@ class ApplicationVerificationReport:
             warnings=tuple(payload.get("warnings") or ()),
             attestations=_mapping_tuple(payload.get("attestations") or (), "attestations"),
             residual_risks=tuple(payload.get("residual_risks") or ()),
+            release_scope=str(payload.get("release_scope") or "candidate"),
             created_at=payload["created_at"],
             report_digest=payload["report_digest"],
         )

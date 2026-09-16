@@ -108,3 +108,55 @@ def test_runtime_action_grant_retries_transient_replace_denial(tmp_path, monkeyp
 
     assert attempts == 3
     assert grant["status"] == "active"
+
+
+def test_runtime_action_grant_is_bound_to_application_release_profile_and_holder(
+    tmp_path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    binding = {
+        "application_id": "family_tasks",
+        "release_digest": "sha256:" + "a" * 64,
+        "permission_profile_digest": "sha256:" + "b" * 64,
+        "subject_ref": "user:masha",
+        "holder_ref": "device:phone-1",
+    }
+    grant = remember_runtime_action_grant(
+        ctx,
+        subject="user:masha",
+        scope="tasks.complete",
+        resource="task:1",
+        webspace_id="desktop",
+        approval_id="pa.application.1",
+        approved_by="user:owner",
+        binding=binding,
+        now=1000,
+    )
+
+    assert find_runtime_action_grant(
+        ctx,
+        subject="user:masha",
+        scope="tasks.complete",
+        resource="task:1",
+        webspace_id="desktop",
+        binding=binding,
+        now=1001,
+    )["id"] == grant["id"]
+    assert find_runtime_action_grant(
+        ctx,
+        subject="user:masha",
+        scope="tasks.complete",
+        resource="task:1",
+        webspace_id="desktop",
+        binding={**binding, "holder_ref": "device:phone-2"},
+        now=1001,
+    ) is None
+    assert find_runtime_action_grant(
+        ctx,
+        subject="user:masha",
+        scope="tasks.complete",
+        resource="task:1",
+        webspace_id="desktop",
+        binding={**binding, "release_digest": "sha256:" + "c" * 64},
+        now=1001,
+    ) is None

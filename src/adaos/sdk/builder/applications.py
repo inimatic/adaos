@@ -195,7 +195,16 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
                                   accepted_candidate_id=candidate_id,
                                   acceptance_evidence=tuple(candidate["validation_evidence"]),
                                   provenance_refs=(release.release_digest,), lifecycle="trial")
-    service.register_release(envelope)
+    registered_release = service.register_release(envelope)
+    from adaos.services.applications.access_management import (
+        ApplicationAccessManagementService,
+    )
+
+    verification = ApplicationAccessManagementService(service).admit_release_stage(
+        application.application_id,
+        release_digest=registered_release.release_digest,
+        stage="trial",
+    )
     data = bind_local_data_lifecycle(_ctx(), runtime, release)
     activations = TrialActivationStore(_state_dir() / "artifact_pipeline/trial-activations")
 
@@ -222,7 +231,8 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
     activation = activations.load(candidate_id)
     refresh = _refresh_application_placements(application.application_id)
     return {"ok": True, "runtime_selection": selection.to_dict(), "trial_activation": activation,
-            "runtime_refresh": refresh, "data_transition": transition}
+            "runtime_refresh": refresh, "data_transition": transition,
+            "verification": verification}
 
 
 def _refresh_application_placements(application_id: str) -> dict[str, Any]:

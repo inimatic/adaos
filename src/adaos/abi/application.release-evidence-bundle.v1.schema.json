@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.release-evidence-bundle.v1.schema.json",
+  "title": "AdaOS Application Release Evidence Bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "application_id",
+    "release_digest",
+    "permission_profile_digest",
+    "observed_capabilities_digest",
+    "release_scope",
+    "source_commit",
+    "report_digest",
+    "overall",
+    "evidence_refs",
+    "attestation_statement_digest",
+    "bundle_digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.application.release_evidence_bundle.v1"},
+    "application_id": {"type": "string", "minLength": 1},
+    "release_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "permission_profile_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "observed_capabilities_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "release_scope": {"enum": ["dev", "candidate", "trial", "publication"]},
+    "source_commit": {"type": "string", "minLength": 1},
+    "report_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "overall": {"enum": ["passed", "failed", "warning", "inconclusive", "skipped"]},
+    "evidence_refs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "attestation_statement_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "bundle_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

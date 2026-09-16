@@ -581,13 +581,39 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
                 "mcp_read_tools": [
                     "applications.list",
                     "applications.show",
+                    "applications.access.show",
+                    "applications.access.users",
+                    "applications.access.reviews",
+                    "applications.access.privacy",
+                    "applications.access.profile",
                     "applications.list_releases",
                     "applications.list_operations",
                     "applications.list_development_reports",
                 ],
-                "mcp_mutation_tools": ["applications.plan", "applications.apply"],
+                "mcp_mutation_tools": [
+                    "applications.plan",
+                    "applications.apply",
+                    "applications.access.grant",
+                    "applications.access.change",
+                    "applications.access.revoke",
+                    "applications.access.connected_account",
+                    "applications.access.simulate",
+                    "applications.access.verify_release",
+                ],
                 "plan_kinds": ["install", "update", "select_track", "remove"],
-                "tabs": ["details", "versions", "operations", "reports"],
+                "tabs": [
+                    "details",
+                    "versions",
+                    "operations",
+                    "reports",
+                    "permissions",
+                    "access",
+                    "roles",
+                    "connected_accounts",
+                    "release_readiness",
+                    "activity",
+                    "users_access",
+                ],
             }
         )
     if prototype_iteration:
@@ -1404,6 +1430,37 @@ def evaluate_ui_request(
                 "response.result.reports",
                 {},
             ),
+            "applications.access.show": (
+                "response.result.access",
+                {
+                    "application_id": "$state.selectedApplicationId",
+                    "release_digest": "$state.selectedReleaseDigest",
+                },
+            ),
+            "applications.access.users": (
+                "response.result.users_access",
+                {},
+            ),
+            "applications.access.reviews": (
+                "response.result.findings",
+                {"application_id": "$state.selectedApplicationId"},
+            ),
+            "applications.access.privacy": (
+                "response.result.privacy_report",
+                {
+                    "application_id": "$state.selectedApplicationId",
+                    "release_digest": "$state.selectedReleaseDigest",
+                },
+            ),
+            "applications.access.profile": (
+                "response.result",
+                {
+                    "application_id": "$state.selectedApplicationId",
+                    "release_digest": "$state.selectedReleaseDigest",
+                    "observed_capabilities": "$state.observedCapabilities",
+                    "inferred_capabilities": "$state.inferredCapabilities",
+                },
+            ),
         }
         required_reads = set(requirements.get("mcp_read_tools") or [])
         exact_reads = {
@@ -1412,7 +1469,19 @@ def evaluate_ui_request(
             if any(
                 source.get("dryRun") is True
                 and str(source.get("toolId") or "") == tool_id
-                and str(source.get("resultPath") or "") == result_path
+                and (
+                    str(source.get("resultPath") or "") == result_path
+                    or (
+                        tool_id
+                        in {
+                            "applications.access.show",
+                            "applications.access.users",
+                        }
+                        and str(source.get("resultPath") or "").startswith(
+                            result_path + "."
+                        )
+                    )
+                )
                 and source.get("arguments") == arguments
                 for source in mcp_sources
             )
@@ -2224,7 +2293,7 @@ def evaluate_ui_request(
             }
             if (
                 str(widget.get("type") or "") == "input.commandBar"
-                and inputs.get("variant") == "segmented"
+                and inputs.get("variant") in {"segmented", "toolbar"}
                 and inputs.get("selectedStateKey") == "activeTab"
                 and tab_ids.issubset(ids)
                 and any(
@@ -2241,6 +2310,130 @@ def evaluate_ui_request(
                 "ok": len(tab_controls) == 1,
                 "expected": sorted(tab_ids),
                 "actual": len(tab_controls),
+            }
+        )
+        application_access_sections = {
+            "permissions",
+            "access",
+            "roles",
+            "connected_accounts",
+            "release_readiness",
+            "activity",
+        }
+        access_section_widgets: set[str] = set()
+        for widget in widgets:
+            source = widget.get("dataSource") or {}
+            result_path = str(source.get("resultPath") or "")
+            if (
+                widget.get("type") in {"item.details", "ui.list"}
+                and source.get("kind") == "mcp"
+                and source.get("toolId") == "applications.access.show"
+                and source.get("dryRun") is True
+                and source.get("arguments")
+                == {
+                    "application_id": "$state.selectedApplicationId",
+                    "release_digest": "$state.selectedReleaseDigest",
+                }
+            ):
+                for section in application_access_sections:
+                    if (
+                        result_path == f"response.result.access.sections.{section}"
+                        and f"$state.activeTab == '{section}'"
+                        in str(widget.get("visibleIf") or "")
+                    ):
+                        access_section_widgets.add(section)
+        users_access_sections = {
+            "people",
+            "guests",
+            "children",
+            "devices",
+            "sessions",
+            "application_access",
+            "activity",
+        }
+        users_access_widgets: set[str] = set()
+        for widget in widgets:
+            source = widget.get("dataSource") or {}
+            result_path = str(source.get("resultPath") or "")
+            if (
+                widget.get("type") in {"item.details", "ui.list"}
+                and source.get("kind") == "mcp"
+                and source.get("toolId") == "applications.access.users"
+                and source.get("dryRun") is True
+                and source.get("arguments") == {}
+                and "$state.activeTab == 'users_access'"
+                in str(widget.get("visibleIf") or "")
+            ):
+                for section in users_access_sections:
+                    if result_path == f"response.result.users_access.{section}":
+                        users_access_widgets.add(section)
+        users_access_controls = [
+            widget
+            for widget in widgets
+            if widget.get("type") == "input.commandBar"
+            and (widget.get("inputs") or {}).get("variant")
+            in {"segmented", "toolbar"}
+            and (widget.get("inputs") or {}).get("selectedStateKey")
+            == "usersAccessTab"
+            and users_access_sections.issubset(
+                {
+                    str(button.get("id") or "")
+                    for button in (widget.get("inputs") or {}).get("buttons") or []
+                    if isinstance(button, Mapping)
+                }
+            )
+            and any(
+                action.get("on") == "click"
+                and action.get("type") == "updateState"
+                and action.get("params") == {"usersAccessTab": "$event.id"}
+                for action in widget_actions(widget)
+            )
+        ]
+        access_targets = {
+            str(action.get("target") or "")
+            for widget in widgets
+            for action in widget_actions(widget)
+            if action.get("type") == "callMcp"
+            and str(action.get("target") or "").startswith("applications.access.")
+        }
+        required_access_targets = {
+            "applications.access.grant",
+            "applications.access.change",
+            "applications.access.revoke",
+            "applications.access.connected_account",
+            "applications.access.simulate",
+            "applications.access.verify_release",
+        }
+        direct_access_mutations = [
+            action
+            for widget in widgets
+            for action in widget_actions(widget)
+            if str(action.get("target") or "").startswith("applications.access.")
+            and action.get("type") != "callMcp"
+        ]
+        postconditions.append(
+            {
+                "id": "applications.access_management",
+                "ok": bool(
+                    access_section_widgets == application_access_sections
+                    and users_access_widgets == users_access_sections
+                    and len(users_access_controls) == 1
+                    and required_access_targets.issubset(access_targets)
+                    and not direct_access_mutations
+                ),
+                "expected": {
+                    "applicationSections": sorted(application_access_sections),
+                    "usersAccessSections": sorted(users_access_sections),
+                    "platformWriteTargets": sorted(required_access_targets),
+                    "directPolicyWrites": 0,
+                },
+                "actual": {
+                    "applicationSections": sorted(access_section_widgets),
+                    "usersAccessSections": sorted(users_access_widgets),
+                    "usersAccessControls": len(users_access_controls),
+                    "platformWriteTargets": sorted(access_targets),
+                    "directPolicyWrites": len(direct_access_mutations),
+                },
             }
         )
         catalog_inputs = {

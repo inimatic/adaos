@@ -279,9 +279,11 @@ def test_application_manager_iteration_focuses_the_selected_recipe() -> None:
         "details_widget",
         "application_header",
         "detail_sections",
-        "detail_section_requirement",
-        "ordering",
-        "tab_action",
+            "detail_section_requirement",
+            "ordering",
+            "access_management",
+            "access_widgets",
+            "tab_action",
         "reads",
         "release_widget",
         "operations_widget",
@@ -437,6 +439,11 @@ def _application_manager_webui() -> dict:
         inferred_fixture = {
             "applications.list": "applications",
             "applications.show": "application",
+            "applications.access.show": "applicationAccess",
+            "applications.access.users": "usersAccess",
+            "applications.access.reviews": "accessReviews",
+            "applications.access.privacy": "privacyReport",
+            "applications.access.profile": "permissionProfiler",
             "applications.list_releases": "releases",
             "applications.list_operations": "operations",
             "applications.list_development_reports": "reports",
@@ -519,12 +526,66 @@ def _application_manager_webui() -> dict:
                             "updatePolicy": "auto_compatible",
                             "removeDataPolicy": "retain",
                             "activeTab": "details",
+                            "usersAccessTab": "people",
+                            "selectedAccessGrantId": "",
+                            "selectedAccessGrantRevision": 0,
+                            "selectedApplicationRoles": [],
+                            "selectedPermissionCeiling": [],
+                            "observedCapabilities": [],
+                            "inferredCapabilities": [],
+                            "applicationVerification": {},
                             "reviewedPlan": {},
                             "prototypeFixtures": {
-                                "applications": {"result": []},
+                                "applications": {
+                                    "result": [
+                                        {
+                                            "application": {
+                                                "application_id": "family_tasks",
+                                                "display": {
+                                                    "title": "Family Tasks",
+                                                    "summary": "Shared household tasks",
+                                                },
+                                                "publisher": {"display_name": "Home"},
+                                            },
+                                            "installed": True,
+                                            "update_available": True,
+                                            "prerelease_following": False,
+                                            "auto_update_enabled": True,
+                                            "subscription": {
+                                                "revision": 1,
+                                                "update_track": "stable",
+                                                "update_policy": "auto_compatible",
+                                            },
+                                            "local_development": {"exists": False},
+                                        }
+                                    ]
+                                },
                                 "developments": {"result": development_fixtures},
                                 "application": {
                                     "cases": [
+                                        {
+                                            "when": {"application_id": "family_tasks"},
+                                            "result": {
+                                                "application": {
+                                                    "application_id": "family_tasks",
+                                                    "display": {
+                                                        "title": "Family Tasks",
+                                                        "summary": "Shared household tasks",
+                                                    },
+                                                    "publisher": {"display_name": "Home"},
+                                                },
+                                                "installed": True,
+                                                "update_available": True,
+                                                "prerelease_following": False,
+                                                "auto_update_enabled": True,
+                                                "subscription": {
+                                                    "revision": 1,
+                                                    "update_track": "stable",
+                                                    "update_policy": "auto_compatible",
+                                                },
+                                                "local_development": {"exists": False},
+                                            },
+                                        },
                                         *[
                                             {
                                                 "when": {
@@ -556,6 +617,119 @@ def _application_manager_webui() -> dict:
                                             )
                                         ],
                                     ]
+                                },
+                                "applicationAccess": {
+                                    "permissions": {
+                                        "result": {
+                                                "digest": "sha256:reviewed-profile",
+                                                "profile": {
+                                                    "required": [
+                                                        {"id": "workspace.read", "purpose": "Read assigned tasks."},
+                                                        {"id": "workspace.write", "purpose": "Complete assigned tasks."},
+                                                        {"id": "llm.generate", "purpose": "Suggest task wording."},
+                                                        {"id": "network.egress", "purpose": "Sync calendar due dates."},
+                                                    ],
+                                                    "data_practices": {
+                                                        "collected": ["task_metadata"],
+                                                        "sent_off_device": ["task_metadata"],
+                                                        "tracking": False,
+                                                    },
+                                                },
+                                                "badges": ["Uses AI", "External calendar", "No tracking"],
+                                        }
+                                    },
+                                    "access": {
+                                        "result": [
+                                                {
+                                                    "grant_id": "appgrant.member",
+                                                    "subject_ref": "user:masha",
+                                                    "application_roles": ["member"],
+                                                    "permission_ceiling": ["workspace.read", "workspace.write"],
+                                                    "status": "active",
+                                                    "revision": 1,
+                                                },
+                                                {
+                                                    "grant_id": "appgrant.guest",
+                                                    "subject_ref": "session:guest-review",
+                                                    "application_roles": ["guest"],
+                                                    "permission_ceiling": ["workspace.read"],
+                                                    "status": "active",
+                                                    "expires_at": "2026-09-17T12:00:00+00:00",
+                                                    "revision": 1,
+                                                },
+                                        ]
+                                    },
+                                    "roles": {
+                                        "result": [
+                                                {"id": "owner", "title": "Owner", "grants": ["application.manage"], "assignable_to": ["owner"], "sensitive": True},
+                                                {"id": "member", "title": "Member", "grants": ["task.read", "task.complete"], "assignable_to": ["member"], "sensitive": False},
+                                                {"id": "child", "title": "Child participant", "grants": ["task.read", "task.complete"], "assignable_to": ["child"], "sensitive": False},
+                                                {"id": "guest", "title": "Guest reader", "grants": ["task.read"], "assignable_to": ["guest"], "sensitive": False},
+                                        ]
+                                    },
+                                    "connected_accounts": {
+                                        "result": [
+                                                {
+                                                    "account_id": "calendar-user",
+                                                    "provider_id": "calendar",
+                                                    "mode": "delegated_user",
+                                                    "scopes": ["calendar.read"],
+                                                    "status": "connected",
+                                                    "token_expires_at": "2026-10-01T12:00:00+00:00",
+                                                }
+                                        ]
+                                    },
+                                    "release_readiness": {
+                                        "result": {
+                                                "overall": "passed",
+                                                "release_scope": "trial",
+                                                "checks": ["permissions", "roles", "regression", "redaction"],
+                                                "report_digest": "sha256:verification-report",
+                                        }
+                                    },
+                                    "activity": {
+                                        "result": [
+                                                {
+                                                    "occurred_at": "2026-09-16T07:00:00+00:00",
+                                                    "action": "application.permission.allow",
+                                                    "subject_ref": "user:masha",
+                                                    "decision": "allow",
+                                                    "reason_code": "allowed",
+                                                }
+                                        ]
+                                    },
+                                },
+                                "usersAccess": {
+                                    "people": {"result": [{"subject_ref": "user:masha", "kind": "user", "application_access": ["family_tasks:member"]}]},
+                                    "guests": {"result": [{"subject_ref": "session:guest-review", "kind": "guest", "application_access": ["family_tasks:guest"]}]},
+                                    "children": {"result": [{"subject_ref": "child:petya", "kind": "child", "application_access": ["family_tasks:child"]}]},
+                                    "devices": {"result": [{"device_id": "phone-owner", "status": "trusted", "user_id": "owner"}]},
+                                    "sessions": {"result": [{"session_id": "session-owner", "status": "active", "subject": "user:owner"}]},
+                                    "application_access": {"result": [{"grant_id": "appgrant.member", "subject_ref": "user:masha", "application_roles": ["member"]}]},
+                                    "activity": {"result": [{"occurred_at": "2026-09-16T07:00:00+00:00", "action": "application.permission.allow", "reason_code": "allowed"}]},
+                                },
+                                "accessReviews": {"result": [{"finding_id": "review.guest", "recommended_action": "review_guest_expiry", "subject_ref": "session:guest-review", "reasons": ["long_lived_guest"]}]},
+                                "privacyReport": {"result": {"declared": {"data_categories": ["task_metadata"]}, "observed": {"data_categories": ["task_metadata"]}}},
+                                "permissionProfiler": {
+                                    "result": {
+                                        "declared": ["workspace.read"],
+                                        "statically_inferred": ["workspace.read"],
+                                        "observed": ["workspace.read"],
+                                        "undeclared_observed": [],
+                                        "unused": [],
+                                        "role_matrix": [{"role_id": "member", "compatible": {"owner": True, "member": True, "child": False, "guest": False}}],
+                                        "preview_modes": {"owner": ["owner"], "member": ["member"], "child": ["child"], "guest": ["guest"]},
+                                    }
+                                },
+                                "applicationVerification": {
+                                    "result": {
+                                        "report": {"overall": "passed"},
+                                        "checklist": [
+                                            {"id": "permissions.declared_vs_observed", "result": "passed", "gate": "hard_gate"},
+                                            {"id": "access.role_matrix", "result": "passed", "gate": "hard_gate"},
+                                        ],
+                                        "ci_status": "passed",
+                                    }
                                 },
                                 "releases": {"result": []},
                                 "operations": {"result": []},
@@ -740,15 +914,22 @@ def _application_manager_webui() -> dict:
                                 "type": "input.commandBar",
                                 "area": "detail",
                                 "inputs": {
-                                    "variant": "segmented",
+                                    "variant": "toolbar",
                                     "selectedStateKey": "activeTab",
                                     "buttons": [
-                                        {"id": value, "label": value.title()}
-                                        for value in (
-                                            "details",
-                                            "versions",
-                                            "operations",
-                                            "reports",
+                                        {"id": value, "label": label, "icon": icon}
+                                        for value, label, icon in (
+                                            ("details", "Details", "options-outline"),
+                                            ("versions", "Versions", "download-outline"),
+                                            ("operations", "Operations", "construct-outline"),
+                                            ("reports", "Reports", "folder-open-outline"),
+                                            ("permissions", "Permissions", "checkmark-outline"),
+                                            ("access", "Access", "ticket-outline"),
+                                            ("roles", "Roles", "folder-open-outline"),
+                                            ("connected_accounts", "Accounts", "refresh-outline"),
+                                            ("release_readiness", "Readiness", "checkmark-outline"),
+                                            ("activity", "Activity", "refresh-outline"),
+                                            ("users_access", "Users & Access", "ticket-outline"),
                                         )
                                     ],
                                 },
@@ -757,6 +938,505 @@ def _application_manager_webui() -> dict:
                                         "on": "click",
                                         "type": "updateState",
                                         "params": {"activeTab": "$event.id"},
+                                    }
+                                ],
+                            },
+                            *[
+                                {
+                                    "id": f"application-access-{section}",
+                                    "type": "ui.list" if list_keys else "item.details",
+                                    "area": "detail",
+                                    "title": title,
+                                    "visibleIf": f"$state.activeTab == '{section}' && $state.selectedApplicationId",
+                                    "dataSource": {
+                                        "kind": "mcp",
+                                        "toolId": "applications.access.show",
+                                        "arguments": {
+                                            "application_id": "$state.selectedApplicationId",
+                                            "release_digest": "$state.selectedReleaseDigest",
+                                        },
+                                        "dryRun": True,
+                                        "resultPath": f"response.result.access.sections.{section}",
+                                        "prototypeFixture": f"$state.prototypeFixtures.applicationAccess.{section}",
+                                    },
+                                    "inputs": (
+                                        {
+                                            "variant": "list",
+                                            "itemIdKey": list_keys[0],
+                                            "titleKey": list_keys[1],
+                                            "subtitleKey": list_keys[2],
+                                            "previewKey": list_keys[3],
+                                            "emptyText": empty_text,
+                                        }
+                                        if list_keys
+                                        else {
+                                            "presentation": "section",
+                                            "emptyText": empty_text,
+                                            "fields": [
+                                                {"label": label, "path": path}
+                                                for label, path in fields
+                                            ],
+                                        }
+                                    ),
+                                    **(
+                                        {
+                                            "actions": [
+                                                {
+                                                    "on": "select",
+                                                    "type": "updateState",
+                                                    "params": {
+                                                        "selectedAccessGrantId": "$event.grant_id",
+                                                        "selectedAccessGrantRevision": "$event.revision",
+                                                        "selectedApplicationRoles": "$event.application_roles",
+                                                        "selectedPermissionCeiling": "$event.permission_ceiling",
+                                                    },
+                                                }
+                                            ]
+                                        }
+                                        if section == "access"
+                                        else {}
+                                    ),
+                                }
+                                for section, title, empty_text, fields, list_keys in (
+                                    (
+                                        "permissions",
+                                        "Permissions",
+                                        "No permission profile.",
+                                        (
+                                            ("Profile digest", "digest"),
+                                            ("Required", "profile.required"),
+                                            ("Optional", "profile.optional"),
+                                            ("Data practices", "profile.data_practices"),
+                                            ("Model use", "profile.llm_model_use"),
+                                            ("Notifications", "profile.notifications"),
+                                            ("Background work", "profile.background_actions"),
+                                            ("Secrets", "profile.secrets"),
+                                            ("Providers", "profile.external_providers"),
+                                        ),
+                                        None,
+                                    ),
+                                    (
+                                        "access",
+                                        "Access",
+                                        "No access grants.",
+                                        (
+                                            ("Subject", "subject_ref"),
+                                            ("Roles", "application_roles"),
+                                            ("Permissions", "permission_ceiling"),
+                                            ("Constraints", "constraints"),
+                                            ("Status", "status"),
+                                            ("Expires", "expires_at"),
+                                        ),
+                                        ("grant_id", "subject_ref", "status", "application_roles"),
+                                    ),
+                                    (
+                                        "roles",
+                                        "Roles",
+                                        "No Application roles.",
+                                        (
+                                            ("Role", "id"),
+                                            ("Capabilities", "grants"),
+                                            ("Assignable to", "assignable_to"),
+                                            ("Required permissions", "requires_permissions"),
+                                            ("Sensitive", "sensitive"),
+                                        ),
+                                        ("id", "title", "assignable_to", "grants"),
+                                    ),
+                                    (
+                                        "connected_accounts",
+                                        "Connected accounts",
+                                        "No connected accounts.",
+                                        (
+                                            ("Provider", "provider_id"),
+                                            ("Mode", "mode"),
+                                            ("Scopes", "scopes"),
+                                            ("Status", "status"),
+                                            ("Token expiry", "token_expires_at"),
+                                        ),
+                                        ("account_id", "provider_id", "status", "scopes"),
+                                    ),
+                                    (
+                                        "release_readiness",
+                                        "Release readiness",
+                                        "No verification report.",
+                                        (
+                                            ("Result", "overall"),
+                                            ("Scope", "release_scope"),
+                                            ("Checks", "checks"),
+                                            ("Warnings", "warnings"),
+                                            ("Residual risks", "residual_risks"),
+                                        ),
+                                        None,
+                                    ),
+                                    (
+                                        "activity",
+                                        "Activity",
+                                        "No access activity.",
+                                        (
+                                            ("Time", "occurred_at"),
+                                            ("Action", "action"),
+                                            ("Subject", "subject_ref"),
+                                            ("Decision", "decision"),
+                                            ("Reason", "reason_code"),
+                                        ),
+                                        ("occurred_at", "action", "subject_ref", "reason_code"),
+                                    ),
+                                )
+                            ],
+                            {
+                                "id": "application-permission-profiler",
+                                "type": "item.details",
+                                "area": "metadata",
+                                "title": "Permission profiler",
+                                "visibleIf": "$state.activeTab == 'permissions' && $state.selectedApplicationId",
+                                "dataSource": {
+                                    "kind": "mcp",
+                                    "toolId": "applications.access.profile",
+                                    "arguments": {
+                                        "application_id": "$state.selectedApplicationId",
+                                        "release_digest": "$state.selectedReleaseDigest",
+                                        "observed_capabilities": "$state.observedCapabilities",
+                                        "inferred_capabilities": "$state.inferredCapabilities",
+                                    },
+                                    "dryRun": True,
+                                    "resultPath": "response.result",
+                                    "prototypeFixture": "$state.prototypeFixtures.permissionProfiler",
+                                },
+                                "inputs": {
+                                    "presentation": "section",
+                                    "fields": [
+                                        {"label": "Declared", "path": "declared"},
+                                        {"label": "Inferred", "path": "statically_inferred"},
+                                        {"label": "Observed", "path": "observed"},
+                                        {"label": "Undeclared", "path": "undeclared_observed"},
+                                        {"label": "Unused", "path": "unused"},
+                                        {"label": "Role matrix", "path": "role_matrix"},
+                                        {"label": "Preview modes", "path": "preview_modes"},
+                                    ],
+                                },
+                            },
+                            {
+                                "id": "application-privacy-observation",
+                                "type": "item.details",
+                                "area": "metadata",
+                                "title": "Privacy report",
+                                "visibleIf": "$state.activeTab == 'permissions' && $state.selectedApplicationId",
+                                "dataSource": {
+                                    "kind": "mcp",
+                                    "toolId": "applications.access.privacy",
+                                    "arguments": {
+                                        "application_id": "$state.selectedApplicationId",
+                                        "release_digest": "$state.selectedReleaseDigest",
+                                    },
+                                    "dryRun": True,
+                                    "resultPath": "response.result.privacy_report",
+                                    "prototypeFixture": "$state.prototypeFixtures.privacyReport",
+                                },
+                                "inputs": {
+                                    "presentation": "section",
+                                    "fields": [
+                                        {"label": "Declared", "path": "declared"},
+                                        {"label": "Observed", "path": "observed"},
+                                    ],
+                                },
+                            },
+                            {
+                                "id": "application-access-reviews",
+                                "type": "ui.list",
+                                "area": "metadata",
+                                "title": "Access reviews",
+                                "visibleIf": "$state.activeTab == 'activity' && $state.selectedApplicationId",
+                                "dataSource": {
+                                    "kind": "mcp",
+                                    "toolId": "applications.access.reviews",
+                                    "arguments": {
+                                        "application_id": "$state.selectedApplicationId"
+                                    },
+                                    "dryRun": True,
+                                    "resultPath": "response.result.findings",
+                                    "prototypeFixture": "$state.prototypeFixtures.accessReviews",
+                                },
+                                "inputs": {
+                                    "itemIdKey": "finding_id",
+                                    "titleKey": "recommended_action",
+                                    "subtitleKey": "subject_ref",
+                                    "previewKey": "reasons",
+                                    "emptyText": "No reviews due.",
+                                },
+                            },
+                            {
+                                "id": "users-access-tabs",
+                                "type": "input.commandBar",
+                                "area": "detail",
+                                "visibleIf": "$state.activeTab == 'users_access'",
+                                "inputs": {
+                                    "variant": "toolbar",
+                                    "selectedStateKey": "usersAccessTab",
+                                    "buttons": [
+                                        {"id": value, "label": label, "icon": icon}
+                                        for value, label, icon in (
+                                            ("people", "People", "folder-open-outline"),
+                                            ("guests", "Guests", "ticket-outline"),
+                                            ("children", "Children", "checkmark-outline"),
+                                            ("devices", "Devices", "options-outline"),
+                                            ("sessions", "Sessions", "refresh-outline"),
+                                            ("application_access", "App access", "construct-outline"),
+                                            ("activity", "Activity", "download-outline"),
+                                        )
+                                    ],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "click",
+                                        "type": "updateState",
+                                        "params": {"usersAccessTab": "$event.id"},
+                                    }
+                                ],
+                            },
+                            *[
+                                {
+                                    "id": f"users-access-{section}",
+                                    "type": "ui.list",
+                                    "area": "detail",
+                                    "visibleIf": f"$state.activeTab == 'users_access' && $state.usersAccessTab == '{section}'",
+                                    "dataSource": {
+                                        "kind": "mcp",
+                                        "toolId": "applications.access.users",
+                                        "arguments": {},
+                                        "dryRun": True,
+                                        "resultPath": f"response.result.users_access.{section}",
+                                        "prototypeFixture": f"$state.prototypeFixtures.usersAccess.{section}",
+                                    },
+                                    "inputs": {
+                                        "itemIdKey": identity,
+                                        "titleKey": identity,
+                                        "subtitleKey": subtitle,
+                                        "previewKey": preview,
+                                        "emptyText": empty_text,
+                                    },
+                                }
+                                for section, identity, subtitle, preview, empty_text in (
+                                    ("people", "subject_ref", "kind", "application_access", "No people with Application access."),
+                                    ("guests", "subject_ref", "kind", "application_access", "No guest access."),
+                                    ("children", "subject_ref", "kind", "application_access", "No child access."),
+                                    ("devices", "device_id", "status", "user_id", "No devices."),
+                                    ("sessions", "session_id", "status", "subject", "No sessions."),
+                                    ("application_access", "grant_id", "subject_ref", "application_roles", "No Application access."),
+                                    ("activity", "occurred_at", "action", "reason_code", "No access activity."),
+                                )
+                            ],
+                            {
+                                "id": "access-grant-form",
+                                "type": "ui.form",
+                                "area": "metadata",
+                                "visibleIf": "$state.activeTab == 'access' && $state.selectedApplicationId",
+                                "inputs": {
+                                    "showSubmit": True,
+                                    "submitLabel": "Grant access",
+                                    "fields": [
+                                        {"id": "subject_ref", "type": "text", "label": "Subject", "required": True},
+                                        {"id": "application_roles", "type": "text", "label": "Roles", "required": True, "placeholder": "role-id, role-id"},
+                                        {"id": "permission_ceiling", "type": "text", "label": "Permissions", "placeholder": "permission.id, permission.id"},
+                                        {"id": "explicit_denies", "type": "text", "label": "Denied permissions", "placeholder": "permission.id, permission.id"},
+                                        {"id": "expires_at", "type": "dateTime", "label": "Expires"},
+                                    ],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "submit",
+                                        "type": "callMcp",
+                                        "target": "applications.access.grant",
+                                        "idempotencyKey": "auto",
+                                        "params": {
+                                            "application_id": "$state.selectedApplicationId",
+                                            "release_digest": "$state.selectedReleaseDigest",
+                                            "subject_ref": "$event.values.subject_ref",
+                                            "application_roles": "$event.values.application_roles",
+                                            "permission_ceiling": "$event.values.permission_ceiling",
+                                            "explicit_denies": "$event.values.explicit_denies",
+                                            "expires_at": "$event.values.expires_at",
+                                            "expected_revision": 0,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "access-change-form",
+                                "type": "ui.form",
+                                "area": "metadata",
+                                "visibleIf": "$state.activeTab == 'access' && $state.selectedAccessGrantId",
+                                "inputs": {
+                                    "showSubmit": True,
+                                    "submitLabel": "Change access",
+                                    "fields": [
+                                        {"id": "application_roles", "type": "text", "label": "New roles", "required": True, "placeholder": "role-id, role-id"},
+                                        {"id": "permission_ceiling", "type": "text", "label": "Permissions", "placeholder": "permission.id, permission.id"},
+                                        {"id": "explicit_denies", "type": "text", "label": "Denied permissions", "placeholder": "permission.id, permission.id"},
+                                        {"id": "expires_at", "type": "dateTime", "label": "Expires"},
+                                    ],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "submit",
+                                        "type": "callMcp",
+                                        "target": "applications.access.change",
+                                        "idempotencyKey": "auto",
+                                        "params": {
+                                            "grant_id": "$state.selectedAccessGrantId",
+                                            "release_digest": "$state.selectedReleaseDigest",
+                                            "application_roles": "$event.values.application_roles",
+                                            "permission_ceiling": "$event.values.permission_ceiling",
+                                            "explicit_denies": "$event.values.explicit_denies",
+                                            "expires_at": "$event.values.expires_at",
+                                            "expected_revision": "$state.selectedAccessGrantRevision",
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "access-revoke-actions",
+                                "type": "ui.actions",
+                                "area": "metadata",
+                                "visibleIf": "$state.activeTab == 'access' && $state.selectedAccessGrantId",
+                                "inputs": {
+                                    "variant": "toolbar",
+                                    "buttons": [
+                                        {"id": "revoke-access", "label": "Revoke access", "icon": "trash-outline"},
+                                    ],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "click:revoke-access",
+                                        "type": "callMcp",
+                                        "target": "applications.access.revoke",
+                                        "idempotencyKey": "auto",
+                                        "params": {
+                                            "grant_id": "$state.selectedAccessGrantId",
+                                            "expected_revision": "$state.selectedAccessGrantRevision",
+                                        },
+                                    },
+                                ],
+                            },
+                            {
+                                "id": "connected-account-form",
+                                "type": "ui.form",
+                                "area": "metadata",
+                                "visibleIf": "$state.activeTab == 'connected_accounts' && $state.selectedApplicationId",
+                                "inputs": {
+                                    "showSubmit": True,
+                                    "submitLabel": "Update account",
+                                    "fields": [
+                                        {"id": "account_id", "type": "text", "label": "Account", "required": True},
+                                        {"id": "provider_id", "type": "text", "label": "Provider", "required": True},
+                                        {"id": "subject_ref", "type": "text", "label": "Subject", "required": True},
+                                        {"id": "mode", "type": "select", "label": "Mode", "required": True, "defaultValue": "delegated_user", "options": [{"label": "Delegated user", "value": "delegated_user"}, {"label": "Application service", "value": "app_service"}]},
+                                        {"id": "scopes", "type": "text", "label": "Scopes", "placeholder": "scope.read, scope.write"},
+                                        {"id": "status", "type": "select", "label": "Status", "required": True, "defaultValue": "missing", "options": [{"label": "Missing", "value": "missing"}, {"label": "Connected", "value": "connected"}, {"label": "Expired", "value": "expired"}, {"label": "Revoked", "value": "revoked"}, {"label": "Denied", "value": "denied"}]},
+                                    ],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "submit",
+                                        "type": "callMcp",
+                                        "target": "applications.access.connected_account",
+                                        "idempotencyKey": "auto",
+                                        "params": {
+                                            "application_id": "$state.selectedApplicationId",
+                                            "release_digest": "$state.selectedReleaseDigest",
+                                            "account_id": "$event.values.account_id",
+                                            "provider_id": "$event.values.provider_id",
+                                            "subject_ref": "$event.values.subject_ref",
+                                            "mode": "$event.values.mode",
+                                            "scopes": "$event.values.scopes",
+                                            "status": "$event.values.status",
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "access-simulation-form",
+                                "type": "ui.form",
+                                "area": "metadata",
+                                "visibleIf": "$state.activeTab == 'access' && $state.selectedApplicationId",
+                                "inputs": {
+                                    "showSubmit": True,
+                                    "submitLabel": "Simulate",
+                                    "fields": [
+                                        {"id": "subject_ref", "type": "text", "label": "Subject", "required": True},
+                                        {"id": "permission_id", "type": "text", "label": "Permission", "required": True},
+                                        {"id": "app_capability", "type": "text", "label": "Application capability", "required": True, "defaultValue": "application.use"},
+                                    ],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "submit",
+                                        "type": "callMcp",
+                                        "target": "applications.access.simulate",
+                                        "idempotencyKey": "auto",
+                                        "params": {
+                                            "application_id": "$state.selectedApplicationId",
+                                            "release_digest": "$state.selectedReleaseDigest",
+                                            "subject_ref": "$event.values.subject_ref",
+                                            "permission_id": "$event.values.permission_id",
+                                            "app_capability": "$event.values.app_capability",
+                                            "application_roles": "$state.selectedApplicationRoles",
+                                            "permission_ceiling": "$state.selectedPermissionCeiling",
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "application-final-verification-form",
+                                "type": "ui.form",
+                                "area": "metadata",
+                                "visibleIf": "$state.activeTab == 'release_readiness' && $state.selectedApplicationId",
+                                "inputs": {
+                                    "showSubmit": True,
+                                    "submitLabel": "Run final verification",
+                                    "fields": [
+                                        {"id": "source_commit", "type": "text", "label": "Source commit", "required": True},
+                                        {
+                                            "id": "release_scope",
+                                            "type": "select",
+                                            "label": "Release scope",
+                                            "required": True,
+                                            "defaultValue": "candidate",
+                                            "options": [
+                                                {"label": "Candidate", "value": "candidate"},
+                                                {"label": "Trial", "value": "trial"},
+                                                {"label": "Publication", "value": "publication"},
+                                            ],
+                                        },
+                                        {"id": "regression_evidence", "type": "text", "label": "Regression evidence", "required": True},
+                                        {"id": "access_matrix_evidence", "type": "text", "label": "Access matrix evidence", "required": True},
+                                        {"id": "pending_action_evidence", "type": "text", "label": "Pending Action evidence", "required": True},
+                                        {"id": "audit_evidence", "type": "text", "label": "Audit evidence", "required": True},
+                                        {"id": "disclosure_evidence", "type": "text", "label": "Disclosure evidence", "required": True},
+                                        {"id": "redaction_evidence", "type": "text", "label": "Redaction evidence", "required": True},
+                                    ],
+                                },
+                                "actions": [
+                                    {
+                                        "on": "submit",
+                                        "type": "callMcp",
+                                        "target": "applications.access.verify_release",
+                                        "idempotencyKey": "auto",
+                                        "resultStateKey": "applicationVerification",
+                                        "prototypeFixture": "$state.prototypeFixtures.applicationVerification",
+                                        "params": {
+                                            "application_id": "$state.selectedApplicationId",
+                                            "release_digest": "$state.selectedReleaseDigest",
+                                            "source_commit": "$event.values.source_commit",
+                                            "release_scope": "$event.values.release_scope",
+                                            "observed_capabilities": "$state.observedCapabilities",
+                                            "inferred_capabilities": "$state.inferredCapabilities",
+                                            "regression_evidence": "$event.values.regression_evidence",
+                                            "access_matrix_evidence": "$event.values.access_matrix_evidence",
+                                            "pending_action_evidence": "$event.values.pending_action_evidence",
+                                            "audit_evidence": "$event.values.audit_evidence",
+                                            "disclosure_evidence": "$event.values.disclosure_evidence",
+                                            "redaction_evidence": "$event.values.redaction_evidence",
+                                        },
                                     }
                                 ],
                             },
@@ -1526,6 +2206,44 @@ def _application_manager_webui() -> dict:
     widgets.insert(header_index + 1, lifecycle)
     widgets.insert(header_index + 2, tabs)
 
+    detail_order = [
+        "details",
+        "application-header",
+        "lifecycle-actions",
+        "prerelease-following",
+        "automatic-updates",
+        "reviewed-plan",
+        "review-actions",
+        "tabs",
+        "application-section",
+        "releases",
+        "operations",
+        "reports",
+        "application-access-permissions",
+        "application-access-access",
+        "application-access-roles",
+        "application-access-connected_accounts",
+        "application-access-release_readiness",
+        "application-access-activity",
+        "users-access-tabs",
+        "users-access-people",
+        "users-access-guests",
+        "users-access-children",
+        "users-access-devices",
+        "users-access-sessions",
+        "users-access-application_access",
+        "users-access-activity",
+    ]
+    detail_rank = {widget_id: index for index, widget_id in enumerate(detail_order)}
+    widgets.sort(
+        key=lambda widget: (
+            {"master": 0, "detail": 1, "metadata": 2}.get(widget.get("area"), 3),
+            detail_rank.get(str(widget.get("id") or ""), len(detail_rank))
+            if widget.get("area") == "detail"
+            else 0,
+        )
+    )
+
     add_localizations(webui)
     lifecycle = next(
         widget
@@ -1570,6 +2288,64 @@ def test_application_manager_evaluation_enforces_mcp_and_review_boundary() -> No
         if item["id"] == "applications.reviewed_plan_apply"
     )
     assert boundary["ok"] is False
+
+
+def test_application_access_prototype_fixtures_match_widget_shapes() -> None:
+    webui = _application_manager_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    fixtures = page["initialState"]["prototypeFixtures"]
+    widgets = {widget["id"]: widget for widget in page["widgets"]}
+    widget_ids = [widget["id"] for widget in page["widgets"]]
+
+    assert widget_ids.index("application-header") < widget_ids.index(
+        "prerelease-following"
+    ) < widget_ids.index("tabs") < widget_ids.index(
+        "application-access-permissions"
+    )
+
+    for section in (
+        "permissions",
+        "access",
+        "roles",
+        "connected_accounts",
+        "release_readiness",
+        "activity",
+    ):
+        widget = widgets[f"application-access-{section}"]
+        assert widget["dataSource"]["prototypeFixture"] == (
+            f"$state.prototypeFixtures.applicationAccess.{section}"
+        )
+        assert "result" in fixtures["applicationAccess"][section]
+
+    for section in (
+        "people",
+        "guests",
+        "children",
+        "devices",
+        "sessions",
+        "application_access",
+        "activity",
+    ):
+        widget = widgets[f"users-access-{section}"]
+        assert widget["dataSource"]["prototypeFixture"] == (
+            f"$state.prototypeFixtures.usersAccess.{section}"
+        )
+        assert isinstance(fixtures["usersAccess"][section]["result"], list)
+
+    access = widgets["application-access-access"]
+    assert access["type"] == "ui.list"
+    assert access["actions"][0]["params"]["selectedAccessGrantId"] == (
+        "$event.grant_id"
+    )
+    assert widgets["access-change-form"]["actions"][0]["target"] == (
+        "applications.access.change"
+    )
+    for tab_widget_id in ("tabs", "users-access-tabs"):
+        tab_widget = widgets[tab_widget_id]
+        assert tab_widget["inputs"]["variant"] == "toolbar"
+        assert all(
+            button.get("icon") for button in tab_widget["inputs"]["buttons"]
+        )
 
 
 def test_application_manager_evaluation_requires_bilingual_prototype_text() -> None:

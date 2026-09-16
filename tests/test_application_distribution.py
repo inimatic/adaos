@@ -7,6 +7,7 @@ import pytest
 from adaos.domain.application import Application
 from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.applications import (
+    ApplicationAccessManagementService,
     ApplicationDistributionError,
     ApplicationDistributionService,
     ApplicationService,
@@ -142,6 +143,7 @@ def _accepted_candidate(
     releases: ReleaseRepository,
     packages: ContentAddressedPackageStore,
     admission: _Admission,
+    access_aware: bool = False,
 ):
     source_dir = tmp_path / "sources" / version
     source_dir.mkdir(parents=True)
@@ -161,6 +163,47 @@ def _accepted_candidate(
         components=(built.ref,),
         catalog=PackageCatalog(),
         validation_evidence=({"status": "passed", "suite": "distribution"},),
+        project_definition=(
+            {
+                "schema": "adaos.project.v1",
+                "id": "recipes",
+                "version": version,
+                "profiles": ["adaos.application.v1"],
+                "components": {
+                    "owned": [
+                        {
+                            "ref": "scenario:recipes",
+                            "role": "primary",
+                            "exposure": "application",
+                            "lifecycle": "bound",
+                            "relations": ["realizes"],
+                        }
+                    ],
+                    "dependencies": [],
+                },
+                "entrypoints": [],
+                "compatibility": {},
+                "lifecycle": {},
+                "permission_profile": {
+                    "schema": "adaos.application.permission_profile.v1",
+                    "required": [
+                        {"id": "workspace.read", "purpose": "Read recipes."}
+                    ],
+                    "optional": [],
+                },
+                "application_roles": [
+                    {
+                        "id": "viewer",
+                        "title": "Viewer",
+                        "grants": ["application.use"],
+                        "assignable_to": ["owner", "member", "child", "guest"],
+                        "requires_permissions": ["workspace.read"],
+                    }
+                ],
+            }
+            if access_aware
+            else None
+        ),
     )
     candidate = candidate_from_release(
         candidate_id=f"recipes-{version.replace('.', '-')}",
@@ -237,6 +280,32 @@ def _service(tmp_path: Path):
     return distribution, candidates, releases, packages, remote, admission
 
 
+def _verify_access_release(
+    distribution: ApplicationDistributionService,
+    release_digest: str,
+    *,
+    scope: str,
+) -> dict:
+    return ApplicationAccessManagementService(distribution.applications).final_verification(
+        "app_recipes",
+        release_digest=release_digest,
+        source_commit="0123456789abcdef0123456789abcdef01234567",
+        observed_capabilities=("workspace.read",),
+        inferred_capabilities=("workspace.read",),
+        regression_evidence=(
+            "suite:release:application-access"
+            if scope == "publication"
+            else "pytest:tests/test_application_distribution.py",
+        ),
+        access_matrix_evidence=("test:owner-member-child-guest",),
+        pending_action_evidence=("test:pending-action-handoff",),
+        audit_evidence=("test:application-access-audit",),
+        disclosure_evidence=("test:install-update-disclosure",),
+        redaction_evidence=("test:secret-redaction",),
+        release_scope=scope,
+    )
+
+
 def test_link_trial_bootstraps_first_stable_without_rebuild(tmp_path: Path) -> None:
     distribution, candidates, releases, packages, remote, admission = _service(tmp_path)
     candidate, plan = _accepted_candidate(
@@ -264,6 +333,61 @@ def test_link_trial_bootstraps_first_stable_without_rebuild(tmp_path: Path) -> N
     assert remote.get_channel("recipes", "stable").release_digest == candidate.release_digest
     assert remote.upload_writes == 1
     assert releases.get_release("recipes", candidate.release_digest) == plan
+
+
+def test_access_aware_distribution_requires_trial_and_publication_verification(
+    tmp_path: Path,
+) -> None:
+    distribution, candidates, releases, packages, remote, admission = _service(tmp_path)
+    candidate, _ = _accepted_candidate(
+        tmp_path,
+        version="1.0.0",
+        base=None,
+        candidates=candidates,
+        releases=releases,
+        packages=packages,
+        admission=admission,
+        access_aware=True,
+    )
+
+    with pytest.raises(ApplicationDistributionError, match="Final Verification"):
+        distribution.publish_trial(
+            "app_recipes",
+            candidate.candidate_id,
+            publisher_ref="subnet:publisher",
+            mode="link_only",
+        )
+    assert remote.upload_writes == 0
+
+    trial_report = _verify_access_release(
+        distribution, candidate.release_digest, scope="trial"
+    )
+    trial = distribution.publish_trial(
+        "app_recipes",
+        candidate.candidate_id,
+        publisher_ref="subnet:publisher",
+        mode="link_only",
+    )
+    assert trial["verification"]["report_digest"] == trial_report["report"]["report_digest"]
+    assert remote.upload_writes == 1
+
+    with pytest.raises(ApplicationDistributionError, match="publication"):
+        distribution.promote_stable(
+            "app_recipes",
+            candidate.candidate_id,
+            publisher_ref="subnet:publisher",
+            expected_stable_digest=None,
+        )
+    publication_report = _verify_access_release(
+        distribution, candidate.release_digest, scope="publication"
+    )
+    promoted = distribution.promote_stable(
+        "app_recipes",
+        candidate.candidate_id,
+        publisher_ref="subnet:publisher",
+        expected_stable_digest=None,
+    )
+    assert promoted["verification"]["report_digest"] == publication_report["report"]["report_digest"]
 
 
 def test_later_stable_requires_current_exact_prerelease(tmp_path: Path) -> None:

@@ -7,7 +7,7 @@ import secrets
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 
 from adaos.domain.application import TrialAccessGrant, utc_now
@@ -318,7 +318,8 @@ class ApplicationAccessService:
     ) -> ApplicationAccessGrant:
         release = self.store.get_release(application_id, release_digest)
         profile = release.permission_profile
-        role_ids = {item.role_id for item in release.application_roles}
+        role_map = {item.role_id: item for item in release.application_roles}
+        role_ids = set(role_map)
         unknown_roles = sorted(set(application_roles) - role_ids)
         if unknown_roles:
             raise ApplicationAccessError("unknown Application roles: " + ", ".join(unknown_roles))
@@ -332,10 +333,34 @@ class ApplicationAccessService:
         constraint_payload = dict(constraints or {})
         subject_kind = self._subject_kind(subject_ref, constraint_payload)
         constraint_payload.setdefault("subject_kind", subject_kind)
+        platform_role = str(
+            constraint_payload.get("platform_role")
+            or ("guest" if subject_kind == "guest" else "child" if subject_kind == "child" else "member")
+        ).strip().lower()
+        unassignable = sorted(
+            role_id
+            for role_id in application_roles
+            if platform_role not in role_map[role_id].assignable_to
+        )
+        if unassignable:
+            raise ApplicationAccessError(
+                f"Application roles are not assignable to {platform_role}: " + ", ".join(unassignable)
+            )
         high_risk = sorted(item for item in ceiling if is_high_risk_permission(item))
         if subject_kind == "guest":
             if expires_at is None:
                 raise ApplicationAccessError("guest Application access requires expires_at")
+            if constraint_payload.get("profile_binding") is True:
+                raise ApplicationAccessError("guest Application access cannot bind a user profile")
+            if constraint_payload.get("session_bound") is False:
+                raise ApplicationAccessError("guest Application access must be session-bound")
+            if constraint_payload.get("durable_approvals") is True:
+                raise ApplicationAccessError("guest Application access cannot create durable approvals")
+            constraint_payload["profile_binding"] = False
+            constraint_payload["session_bound"] = True
+            constraint_payload["durable_approvals"] = False
+            if subject_ref.startswith("session:"):
+                constraint_payload.setdefault("session_ref", subject_ref)
             if high_risk and not constraint_payload.get("guest_sensitive_override"):
                 raise ApplicationAccessError("guest Application access cannot include sensitive permissions by default")
         child_external_data = bool(
@@ -385,6 +410,131 @@ class ApplicationAccessService:
                 "expires_at": saved.expires_at,
                 "status": saved.status,
                 "reviewed_permission_profile_digest": saved.reviewed_permission_profile_digest,
+                "subject_kind": subject_kind,
+            }
+        )
+        if subject_kind == "guest":
+            self._audit(
+                {
+                    "action": "guest_access",
+                    "application_id": saved.application_id,
+                    "subject_ref": saved.subject_ref,
+                    "grant_id": saved.grant_id,
+                    "expires_at": saved.expires_at,
+                    "session_bound": True,
+                    "profile_binding": False,
+                    "reviewed_permission_profile_digest": saved.reviewed_permission_profile_digest,
+                }
+            )
+        if subject_kind == "child" and constraint_payload.get("guardian_approval_id"):
+            self._audit(
+                {
+                    "action": "guardian_approval",
+                    "application_id": saved.application_id,
+                    "subject_ref": saved.subject_ref,
+                    "grant_id": saved.grant_id,
+                    "approval_id": constraint_payload["guardian_approval_id"],
+                    "reviewed_permission_profile_digest": saved.reviewed_permission_profile_digest,
+                }
+            )
+        return saved
+
+    def change_access(
+        self,
+        grant_id: str,
+        *,
+        release_digest: str,
+        application_roles: tuple[str, ...],
+        issuer_ref: str,
+        expected_revision: int,
+        permission_ceiling: tuple[str, ...] | None = None,
+        explicit_denies: tuple[str, ...] | None = None,
+        constraints: Mapping[str, Any] | None = None,
+        expires_at: str | None = None,
+    ) -> ApplicationAccessGrant:
+        current = self.store.get_application_access_grant(grant_id)
+        if current.revision != expected_revision:
+            from .store import ApplicationRevisionConflict
+
+            raise ApplicationRevisionConflict(expected=expected_revision, observed=current.revision)
+        release = self.store.get_release(current.application_id, release_digest)
+        profile = release.permission_profile
+        role_map = {item.role_id: item for item in release.application_roles}
+        unknown_roles = sorted(set(application_roles) - set(role_map))
+        if unknown_roles:
+            raise ApplicationAccessError("unknown Application roles: " + ", ".join(unknown_roles))
+        ceiling = tuple(permission_ceiling if permission_ceiling is not None else current.permission_ceiling)
+        denies = tuple(explicit_denies if explicit_denies is not None else current.explicit_denies)
+        unknown_permissions = sorted((set(ceiling) | set(denies)) - set(profile.flat_permissions))
+        if unknown_permissions:
+            raise ApplicationAccessError("unknown Application permissions: " + ", ".join(unknown_permissions))
+        next_constraints = dict(current.constraints if constraints is None else constraints)
+        subject_kind = self._subject_kind(current.subject_ref, next_constraints)
+        next_constraints.setdefault("subject_kind", subject_kind)
+        platform_role = str(
+            next_constraints.get("platform_role")
+            or ("guest" if subject_kind == "guest" else "child" if subject_kind == "child" else "member")
+        ).strip().lower()
+        unassignable = sorted(
+            role_id for role_id in application_roles if platform_role not in role_map[role_id].assignable_to
+        )
+        if unassignable:
+            raise ApplicationAccessError(
+                f"Application roles are not assignable to {platform_role}: " + ", ".join(unassignable)
+            )
+        high_risk = sorted(item for item in ceiling if is_high_risk_permission(item))
+        next_expiry = expires_at if expires_at is not None else current.expires_at
+        if subject_kind == "guest":
+            if next_expiry is None:
+                raise ApplicationAccessError("guest Application access requires expires_at")
+            if next_constraints.get("profile_binding") is True:
+                raise ApplicationAccessError("guest Application access cannot bind a user profile")
+            if next_constraints.get("session_bound") is False:
+                raise ApplicationAccessError("guest Application access must be session-bound")
+            if next_constraints.get("durable_approvals") is True:
+                raise ApplicationAccessError("guest Application access cannot create durable approvals")
+            next_constraints["profile_binding"] = False
+            next_constraints["session_bound"] = True
+            next_constraints["durable_approvals"] = False
+            if current.subject_ref.startswith("session:"):
+                next_constraints.setdefault("session_ref", current.subject_ref)
+            if high_risk and not next_constraints.get("guest_sensitive_override"):
+                raise ApplicationAccessError("guest Application access cannot include sensitive permissions by default")
+        if subject_kind == "child" and (
+            high_risk
+            or profile.privacy_labels.get("sent_off_device")
+            or profile.privacy_labels.get("tracking")
+            or any(role_map[role_id].sensitive for role_id in application_roles)
+        ) and not next_constraints.get("guardian_approval_id"):
+            raise ApplicationAccessError("child sensitive Application access requires guardian approval")
+        changed = replace(
+            current,
+            application_roles=application_roles,
+            permission_ceiling=ceiling,
+            explicit_denies=denies,
+            constraints=next_constraints,
+            issuer_ref=issuer_ref,
+            reviewed_permission_profile_digest=profile.digest,
+            expires_at=next_expiry,
+            status="active",
+            revision=current.revision + 1,
+            updated_at=utc_now(),
+        )
+        saved = self.store.save_application_access_grant(changed, expected_revision=current.revision)
+        self._audit(
+            {
+                "action": "role_change",
+                "application_id": saved.application_id,
+                "subject_ref": saved.subject_ref,
+                "grant_id": saved.grant_id,
+                "issuer_ref": issuer_ref,
+                "previous_application_roles": list(current.application_roles),
+                "application_roles": list(saved.application_roles),
+                "permission_ceiling": list(saved.permission_ceiling),
+                "explicit_denies": list(saved.explicit_denies),
+                "constraints": dict(saved.constraints),
+                "expires_at": saved.expires_at,
+                "reviewed_permission_profile_digest": saved.reviewed_permission_profile_digest,
             }
         )
         return saved
@@ -397,12 +547,12 @@ class ApplicationAccessService:
         expected_revision: int,
     ) -> ApplicationAccessGrant:
         grant = self.store.get_application_access_grant(grant_id)
+        if grant.status == "revoked":
+            return grant
         if grant.revision != expected_revision:
             from .store import ApplicationRevisionConflict
 
             raise ApplicationRevisionConflict(expected=expected_revision, observed=grant.revision)
-        if grant.status == "revoked":
-            return grant
         revoked = replace(grant, status="revoked", revision=grant.revision + 1, updated_at=utc_now())
         saved = self.store.save_application_access_grant(revoked, expected_revision=grant.revision)
         self._audit(

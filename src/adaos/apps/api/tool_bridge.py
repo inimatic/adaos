@@ -16,13 +16,13 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from adaos.apps.api.auth import require_token, require_tool_caller
+from adaos.apps.api.auth import require_tool_caller
 from adaos.domain.node_identity import node_identities_match, node_identity_token
 from adaos.services.observe import attach_http_trace_headers
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.eventbus import emit
 from adaos.services.pending_actions import list_pending_actions_async, publish_pending_action_async
-from adaos.services.policy.caller import CallerAccessDenied, current_caller_scope
+from adaos.services.policy.caller import CallerAccessDenied, current_caller, current_caller_scope
 from adaos.services.runtime_lifecycle import is_accepting_new_work
 from adaos.services.runtime_action_grants import (
     find_runtime_action_grant,
@@ -30,7 +30,9 @@ from adaos.services.runtime_action_grants import (
 )
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.tool_contract import (
+    declared_tool_application_access as _declared_tool_application_access,
     declared_tool_approval_scope as _declared_tool_approval_scope,
+    declared_tool_permissions as _declared_tool_permissions,
     declared_tool_side_effects as _declared_tool_side_effects,
     side_effects_are_read_only as _declared_side_effects_are_read_only,
 )
@@ -684,6 +686,7 @@ def _runtime_action_domain_ref(
         local_node_id=local_node_id,
     )
     fingerprint = hashlib.sha256(_stable_json(fingerprint_payload).encode("utf-8")).hexdigest()
+    verified_application = _mapping(_mapping(body.context).get("_verified_application_access"))
     return _without_empty(
         {
             "tool": str(body.tool or ""),
@@ -693,6 +696,13 @@ def _runtime_action_domain_ref(
             "target_node_id": str(target_node_id or _resolve_target_node_id(payload) or "").strip(),
             "risk_class": str(action_risk.get("risk_class") or "").strip(),
             "arguments_sha256": fingerprint,
+            "application_id": verified_application.get("application_id"),
+            "release_digest": verified_application.get("release_digest"),
+            "permission_profile_digest": verified_application.get("permission_profile_digest"),
+            "subject_ref": verified_application.get("subject_ref"),
+            "permission_id": verified_application.get("permission_id"),
+            "app_capability": verified_application.get("app_capability"),
+            "holder_ref": verified_application.get("holder_ref"),
         }
     )
 
@@ -764,15 +774,26 @@ def _runtime_action_approval_presentation(
 ) -> dict[str, Any]:
     spec = dict(declaration) if isinstance(declaration, Mapping) else {}
     presentation = _mapping(spec.get("presentation"))
+    verified_application = _mapping(spec.get("application_access"))
     target_label = _first_text(payload.get("target_label"), payload.get("target_id"))
-    params = {
+    params = _without_empty({
         "tool": tool_name,
         "risk_class": risk_class,
         "target": target_label,
         "target_label": target_label,
-    }
-    title = _first_text(presentation.get("title")) or "Action approval required"
-    summary = _first_text(presentation.get("summary")) or f"Approve {tool_name} ({risk_class}) before it runs."
+        "application": verified_application.get("application_title"),
+        "permission": verified_application.get("permission_id"),
+    })
+    application_title = _first_text(verified_application.get("application_title"))
+    permission_id = _first_text(verified_application.get("permission_id"))
+    title = _first_text(presentation.get("title")) or (
+        f"{application_title} needs approval" if application_title else "Action approval required"
+    )
+    summary = _first_text(presentation.get("summary")) or (
+        f"Approve {permission_id} for {application_title}."
+        if application_title and permission_id
+        else f"Approve {tool_name} ({risk_class}) before it runs."
+    )
     title_key = _first_text(presentation.get("title_i18n_key")) or "pending_actions.runtime.action_approval_title"
     summary_key = _first_text(presentation.get("summary_i18n_key")) or "pending_actions.runtime.action_approval_summary"
     waiting_key = _first_text(presentation.get("waiting_i18n_key")) or summary_key
@@ -870,6 +891,11 @@ async def _ensure_runtime_action_pending_action(
         tool_name=tool_name,
         risk_class=risk_class,
     )
+    verified_application = _mapping(
+        _mapping(body.context).get("_verified_application_access")
+    )
+    application_id = _first_text(verified_application.get("application_id"))
+    subject_ref = _first_text(verified_application.get("subject_ref"))
     try:
         return await publish_pending_action_async(
             ctx=ctx or get_ctx(),
@@ -894,6 +920,29 @@ async def _ensure_runtime_action_pending_action(
                 "source": "tool_bridge",
                 "action_risk": action_risk,
                 "approval_contract": _approval_contract(),
+                "application_access": verified_application,
+                "routes": _without_empty(
+                    {
+                        "application": (
+                            f"applications://{application_id}/access"
+                            if application_id
+                            else "applications://permissions"
+                        ),
+                        "user": (
+                            f"applications://users-access/{subject_ref}"
+                            if subject_ref
+                            else "applications://users-access"
+                        ),
+                        "trusted_device": "pending-actions://trusted-device",
+                    }
+                ),
+                "channel_affordances": {
+                    "chat": "keyboard",
+                    "telegram": "inline_keyboard",
+                    "voice": "trusted_device_handoff",
+                    "voice_text": "This action needs confirmation on a trusted device.",
+                    "voice_text_i18n_key": "runtime.application_approval.voice_handoff",
+                },
             },
         )
     except ValueError as exc:
@@ -919,6 +968,7 @@ async def _enforce_runtime_action_gate(
     local_node_id: str = "",
     forced_side_effect_class: str = "",
     approval_scope: Mapping[str, Any] | None = None,
+    application_access: Mapping[str, Any] | None = None,
     ctx: AgentContext | None = None,
 ) -> Dict[str, Any]:
     local_resource = _runtime_action_targets_local_resource(approval_scope, payload)
@@ -931,9 +981,58 @@ async def _enforce_runtime_action_gate(
         local_node_id=local_node_id,
         forced_side_effect_class="local_write" if local_resource else forced_side_effect_class,
     )
-    if not _runtime_action_gate_enabled() or not bool(action_risk.get("approval_required")):
+    application_gate = dict(application_access or {})
+    application_decision = _mapping(application_gate.get("decision"))
+    if application_decision:
+        decision = str(application_decision.get("decision") or "").strip()
+        if decision == "allow":
+            return {
+                **action_risk,
+                "approval": {
+                    "status": "approve",
+                    "source": "application_grant",
+                    "approval_id": application_decision.get("approval_id"),
+                    "grant_id": application_decision.get("grant_id"),
+                    "permission_id": application_decision.get("permission_id"),
+                    "application_id": application_decision.get("application_id"),
+                },
+                "application_access": application_gate,
+            }
+        if decision == "deny":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "application_access_denied",
+                    "application_id": application_decision.get("application_id"),
+                    "permission_id": application_decision.get("permission_id"),
+                    "reason": application_decision.get("reason_code"),
+                    "policy_explanation": application_decision.get("policy_explanation"),
+                    "technical_detail": {"tool": str(body.tool or "")},
+                },
+            )
+    if not _runtime_action_gate_enabled() or (
+        not bool(action_risk.get("approval_required")) and not application_decision
+    ):
         return action_risk
+    verified_application = _mapping(_mapping(body.context).get("_verified_application_access"))
+    if verified_application:
+        scope = dict(approval_scope or {})
+        scope["application_access"] = verified_application
+        approval_scope = scope
     grant_ref = _runtime_action_grant_ref(approval_scope, payload)
+    if verified_application.get("durable_approval_allowed") is False:
+        grant_ref = None
+    grant_binding = {
+        key: verified_application[key]
+        for key in (
+            "application_id",
+            "release_digest",
+            "permission_profile_digest",
+            "subject_ref",
+            "holder_ref",
+        )
+        if verified_application.get(key)
+    }
     if grant_ref:
         grant = await asyncio.to_thread(
             find_runtime_action_grant,
@@ -942,6 +1041,7 @@ async def _enforce_runtime_action_gate(
                 key: grant_ref[key]
                 for key in ("subject", "scope", "resource", "webspace_id")
             },
+            binding=grant_binding,
         )
         if grant:
             return {
@@ -965,6 +1065,7 @@ async def _enforce_runtime_action_gate(
                     **grant_ref,
                     approval_id=_first_text(approval.get("approval_id")),
                     approved_by=_approval_identity(approval),
+                    binding=grant_binding,
                 )
                 accepted["durable_grant_id"] = grant["id"]
             return {**action_risk, "approval": accepted}
@@ -991,6 +1092,15 @@ async def _enforce_runtime_action_gate(
         )
         approval = _pending_action_approval(pending_action, action_risk)
         if approval:
+            pending_reason = str(application_decision.get("reason_code") or "")
+            if application_decision and pending_reason not in {
+                "permission_not_granted",
+                "guardian_approval_required",
+                "device_trust_required",
+                "session_trust_required",
+            }:
+                approval = None
+        if approval:
             if grant_ref:
                 grant = await asyncio.to_thread(
                     remember_runtime_action_grant,
@@ -998,6 +1108,7 @@ async def _enforce_runtime_action_gate(
                     **grant_ref,
                     approval_id=_first_text(approval.get("pending_action_id")),
                     approved_by=_approval_identity(approval),
+                    binding=grant_binding,
                 )
                 approval = {**approval, "durable_grant_id": grant["id"]}
             return {**action_risk, "approval": approval}
@@ -1007,7 +1118,11 @@ async def _enforce_runtime_action_gate(
     raise HTTPException(
         status_code=403,
         detail={
-            "error": "action_approval_required",
+            "error": "application_approval_required" if application_decision else "action_approval_required",
+            "application_id": application_decision.get("application_id"),
+            "permission_id": application_decision.get("permission_id"),
+            "reason": application_decision.get("reason_code"),
+            "policy_explanation": application_decision.get("policy_explanation"),
             "tool": str(body.tool or ""),
             "action_risk": action_risk,
             "pending_action_id": str(pending_action.get("id") or ""),
@@ -1764,15 +1879,208 @@ def _project_tool_context_meta(
     return projected
 
 
+async def _authorize_application_tool_call(
+    *,
+    body: ToolCall,
+    request: Request,
+    ctx: AgentContext,
+    skill_name: str,
+    public_tool: str,
+    manager: SkillManager,
+    declared_side_effects: str,
+    component_capabilities: tuple[str, ...],
+    application_contract: Mapping[str, Any],
+) -> tuple[ToolCall, dict[str, Any] | None]:
+    """Resolve and enforce trusted Application context before action approval."""
+
+    if body.dev:
+        return body, None
+    from adaos.services.applications.access_management import ApplicationAccessManagementService
+    from adaos.services.applications.runtime import get_application_service
+    from adaos.services.personalization_runtime import personalization_access_service
+
+    request_context = _mapping(body.context)
+    requested_application_id = _first_text(request_context.get("application_id"))
+    requested_release_digest = _first_text(
+        request_context.get("application_release_digest"),
+        _mapping(request_context.get("runtime_selection")).get("release_digest"),
+    )
+    paths = getattr(ctx, "paths", None)
+    state_dir_getter = getattr(paths, "state_dir", None)
+    if not callable(state_dir_getter) and not getattr(ctx, "authority_state_dir", None):
+        if requested_application_id:
+            raise HTTPException(status_code=503, detail={"error": "application_authority_unavailable"})
+        return body, None
+    state_dir = Path(getattr(ctx, "authority_state_dir", None) or state_dir_getter())
+    management = ApplicationAccessManagementService(get_application_service(state_dir))
+    runtime = await asyncio.to_thread(
+        management.resolve_runtime_context,
+        skill_name=skill_name,
+        requested_application_id=requested_application_id,
+        requested_release_digest=requested_release_digest,
+        webspace_id=_resolve_tool_webspace_id(body.arguments or {}, context=body.context),
+    )
+    if runtime is None:
+        if requested_application_id:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "application_context_invalid",
+                    "application_id": requested_application_id,
+                    "technical_detail": {"tool": body.tool},
+                },
+            )
+        return body, None
+
+    if not component_capabilities:
+        component_capabilities = await asyncio.to_thread(
+            _declared_tool_permissions,
+            manager,
+            skill_name=skill_name,
+            public_tool=public_tool,
+            dev=False,
+        )
+    if not application_contract:
+        application_contract = await asyncio.to_thread(
+            _declared_tool_application_access,
+            manager,
+            skill_name=skill_name,
+            public_tool=public_tool,
+            dev=False,
+        )
+
+    actor = current_caller()
+    if actor is None:
+        raise HTTPException(status_code=403, detail={"error": "application_actor_missing"})
+    subject_ref = actor.ref()
+    session_ref = ""
+    device_ref = ""
+    session_trusted = False
+    device_trusted = False
+    access_service = personalization_access_service(ctx)
+    access_store = access_service.store
+    if actor.kind == "session":
+        session = await asyncio.to_thread(access_store.get_session, actor.id)
+        if session:
+            subject = _mapping(session.get("subject"))
+            if subject.get("kind") and subject.get("id"):
+                subject_ref = f"{subject['kind']}:{subject['id']}"
+            session_ref = f"session:{actor.id}"
+            session_trusted = str(session.get("status") or "active") == "active"
+            session_device_id = _first_text(session.get("device_id"))
+            if session_device_id:
+                device_ref = f"device:{session_device_id}"
+    header_device_id = _first_text(
+        request.headers.get("X-AdaOS-Device-Id"),
+        request.headers.get("x-adaos-device-id"),
+    )
+    if header_device_id:
+        device = await asyncio.to_thread(access_store.get_device_key, header_device_id)
+        subject_id = subject_ref.partition(":")[2]
+        if device and str(device.get("status") or "active") == "active" and str(device.get("user_id") or "") == subject_id:
+            device_ref = f"device:{header_device_id}"
+            device_trusted = True
+    if device_ref and not device_trusted:
+        device_id = device_ref.partition(":")[2]
+        device = await asyncio.to_thread(access_store.get_device_key, device_id)
+        device_trusted = bool(device and str(device.get("status") or "active") == "active")
+    holder_ref = session_ref or device_ref or actor.ref()
+    permission_id, app_capability = management.runtime_permission(
+        side_effects=declared_side_effects,
+        application_access=application_contract,
+        component_capabilities=component_capabilities,
+    )
+    if not permission_id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "application_permission_mapping_missing",
+                "application_id": runtime["application_id"],
+                "technical_detail": {"tool": body.tool},
+            },
+        )
+    payload = dict(body.arguments or {})
+    resource_argument = _first_text(application_contract.get("resource_argument"))
+    provider_argument = _first_text(application_contract.get("provider_argument"))
+    actor_chain = {
+        "user_ref": subject_ref if subject_ref.startswith("user:") else "",
+        "subject_ref": subject_ref,
+        "application_id": runtime["application_id"],
+        "component_ref": f"skill:{skill_name}",
+        "tool_ref": f"tool:{skill_name}:{public_tool}",
+        "device_ref": device_ref,
+        "device_trusted": device_trusted,
+        "session_ref": session_ref,
+        "session_trusted": session_trusted,
+        "webspace_id": _resolve_tool_webspace_id(payload, context=body.context),
+        "resource_ref": _first_text(payload.get(resource_argument)) if resource_argument else "",
+        "external_provider_ref": _first_text(payload.get(provider_argument)) if provider_argument else "",
+    }
+    decision = await asyncio.to_thread(
+        management.access.decide,
+        runtime["application_id"],
+        release_digest=runtime["release_digest"],
+        subject_ref=subject_ref,
+        permission_id=permission_id,
+        app_capability=app_capability,
+        actor_chain=actor_chain,
+        component_capabilities=component_capabilities,
+    )
+    application = management.store.get_application(runtime["application_id"])
+    verified = {
+        "application_id": runtime["application_id"],
+        "application_title": application.display["title"],
+        "release_digest": runtime["release_digest"],
+        "permission_profile_digest": runtime["permission_profile_digest"],
+        "subject_ref": subject_ref,
+        "holder_ref": holder_ref,
+        "permission_id": permission_id,
+        "app_capability": app_capability,
+        "component_ref": f"skill:{skill_name}",
+        "tool_ref": f"tool:{skill_name}:{public_tool}",
+        "device_ref": device_ref,
+        "session_ref": session_ref,
+        "webspace_id": actor_chain["webspace_id"],
+    }
+    if decision.grant_id:
+        grant = management.store.get_application_access_grant(decision.grant_id)
+        verified["durable_approval_allowed"] = bool(
+            grant.constraints.get("durable_approvals", True)
+        )
+    from adaos.services.policy.application import bind_application
+
+    bind_application(verified)
+    updated_context = {**request_context, "_verified_application_access": verified}
+    await asyncio.to_thread(
+        management.record_runtime_observation,
+        application_id=runtime["application_id"],
+        subject_ref=subject_ref,
+        permission_id=permission_id,
+        actor_chain=actor_chain,
+        outcome=decision.decision,
+        grant_id=str(decision.grant_id or ""),
+        network_destination=str(actor_chain.get("external_provider_ref") or ""),
+    )
+    return body.model_copy(update={"context": updated_context}), {
+        "decision": decision.to_dict(),
+        "context": verified,
+        "component_capabilities": list(component_capabilities),
+    }
+
+
 @router.post("/tools/call", dependencies=[Depends(require_tool_caller)])
 async def call_tool(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
     from adaos.services.policy.caller import verified_caller
+    from adaos.services.policy.application import clear_application
 
     state = getattr(request, "state", None)
     actor = getattr(state, "adaos_verified_caller", None)
     scope = getattr(state, "adaos_verified_caller_scope", None)
     with verified_caller(actor, scope):
-        return await _call_tool_with_identity(body, request, response, ctx)
+        try:
+            return await _call_tool_with_identity(body, request, response, ctx)
+        finally:
+            clear_application()
 
 
 async def _authorize_scoped_tool_call(body: ToolCall, ctx: AgentContext, trial_runtime=None) -> None:
@@ -1941,6 +2249,8 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
     if trial_runtime is None and accepting_new_work and body.intent != "read" and _looks_readonly_tool(public_tool):
         declared_side_effects = ""
         declared_approval_scope: dict[str, Any] = {}
+        declared_component_permissions: tuple[str, ...] = ()
+        declared_application_access: dict[str, Any] = {}
     else:
         declared_side_effects = await asyncio.to_thread(
             _declared_tool_side_effects,
@@ -1951,6 +2261,20 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         )
         declared_approval_scope = await asyncio.to_thread(
             _declared_tool_approval_scope,
+            mgr,
+            skill_name=skill_name,
+            public_tool=public_tool,
+            dev=bool(body.dev),
+        )
+        declared_component_permissions = await asyncio.to_thread(
+            _declared_tool_permissions,
+            mgr,
+            skill_name=skill_name,
+            public_tool=public_tool,
+            dev=bool(body.dev),
+        )
+        declared_application_access = await asyncio.to_thread(
+            _declared_tool_application_access,
             mgr,
             skill_name=skill_name,
             public_tool=public_tool,
@@ -2014,6 +2338,17 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
     target_node_id = _resolve_target_node_id(payload, local_node_id=local_node_id)
     if trial_runtime is not None and target_node_id and target_node_id != local_node_id:
         raise HTTPException(status_code=409, detail={"error": "trial_runtime_unavailable", "message": "Trial node forwarding is not admitted"})
+    body, application_access = await _authorize_application_tool_call(
+        body=body,
+        request=request,
+        ctx=ctx,
+        skill_name=skill_name,
+        public_tool=public_tool,
+        manager=mgr,
+        declared_side_effects=declared_side_effects,
+        component_capabilities=declared_component_permissions,
+        application_contract=declared_application_access,
+    )
     gate_started_at = time.perf_counter()
     action_risk = await _enforce_runtime_action_gate(
         body=body,
@@ -2024,6 +2359,7 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         local_node_id=local_node_id,
         forced_side_effect_class=declared_side_effects,
         approval_scope=declared_approval_scope,
+        application_access=application_access,
         ctx=ctx,
     )
     mutating_call = _action_risk_may_mutate(action_risk)

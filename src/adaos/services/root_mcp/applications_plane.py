@@ -288,6 +288,16 @@ def contracts() -> list[RootMcpToolContract]:
         "expected_revision": {"type": "integer", "minimum": 0},
         "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
     }
+    string_list = {
+        "oneOf": [
+            {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            },
+            {"type": "string", "maxLength": 8_000},
+        ]
+    }
     evidence_item = {
         "type": "object",
         "additionalProperties": False,
@@ -342,6 +352,266 @@ def contracts() -> list[RootMcpToolContract]:
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_show"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.show",
+            title="Show Application access",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Read permissions, grants, roles, connected accounts, readiness and activity for one Application.",
+            input_schema=schema_object(
+                properties={"application_id": {"type": "string"}, "release_digest": {"type": ["string", "null"]}},
+                required=["application_id"],
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_access_show"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.users",
+            title="Show Users and Access",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Read people, guests, children, devices, sessions, Application access and redacted activity.",
+            input_schema=schema_object(),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_access_users"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.reviews",
+            title="List Application access reviews",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Find long-lived guests, stale holders, unused grants and sensitive access due for review.",
+            input_schema=schema_object(
+                properties={"application_id": {"type": ["string", "null"]}, "stale_days": {"type": "integer", "minimum": 1, "maximum": 3650}},
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_access_reviews"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.privacy",
+            title="Show Application privacy report",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Compare declared and observed data, models, network, secrets, notifications and background use.",
+            input_schema=schema_object(
+                properties={"application_id": {"type": "string"}, "release_digest": {"type": "string"}},
+                required=["application_id", "release_digest"],
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_access_privacy"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.simulate",
+            title="Simulate Application access",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Preview a grant or role decision without persisting policy state.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {"type": "string"},
+                    "subject_ref": {"type": "string"},
+                    "permission_id": {"type": "string"},
+                    "app_capability": {"type": "string"},
+                    "application_roles": {"type": "array", "items": {"type": "string"}},
+                    "permission_ceiling": {"type": "array", "items": {"type": "string"}},
+                    "explicit_denies": {"type": "array", "items": {"type": "string"}},
+                    "constraints": {"type": "object"},
+                    "actor_chain": {"type": "object"},
+                    "component_capabilities": {"type": "array", "items": {"type": "string"}},
+                },
+                required=["application_id", "release_digest", "subject_ref", "permission_id", "app_capability", "application_roles", "permission_ceiling"],
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_access_simulate"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.grant",
+            title="Grant Application access",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Assign declared Application roles and a bounded permission ceiling to a subject.",
+            input_schema=schema_object(
+                properties={
+                    **identity,
+                    "release_digest": {"type": "string"},
+                    "subject_ref": {"type": "string"},
+                    "application_roles": deepcopy(string_list),
+                    "permission_ceiling": {
+                        "oneOf": [*deepcopy(string_list["oneOf"]), {"type": "null"}]
+                    },
+                    "explicit_denies": deepcopy(string_list),
+                    "constraints": {"type": "object"},
+                    "expires_at": {"type": ["string", "null"]},
+                },
+                required=["application_id", "release_digest", "subject_ref", "application_roles", "expected_revision", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_access_grant"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.change",
+            title="Change Application access",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Change a declared Application role or permission ceiling with optimistic concurrency.",
+            input_schema=schema_object(
+                properties={
+                    "grant_id": {"type": "string"},
+                    "release_digest": {"type": "string"},
+                    "application_roles": deepcopy(string_list),
+                    "permission_ceiling": {
+                        "oneOf": [*deepcopy(string_list["oneOf"]), {"type": "null"}]
+                    },
+                    "explicit_denies": {
+                        "oneOf": [*deepcopy(string_list["oneOf"]), {"type": "null"}]
+                    },
+                    "constraints": {"type": ["object", "null"]},
+                    "expires_at": {"type": ["string", "null"]},
+                    "expected_revision": {"type": "integer", "minimum": 1},
+                    "idempotency_key": {"type": "string"},
+                },
+                required=["grant_id", "release_digest", "application_roles", "expected_revision", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_access_change"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.revoke",
+            title="Revoke Application access",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Revoke a subject's live Application grant with optimistic concurrency.",
+            input_schema=schema_object(
+                properties={"grant_id": {"type": "string"}, "expected_revision": {"type": "integer", "minimum": 1}, "idempotency_key": {"type": "string"}},
+                required=["grant_id", "expected_revision", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_access_revoke"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.export",
+            title="Export Application access snapshot",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Export a digest-bound, secret-free Application access policy snapshot.",
+            input_schema=schema_object(properties={"application_id": {"type": "string"}}, required=["application_id"]),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_access_export"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.import",
+            title="Import Application access snapshot",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Validate or apply a digest-bound Application access snapshot.",
+            input_schema=schema_object(
+                properties={"snapshot": {"type": "object"}, "apply": {"type": "boolean"}, "idempotency_key": {"type": "string"}},
+                required=["snapshot", "apply", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_access_import"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.connected_account",
+            title="Update connected account state",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Record a redacted delegated-user or app-service provider state without accepting secret values.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {"type": "string"},
+                    "account_id": {"type": "string"},
+                    "provider_id": {"type": "string"},
+                    "subject_ref": {"type": "string"},
+                    "mode": {"enum": ["delegated_user", "app_service"]},
+                    "scopes": {"type": "array", "items": {"type": "string"}},
+                    "status": {"enum": ["missing", "connected", "expired", "revoked", "denied"]},
+                    "token_expires_at": {"type": ["string", "null"]},
+                    "scope_changed_at": {"type": ["string", "null"]},
+                    "idempotency_key": {"type": "string"},
+                },
+                required=[
+                    "application_id", "release_digest", "account_id", "provider_id",
+                    "subject_ref", "mode", "status", "idempotency_key",
+                ],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_access_connected_account"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.update_review",
+            title="Review Application access update",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Classify permission and role changes, affected subjects, and automatic-update eligibility.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "old_release_digest": {"type": "string"},
+                    "new_release_digest": {"type": "string"},
+                },
+                required=["application_id", "old_release_digest", "new_release_digest"],
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_access_update_review"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.profile",
+            title="Profile Application permissions",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Compare declared, inferred and observed permissions plus child, guest and role compatibility.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {"type": "string"},
+                    "observed_capabilities": {"type": "array", "items": {"type": "string"}},
+                    "inferred_capabilities": {"type": "array", "items": {"type": "string"}},
+                    "previous_release_digest": {"type": ["string", "null"]},
+                },
+                required=["application_id", "release_digest"],
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_access_profile"},
+        ),
+        RootMcpToolContract(
+            id="applications.access.verify_release",
+            title="Verify Application release access",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Persist the release-bound Builder checklist and deterministic in-toto-compatible statement.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {"type": "string"},
+                    "source_commit": {"type": "string"},
+                    "observed_capabilities": {"type": "array", "items": {"type": "string"}},
+                    "inferred_capabilities": {"type": "array", "items": {"type": "string"}},
+                    "regression_evidence": deepcopy(string_list),
+                    "access_matrix_evidence": deepcopy(string_list),
+                    "pending_action_evidence": deepcopy(string_list),
+                    "audit_evidence": deepcopy(string_list),
+                    "disclosure_evidence": deepcopy(string_list),
+                    "redaction_evidence": deepcopy(string_list),
+                    "release_scope": {"enum": ["dev", "candidate", "trial", "publication"]},
+                    "idempotency_key": {"type": "string"},
+                },
+                required=[
+                    "application_id", "release_digest", "source_commit",
+                    "release_scope", "idempotency_key",
+                ],
+            ),
+            output_schema=response(),
+            required_capability="applications.plan",
+            side_effects="write",
+            metadata={**published, "handler": "applications_access_verify_release"},
         ),
         RootMcpToolContract(
             id="applications.list_releases",
@@ -872,6 +1142,20 @@ def _application_id(arguments: Mapping[str, Any]) -> str:
     return value
 
 
+def _string_list(value: Any) -> tuple[str, ...]:
+    """Normalize declarative form text and native array inputs identically."""
+
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        values = value.replace("\r", "\n").replace(",", "\n").splitlines()
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        raise ValueError("expected a string or list of strings")
+    return tuple(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
+
+
 def _mcp_mutation_context(
     arguments: Mapping[str, Any], capability: str
 ) -> dict[str, str]:
@@ -900,6 +1184,199 @@ def _handle_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
 
 def _handle_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     return {"application": _sdk().get_application(_application_id(arguments))}
+
+
+def _handle_access_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return {
+        "access": _sdk().get_application_access_surface(
+            _application_id(arguments),
+            release_digest=str(arguments.get("release_digest") or "").strip() or None,
+        )
+    }
+
+
+def _handle_access_users(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return {"users_access": _sdk().get_users_access_surface()}
+
+
+def _handle_access_reviews(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return {
+        "findings": _sdk().list_application_access_reviews(
+            str(arguments.get("application_id") or "").strip() or None,
+            stale_days=int(arguments.get("stale_days") or 90),
+        )
+    }
+
+
+def _handle_access_privacy(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _sdk().get_application_privacy_report(
+        _application_id(arguments),
+        release_digest=str(arguments.get("release_digest") or ""),
+    )
+
+
+def _handle_access_simulate(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _sdk().simulate_application_access(
+        _application_id(arguments),
+        release_digest=str(arguments.get("release_digest") or ""),
+        subject_ref=str(arguments.get("subject_ref") or ""),
+        permission_id=str(arguments.get("permission_id") or ""),
+        app_capability=str(arguments.get("app_capability") or ""),
+        application_roles=_string_list(arguments.get("application_roles")),
+        permission_ceiling=_string_list(arguments.get("permission_ceiling")),
+        explicit_denies=_string_list(arguments.get("explicit_denies")),
+        constraints=dict(arguments.get("constraints") or {}),
+        actor_chain=dict(arguments.get("actor_chain") or {}),
+        component_capabilities=_string_list(arguments.get("component_capabilities")),
+    )
+
+
+def _handle_access_grant(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"would_grant": True, "application_id": _application_id(arguments)}
+    mutation = _mcp_mutation_context(arguments, "applications.apply")
+    ceiling = _string_list(arguments.get("permission_ceiling"))
+    return {
+        "grant": _sdk().grant_application_access(
+            _application_id(arguments),
+            release_digest=str(arguments.get("release_digest") or ""),
+            subject_ref=str(arguments.get("subject_ref") or ""),
+            application_roles=_string_list(arguments.get("application_roles")),
+            issuer_ref=mutation["actor_ref"],
+            permission_ceiling=ceiling or None,
+            explicit_denies=_string_list(arguments.get("explicit_denies")),
+            constraints=dict(arguments.get("constraints") or {}),
+            expires_at=str(arguments.get("expires_at") or "").strip() or None,
+            **mutation,
+        )
+    }
+
+
+def _handle_access_change(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"would_change": True, "grant_id": arguments.get("grant_id")}
+    mutation = _mcp_mutation_context(arguments, "applications.apply")
+    ceiling = arguments.get("permission_ceiling")
+    denies = arguments.get("explicit_denies")
+    constraints = arguments.get("constraints")
+    return {
+        "grant": _sdk().change_application_access(
+            str(arguments.get("grant_id") or ""),
+            release_digest=str(arguments.get("release_digest") or ""),
+            application_roles=_string_list(arguments.get("application_roles")),
+            expected_revision=int(arguments.get("expected_revision") or 0),
+            permission_ceiling=(_string_list(ceiling) or None) if ceiling is not None else None,
+            explicit_denies=_string_list(denies) if denies is not None else None,
+            constraints=dict(constraints) if isinstance(constraints, Mapping) else None,
+            expires_at=str(arguments.get("expires_at") or "").strip() or None,
+            issuer_ref=mutation["actor_ref"],
+            **mutation,
+        )
+    }
+
+
+def _handle_access_revoke(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"would_revoke": True, "grant_id": arguments.get("grant_id")}
+    mutation = _mcp_mutation_context(arguments, "applications.apply")
+    mutation.pop("idempotency_key")
+    return {
+        "grant": _sdk().revoke_application_access(
+            str(arguments.get("grant_id") or ""),
+            expected_revision=int(arguments.get("expected_revision") or 0),
+            issuer_ref=mutation["actor_ref"],
+            **mutation,
+        )
+    }
+
+
+def _handle_access_export(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return {"snapshot": _sdk().export_application_access_snapshot(_application_id(arguments))}
+
+
+def _handle_access_import(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    mutation = _mcp_mutation_context(arguments, "applications.apply")
+    return _sdk().import_application_access_snapshot(
+        dict(arguments.get("snapshot") or {}),
+        apply=bool(arguments.get("apply", False)) and not dry_run,
+        **mutation,
+    )
+
+
+def _handle_access_connected_account(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_update": True,
+            "application_id": _application_id(arguments),
+            "account_id": arguments.get("account_id"),
+        }
+    mutation = _mcp_mutation_context(arguments, "applications.apply")
+    account = {
+        key: arguments.get(key)
+        for key in (
+            "release_digest", "account_id", "provider_id", "subject_ref", "mode",
+            "scopes", "status", "token_expires_at", "scope_changed_at",
+        )
+    }
+    account["scopes"] = _string_list(account.get("scopes"))
+    return {
+        "connected_account": _sdk().put_application_connected_account(
+            _application_id(arguments),
+            account,
+            **mutation,
+        )
+    }
+
+
+def _handle_access_update_review(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    return _sdk().get_application_update_review(
+        _application_id(arguments),
+        old_release_digest=str(arguments.get("old_release_digest") or ""),
+        new_release_digest=str(arguments.get("new_release_digest") or ""),
+    )
+
+
+def _handle_access_profile(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _sdk().profile_application_permissions(
+        _application_id(arguments),
+        release_digest=str(arguments.get("release_digest") or ""),
+        observed_capabilities=_string_list(arguments.get("observed_capabilities")),
+        inferred_capabilities=_string_list(arguments.get("inferred_capabilities")),
+        previous_release_digest=(
+            str(arguments.get("previous_release_digest") or "").strip() or None
+        ),
+    )
+
+
+def _handle_access_verify_release(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_verify": True,
+            "application_id": _application_id(arguments),
+            "release_digest": arguments.get("release_digest"),
+        }
+    mutation = _mcp_mutation_context(arguments, "applications.plan")
+    return _sdk().verify_application_release(
+        _application_id(arguments),
+        release_digest=str(arguments.get("release_digest") or ""),
+        source_commit=str(arguments.get("source_commit") or ""),
+        observed_capabilities=_string_list(arguments.get("observed_capabilities")),
+        inferred_capabilities=_string_list(arguments.get("inferred_capabilities")),
+        regression_evidence=_string_list(arguments.get("regression_evidence")),
+        access_matrix_evidence=_string_list(arguments.get("access_matrix_evidence")),
+        pending_action_evidence=_string_list(arguments.get("pending_action_evidence")),
+        audit_evidence=_string_list(arguments.get("audit_evidence")),
+        disclosure_evidence=_string_list(arguments.get("disclosure_evidence")),
+        redaction_evidence=_string_list(arguments.get("redaction_evidence")),
+        release_scope=str(arguments.get("release_scope") or "candidate"),
+        **mutation,
+    )
 
 
 def _handle_releases(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -1510,6 +1987,20 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "applications.list": _handle_list,
         "applications.show": _handle_show,
+        "applications.access.show": _handle_access_show,
+        "applications.access.users": _handle_access_users,
+        "applications.access.reviews": _handle_access_reviews,
+        "applications.access.privacy": _handle_access_privacy,
+        "applications.access.simulate": _handle_access_simulate,
+        "applications.access.grant": _handle_access_grant,
+        "applications.access.change": _handle_access_change,
+        "applications.access.revoke": _handle_access_revoke,
+        "applications.access.export": _handle_access_export,
+        "applications.access.import": _handle_access_import,
+        "applications.access.connected_account": _handle_access_connected_account,
+        "applications.access.update_review": _handle_access_update_review,
+        "applications.access.profile": _handle_access_profile,
+        "applications.access.verify_release": _handle_access_verify_release,
         "applications.list_releases": _handle_releases,
         "applications.list_operations": _handle_operations,
         "applications.poll_operation_events": _handle_operation_events,

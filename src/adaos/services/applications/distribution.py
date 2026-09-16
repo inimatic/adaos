@@ -300,6 +300,25 @@ class ApplicationDistributionService:
                 f"addressed Development Reports failed preflight: {exc}"
             ) from exc
 
+    def _require_application_verification(
+        self,
+        release: ApplicationRelease,
+        *,
+        stage: str,
+    ) -> dict[str, Any]:
+        from .access_management import ApplicationAccessManagementService
+
+        try:
+            return ApplicationAccessManagementService(
+                self.applications
+            ).admit_release_stage(
+                release.application_id,
+                release_digest=release.release_digest,
+                stage=stage,
+            )
+        except Exception as exc:
+            raise ApplicationDistributionError(str(exc)) from exc
+
     def _announce_addressed_reports(
         self,
         operation: dict[str, Any],
@@ -527,11 +546,15 @@ class ApplicationDistributionService:
             )
             _, binding = self._provenance(plan)
             operation = self._operation(application_id, candidate, binding)
-            self._ensure_uploaded(operation, plan)
             release = self._register_release(
                 application_id, publisher_ref, candidate, plan, binding,
                 bounded_report_ids,
             )
+            verification = self._require_application_verification(
+                release,
+                stage="publication" if mode == "prerelease" else "trial",
+            )
+            self._ensure_uploaded(operation, plan)
             publication: dict[str, Any] = {"mode": mode, "release": release.to_dict()}
             if mode == "prerelease":
                 publication["channel"] = self._move_channel(
@@ -558,6 +581,7 @@ class ApplicationDistributionService:
             )
             return {
                 **publication,
+                "verification": verification,
                 "address_validation": address_validation,
                 "report_announcement": announcement,
                 "operation": operation,
@@ -633,6 +657,10 @@ class ApplicationDistributionService:
                 application_id, publisher_ref, candidate, plan, binding,
                 addresses_report_ids,
             )
+            verification = self._require_application_verification(
+                release,
+                stage="publication",
+            )
             channel = self._move_channel(
                 operation,
                 application_id=application_id,
@@ -663,6 +691,7 @@ class ApplicationDistributionService:
             )
             return {
                 "release": release.to_dict(),
+                "verification": verification,
                 "channel": channel,
                 "address_validation": address_validation,
                 "report_announcement": announcement,

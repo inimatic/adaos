@@ -231,5 +231,20 @@
         "pending_actions.action.open_diagnostics": "Diagnostics",
         "pending_actions.action.dismiss": "Dismiss",
         "pending_actions.runtime.service_recovery_title": "Service recovery needs attention",
-        "pending_actions.runtime.service_recovery_summary": "Failed to {operation} {target}: {error_type}"
+        "pending_actions.runtime.service_recovery_summary": "Failed to {operation} {target}: {error_type}",
+        "pending_actions.runtime.action_approval_title": "Application approval required",
+        "pending_actions.runtime.action_approval_summary": "Approve {permission} for {application}.",
+        "pending_actions.application.voice_handoff": "Confirm this action on a trusted device.",
+        "applications.access.permissions": "Permissions",
+        "applications.access.access": "Access",
+        "applications.access.roles": "Roles",
+        "applications.access.connected_accounts": "Connected accounts",
+        "applications.access.release_readiness": "Release readiness",
+        "applications.access.activity": "Activity",
+        "users_access.title": "Users & Access",
+        "users_access.people": "People",
+        "users_access.guests": "Guests",
+        "users_access.children": "Children",
+        "users_access.devices_sessions": "Devices & sessions",
+        "users_access.application_access": "Application access"
 }

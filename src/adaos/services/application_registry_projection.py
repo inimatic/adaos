@@ -2659,6 +2659,81 @@ class ApplicationRegistryProjection:
         )
 
     @staticmethod
+    def _insert_invalid_permission_profile(
+        con: sqlite3.Connection,
+        *,
+        source_kind: str,
+        application_id: str,
+        release_digest: str | None,
+        release_key: str,
+        raw_profile: Mapping[str, Any] | None,
+        legacy_permissions: Sequence[Any],
+        payload_digest: str,
+        error: Exception,
+    ) -> None:
+        profile = dict(raw_profile or {})
+
+        def declared_ids(name: str) -> list[str]:
+            values = profile.get(name) if isinstance(profile.get(name), list) else []
+            return sorted(
+                {
+                    str(item.get("id") or "").strip()
+                    for item in values
+                    if isinstance(item, Mapping) and str(item.get("id") or "").strip()
+                }
+            )
+
+        required = declared_ids("required")
+        optional = declared_ids("optional")
+        flat = sorted(
+            {
+                *required,
+                *optional,
+                *(str(item or "").strip() for item in legacy_permissions if str(item or "").strip()),
+            }
+        )
+        diagnostic = {
+            "repair_required": True,
+            "error": _bounded_error(error),
+            "permission_profile_digest": None,
+        }
+        con.execute(
+            """
+            INSERT INTO application_permission_profile_index(
+                source_kind, application_id, release_digest, release_key,
+                permission_profile_digest, required_permissions_json,
+                optional_permissions_json, flat_permissions_json,
+                declaration_summary_json, validation_status,
+                payload_digest, payload_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(source_kind, application_id, release_key) DO UPDATE SET
+                release_digest=excluded.release_digest,
+                permission_profile_digest=NULL,
+                required_permissions_json=excluded.required_permissions_json,
+                optional_permissions_json=excluded.optional_permissions_json,
+                flat_permissions_json=excluded.flat_permissions_json,
+                declaration_summary_json=excluded.declaration_summary_json,
+                validation_status='invalid',
+                payload_digest=excluded.payload_digest,
+                payload_json=excluded.payload_json
+            """,
+            (
+                source_kind,
+                application_id,
+                release_digest,
+                release_key,
+                None,
+                _json_pretty(required),
+                _json_pretty(optional),
+                _json_pretty(flat),
+                _json_pretty(diagnostic),
+                "invalid",
+                payload_digest,
+                _json_pretty(profile),
+            ),
+        )
+
+    @staticmethod
     def _insert_application_roles(
         con: sqlite3.Connection,
         *,
@@ -2721,14 +2796,34 @@ class ApplicationRegistryProjection:
             "DELETE FROM application_role_index WHERE source_kind=? AND application_id=?",
             (source_kind, project_id),
         )
-        profile = ApplicationPermissionProfile.from_mapping(
-            project.get("permission_profile") if isinstance(project.get("permission_profile"), Mapping) else None,
-            legacy_permissions=project.get("permissions") or (),
+        raw_profile = (
+            project.get("permission_profile")
+            if isinstance(project.get("permission_profile"), Mapping)
+            else None
         )
-        roles = normalize_application_roles(
-            tuple(project.get("application_roles") or ()),
-            known_permissions=profile.flat_permissions,
-        )
+        legacy_permissions = tuple(project.get("permissions") or ())
+        try:
+            profile = ApplicationPermissionProfile.from_mapping(
+                raw_profile,
+                legacy_permissions=legacy_permissions,
+            )
+            roles = normalize_application_roles(
+                tuple(project.get("application_roles") or ()),
+                known_permissions=profile.flat_permissions,
+            )
+        except ValueError as exc:
+            ApplicationRegistryProjection._insert_invalid_permission_profile(
+                con,
+                source_kind=source_kind,
+                application_id=project_id,
+                release_digest=None,
+                release_key="",
+                raw_profile=raw_profile,
+                legacy_permissions=legacy_permissions,
+                payload_digest=payload_digest,
+                error=exc,
+            )
+            return
         ApplicationRegistryProjection._insert_permission_profile(
             con,
             source_kind=source_kind,

@@ -1,0 +1,116 @@
+schema: adaos.project.v1
+kind: project
+id: family_tasks
+version: 1.0.0
+profiles:
+  - adaos.application.v1
+components:
+  owned:
+    - ref: scenario:family_tasks
+      role: primary
+      exposure: application
+      lifecycle: bound
+      relations: [realizes]
+    - ref: skill:family_tasks
+      role: implementation
+      exposure: application
+      lifecycle: bound
+      relations: [uses]
+  dependencies: []
+entrypoints:
+  - id: main
+    presentation: scenario:family_tasks
+    default: true
+    bindings: {}
+catalog:
+  title: Family Tasks
+  description: Shared household tasks with explicit child and guest access floors.
+  categories: [household]
+  tags: [tasks, family]
+compatibility: {}
+lifecycle:
+  uninstall:
+    components: remove_if_unreferenced
+    runtime_data: retain
+    source_artifacts: retain
+permissions:
+  - background.run
+  - llm.generate
+  - network.egress
+  - notifications.send
+  - secrets.use
+  - workspace.read
+  - workspace.write
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: workspace.read
+      purpose: Read assigned household tasks.
+    - id: workspace.write
+      purpose: Complete assigned household tasks.
+    - id: llm.generate
+      purpose: Suggest task wording when the user requests it.
+    - id: network.egress
+      purpose: Synchronize due dates with the selected calendar provider.
+    - id: secrets.use
+      purpose: Use a connected calendar credential without revealing it.
+    - id: notifications.send
+      purpose: Notify assignees about due tasks.
+  optional:
+    - id: background.run
+      purpose: Refresh due dates on the user's configured schedule.
+  data_practices:
+    collected: [task_metadata]
+    sent_off_device: [task_metadata]
+    linked_to_user: [task_metadata]
+    tracking: false
+    retention: until_task_deleted
+  llm_model_use:
+    - id: task_wording
+      provider: root_llm_proxy
+  notifications:
+    - id: task_due
+  background_actions:
+    - id: due_date_refresh
+  secrets:
+    - id: calendar_token
+      provider: calendar
+      scopes: [calendar.read]
+      purpose: Read shared calendar due dates.
+      required: false
+      binding: user_or_app
+  external_providers:
+    - id: calendar
+      destination: api.calendar.example
+      scopes: [calendar.read]
+      account_modes: [delegated_user, app_service]
+application_roles:
+  - id: owner
+    title: Owner
+    grants: [application.manage, task.read, task.assign, task.complete]
+    assignable_to: [owner, co_owner, admin]
+    default_for:
+      owner: owner
+    requires_permissions: [workspace.read, workspace.write]
+    sensitive: true
+  - id: member
+    title: Member
+    grants: [application.use, task.read, task.complete]
+    assignable_to: [member]
+    default_for:
+      member: member
+    requires_permissions: [workspace.read, workspace.write]
+  - id: child
+    title: Child participant
+    grants: [application.use, task.read, task.complete]
+    assignable_to: [child]
+    default_for:
+      child: child
+    requires_permissions: [workspace.read, workspace.write]
+  - id: guest
+    title: Guest reader
+    grants: [application.use, task.read]
+    assignable_to: [guest]
+    default_for:
+      guest: guest
+    requires_permissions: [workspace.read]

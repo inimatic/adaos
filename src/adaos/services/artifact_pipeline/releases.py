@@ -528,6 +528,7 @@ def build_project_release(
         if key not in owned_keys
     )
     composition_lock = None
+    structured_permissions: tuple[str, ...] = ()
     if project_definition is not None:
         source_definition = {
             key: value
@@ -593,6 +594,12 @@ def build_project_release(
         profiles = source_definition.get("profiles") or []
         compatibility = source_definition.get("compatibility") or {}
         lifecycle = source_definition.get("lifecycle") or {}
+        permission_profile = source_definition.get("permission_profile")
+        application_roles = source_definition.get("application_roles") or []
+        if permission_profile is None and application_roles:
+            raise DependencyResolutionError(
+                "application_roles require a structured permission_profile"
+            )
         if not isinstance(entrypoints, list) or any(
             not isinstance(item, Mapping) for item in entrypoints
         ):
@@ -603,6 +610,22 @@ def build_project_release(
             raise DependencyResolutionError(
                 "project_definition compatibility and lifecycle must be objects"
             )
+        if permission_profile is not None:
+            from adaos.domain.application_access import (
+                ApplicationPermissionProfile,
+                normalize_application_roles,
+            )
+
+            normalized_profile = ApplicationPermissionProfile.from_mapping(
+                permission_profile
+            )
+            normalized_roles = normalize_application_roles(
+                application_roles,
+                known_permissions=normalized_profile.flat_permissions,
+            )
+            permission_profile = normalized_profile.to_dict()
+            application_roles = [item.to_dict() for item in normalized_roles]
+            structured_permissions = normalized_profile.flat_permissions
         composition_lock = ProjectCompositionLock(
             project_definition_digest=canonical_payload_digest(source_definition),
             profiles=tuple(profiles),
@@ -611,7 +634,21 @@ def build_project_release(
             entrypoints=tuple(entrypoints),
             compatibility=dict(compatibility),
             lifecycle=dict(lifecycle),
+            permission_profile=(
+                dict(permission_profile)
+                if isinstance(permission_profile, Mapping)
+                else None
+            ),
+            application_roles=tuple(application_roles),
         )
+
+    supplied_permissions = tuple(permissions)
+    if structured_permissions and supplied_permissions:
+        if set(supplied_permissions) != set(structured_permissions):
+            raise DependencyResolutionError(
+                "flat permissions must match project permission_profile"
+            )
+    effective_permissions = structured_permissions or supplied_permissions
 
     release = ProjectRelease(
         project_id=project_id,
@@ -619,7 +656,7 @@ def build_project_release(
         source_ref=source_ref,
         components=owned,
         resolved_dependencies=resolved_dependencies,
-        permissions=tuple(permissions),
+        permissions=effective_permissions,
         migrations=tuple(migrations),
         validation_evidence=tuple(validation_evidence),
         schema_locks=tuple(

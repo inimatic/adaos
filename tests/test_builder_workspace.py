@@ -1214,3 +1214,94 @@ def test_builder_api_reconciles_checkpoint_without_codex() -> None:
     assert calls == [
         {"object_type": "scenario", "object_id": "taiga_ui_demo_scenario"}
     ]
+
+
+def test_builder_application_permission_profiler_cli(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class _Access:
+        def permission_profiler(self, application_id: str, **kwargs):
+            calls.append((application_id, kwargs))
+            return {
+                "application_id": application_id,
+                "release_digest": kwargs["release_digest"],
+                "permission_profile_digest": "sha256:" + "b" * 64,
+                "declared": ["workspace.read"],
+                "statically_inferred": ["workspace.read"],
+                "observed": ["workspace.read"],
+                "undeclared_observed": [],
+                "unused": [],
+            }
+
+    monkeypatch.setattr(builder_cli, "_application_access_management", lambda: _Access())
+    result = CliRunner().invoke(
+        builder_cli.app,
+        [
+            "application-permissions",
+            "family_tasks",
+            "--release",
+            "sha256:" + "a" * 64,
+            "--observed",
+            "workspace.read",
+            "--inferred",
+            "workspace.read",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["undeclared_observed"] == []
+    assert calls[0][1]["observed_capabilities"] == ["workspace.read"]
+
+
+def test_builder_application_verify_writes_ci_evidence_bundle(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "evidence" / "application-access.json"
+
+    class _Access:
+        def final_verification(self, application_id: str, **kwargs):
+            assert kwargs["release_scope"] == "publication"
+            return {
+                "report": {
+                    "overall": "passed",
+                    "report_digest": "sha256:" + "c" * 64,
+                },
+                "checklist": [
+                    {
+                        "id": "permission_profile.schema",
+                        "gate": "hard_gate",
+                        "result": "passed",
+                    }
+                ],
+                "publication_allowed": True,
+                "attestation": {"statement_digest": "sha256:" + "d" * 64},
+                "evidence_bundle": {
+                    "schema": "adaos.application.release_evidence_bundle.v1",
+                    "bundle_digest": "sha256:" + "e" * 64,
+                },
+                "ci_status": "passed",
+            }
+
+    monkeypatch.setattr(builder_cli, "_application_access_management", lambda: _Access())
+    result = CliRunner().invoke(
+        builder_cli.app,
+        [
+            "application-verify",
+            "family_tasks",
+            "--release",
+            "sha256:" + "a" * 64,
+            "--scope",
+            "publication",
+            "--output",
+            str(output),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["ci_status"] == "passed"
+    assert json.loads(output.read_text(encoding="utf-8"))["evidence_bundle"][
+        "bundle_digest"
+    ].startswith("sha256:")

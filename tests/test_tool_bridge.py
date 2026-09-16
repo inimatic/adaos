@@ -1738,6 +1738,137 @@ def test_runtime_action_approval_presentation_is_skill_owned() -> None:
     }
 
 
+def _application_gate_payload(decision: str, reason: str = "allowed") -> dict[str, object]:
+    return {
+        "decision": {
+            "decision": decision,
+            "reason_code": reason,
+            "policy_explanation": "Application access policy evaluated.",
+            "application_id": "family_tasks",
+            "release_digest": "sha256:" + "a" * 64,
+            "permission_profile_digest": "sha256:" + "b" * 64,
+            "permission_id": "network.egress",
+            "app_capability": "task.sync",
+            "subject_ref": "user:masha",
+            "grant_id": "appgrant.member",
+        },
+        "context": {
+            "application_id": "family_tasks",
+            "application_title": "Family Tasks",
+            "release_digest": "sha256:" + "a" * 64,
+            "permission_profile_digest": "sha256:" + "b" * 64,
+            "permission_id": "network.egress",
+            "subject_ref": "user:masha",
+            "holder_ref": "device:phone-1",
+            "webspace_id": "desktop",
+        },
+    }
+
+
+def test_application_grant_prevents_repeated_method_level_prompt(monkeypatch) -> None:
+    async def fail_pending_action(**_kwargs):
+        raise AssertionError("covered Application action must not create a Pending Action")
+
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "publish_pending_action_async",
+        fail_pending_action,
+    )
+    body = tool_bridge_module.ToolCall(
+        tool="family_tasks_skill:sync_tasks",
+        arguments={"webspace_id": "desktop"},
+    )
+
+    result = asyncio.run(
+        tool_bridge_module._enforce_runtime_action_gate(
+            body=body,
+            skill_name="family_tasks_skill",
+            public_tool="sync_tasks",
+            payload=dict(body.arguments),
+            forced_side_effect_class="network",
+            approval_scope={"name": "tasks.sync"},
+            application_access=_application_gate_payload("allow"),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["approval"]["source"] == "application_grant"
+    assert result["approval"]["grant_id"] == "appgrant.member"
+
+
+def test_application_deny_cannot_fall_back_to_method_approval() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="family_tasks_skill:sync_tasks",
+        arguments={"webspace_id": "desktop"},
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            tool_bridge_module._enforce_runtime_action_gate(
+                body=body,
+                skill_name="family_tasks_skill",
+                public_tool="sync_tasks",
+                payload=dict(body.arguments),
+                forced_side_effect_class="network",
+                approval_scope={"name": "tasks.sync"},
+                application_access=_application_gate_payload(
+                    "deny", "guest_floor_denied"
+                ),
+                ctx=_fake_ctx(),
+            )
+        )
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail["error"] == "application_access_denied"
+    assert excinfo.value.detail["technical_detail"] == {
+        "tool": "family_tasks_skill:sync_tasks"
+    }
+
+
+def test_application_pending_action_uses_app_language_and_channel_handoff(
+    monkeypatch,
+) -> None:
+    published = _patch_runtime_approval_pending_actions(monkeypatch)
+    context = _application_gate_payload(
+        "pending_action", "permission_not_granted"
+    )["context"]
+    body = tool_bridge_module.ToolCall(
+        tool="family_tasks_skill:sync_tasks",
+        arguments={"webspace_id": "desktop"},
+        context={"_verified_application_access": context},
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            tool_bridge_module._enforce_runtime_action_gate(
+                body=body,
+                skill_name="family_tasks_skill",
+                public_tool="sync_tasks",
+                payload=dict(body.arguments),
+                forced_side_effect_class="network",
+                approval_scope={"name": "tasks.sync"},
+                application_access=_application_gate_payload(
+                    "pending_action", "permission_not_granted"
+                ),
+                ctx=_fake_ctx(),
+            )
+        )
+
+    assert excinfo.value.detail["error"] == "application_approval_required"
+    assert "Family Tasks" in excinfo.value.detail["human_message"]
+    assert len(published) == 1
+    metadata = published[0]["metadata"]
+    assert metadata["routes"]["application"] == "applications://family_tasks/access"
+    assert metadata["routes"]["user"] == "applications://users-access/user:masha"
+    assert metadata["routes"]["trusted_device"] == "pending-actions://trusted-device"
+    assert metadata["channel_affordances"]["chat"] == "keyboard"
+    assert metadata["channel_affordances"]["telegram"] == "inline_keyboard"
+    assert metadata["channel_affordances"]["voice"] == "trusted_device_handoff"
+    assert metadata["channel_affordances"]["voice_text_i18n_key"] == (
+        "runtime.application_approval.voice_handoff"
+    )
+
+
 def test_call_tool_keeps_prompt_project_selection_local_and_approval_free(monkeypatch) -> None:
     calls: list[str] = []
     payloads: list[dict[str, object]] = []

@@ -652,6 +652,105 @@ def preview(
     typer.echo(f"human_review_required: {summary.get('human_review_required')}")
 
 
+def _application_access_management():
+    from adaos.services.applications import (
+        ApplicationAccessManagementService,
+        get_application_service,
+    )
+
+    ctx = get_ctx()
+    return ApplicationAccessManagementService(
+        get_application_service(Path(ctx.paths.state_dir()))
+    )
+
+
+@app.command("application-permissions")
+def application_permissions(
+    application_id: str = typer.Argument(...),
+    release_digest: str = typer.Option(..., "--release"),
+    observed: list[str] | None = typer.Option(None, "--observed"),
+    inferred: list[str] | None = typer.Option(None, "--inferred"),
+    previous_release_digest: str | None = typer.Option(None, "--previous-release"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Profile declared, inferred and observed Application permissions."""
+
+    report = _application_access_management().permission_profiler(
+        application_id,
+        release_digest=release_digest,
+        observed_capabilities=observed or (),
+        inferred_capabilities=inferred or (),
+        previous_release_digest=previous_release_digest,
+    )
+    if json_output:
+        typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"Application: {report['application_id']}")
+    typer.echo(f"Release: {report['release_digest']}")
+    typer.echo(f"Permission profile: {report['permission_profile_digest']}")
+    for key in ("declared", "statically_inferred", "observed", "undeclared_observed", "unused"):
+        typer.echo(f"{key}: {', '.join(report[key]) or '-'}")
+
+
+@app.command("application-verify")
+def application_verify(
+    application_id: str = typer.Argument(...),
+    release_digest: str = typer.Option(..., "--release"),
+    source_commit: str = typer.Option("working-tree", "--source-commit"),
+    observed: list[str] | None = typer.Option(None, "--observed"),
+    inferred: list[str] | None = typer.Option(None, "--inferred"),
+    regression_evidence: list[str] | None = typer.Option(None, "--regression-evidence"),
+    access_matrix_evidence: list[str] | None = typer.Option(None, "--access-matrix-evidence"),
+    pending_action_evidence: list[str] | None = typer.Option(None, "--pending-action-evidence"),
+    audit_evidence: list[str] | None = typer.Option(None, "--audit-evidence"),
+    disclosure_evidence: list[str] | None = typer.Option(None, "--disclosure-evidence"),
+    redaction_evidence: list[str] | None = typer.Option(None, "--redaction-evidence"),
+    release_scope: str = typer.Option("candidate", "--scope"),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        help="Write the redacted verification result and evidence bundle as JSON.",
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Persist and render the release-bound Application Final Verification checklist."""
+
+    if release_scope not in {"dev", "candidate", "trial", "publication"}:
+        raise typer.BadParameter("--scope must be dev, candidate, trial, or publication")
+    result = _application_access_management().final_verification(
+        application_id,
+        release_digest=release_digest,
+        source_commit=source_commit,
+        observed_capabilities=observed or (),
+        inferred_capabilities=inferred or (),
+        regression_evidence=regression_evidence or (),
+        access_matrix_evidence=access_matrix_evidence or (),
+        pending_action_evidence=pending_action_evidence or (),
+        audit_evidence=audit_evidence or (),
+        disclosure_evidence=disclosure_evidence or (),
+        redaction_evidence=redaction_evidence or (),
+        release_scope=release_scope,
+        actor_ref="system:builder-cli",
+    )
+    if output is not None:
+        from adaos.services.artifact_pipeline.storage import atomic_write_json
+
+        atomic_write_json(output, result)
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        report = result["report"]
+        typer.echo(f"Application Final Verification: {report['overall']}")
+        typer.echo(f"Report: {report['report_digest']}")
+        typer.echo(f"Evidence bundle: {result['evidence_bundle']['bundle_digest']}")
+        typer.echo(f"CI status: {result['ci_status']}")
+        for check in result["checklist"]:
+            evidence = f" [{check['evidence']}]" if check.get("evidence") else ""
+            typer.echo(f"{check['result'].upper():12} {check['gate']:11} {check['id']}{evidence}")
+    if not result["publication_allowed"]:
+        raise typer.Exit(1)
+
+
 @app.command("e2e")
 def e2e(
     suite: Path = typer.Argument(

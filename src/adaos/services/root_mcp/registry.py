@@ -383,6 +383,12 @@ def _application_contracts() -> dict[str, Any]:
         "application.trial-access-grant.v1.schema.json",
         "application.operation.v1.schema.json",
         "application.prerelease-rollout.v1.schema.json",
+        "application.permission-profile.v1.schema.json",
+        "application.access-grant.v1.schema.json",
+        "application.access-decision.v1.schema.json",
+        "application.access-profile-diff.v1.schema.json",
+        "application.verification-report.v1.schema.json",
+        "application.release-evidence-bundle.v1.schema.json",
     )
     return {
         "schema": "adaos.application.contract_bundle.v1",

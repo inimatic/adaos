@@ -30,6 +30,7 @@ from .access import (
     TrialAccessError,
     TrialAccessService,
 )
+from .access_management import ApplicationAccessManagementService, ROLE_TEMPLATES
 from .distribution import (
     ApplicationDistributionError,
     ApplicationDistributionService,
@@ -86,6 +87,7 @@ __all__ = [
     "ApplicationDevelopmentOutcomeUnknown",
     "ApplicationAccessError",
     "ApplicationAccessService",
+    "ApplicationAccessManagementService",
     "ApplicationPlanConflict",
     "ApplicationRevisionConflict",
     "ApplicationRetentionError",
@@ -125,6 +127,7 @@ __all__ = [
     "TrustedMetadataAuthority",
     "TrustedMetadataClient",
     "TrustedMetadataError",
+    "ROLE_TEMPLATES",
     "get_application_service",
     "get_application_distribution_service",
     "get_development_report_service",

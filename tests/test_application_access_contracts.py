@@ -5,6 +5,7 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+import yaml
 
 from adaos.domain.application_access import (
     ApplicationAccessContractError,
@@ -104,6 +105,32 @@ def test_permission_profile_normalizes_digest_privacy_and_legacy_projection() ->
     assert profile.privacy_labels["sent_off_device"] is True
     assert legacy.flat_permissions == ("workspace.read",)
     assert legacy.to_dict()["required"][0]["purpose"] == "Legacy ProjectRelease permission"
+
+
+def test_documented_application_access_project_is_a_valid_authoritative_example() -> None:
+    root = Path(__file__).parents[1]
+    payload = yaml.safe_load(
+        (root / "docs" / "examples" / "application-access" / "project.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    schema = json.loads(
+        (root / "src" / "adaos" / "abi" / "project.v1.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    jsonschema.Draft202012Validator(schema).validate(payload)
+    profile = ApplicationPermissionProfile.from_mapping(payload["permission_profile"])
+    roles = normalize_application_roles(
+        payload["application_roles"], known_permissions=profile.flat_permissions
+    )
+
+    assert tuple(payload["permissions"]) == profile.flat_permissions
+    assert [role.role_id for role in roles] == ["child", "guest", "member", "owner"]
+    assert next(role for role in roles if role.role_id == "guest").assignable_to == (
+        "guest",
+    )
 
 
 def test_application_roles_validate_permissions_and_diff_update_impact() -> None:
@@ -414,3 +441,13 @@ def test_application_access_payloads_validate_against_abi_schemas() -> None:
     for schema_name, payload in cases.items():
         schema = json.loads((ABI_ROOT / schema_name).read_text(encoding="utf-8"))
         jsonschema.Draft202012Validator(schema).validate(payload)
+
+
+def test_release_evidence_bundle_accepts_verification_warning_status() -> None:
+    schema = json.loads(
+        (ABI_ROOT / "application.release-evidence-bundle.v1.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "warning" in schema["properties"]["overall"]["enum"]

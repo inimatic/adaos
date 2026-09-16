@@ -34,6 +34,18 @@ class _StubSdk:
         self.calls.append(("submit_development_report", args, kwargs))
         return {"report": {"report_id": "report.1"}, "duplicate": False}
 
+    def get_application_access_surface(self, *args, **kwargs):
+        self.calls.append(("get_application_access_surface", args, kwargs))
+        return {"sections": {"permissions": {}, "access": []}}
+
+    def get_users_access_surface(self, *args, **kwargs):
+        self.calls.append(("get_users_access_surface", args, kwargs))
+        return {"people": [], "guests": [], "children": []}
+
+    def put_application_connected_account(self, *args, **kwargs):
+        self.calls.append(("put_application_connected_account", args, kwargs))
+        return {"account_id": "calendar-user", "status": "connected"}
+
 
 class _StubBuilderSdk:
     def __init__(self) -> None:
@@ -68,6 +80,20 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
     assert {item.id for item in contracts} == {
         "applications.list",
         "applications.show",
+        "applications.access.show",
+        "applications.access.users",
+        "applications.access.reviews",
+        "applications.access.privacy",
+        "applications.access.simulate",
+        "applications.access.grant",
+        "applications.access.change",
+        "applications.access.revoke",
+        "applications.access.export",
+        "applications.access.import",
+        "applications.access.connected_account",
+        "applications.access.update_review",
+        "applications.access.profile",
+        "applications.access.verify_release",
         "applications.list_releases",
         "applications.list_operations",
         "applications.poll_operation_events",
@@ -214,6 +240,79 @@ def test_applications_plane_dry_run_does_not_call_sdk(monkeypatch) -> None:
     assert stub.calls == []
 
 
+def test_application_access_contracts_are_secret_free_and_reads_share_sdk_projection(
+    monkeypatch,
+) -> None:
+    stub = _StubSdk()
+    monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
+    contracts = {item.id: item for item in applications_plane.contracts()}
+    connected = contracts["applications.access.connected_account"]
+
+    assert {"secret", "token", "credential", "value"}.isdisjoint(
+        connected.input_schema["properties"]
+    )
+    app_result = applications_plane.handlers()["applications.access.show"](
+        {"application_id": "app_recipes"}, dry_run=True
+    )
+    users_result = applications_plane.handlers()["applications.access.users"](
+        {}, dry_run=True
+    )
+
+    assert app_result["access"]["sections"]["access"] == []
+    assert users_result["users_access"]["guests"] == []
+    assert [call[0] for call in stub.calls] == [
+        "get_application_access_surface",
+        "get_users_access_surface",
+    ]
+
+
+def test_application_access_connected_account_dry_run_never_mutates(monkeypatch) -> None:
+    stub = _StubSdk()
+    monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
+
+    result = applications_plane.handlers()["applications.access.connected_account"](
+        {
+            "application_id": "app_recipes",
+            "release_digest": "sha256:" + "a" * 64,
+            "account_id": "calendar-user",
+            "provider_id": "calendar",
+            "subject_ref": "user:owner",
+            "mode": "delegated_user",
+            "status": "connected",
+            "idempotency_key": "calendar-connect-1",
+        },
+        dry_run=True,
+    )
+
+    assert result == {
+        "would_update": True,
+        "application_id": "app_recipes",
+        "account_id": "calendar-user",
+    }
+    assert stub.calls == []
+
+
+def test_application_access_form_lists_normalize_without_splitting_identifiers() -> None:
+    assert applications_plane._string_list(
+        "editor, viewer\neditor\nworkspace.read"
+    ) == ("editor", "viewer", "workspace.read")
+    assert applications_plane._string_list(["audit:allow", "audit:deny"]) == (
+        "audit:allow",
+        "audit:deny",
+    )
+
+    grant = next(
+        item
+        for item in applications_plane.contracts()
+        if item.id == "applications.access.grant"
+    )
+    role_input = grant.input_schema["properties"]["application_roles"]
+    assert {option["type"] for option in role_input["oneOf"]} == {
+        "array",
+        "string",
+    }
+
+
 def test_trial_link_redemption_uses_authenticated_subnet_and_zone(monkeypatch) -> None:
     stub = _StubSdk()
     monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
@@ -321,8 +420,11 @@ def test_applications_contract_descriptor_and_capability_profile_are_published()
     schemas = descriptor["payload"]["schemas"]
     capabilities = {item["capability"] for item in list_capability_classes()}
 
-    assert len(schemas) == 8
+    assert len(schemas) == 14
     assert schemas["application.v1.schema.json"]["title"] == "AdaOS Application v1"
+    assert schemas["application.release-evidence-bundle.v1.schema.json"]["title"] == (
+        "AdaOS Application Release Evidence Bundle v1"
+    )
     assert {
         "applications.read", "applications.plan", "applications.apply",
         "applications.trial.install", "applications.publisher.read",

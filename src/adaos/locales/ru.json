@@ -232,5 +232,20 @@
         "pending_actions.action.open_diagnostics": "Диагностика",
         "pending_actions.action.dismiss": "Скрыть",
         "pending_actions.runtime.service_recovery_title": "Требуется восстановление сервиса",
-        "pending_actions.runtime.service_recovery_summary": "Не удалось выполнить {operation} для {target}: {error_type}"
+        "pending_actions.runtime.service_recovery_summary": "Не удалось выполнить {operation} для {target}: {error_type}",
+        "pending_actions.runtime.action_approval_title": "Требуется подтверждение приложения",
+        "pending_actions.runtime.action_approval_summary": "Разрешить {permission} для {application}.",
+        "pending_actions.application.voice_handoff": "Подтвердите это действие на доверенном устройстве.",
+        "applications.access.permissions": "Разрешения",
+        "applications.access.access": "Доступ",
+        "applications.access.roles": "Роли",
+        "applications.access.connected_accounts": "Подключенные учетные записи",
+        "applications.access.release_readiness": "Готовность релиза",
+        "applications.access.activity": "Активность",
+        "users_access.title": "Пользователи и доступ",
+        "users_access.people": "Люди",
+        "users_access.guests": "Гости",
+        "users_access.children": "Дети",
+        "users_access.devices_sessions": "Устройства и сессии",
+        "users_access.application_access": "Доступ к приложениям"
 }

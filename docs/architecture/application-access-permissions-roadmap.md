@@ -1,6 +1,6 @@
 # Application Access, Permissions, and Roles Roadmap
 
-Status: implementation roadmap with first backend/ABI slice in progress.
+Status: V1 non-deferred implementation complete; deferred backlog retained.
 
 Last reviewed: 2026-09-16.
 
@@ -52,11 +52,12 @@ Application declaration -> install/update review -> access grant/role assignment
 -> revoke/update review
 ```
 
-## Implementation Evidence: 2026-09-16 Backend/ABI Slice
+## Implementation Evidence: 2026-09-16 V1 Vertical Slice
 
-The first non-UI slice now exists as versioned domain contracts, JSON schemas,
-store/service APIs, SDK helpers, registry-projection indexes, and focused
-tests. Evidence:
+The non-deferred roadmap is implemented as a release-bound vertical slice.
+The durable contracts, policy path, management surfaces, Builder gates, and
+machine evidence use the same Application and permission-profile digests.
+Evidence:
 
 - `src/adaos/domain/application_access.py` defines permission profiles,
   Application roles, Application grants, access decisions, update diffs, and
@@ -80,15 +81,36 @@ tests. Evidence:
 - `src/adaos/services/application_registry_projection.py` indexes permission
   profiles and Application roles from DEV projects and ApplicationStore
   releases for Applications/Users & Access read models.
-- Focused evidence: `tests/test_application_access_contracts.py`,
-  `tests/test_application_access_service.py`,
-  `tests/test_application_registry_projection.py`,
-  `tests/test_application_contracts.py`, and `tests/test_sdk_applications.py`.
-
-Still open after this slice: runtime tool/action bridge integration,
-Applications and Users & Access browser surfaces, conversational/Pending
-Actions routing, connected-account state UI, persisted Builder checklist
-surface, and a full AAPR6 end-to-end evidence bundle.
+- `src/adaos/apps/api/tool_bridge.py`,
+  `src/adaos/services/skill/tool_contract.py`, and
+  `src/adaos/services/runtime_action_grants.py` resolve a verified Application,
+  subject, release, grant, device/session holder, and actor chain before the
+  common runtime decision. Covered Application permissions suppress repeated
+  method prompts; uncovered or step-up actions create Application-aware
+  Pending Actions.
+- `src/adaos/services/applications/access_management.py`,
+  `src/adaos/apps/api/application_access.py`, `src/adaos/sdk/access.py`, and
+  `src/adaos/services/root_mcp/applications_plane.py` expose one management
+  model to Applications, Users & Access, Builder, API, SDK, Root MCP, and
+  conversation entry points. Connected-account values are metadata-only and
+  secret-redacted.
+- `src/adaos/services/builder/domain_packs/application_manager_legacy.py` and
+  `applications.compatibility.v1.json` publish the DEV Applications and Users
+  & Access surfaces, including assignment/change/revoke, simulation, privacy,
+  review, profiler, and Final Verification controls. Browser evidence covers
+  wide and compact keyboard flows with no request failures or horizontal
+  overflow.
+- `adaos builder application-permissions` and
+  `adaos builder application-verify` produce the profiler and blocking-first
+  checklist. Trial/publication admission consumes persisted reports and the
+  release evidence bundle, including deterministic in-toto-compatible
+  statement digests.
+- `docs/examples/application-access/project.yaml` provides the complete
+  owner/member/child/guest declaration fixture. The focused tests include
+  `test_application_access_v1_end_to_end_evidence_bundle`, runtime integration,
+  distribution admission, Root MCP, API/SDK, registry isolation, declarative UI,
+  and browser tests. The reproducible local run is recorded in
+  `docs/evidence/application-access-v1-20260916.md`.
 
 ## Sequencing Rules
 
@@ -154,7 +176,7 @@ without a full policy engine.
   remap-required.
 - [x] `[should]` `AAPR1-07` Add privacy label and data-safety projection fields
   mapped from `data_practices`.
-- [ ] `[could]` `AAPR1-08` Add developer-facing examples for Builder-generated
+- [x] `[could]` `AAPR1-08` Add developer-facing examples for Builder-generated
   Applications with owner/member/child/guest role fixtures.
 
 **Exit proof:** schema tests cover normalization, digest stability, flat-list
@@ -188,7 +210,7 @@ Application role, scope, and permission profile.
   and update review.
 - [x] `[should]` `AAPR2-08` Add policy explanations suitable for Applications,
   Users & Access, Builder, chat, and logs.
-- [ ] `[could]` `AAPR2-09` Add coarse access-review detectors for long-lived
+- [x] `[could]` `AAPR2-09` Add coarse access-review detectors for long-lived
   guests, stale devices, unused grants, and sensitive app roles.
 
 **Exit proof:** policy tests prove owner install, member access, child denial
@@ -200,27 +222,27 @@ permission digest behavior.
 **Outcome:** runtime actions consult Application grants before falling back to
 method-level Pending Actions.
 
-- [ ] `[must]` `AAPR3-01` Pass verified Application context, actor, subject,
+- [x] `[must]` `AAPR3-01` Pass verified Application context, actor, subject,
   device/session, webspace, and release digest into tool/action authorization.
-- [ ] `[must]` `AAPR3-02` Check Application permission profile and
+- [x] `[must]` `AAPR3-02` Check Application permission profile and
   ApplicationAccessGrant before runtime action approval fallback.
-- [ ] `[must]` `AAPR3-03` Keep skill manifest/profile capability admission in
+- [x] `[must]` `AAPR3-03` Keep skill manifest/profile capability admission in
   the decision path; an Application grant cannot authorize an undeclared skill
   capability.
-- [ ] `[must]` `AAPR3-04` Gate LLM/content generation, model access, network
+- [x] `[must]` `AAPR3-04` Gate LLM/content generation, model access, network
   egress, notifications, background actions, and secrets behind explicit
   Application permissions and component capabilities.
-- [ ] `[must]` `AAPR3-05` Emit user-facing denial and approval contracts using
+- [x] `[must]` `AAPR3-05` Emit user-facing denial and approval contracts using
   Application language, with tool/method id available only as technical detail.
-- [ ] `[must]` `AAPR3-06` Reuse durable method/resource approval only when it
+- [x] `[must]` `AAPR3-06` Reuse durable method/resource approval only when it
   matches the Application grant, subject, resource, webspace, holder, and
   expiry.
-- [ ] `[must]` `AAPR3-07` Add integration tests for previously noisy prompts:
+- [x] `[must]` `AAPR3-07` Add integration tests for previously noisy prompts:
   an approved Application permission should prevent repeated method-level
   prompts for covered actions.
-- [ ] `[should]` `AAPR3-08` Add holder binding for trusted device/session on
+- [x] `[should]` `AAPR3-08` Add holder binding for trusted device/session on
   sensitive approvals.
-- [ ] `[could]` `AAPR3-09` Add proof-of-possession compatible fields without
+- [x] `[could]` `AAPR3-09` Add proof-of-possession compatible fields without
   requiring a full OAuth token server.
 
 **Exit proof:** tool calls are allowed, denied, or converted to Pending Actions
@@ -232,25 +254,25 @@ replay.
 **Outcome:** Applications and Users & Access expose the same policy state from
 Application-centric and subject-centric views.
 
-- [ ] `[must]` `AAPR4-01` Extend Application install/update review to show
+- [x] `[must]` `AAPR4-01` Extend Application install/update review to show
   structured permissions, data practices, LLM/network use, secrets,
   notifications, background work, role model, and release-readiness summary.
-- [ ] `[must]` `AAPR4-02` Add Application detail tabs or sections:
+- [x] `[must]` `AAPR4-02` Add Application detail tabs or sections:
   Permissions, Access, Roles, Connected Accounts, Release Readiness, and
   Activity.
-- [ ] `[must]` `AAPR4-03` Add minimal role assignment management from
+- [x] `[must]` `AAPR4-03` Add minimal role assignment management from
   Applications: assign declared Application role, change role, revoke access,
   and show affected child/guest constraints.
-- [ ] `[must]` `AAPR4-04` Add Users & Access V1 with People, Guests, Children,
+- [x] `[must]` `AAPR4-04` Add Users & Access V1 with People, Guests, Children,
   Devices/Sessions, User Detail, Application Access, and Activity projections.
-- [ ] `[must]` `AAPR4-05` Connect Pending Actions to Application permission
+- [x] `[must]` `AAPR4-05` Connect Pending Actions to Application permission
   and Users & Access detail instead of showing only raw tool ids.
-- [ ] `[must]` `AAPR4-06` Add Builder permission profiler: declared,
+- [x] `[must]` `AAPR4-06` Add Builder permission profiler: declared,
   statically inferred, observed, undeclared observed, unused, child/guest
   compatibility, role diff, and inputs for Builder final verification.
-- [ ] `[should]` `AAPR4-07` Add responsive compact/wide UI, keyboard flows, and
+- [x] `[should]` `AAPR4-07` Add responsive compact/wide UI, keyboard flows, and
   EN/RU i18n fixtures for long permission, role, provider, and denial labels.
-- [ ] `[could]` `AAPR4-08` Add app-embedded role management component that
+- [x] `[could]` `AAPR4-08` Add app-embedded role management component that
   delegates all writes to platform APIs.
 
 **Exit proof:** browser tests cover Application-centric and user-centric
@@ -268,7 +290,7 @@ install.
   `hard_gate|warning|attestation`, report digest, release digest,
   source commit, permission profile digest, observed capability digest,
   evidence refs, warnings, attestations, and residual risks.
-- [ ] `[must]` `AAPR5-02` Add Builder Final Verification UI/CLI output that
+- [x] `[must]` `AAPR5-02` Add Builder Final Verification UI/CLI output that
   renders the report as a checklist, names blocking checks first, and links
   each item to evidence or required follow-up.
 - [x] `[must]` `AAPR5-03` Validate permission profile schema, normalization,
@@ -285,20 +307,20 @@ install.
   behavior. For DEV/Candidate, focused affected tests may pass the gate; for
   publication, the report must name the broader release test profile or explain
   a bounded `skipped` scope.
-- [ ] `[must]` `AAPR5-07` Verify secrets, connected accounts, external provider
+- [x] `[must]` `AAPR5-07` Verify secrets, connected accounts, external provider
   scopes, notifications, background jobs, and data-practice disclosures,
   including missing/revoked states and secret-value redaction in source, logs,
   and report output.
-- [ ] `[must]` `AAPR5-08` Verify Pending Action fallback cards and routing for
+- [x] `[must]` `AAPR5-08` Verify Pending Action fallback cards and routing for
   uncovered or step-up actions, including chat/Telegram keyboard affordances
   and voice handoff text for trusted-device approval.
 - [x] `[must]` `AAPR5-09` Verify auditability for allow, deny, approval,
   revoke, update-blocked, child, guest, secret, and external-provider
   decisions, including actor chain and reviewed profile digest.
-- [ ] `[should]` `AAPR5-10` Integrate the report into the MVP release evidence
+- [x] `[should]` `AAPR5-10` Integrate the report into the MVP release evidence
   bundle and CI status checks so required checks can be run outside the Builder
   UI.
-- [ ] `[could]` `AAPR5-11` Emit an in-toto/SLSA-compatible attestation for the
+- [x] `[could]` `AAPR5-11` Emit an in-toto/SLSA-compatible attestation for the
   report after deterministic serialization and signing boundaries exist.
 
 **Exit proof:** one Application candidate has a persisted verification report
@@ -311,26 +333,26 @@ with an undeclared high-risk observed permission and accepts one that passes.
 **Outcome:** the first access-aware Applications slice works through real
 install, grant, runtime, audit, and revoke flows.
 
-- [ ] `[must]` `AAPR6-01` Owner installs an Application with LLM/network/write
+- [x] `[must]` `AAPR6-01` Owner installs an Application with LLM/network/write
   permissions, sees the profile, grants access, and covered runtime actions do
   not request raw method approval.
-- [ ] `[must]` `AAPR6-02` Owner grants a child access with an app role that can
+- [x] `[must]` `AAPR6-02` Owner grants a child access with an app role that can
   read or complete assigned work but cannot use LLM/network/secrets without
   guardian approval.
-- [ ] `[must]` `AAPR6-03` Owner grants guest access through a TTL link with a
+- [x] `[must]` `AAPR6-03` Owner grants guest access through a TTL link with a
   readonly app role, proves no profile binding, and revokes live access.
-- [ ] `[must]` `AAPR6-04` Application update adds or elevates a permission and
+- [x] `[must]` `AAPR6-04` Application update adds or elevates a permission and
   a role capability; auto-update pauses for review and shows affected users.
-- [ ] `[must]` `AAPR6-05` Secret/connected-account use shows missing,
+- [x] `[must]` `AAPR6-05` Secret/connected-account use shows missing,
   connected, revoked, and denied states without exposing secret values.
-- [ ] `[must]` `AAPR6-06` Users & Access shows the same facts from a user,
+- [x] `[must]` `AAPR6-06` Users & Access shows the same facts from a user,
   child, guest, device/session, and Application perspective.
-- [ ] `[must]` `AAPR6-07` Builder final verification reports declared versus
+- [x] `[must]` `AAPR6-07` Builder final verification reports declared versus
   observed permissions, records regression/access-matrix evidence, and blocks
   release on undeclared observed high-risk access.
-- [ ] `[should]` `AAPR6-08` Conversational read/explain/revoke works, with
+- [x] `[should]` `AAPR6-08` Conversational read/explain/revoke works, with
   approval routed to Pending Actions or trusted device for sensitive changes.
-- [ ] `[could]` `AAPR6-09` Telegram keyboard mirrors low-risk Pending Action
+- [x] `[could]` `AAPR6-09` Telegram keyboard mirrors low-risk Pending Action
   decisions with the same grant and audit records.
 
 **Exit proof:** one evidence bundle captures release/profile digests, grants,
@@ -338,38 +360,64 @@ role assignments, runtime decisions, Pending Actions, child/guest cases,
 revoke cutoff, update diff, Builder final verification report, browser views,
 and audit queries.
 
-## Should-Level Follow-Up
+## Should-Level V1
 
-- [ ] `[should]` `AAPR-S-01` Add scheduled or prompted access reviews for
+- [x] `[should]` `AAPR-S-01` Add scheduled or prompted access reviews for
   stale grants, inactive users, unused connected accounts, long-lived guests,
   and newly elevated permissions.
-- [ ] `[should]` `AAPR-S-02` Add Application privacy report projections:
+- [x] `[should]` `AAPR-S-02` Add Application privacy report projections:
   declared versus observed data categories, model calls, network destinations,
   secrets use, notifications, and background runs.
-- [ ] `[should]` `AAPR-S-03` Add SDK helpers:
+- [x] `[should]` `AAPR-S-03` Add SDK helpers:
   `ctx.actor`, `ctx.current_user`, `ctx.application`, `ctx.require_app_role`,
   `ctx.require_app_capability`, `ctx.policy.explain`.
-- [ ] `[should]` `AAPR-S-04` Add access-scoped Builder preview modes:
+- [x] `[should]` `AAPR-S-04` Add access-scoped Builder preview modes:
   owner, member, child, guest, and selected custom Application role.
-- [ ] `[should]` `AAPR-S-05` Add admin-visible but content-redacted child and
+- [x] `[should]` `AAPR-S-05` Add admin-visible but content-redacted child and
   user-private data diagnostics in Users & Access.
-- [ ] `[should]` `AAPR-S-06` Add per-provider connected-account policy:
+- [x] `[should]` `AAPR-S-06` Add per-provider connected-account policy:
   delegated user account versus app-owned service account, token expiry,
   revoked state, and user-visible scope changes.
 
-## Could-Level Follow-Up
+## Could-Level V1 Enhancements
 
-- [ ] `[could]` `AAPR-C-01` Add a policy simulation UI before committing
+- [x] `[could]` `AAPR-C-01` Add a policy simulation UI before committing
   grants or role changes.
-- [ ] `[could]` `AAPR-C-02` Add role templates for common app families:
+- [x] `[could]` `AAPR-C-02` Add role templates for common app families:
   classroom, household tasks, dashboards, moderation, research review, and
   media queues.
-- [ ] `[could]` `AAPR-C-03` Add marketplace-style privacy labels and safety
+- [x] `[could]` `AAPR-C-03` Add marketplace-style privacy labels and safety
   badges generated from permission profile plus observed runtime report.
-- [ ] `[could]` `AAPR-C-04` Add export/import of access policy snapshots for
+- [x] `[could]` `AAPR-C-04` Add export/import of access policy snapshots for
   review or backup.
-- [ ] `[could]` `AAPR-C-05` Add anomaly detection for unexpected permission
+- [x] `[could]` `AAPR-C-05` Add anomaly detection for unexpected permission
   use, sudden network destinations, or broad role assignment changes.
+
+## V1 Boundaries
+
+Completion of a non-deferred item means the smallest enforceable product slice,
+not the corresponding deferred platform expansion:
+
+- Application roles are declared by the Application and their assignments can
+  be granted, changed, simulated, explained, and revoked. A general custom-role
+  editor and role hierarchy remain deferred.
+- Users & Access is a shared, metadata-only projection over Personalization and
+  Application grants. It does not duplicate identity data or expose child/user
+  private content.
+- Chat and Telegram use the same typed Pending Action choices, response route,
+  grant revision, and audit path. V1 publishes channel-neutral keyboard
+  affordances and uses the existing Telegram inline-keyboard projection; it
+  does not introduce a separate Telegram authorization store or bot protocol.
+- Voice reads the reason and hands sensitive approval to a selected trusted
+  device. Voice-only high-risk approval remains deferred.
+- Device/session holder fields and grant binding are proof-of-possession
+  compatible, but AdaOS does not act as a full OAuth/DPoP token server in V1.
+- Final Verification emits deterministic in-toto-compatible statement and
+  evidence-bundle digests. Signing, transparency logs, and marketplace
+  certification remain deferred.
+- Access reviews and anomaly findings are computed on read or invoked by a
+  caller in V1. A general scheduler and notification campaign are not required
+  for this local proof.
 
 ## Deferred
 

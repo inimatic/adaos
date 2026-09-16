@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from adaos.domain.personalization_access import ScopeRef
@@ -28,6 +29,110 @@ def caller() -> dict[str, str] | None:
     """
     actor = current_caller()
     return {"kind": actor.kind, "id": actor.id} if actor is not None else None
+
+
+def actor() -> dict[str, str] | None:
+    """Alias used by Application-aware SDK contexts."""
+
+    return caller()
+
+
+def current_user() -> dict[str, str] | None:
+    """Return the user subject behind the verified user/session invocation."""
+
+    subject = current_caller()
+    if subject is None:
+        return None
+    if subject.kind == "user":
+        return {"kind": subject.kind, "id": subject.id}
+    if subject.kind != "session":
+        return None
+    ctx = require_ctx("sdk.access.current_user")
+    session = personalization_access_service(ctx).store.get_session(subject.id)
+    value = dict((session or {}).get("subject") or {})
+    if value.get("kind") != "user" or not value.get("id"):
+        return None
+    return {"kind": "user", "id": str(value["id"])}
+
+
+def application() -> dict[str, Any] | None:
+    """Return server-verified Application identity for the active tool call."""
+
+    from adaos.services.policy.application import current_application
+
+    return current_application()
+
+
+def _application_grant() -> tuple[dict[str, Any], Any, Any]:
+    from adaos.services.applications import get_application_service
+
+    context = application()
+    if context is None:
+        raise CallerAccessDenied("application_context_missing")
+    ctx = require_ctx("sdk.access.application")
+    state = Path(getattr(ctx, "authority_state_dir", None) or ctx.paths.state_dir())
+    service = get_application_service(state)
+    grants = service.store.list_application_access_grants(
+        str(context["application_id"]),
+        subject_ref=str(context["subject_ref"]),
+    )
+    grant = next(
+        (
+            item
+            for item in grants
+            if item.status == "active"
+            and item.reviewed_permission_profile_digest == context["permission_profile_digest"]
+        ),
+        None,
+    )
+    if grant is None:
+        raise CallerAccessDenied("application_grant_missing")
+    release = service.store.get_release(
+        str(context["application_id"]),
+        str(context["release_digest"]),
+    )
+    return context, grant, release
+
+
+def require_app_role(role_id: str) -> dict[str, Any]:
+    context, grant, _release = _application_grant()
+    token = str(role_id or "").strip().lower()
+    if token not in grant.application_roles:
+        raise CallerAccessDenied(f"application_role_missing:{token}")
+    return {"application": context, "grant_id": grant.grant_id, "role_id": token}
+
+
+def require_app_capability(capability: str) -> dict[str, Any]:
+    context, grant, release = _application_grant()
+    token = str(capability or "").strip().lower()
+    role_map = {item.role_id: item for item in release.application_roles}
+    roles = [role_map[item] for item in grant.application_roles if item in role_map]
+    if not any(token in role.grants for role in roles):
+        raise CallerAccessDenied(f"application_capability_missing:{token}")
+    return {"application": context, "grant_id": grant.grant_id, "capability": token}
+
+
+def explain() -> dict[str, Any]:
+    """Return the bounded policy facts used for the active Application invocation."""
+
+    context, grant, release = _application_grant()
+    return {
+        "application": context,
+        "grant_id": grant.grant_id,
+        "roles": list(grant.application_roles),
+        "permission_ceiling": list(grant.permission_ceiling),
+        "explicit_denies": list(grant.explicit_denies),
+        "permission_profile_digest": release.permission_profile.digest,
+    }
+
+
+class _PolicyContext:
+    @staticmethod
+    def explain() -> dict[str, Any]:
+        return explain()
+
+
+policy = _PolicyContext()
 
 
 def require(capability: str) -> dict[str, Any]:
@@ -61,4 +166,14 @@ def require(capability: str) -> dict[str, Any]:
     return decision.to_dict()
 
 
-__all__ = ["caller", "require"]
+__all__ = [
+    "actor",
+    "application",
+    "caller",
+    "current_user",
+    "explain",
+    "policy",
+    "require",
+    "require_app_capability",
+    "require_app_role",
+]

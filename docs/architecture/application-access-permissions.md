@@ -1,6 +1,6 @@
 # Application Access, Permissions, and Roles
 
-Status: target architecture with first backend/ABI slice implemented.
+Status: target architecture with the V1 non-deferred vertical slice implemented.
 
 Last reviewed: 2026-09-16.
 
@@ -50,21 +50,22 @@ AdaOS already has useful lower-level foundations:
 - Guest joins are session-bound and profile-unbound by default. Targeted
   invites are one-time by default and show scope, role preset, expiry, and
   acceptance before claim.
-- The Applications prototype already has review surfaces for requested
-  permissions, but it does not yet own a complete permission center.
-- Secrets exist as a vault and per-skill runtime injection mechanism, but they
-  are not yet integrated into an Application access profile or user-facing
-  connected-account surface.
+- The Applications DEV prototype now has permission, access, role, connected
+  account, release-readiness, activity, and Users & Access surfaces over the
+  shared access service.
+- Secrets remain in the vault and per-skill runtime injection mechanism;
+  Application permission profiles and connected-account metadata now govern
+  declared purpose, provider, scope, state, and redacted observability.
 
-The missing piece is a single product and policy contract that turns those
-parts into an Application-level permission profile and per-subject access
-model. Method-level prompts such as `skill_name:tool_name (network)` remain
-valuable as enforcement detail, but they are too technical as the normal user
-consent experience.
+The shared product and policy contract now turns those foundations into an
+Application-level permission profile and per-subject access model. Method-level
+prompts such as `skill_name:tool_name (network)` remain valuable as fallback
+enforcement detail, but they are no longer the normal consent experience for a
+covered Application grant.
 
 ## Current Implementation Boundary
 
-As of 2026-09-16, AdaOS has the backend contract slice for this architecture:
+As of 2026-09-16, AdaOS has the complete non-deferred V1 slice:
 
 - release-bound `ApplicationPermissionProfile` and `application_roles`;
 - deterministic permission-profile and role-model digests;
@@ -83,10 +84,19 @@ As of 2026-09-16, AdaOS has the backend contract slice for this architecture:
 - Builder verification report generation for profile schema, declared versus
   observed capabilities, role declarations, regression evidence, access-matrix
   evidence, Pending Action fallback evidence, and auditability evidence.
-
-The runtime tool bridge, Applications and Users & Access browser surfaces,
-Pending Actions presentation, conversational/Telegram/voice routing,
-connected-account state UI, and the full AAPR6 evidence bundle remain open.
+- verified Application context and grant evaluation in the common runtime tool
+  bridge before method-level approval fallback;
+- one management service exposed through API, SDK, Root MCP, Applications,
+  Users & Access, and conversational entry points;
+- connected-account lifecycle, privacy and anomaly projections, access review,
+  policy simulation, snapshots, role templates, and content-redacted user
+  diagnostics;
+- responsive EN/RU DEV surfaces and Application-aware Pending Action routing
+  for chat/Telegram keyboard and trusted-device voice handoff;
+- Builder CLI/UI Final Verification, release evidence bundles,
+  in-toto-compatible statement digests, and Trial/publication admission gates;
+- a release-bound AAPR6 proof and reproducible machine evidence in
+  [`docs/evidence/application-access-v1-20260916.md`](../evidence/application-access-v1-20260916.md).
 
 ## Standard Practice Anchors
 

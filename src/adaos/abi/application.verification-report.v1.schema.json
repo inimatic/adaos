@@ -17,6 +17,7 @@
     "warnings": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "attestations": {"type": "array", "items": {"type": "object"}},
     "residual_risks": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "release_scope": {"enum": ["dev", "candidate", "trial", "publication"]},
     "created_at": {"type": "string", "format": "date-time"},
     "report_digest": {"$ref": "#/$defs/digest"}
   },

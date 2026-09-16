@@ -56,7 +56,8 @@
           "ui.list",
           "item.details",
           "input.commandBar",
-          "ui.actions"
+          "ui.actions",
+          "ui.form"
         ]
       },
       "composition": {
@@ -244,7 +245,7 @@
             "Snapshot then delete": "Создать снимок и удалить"
           }
         },
-        "details": "A state-only item.details in the detail area reads applications.show whenever selectedApplicationId is non-empty and binds CAS revisions, install/protection/update booleans, track/policy state, effective release, and the existing local Builder object and source-Webspace identity. Missing installation, subscription, release, and development values use explicit defaults. A visible unframed item.details header follows it, then a segmented command bar exposes Details, Versions, Operations, and Reports.",
+        "details": "A state-only item.details in the detail area reads applications.show whenever selectedApplicationId is non-empty and binds CAS revisions, install/protection/update booleans, track/policy state, effective release, and the existing local Builder object and source-Webspace identity. Missing installation, subscription, release, and development values use explicit defaults. A visible unframed item.details header follows it, then a segmented command bar exposes Details, Versions, Operations, Reports, Permissions, Access, Roles, Connected accounts, Release readiness, and Activity.",
         "details_widget": {
           "type": "item.details",
           "area": "detail",
@@ -552,6 +553,123 @@
         ],
         "detail_section_requirement": "Create all five detail_sections entries as separate unframed item.details widgets. Details belongs to the detail area; Installation, Marketplace, Categories, and conditional My development belong to the metadata area. Do not merge, omit, nest, or move these sections into card grids.",
         "ordering": "Within the detail area place the state resolver, visible Application header, compact icon-backed lifecycle toolbar, prerelease and automatic-update toggles, then the reviewed-plan receipt with its own confirmation actions, followed by tabs and active main content. Never place a confirmation action in the lifecycle toolbar. Keep Installation, Marketplace, Categories, and conditional My development in the metadata rail for the Details tab.",
+        "access_management": {
+          "application_tabs": [
+            "permissions",
+            "access",
+            "roles",
+            "connected_accounts",
+            "release_readiness",
+            "activity"
+          ],
+          "users_access_tabs": [
+            "people",
+            "guests",
+            "children",
+            "devices",
+            "sessions",
+            "application_access",
+            "activity"
+          ],
+          "tab_labels": {
+            "connected_accounts": "Accounts",
+            "release_readiness": "Readiness",
+            "users_access": "Users & Access",
+            "application_access": "App access"
+          },
+          "tab_variant": "Use wrapping icon-backed toolbar tabs so every destination remains visible on compact screens; preserve role=tab semantics, selected state, labels, titles, and keyboard activation.",
+          "application_read": "applications.access.show",
+          "users_read": "applications.access.users",
+          "writes": [
+            "applications.access.grant",
+            "applications.access.change",
+            "applications.access.revoke",
+            "applications.access.connected_account",
+            "applications.access.verify_release"
+          ],
+          "simulation": "applications.access.simulate",
+          "privacy": "applications.access.privacy",
+          "reviews": "applications.access.reviews",
+          "role_management": "Embedded role controls delegate writes to ApplicationsPlane and never mutate policy state directly.",
+          "responsive": "Use master-detail at wide widths and one-column drill-down at compact widths. Use wrapping icon-backed toolbar tabs and the short tab_labels while preserving full section titles. Tabs support ArrowLeft, ArrowRight, Enter, Space, and Escape.",
+          "pending_actions": "Render Application title and permission first, keep tool/method as technical detail, link to Application Access and Users & Access, use chat and Telegram keyboards, and use trusted-device handoff text for voice."
+        },
+        "access_widgets": {
+          "application_sections": [
+            {
+              "tab": "permissions",
+              "title": "Permissions",
+              "resultPath": "response.result.access.sections.permissions",
+              "fields": ["profile", "digest", "privacy_report", "badges"]
+            },
+            {
+              "tab": "access",
+              "title": "Access",
+              "resultPath": "response.result.access.sections.access",
+              "fields": ["subject_ref", "application_roles", "permission_ceiling", "constraints", "status", "expires_at"]
+            },
+            {
+              "tab": "roles",
+              "title": "Roles",
+              "resultPath": "response.result.access.sections.roles",
+              "fields": ["id", "title", "grants", "assignable_to", "requires_permissions", "sensitive"]
+            },
+            {
+              "tab": "connected_accounts",
+              "title": "Connected accounts",
+              "resultPath": "response.result.access.sections.connected_accounts",
+              "fields": ["provider_id", "mode", "scopes", "status", "token_expires_at", "scope_changed_at"]
+            },
+            {
+              "tab": "release_readiness",
+              "title": "Release readiness",
+              "resultPath": "response.result.access.sections.release_readiness",
+              "fields": ["overall", "release_scope", "checks", "warnings", "residual_risks", "report_digest"]
+            },
+            {
+              "tab": "activity",
+              "title": "Activity",
+              "resultPath": "response.result.access.sections.activity",
+              "fields": ["occurred_at", "action", "subject_ref", "decision", "reason_code"]
+            }
+          ],
+          "users_access_sections": [
+            "people",
+            "guests",
+            "children",
+            "devices",
+            "sessions",
+            "application_access",
+            "activity"
+          ],
+          "forms": {
+            "grant": {
+              "type": "ui.form",
+              "submitTarget": "applications.access.grant",
+              "fields": ["subject_ref", "application_roles", "permission_ceiling", "explicit_denies", "expires_at"]
+            },
+            "connected_account": {
+              "type": "ui.form",
+              "submitTarget": "applications.access.connected_account",
+              "fields": ["provider_id", "subject_ref", "mode", "scopes", "status", "token_expires_at"]
+            },
+            "simulation": {
+              "type": "ui.form",
+              "submitTarget": "applications.access.simulate",
+              "fields": ["subject_ref", "application_roles", "permission_ceiling", "permission_id", "app_capability"]
+            },
+            "final_verification": {
+              "type": "ui.form",
+              "submitTarget": "applications.access.verify_release",
+              "fields": ["source_commit", "release_scope", "regression_evidence", "access_matrix_evidence", "pending_action_evidence", "audit_evidence", "disclosure_evidence", "redaction_evidence"]
+            }
+          },
+          "commands": [
+            {"id": "change-role", "target": "applications.access.change"},
+            {"id": "revoke-access", "target": "applications.access.revoke"}
+          ],
+          "write_rule": "Every access write is callMcp to ApplicationsPlane with idempotency and CAS where applicable; no widget writes policy storage directly."
+        },
         "tab_action": {
           "type": "updateState",
           "on": "click",
@@ -590,6 +708,38 @@
             "dryRun": true,
             "resultPath": "response.result.application",
             "prototypeFixture": "$state.prototypeFixtures.application"
+          },
+          "application_access": {
+            "kind": "mcp",
+            "toolId": "applications.access.show",
+            "arguments": {
+              "application_id": "$state.selectedApplicationId",
+              "release_digest": "$state.selectedReleaseDigest"
+            },
+            "dryRun": true,
+            "resultPath": "response.result.access",
+            "prototypeFixture": "$state.prototypeFixtures.applicationAccess"
+          },
+          "users_access": {
+            "kind": "mcp",
+            "toolId": "applications.access.users",
+            "arguments": {},
+            "dryRun": true,
+            "resultPath": "response.result.users_access",
+            "prototypeFixture": "$state.prototypeFixtures.usersAccess"
+          },
+          "permission_profiler": {
+            "kind": "mcp",
+            "toolId": "applications.access.profile",
+            "arguments": {
+              "application_id": "$state.selectedApplicationId",
+              "release_digest": "$state.selectedReleaseDigest",
+              "observed_capabilities": "$state.observedCapabilities",
+              "inferred_capabilities": "$state.inferredCapabilities"
+            },
+            "dryRun": true,
+            "resultPath": "response.result",
+            "prototypeFixture": "$state.prototypeFixtures.permissionProfiler"
           },
           "releases": {
             "kind": "mcp",
@@ -690,6 +840,10 @@
           "catalogSection": "applications",
           "installedOnly": false,
           "activeTab": "details",
+          "usersAccessTab": "people",
+          "observedCapabilities": [],
+          "inferredCapabilities": [],
+          "applicationVerification": {},
           "selectedReleaseDigest": "",
           "effectiveReleaseDigest": "",
           "installationRevision": 0,
@@ -2094,6 +2248,8 @@
               "detail_sections",
               "detail_section_requirement",
               "ordering",
+              "access_management",
+              "access_widgets",
               "tab_action",
               "reads",
               "release_widget",
@@ -2104,6 +2260,7 @@
             "required_postconditions": [
               "applications.mcp_reads",
               "applications.tabs",
+              "applications.access_management",
               "applications.concise_operable_detail",
               "applications.detail_state_binding"
             ]
@@ -2177,6 +2334,7 @@
         "A visible Application identity header and card-free Details content are separated from the compact Installation, Marketplace, Categories, and My development metadata rail.",
         "Catalog rows use stable nested Application identity and display projections supported by the renderer.",
         "Selection addresses one exact Application across details, versions, operations, and reports.",
+        "Permissions, Access, Roles, Connected accounts, Release readiness, Activity, and Users & Access render shared ApplicationsPlane projections; grant, role change, revoke, connected-account, and simulation controls call only platform APIs.",
         "Every Root MCP data source is dry-run and mutation-free.",
         "In a development Webspace, bounded argument-sensitive MCP fixtures cover all seven workflow examples and all detail tabs without touching Application state; stable Webspaces ignore those fixtures.",
         "Every plan has an executable operation kind and compare-and-swap revision, stores its exact receipt in visible local Review state, and confirmation is a separate kind-specific command bound to that receipt. Lifecycle buttons use Install, Update, Save update settings, and Uninstall labels; internal Plan/Apply terminology never appears in that toolbar.",

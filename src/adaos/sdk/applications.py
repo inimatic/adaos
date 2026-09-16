@@ -13,6 +13,7 @@ from typing import Any, Mapping, Sequence
 from adaos.domain.application import RuntimeSelection
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.applications import (
+    ApplicationAccessManagementService,
     ApplicationAccessService,
     ApplicationDevelopmentCoordinator,
     ApplicationRolloutService,
@@ -29,6 +30,10 @@ from adaos.services.policy.skill_capabilities import require_skill_capability
 def _service():
     ctx = require_ctx("sdk.applications")
     return get_application_service(Path(ctx.paths.state_dir()))
+
+
+def _access_management() -> ApplicationAccessManagementService:
+    return ApplicationAccessManagementService(_service())
 
 
 def _local_subnet_ref() -> str:
@@ -701,6 +706,179 @@ def revoke_application_access(
     ).to_dict()
 
 
+def change_application_access(
+    grant_id: str,
+    *,
+    release_digest: str,
+    application_roles: tuple[str, ...],
+    expected_revision: int,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+    issuer_ref: str = "",
+    permission_ceiling: tuple[str, ...] | None = None,
+    explicit_denies: tuple[str, ...] | None = None,
+    constraints: Mapping[str, Any] | None = None,
+    expires_at: str | None = None,
+) -> dict[str, Any]:
+    actor, _, _, _ = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.apply",
+    )
+    return ApplicationAccessService(_service()).change_access(
+        grant_id,
+        release_digest=release_digest,
+        application_roles=application_roles,
+        expected_revision=expected_revision,
+        issuer_ref=issuer_ref or actor,
+        permission_ceiling=permission_ceiling,
+        explicit_denies=explicit_denies,
+        constraints=constraints,
+        expires_at=expires_at,
+    ).to_dict()
+
+
+def get_application_access_surface(
+    application_id: str,
+    *,
+    release_digest: str | None = None,
+) -> dict[str, Any]:
+    return _access_management().application_detail(application_id, release_digest=release_digest)
+
+
+def get_users_access_surface(
+    personalization: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return _access_management().users_access(personalization)
+
+
+def simulate_application_access(application_id: str, **request: Any) -> dict[str, Any]:
+    return _access_management().simulate(application_id, **request)
+
+
+def list_application_access_reviews(
+    application_id: str | None = None,
+    *,
+    stale_days: int = 90,
+) -> list[dict[str, Any]]:
+    return _access_management().access_reviews(
+        application_id=application_id,
+        stale_days=stale_days,
+    )
+
+
+def get_application_privacy_report(
+    application_id: str,
+    *,
+    release_digest: str,
+) -> dict[str, Any]:
+    service = _access_management()
+    return {
+        "privacy_report": service.privacy_report(application_id, release_digest=release_digest),
+        "anomalies": service.anomalies(application_id, release_digest=release_digest),
+        "badges": service.privacy_badges(application_id, release_digest=release_digest),
+    }
+
+
+def get_application_update_review(
+    application_id: str,
+    *,
+    old_release_digest: str,
+    new_release_digest: str,
+) -> dict[str, Any]:
+    return _access_management().update_review(
+        application_id,
+        old_release_digest=old_release_digest,
+        new_release_digest=new_release_digest,
+    )
+
+
+def profile_application_permissions(
+    application_id: str,
+    *,
+    release_digest: str,
+    observed_capabilities: tuple[str, ...] = (),
+    inferred_capabilities: tuple[str, ...] = (),
+    previous_release_digest: str | None = None,
+) -> dict[str, Any]:
+    return _access_management().permission_profiler(
+        application_id,
+        release_digest=release_digest,
+        observed_capabilities=observed_capabilities,
+        inferred_capabilities=inferred_capabilities,
+        previous_release_digest=previous_release_digest,
+    )
+
+
+def put_application_connected_account(
+    application_id: str,
+    account: Mapping[str, Any],
+    *,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.apply",
+    )
+    return _access_management().put_connected_account(application_id, account)
+
+
+def export_application_access_snapshot(application_id: str) -> dict[str, Any]:
+    return _access_management().export_snapshot(application_id)
+
+
+def import_application_access_snapshot(
+    snapshot: Mapping[str, Any],
+    *,
+    apply: bool,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    actor, _, _, _ = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.apply",
+    )
+    return _access_management().import_snapshot(snapshot, issuer_ref=actor, apply=apply)
+
+
+def verify_application_release(
+    application_id: str,
+    *,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+    **request: Any,
+) -> dict[str, Any]:
+    actor, _, _, _ = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.plan",
+    )
+    return _access_management().final_verification(
+        application_id,
+        actor_ref=actor,
+        **request,
+    )
+
+
 def decide_application_access(
     application_id: str,
     *,
@@ -1181,9 +1359,14 @@ def explain_plan(operation_id: str) -> dict[str, Any]:
 __all__ = [
     "accept_development_report",
     "apply_operation",
+    "change_application_access",
     "decide_application_access",
     "explain_plan",
+    "export_application_access_snapshot",
     "get_application",
+    "get_application_access_surface",
+    "get_application_privacy_report",
+    "get_application_update_review",
     "get_identity",
     "get_development_report",
     "get_development_report_status",
@@ -1192,10 +1375,13 @@ __all__ = [
     "get_prerelease_rollout",
     "get_runtime_selection",
     "get_subscription",
+    "get_users_access_surface",
     "grant_application_access",
     "issue_trial_access",
+    "import_application_access_snapshot",
     "list_application_access",
     "list_application_access_audit",
+    "list_application_access_reviews",
     "list_applications",
     "list_catalog",
     "list_development_report_intakes",
@@ -1211,6 +1397,8 @@ __all__ = [
     "plan_update",
     "plan_update_track",
     "poll_operation_events",
+    "profile_application_permissions",
+    "put_application_connected_account",
     "record_prerelease_health",
     "request_development_report_resync",
     "resolve_development_report_appeal",
@@ -1226,4 +1414,6 @@ __all__ = [
     "triage_development_report",
     "verify_development_report_release",
     "simulate_removal",
+    "simulate_application_access",
+    "verify_application_release",
 ]

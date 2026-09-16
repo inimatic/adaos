@@ -70,8 +70,28 @@ def _write(path: Path, value: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _grant_id(*, subject: str, scope: str, resource: str, webspace_id: str) -> str:
-    raw = "\0".join((subject, scope, resource, webspace_id))
+def _normalized_binding(value: Mapping[str, Any] | None) -> dict[str, str]:
+    binding = {
+        str(key).strip(): _text(item)
+        for key, item in dict(value or {}).items()
+        if str(key).strip() and _text(item)
+    }
+    if any(not _TOKEN.fullmatch(key) or not _TOKEN.fullmatch(item) for key, item in binding.items()):
+        raise ValueError("invalid_runtime_action_grant_binding")
+    return dict(sorted(binding.items()))
+
+
+def _grant_id(
+    *,
+    subject: str,
+    scope: str,
+    resource: str,
+    webspace_id: str,
+    binding: Mapping[str, Any] | None = None,
+) -> str:
+    normalized = _normalized_binding(binding)
+    binding_token = json.dumps(normalized, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    raw = "\0".join((subject, scope, resource, webspace_id, binding_token))
     return "grant.runtime." + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
@@ -96,12 +116,14 @@ def find_runtime_action_grant(
     scope: str,
     resource: str,
     webspace_id: str,
+    binding: Mapping[str, Any] | None = None,
     now: float | None = None,
 ) -> dict[str, Any] | None:
     ref = _validated_ref(
         subject=subject, scope=scope, resource=resource, webspace_id=webspace_id
     )
-    grant_id = _grant_id(**ref)
+    normalized_binding = _normalized_binding(binding)
+    grant_id = _grant_id(**ref, binding=normalized_binding)
     current = time.time() if now is None else float(now)
     with _LOCK:
         store = _load(_store_path(ctx))
@@ -109,6 +131,8 @@ def find_runtime_action_grant(
         if not isinstance(grant, dict):
             return None
         if grant.get("status") != "active" or float(grant.get("expires_at") or 0) <= current:
+            return None
+        if dict(grant.get("binding") or {}) != normalized_binding:
             return None
         return dict(grant)
 
@@ -122,6 +146,7 @@ def remember_runtime_action_grant(
     webspace_id: str,
     approval_id: str,
     approved_by: str,
+    binding: Mapping[str, Any] | None = None,
     ttl_seconds: int = 30 * 24 * 60 * 60,
     now: float | None = None,
 ) -> dict[str, Any]:
@@ -130,7 +155,8 @@ def remember_runtime_action_grant(
     )
     created = time.time() if now is None else float(now)
     ttl = max(300, min(365 * 24 * 60 * 60, int(ttl_seconds or 0)))
-    grant_id = _grant_id(**ref)
+    normalized_binding = _normalized_binding(binding)
+    grant_id = _grant_id(**ref, binding=normalized_binding)
     grant = {
         "schema": "adaos.runtime_action_grant.v1",
         "id": grant_id,
@@ -138,6 +164,7 @@ def remember_runtime_action_grant(
         "status": "active",
         "approval_id": _text(approval_id),
         "approved_by": _text(approved_by),
+        "binding": normalized_binding,
         "created_at": created,
         "updated_at": created,
         "expires_at": created + ttl,

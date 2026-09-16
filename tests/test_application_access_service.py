@@ -276,7 +276,32 @@ def test_application_access_enforces_guest_and_child_floors_on_grant(tmp_path: P
     )
 
     assert guest.constraints["subject_kind"] == "guest"
+    assert guest.constraints["session_bound"] is True
+    assert guest.constraints["session_ref"] == "session:guest-1"
+    assert guest.constraints["profile_binding"] is False
+    assert guest.constraints["durable_approvals"] is False
     assert guest.expires_at is not None
+
+    allowed = access.decide(
+        "family_tasks",
+        release_digest=release_digest,
+        subject_ref="session:guest-1",
+        permission_id="workspace.read",
+        app_capability="app.view",
+        component_capabilities=("workspace.read",),
+        actor_chain={"session_ref": "session:guest-1"},
+    )
+    wrong_session = access.decide(
+        "family_tasks",
+        release_digest=release_digest,
+        subject_ref="session:guest-1",
+        permission_id="workspace.read",
+        app_capability="app.view",
+        component_capabilities=("workspace.read",),
+        actor_chain={"session_ref": "session:guest-2"},
+    )
+    assert allowed.decision == "allow"
+    assert wrong_session.reason_code == "session_scope_mismatch"
 
 
 def test_application_access_requires_guardian_for_child_external_data_profile(tmp_path: Path) -> None:
