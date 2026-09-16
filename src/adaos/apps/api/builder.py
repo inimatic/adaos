@@ -156,6 +156,13 @@ class BuilderAutomationRecoveryRequest(BaseModel):
     object_id: str = Field(..., min_length=1)
 
 
+class BuilderAutomationRepackageRequest(BuilderAutomationRecoveryRequest):
+    publication_project_ref: str = Field(..., pattern="^project:[a-z0-9][a-z0-9_.-]{0,127}$")
+    actor: str = Field(default="user:owner", min_length=1)
+    idempotency_key: str = Field(..., min_length=1)
+    reason: str = ""
+
+
 class BuilderWorkflowTransitionRequest(BaseModel):
     object_type: str = Field(..., pattern="^(skill|scenario|project)$")
     object_id: str = Field(..., min_length=1)
@@ -507,6 +514,26 @@ def reconcile_automation_checkpoint(
         return service.reconcile_checkpoint(
             object_type=body.object_type,
             object_id=body.object_id,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/automation/repackage-checkpoint")
+def repackage_automation_checkpoint(
+    body: BuilderAutomationRepackageRequest,
+    service: BuilderAutomationService = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    """Allocate a new Project version for exact already-validated source."""
+
+    try:
+        return service.repackage_checkpoint(
+            object_type=body.object_type,
+            object_id=body.object_id,
+            publication_project_ref=body.publication_project_ref,
+            actor=body.actor,
+            idempotency_key=body.idempotency_key,
+            reason=body.reason,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

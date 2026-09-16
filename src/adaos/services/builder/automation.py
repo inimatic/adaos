@@ -4153,6 +4153,233 @@ class BuilderAutomationService:
             "automation": self.project_session(reconciled),
         }
 
+    def repackage_checkpoint(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        publication_project_ref: str,
+        actor: str,
+        idempotency_key: str,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Reserve a new Project version for an unchanged validated checkpoint.
+
+        Build-policy and release-ABI changes can make bytes rebuilt from an old
+        Project version differ from the immutable release already cached under
+        that version.  Resolving that conflict is trusted Forge work: the
+        implementing model must not edit release metadata or rerun unchanged
+        source.  This operation reuses exact successful component checkpoints,
+        advances only the owning Project composition and rebinds the canonical
+        Builder delivery checkpoint.
+        """
+
+        project_ref = str(publication_project_ref or "").strip()
+        if not project_ref.startswith("project:") or not project_ref.split(":", 1)[1].strip():
+            raise ValueError("checkpoint repackage requires publication_project_ref=project:<id>")
+        actor_ref = str(actor or "").strip()
+        operation_key = str(idempotency_key or "").strip()
+        if not actor_ref or not operation_key:
+            raise ValueError("checkpoint repackage requires actor and idempotency key")
+
+        with _LOCK:
+            session = self.get_session(object_type, object_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            current = self.refresh_session(session)
+            if str(current.get("status") or "") != "completed":
+                raise ValueError("checkpoint repackage requires completed Automation")
+            readiness = (
+                current.get("completion_readiness")
+                if isinstance(current.get("completion_readiness"), Mapping)
+                else {}
+            )
+            checkpoints = [
+                dict(item)
+                for item in readiness.get("vcs_checkpoints") or []
+                if isinstance(item, Mapping) and bool(item.get("ok"))
+            ]
+            if not checkpoints:
+                raise ValueError("checkpoint repackage requires confirmed Forge checkpoints")
+
+            workflow = self._workflow().describe(object_type, object_id)
+            workflow_automation = (
+                workflow.get("automation")
+                if isinstance(workflow.get("automation"), Mapping)
+                else {}
+            )
+            delivery = (
+                workflow.get("delivery")
+                if isinstance(workflow.get("delivery"), Mapping)
+                else {}
+            )
+            if str(workflow_automation.get("status") or "") != "completed":
+                raise ValueError("checkpoint repackage requires completed canonical Automation")
+            if str(delivery.get("status") or "") != "checkpoint":
+                raise ValueError("checkpoint repackage requires an exact retryable checkpoint")
+
+            primary = next(
+                (
+                    item
+                    for item in checkpoints
+                    if str(item.get("kind") or "").strip().lower().rstrip("s")
+                    == str(object_type or "").strip().lower().rstrip("s")
+                    and str(item.get("name") or "").strip() == str(object_id or "").strip()
+                ),
+                None,
+            )
+            package_digest = str(delivery.get("package_digest") or "").strip()
+            source_revision = str(delivery.get("source_revision") or "").strip()
+            if not primary or (
+                str(primary.get("package_digest") or "").strip() != package_digest
+                or str(primary.get("source_revision") or primary.get("commit") or "").strip()
+                != source_revision
+            ):
+                raise ValueError("canonical delivery no longer matches the validated Forge checkpoint")
+
+            links = current.get("links") if isinstance(current.get("links"), Mapping) else {}
+            linked_project_ref = str(
+                links.get("development_ticket_project_ref") or links.get("project_ref") or ""
+            ).strip()
+            if linked_project_ref and linked_project_ref != project_ref:
+                raise ValueError("checkpoint repackage Project does not match the Automation session")
+
+            repackage_id = self._change_id(
+                session_id=str(current.get("session_id") or ""),
+                iteration=int(current.get("iteration") or 0),
+                seed=(
+                    f"repackage:{operation_key}:{project_ref}:"
+                    f"{package_digest}:{source_revision}"
+                ),
+            )
+            repackage_session = {
+                **current,
+                "change_id": repackage_id,
+                "current_task_id": str(
+                    workflow_automation.get("head_task_id")
+                    or current.get("current_task_id")
+                    or ""
+                ).strip(),
+                "links": {**dict(links), "project_ref": project_ref},
+            }
+            # Canonical Builder has already accepted the old verification and
+            # is therefore in trial_ready. Repackaging is a recovery Run, not
+            # another implementation turn: explicitly invalidate that delivery,
+            # re-enter Automation without increasing the model iteration, and
+            # record the same validated task before reserving the new version.
+            common_metadata = {
+                "confirmed": True,
+                "change_id": repackage_id,
+                "task_id": repackage_session.get("current_task_id"),
+                "purpose": "recovery",
+            }
+            self._workflow().transition(
+                object_type,
+                object_id,
+                "candidate_stale",
+                actor=actor_ref,
+                reason="Invalidate the old Project release identity before zero-model repackage",
+                metadata={
+                    **common_metadata,
+                    "candidate_id": str(delivery.get("candidate_id") or ""),
+                    "rebase_plan": {
+                        "stale_reason": "release_abi_repackage",
+                        "source_change_id": str(delivery.get("checkpoint_change_id") or ""),
+                    },
+                    "run_id": f"repackage:{operation_key}:invalidate",
+                    "idempotency_key": f"{operation_key}:invalidate",
+                },
+            )
+            self._workflow().transition(
+                object_type,
+                object_id,
+                "automation_iteration_started",
+                actor=actor_ref,
+                reason="Admit unchanged validated source for zero-model repackage",
+                metadata={
+                    **common_metadata,
+                    "reconciliation": True,
+                    "run_id": f"repackage:{operation_key}:admit",
+                    "idempotency_key": f"{operation_key}:admit",
+                },
+            )
+            self._workflow().transition(
+                object_type,
+                object_id,
+                "automation_completed",
+                actor=actor_ref,
+                reason="Reuse the exact validated Automation task for Project repackage",
+                metadata={
+                    **common_metadata,
+                    "version": self._project_version(object_type, object_id),
+                    "snapshot_path": (
+                        readiness.get("automation_snapshot", {}).get("path")
+                        if isinstance(readiness.get("automation_snapshot"), Mapping)
+                        else None
+                    ),
+                    "run_id": f"repackage:{operation_key}:complete",
+                    "idempotency_key": f"{operation_key}:complete",
+                },
+            )
+            project_checkpoint = self._ensure_project_composition_checkpoint(
+                repackage_session,
+                checkpoints=checkpoints,
+            )
+            transitioned = self._workflow().transition(
+                object_type,
+                object_id,
+                "checkpoint_recorded",
+                actor=actor_ref,
+                reason=(
+                    str(reason or "").strip()
+                    or "Repackage an unchanged validated checkpoint after release ABI drift"
+                ),
+                metadata={
+                    "confirmed": True,
+                    "change_id": repackage_id,
+                    "package_digest": package_digest,
+                    "source_revision": source_revision,
+                    "version": project_checkpoint.get("version"),
+                    "task_id": repackage_session.get("current_task_id"),
+                    "run_id": f"repackage:{operation_key}",
+                    "idempotency_key": f"{operation_key}:checkpoint",
+                    "purpose": "recovery",
+                    "evidence_refs": [
+                        f"project-checkpoint:{project_ref}@{project_checkpoint.get('version')}",
+                        f"source:{source_revision}",
+                    ],
+                },
+            )
+            history = [
+                dict(item)
+                for item in current.get("repackage_history") or []
+                if isinstance(item, Mapping)
+            ]
+            receipt = {
+                "schema": "adaos.builder.checkpoint_repackage.v1",
+                "operation_id": operation_key,
+                "change_id": repackage_id,
+                "project_ref": project_ref,
+                "version": project_checkpoint.get("version"),
+                "package_digest": package_digest,
+                "source_revision": source_revision,
+                "model_started": False,
+                "recorded_at": _now_iso(),
+            }
+            history.append(receipt)
+            current["repackage_history"] = history[-20:]
+            current["updated_at"] = receipt["recorded_at"]
+            self._save_session(current)
+
+        return {
+            "ok": True,
+            "repackaged": True,
+            "model_started": False,
+            "receipt": receipt,
+            "project_checkpoint": project_checkpoint,
+            "workflow": transitioned.get("workflow"),
+        }
+
     def recover_validated_result(self, *, object_type: str, object_id: str) -> dict[str, Any]:
         """Activate a preserved validated task result without rerunning Codex."""
 

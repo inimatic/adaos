@@ -1216,6 +1216,46 @@ def test_builder_api_reconciles_checkpoint_without_codex() -> None:
     ]
 
 
+def test_builder_api_repackages_checkpoint_without_codex() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _Automation:
+        def repackage_checkpoint(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "repackaged": True, "model_started": False}
+
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_automation_service] = lambda: _Automation()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/builder/automation/repackage-checkpoint",
+        json={
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "publication_project_ref": "project:recipes",
+            "actor": "user:owner",
+            "idempotency_key": "release-abi-v2",
+            "reason": "release ABI changed",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["model_started"] is False
+    assert calls == [
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "publication_project_ref": "project:recipes",
+            "actor": "user:owner",
+            "idempotency_key": "release-abi-v2",
+            "reason": "release ABI changed",
+        }
+    ]
+
+
 def test_builder_application_permission_profiler_cli(monkeypatch) -> None:
     calls: list[tuple[str, dict[str, Any]]] = []
 

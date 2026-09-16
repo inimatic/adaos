@@ -8183,6 +8183,108 @@ def test_explicit_checkpoint_reconciliation_does_not_rerun_codex(tmp_path: Path,
     assert finalized[0]["reconciliation_history"][-1]["previous_change_id"] == previous_change_id
 
 
+def test_checkpoint_repackage_advances_only_project_composition_without_codex(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    package_digest = "sha256:" + "a" * 64
+    source_revision = "commit.validated"
+    session = {
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "status": "completed",
+        "iteration": 2,
+        "current_task_id": "task.validated",
+        "links": {"project_ref": "project:recipes"},
+        "completion_readiness": {
+            "ok": True,
+            "vcs_checkpoints": [
+                {
+                    "ok": True,
+                    "kind": "scenario",
+                    "name": "recipes",
+                    "package_digest": package_digest,
+                    "source_revision": source_revision,
+                },
+                {
+                    "ok": True,
+                    "kind": "skill",
+                    "name": "recipes_skill",
+                    "package_digest": "sha256:" + "b" * 64,
+                    "source_revision": "commit.skill",
+                },
+            ],
+        },
+    }
+    service._save_session(session)
+    transitions: list[tuple[str, dict]] = []
+
+    class _Workflow:
+        @staticmethod
+        def describe(*_args):
+            return {
+                "automation": {"status": "completed", "head_task_id": "task.validated"},
+                "delivery": {
+                    "status": "checkpoint",
+                    "package_digest": package_digest,
+                    "source_revision": source_revision,
+                },
+            }
+
+        @staticmethod
+        def transition(_kind, _object_id, action, **kwargs):
+            transitions.append((action, dict(kwargs)))
+            return {"workflow": {"delivery": {"status": "checkpoint", "version": "0.3.8"}}}
+
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: _Workflow())
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_ensure_project_composition_checkpoint",
+        lambda self, value, *, checkpoints: {
+            "ok": True,
+            "version": "0.3.8",
+            "change_id": value["change_id"],
+            "checkpoint_count": len(checkpoints),
+        },
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_submit",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Codex must not be submitted")
+        ),
+    )
+
+    result = service.repackage_checkpoint(
+        object_type="scenario",
+        object_id="recipes",
+        publication_project_ref="project:recipes",
+        actor="user:owner",
+        idempotency_key="release-abi-v2",
+        reason="Release normalization changed",
+    )
+
+    assert result["ok"] is True
+    assert result["model_started"] is False
+    assert result["receipt"]["version"] == "0.3.8"
+    assert [item[0] for item in transitions] == [
+        "candidate_stale",
+        "automation_iteration_started",
+        "automation_completed",
+        "checkpoint_recorded",
+    ]
+    assert transitions[1][1]["metadata"]["reconciliation"] is True
+    metadata = transitions[-1][1]["metadata"]
+    assert metadata["package_digest"] == package_digest
+    assert metadata["source_revision"] == source_revision
+    assert metadata["version"] == "0.3.8"
+    saved = service.get_session("scenario", "recipes")
+    assert saved is not None
+    assert saved["repackage_history"][-1]["operation_id"] == "release-abi-v2"
+
+
 def test_checkpoint_reconciliation_reuses_change_id_for_partially_committed_pair(
     tmp_path: Path,
     monkeypatch,

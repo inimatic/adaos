@@ -285,6 +285,30 @@ def reconcile_checkpoint(*, object_type: str, object_id: str) -> dict[str, Any]:
     )
 
 
+def repackage_checkpoint(
+    *,
+    object_type: str,
+    object_id: str,
+    publication_project_ref: str,
+    actor: str,
+    idempotency_key: str,
+    reason: str = "",
+) -> dict[str, Any]:
+    """Advance only the owning Project version for validated unchanged source."""
+
+    return dict(
+        _service().repackage_checkpoint(
+            object_type=object_type,
+            object_id=object_id,
+            publication_project_ref=publication_project_ref,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            reason=reason,
+        )
+        or {}
+    )
+
+
 def recover_validated_result(*, object_type: str, object_id: str) -> dict[str, Any]:
     """Activate a preserved validated result without assigning Codex again."""
 
@@ -322,6 +346,7 @@ __all__ = [
     "get_state",
     "release_candidate_runtime",
     "reconcile_checkpoint",
+    "repackage_checkpoint",
     "recover_validated_result",
     "return_to_prototype",
     "retry_failed",
