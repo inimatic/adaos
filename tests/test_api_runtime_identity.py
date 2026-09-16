@@ -1379,6 +1379,42 @@ def test_candidate_promotion_defers_service_start_until_core_update_finishes(mon
     assert api_server._promoted_service_start_status_payload()["update_state"] == "failed"
 
 
+def test_service_start_refreshes_discovery_force(monkeypatch) -> None:
+    calls: list[object] = []
+
+    class _ServiceSupervisor:
+        async def refresh_discovered(self, *, force: bool = False) -> None:
+            calls.append(("refresh", force))
+
+        async def start(self, name: str) -> None:
+            calls.append(("start", name))
+
+    monkeypatch.setattr(api_server, "get_service_supervisor", lambda: _ServiceSupervisor())
+
+    payload = asyncio.run(api_server.start_service("slideshow_skill"))
+
+    assert payload == {"ok": True}
+    assert calls == [("refresh", True), ("start", "slideshow_skill")]
+
+
+def test_service_restart_refreshes_discovery_force(monkeypatch) -> None:
+    calls: list[object] = []
+
+    class _ServiceSupervisor:
+        async def refresh_discovered(self, *, force: bool = False) -> None:
+            calls.append(("refresh", force))
+
+        async def restart(self, name: str) -> None:
+            calls.append(("restart", name))
+
+    monkeypatch.setattr(api_server, "get_service_supervisor", lambda: _ServiceSupervisor())
+
+    payload = asyncio.run(api_server.restart_service("slideshow_skill"))
+
+    assert payload == {"ok": True}
+    assert calls == [("refresh", True), ("restart", "slideshow_skill")]
+
+
 def test_promote_active_is_idempotent_for_active_runtime(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-a-a-abcdef12")

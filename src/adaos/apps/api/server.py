@@ -2867,6 +2867,7 @@ async def get_service_status(name: str, check_health: bool = False) -> dict:
 @app.post("/api/services/{name}/start", dependencies=[Depends(require_token)])
 async def start_service(name: str) -> dict:
     supervisor = get_service_supervisor()
+    await supervisor.refresh_discovered(force=True)
     try:
         await supervisor.start(name)
     except KeyError:
@@ -2888,6 +2889,7 @@ async def stop_service(name: str) -> dict:
 @app.post("/api/services/{name}/restart", dependencies=[Depends(require_token)])
 async def restart_service(name: str) -> dict:
     supervisor = get_service_supervisor()
+    await supervisor.refresh_discovered(force=True)
     try:
         await supervisor.restart(name)
     except KeyError:
