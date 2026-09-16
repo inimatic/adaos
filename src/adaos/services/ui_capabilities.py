@@ -11,6 +11,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from jsonschema import Draft202012Validator
 
 from adaos.services.ui_resource_queries import widget_resource_queries
+from adaos.services.webui_layout import layout_v2_findings
 
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief, partition_intent_scope
 from adaos.services.builder_domain_packs import (
@@ -649,7 +650,7 @@ def qualify_ui_request(
             {
                 "recipe_id": "recipe.kanban_board",
                 "component_type": "collection.board",
-                "layout_id": "layout.flow",
+                "layout_id": "layout.board",
                 "lane_count": lane_count,
                 "items_per_lane": items_per_lane,
                 "images_requested": images_requested,
@@ -905,24 +906,7 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
     desktop_state = next((page.get("initialState") for path, page in schemas if path == "ui.application.desktop.pageSchema"), {})
     shared_initial_state = desktop_state if isinstance(desktop_state, Mapping) else {}
     for schema_path, page in schemas:
-        layout = page.get("layout") if isinstance(page.get("layout"), Mapping) else {}
-        layout_type = str(layout.get("type") or "").strip()
-        if layout_type not in {
-            "single",
-            "stack",
-            "split",
-            "grid",
-            "custom",
-            "responsive",
-        }:
-            findings.append(
-                {
-                    "code": "ui.layout.type_unsupported",
-                    "severity": "error",
-                    "path": f"{schema_path}.layout.type",
-                    "message": f"Unsupported layout type {layout_type!r}",
-                }
-            )
+        findings.extend(layout_v2_findings(page, schema_path=schema_path))
         widgets = page.get("widgets") if isinstance(page.get("widgets"), list) else []
         initial_state = (
             page.get("initialState")

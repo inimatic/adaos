@@ -128,7 +128,12 @@ def form(id, fields, submit_ru, submit_en, actions, *, area="main"):
 
 def modal(id, ru, en, widgets):
     return {**text_field("title", ru, en), "presentation": {"kind": "modal"},
-            "schema": {"id": id, "layout": {"type": "stack", "areas": [{"id": "main", "role": "main"}]},
+            "schema": {"id": id, "layout": {
+                "version": 2, "pattern": "task-flow", "density": "comfortable",
+                "contentWidth": "reading", "scroll": "page", "regions": [{
+                    "id": "main", "role": "main", "priority": 100, "scroll": "page",
+                    "presentation": {"wide": "pane", "compact": "stack"},
+                }], "interaction": {"actions": "adaptive"}},
                        "widgets": widgets}}
 
 
@@ -317,8 +322,21 @@ def build_document():
     diagnostics = details("design-diagnostics", "Диагностика · образец", "Diagnostics · specimen", {"run": "$state.current.run", "state": "$state.current.id", "revision": "$state.previewRevision"},
                           [field("run", "Запуск", "Run"), field("state", "Состояние", "State"), field("revision", "Preview", "Preview")], visible="$state.designSettings.diagnostics")
     widgets = [header, status, *actions, tabs, *result_widgets, brief, checks, process, context_button, diagnostics]
-    page = {"id": "builder", "title": "Builder", "layout": {"type": "split", "areas": [{"id": "main", "role": "main"}, {"id": "conversation", "role": "aux", "width": 360}],
-            "auxWidth": 360, "variants": [{"id": "conversation-focus", "when": "$state.workbenchView === 'conversation'", "type": "single", "areas": [{"id": "main", "role": "main"}]}]},
+    page = {"id": "builder", "title": "Builder", "layout": {
+            "version": 2, "pattern": "workbench", "density": "compact", "contentWidth": "bounded",
+            "maxContentWidthPx": 1600, "scroll": "regions", "regions": [
+                {"id": "main", "role": "main", "priority": 100, "scroll": "region",
+                 "presentation": {"wide": "pane", "compact": "stack"}},
+                {"id": "conversation", "role": "detail", "priority": 70, "scroll": "region",
+                 "size": {"minPx": 280, "preferredPx": 360, "maxPx": 600},
+                 "presentation": {"wide": "pane", "compact": "sheet"}},
+            ], "interaction": {"detail": "inline", "actions": "adaptive"},
+            "variants": [{"id": "conversation-focus", "when": "$state.workbenchView === 'conversation'",
+                          "pattern": "document", "density": "compact", "contentWidth": "bounded",
+                          "maxContentWidthPx": 1600, "scroll": "page", "regions": [
+                              {"id": "main", "role": "main", "priority": 100, "scroll": "page",
+                               "presentation": {"wide": "pane", "compact": "stack"}},
+                          ]}]},
             "presentation": {"defaultProfile": "desktop", "profiles": {"desktop": {"density": "compact", "maxContentWidthPx": 1600}}},
             "initialState": {"samples": samples, "current": samples["review"], "workbenchView": "result", "previewRevision": "003", "inspectedRevision": "003",
                              "applicationTitle": "Осмотр оборудования", "selectedAssetId": "pump", "selectedAsset": {"id": "pump", "name": "Насос К-1", "location": "Цех 1"},

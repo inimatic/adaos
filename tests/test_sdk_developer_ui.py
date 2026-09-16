@@ -10,7 +10,7 @@ def test_ui_sdk_selects_a_bounded_kanban_contract_without_runtime_context() -> N
     assert {item["id"] for item in selected["items"]} == {
         "recipe.kanban_board",
         "collection.board",
-        "layout.flow",
+        "layout.board",
     }
 
 

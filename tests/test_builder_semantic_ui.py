@@ -24,7 +24,20 @@ def semantic_project(tmp_path: Path) -> tuple[BuilderSemanticUIService, BuilderW
                 "desktop": {
                     "pageSchema": {
                         "id": "recipes-page",
-                        "layout": {"type": "stack", "areas": [{"id": "main", "role": "main"}]},
+                        "layout": {
+                            "version": 2,
+                            "pattern": "document",
+                            "density": "comfortable",
+                            "contentWidth": "fluid",
+                            "scroll": "page",
+                            "regions": [
+                                {
+                                    "id": "main",
+                                    "role": "main",
+                                    "presentation": {"wide": "pane", "compact": "stack"},
+                                }
+                            ],
+                        },
                         "widgets": [
                             {
                                 "id": "recipe-list",

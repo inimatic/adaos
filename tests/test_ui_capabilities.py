@@ -32,9 +32,16 @@ def _board_webui(*, cards_per_lane: int = 2) -> dict:
                     "pageSchema": {
                         "id": "kanban",
                         "layout": {
-                            "type": "single",
-                            "pattern": "stack",
-                            "areas": [{"id": "main", "role": "main"}],
+                            "version": 2,
+                            "pattern": "board",
+                            "density": "comfortable",
+                            "regions": [
+                                {
+                                    "id": "main",
+                                    "role": "main",
+                                    "presentation": {"wide": "pane", "compact": "overflow"},
+                                }
+                            ],
                         },
                         "widgets": [
                             {
@@ -72,12 +79,12 @@ def test_multilingual_search_selects_kanban_recipe() -> None:
     assert {item["id"] for item in selected["items"]} == {
         "recipe.kanban_board",
         "collection.board",
-        "layout.flow",
+        "layout.board",
     }
     assert selected["root_item_ids"] == [
         "recipe.kanban_board",
         "collection.board",
-        "layout.flow",
+        "layout.board",
     ]
     assert selected["dependency_closure"] == []
 
@@ -164,14 +171,14 @@ def test_qualification_selects_resource_workbench_for_russian_board_crud() -> No
     }
     selected_ids = {item["id"] for item in selected["items"]}
     assert {
-        "layout.split",
+        "layout.collection-detail",
         "input.text",
         "input.selector",
         "ui.form",
         "item.details",
     } <= selected_ids
     assert {
-        "layout.split",
+        "layout.collection-detail",
         "input.text",
         "input.selector",
         "ui.form",
@@ -188,7 +195,7 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
 
     assert selected["root_item_ids"][0] == "recipe.application_manager"
     assert {
-        "layout.split",
+        "layout.collection-detail",
         "input.toggle",
         "input.selector",
         "ui.list",
@@ -765,14 +772,29 @@ def _application_manager_webui() -> dict:
                             },
                         },
                         "layout": {
-                            "type": "split",
-                            "pattern": "sidebar-content",
-                            "sidebarWidth": 380,
-                            "auxWidth": 300,
-                            "areas": [
-                                {"id": "master", "role": "sidebar"},
-                                {"id": "detail", "role": "main"},
-                                {"id": "metadata", "role": "aux"},
+                            "version": 2,
+                            "pattern": "collection-detail",
+                            "density": "comfortable",
+                            "contentWidth": "fluid",
+                            "scroll": "regions",
+                            "regions": [
+                                {
+                                    "id": "master",
+                                    "role": "collection",
+                                    "size": {"minPx": 240, "preferredPx": 380, "maxPx": 520},
+                                    "presentation": {"wide": "pane", "compact": "drawer"},
+                                },
+                                {
+                                    "id": "detail",
+                                    "role": "detail",
+                                    "presentation": {"wide": "pane", "compact": "route"},
+                                },
+                                {
+                                    "id": "metadata",
+                                    "role": "inspector",
+                                    "size": {"minPx": 220, "preferredPx": 300, "maxPx": 480},
+                                    "presentation": {"wide": "pane", "compact": "sheet"},
+                                },
                             ],
                         },
                         "widgets": [
@@ -2752,11 +2774,20 @@ def test_application_manager_evaluation_rejects_wide_aux_layout_and_unguarded_in
     webui = _application_manager_webui()
     page = webui["ui"]["application"]["desktop"]["pageSchema"]
     page["layout"] = {
-        "type": "split",
-        "pattern": "split",
-        "areas": [
-            {"id": "master", "role": "main"},
-            {"id": "detail", "role": "aux"},
+        "version": 2,
+        "pattern": "workbench",
+        "density": "comfortable",
+        "regions": [
+            {
+                "id": "master",
+                "role": "main",
+                "presentation": {"wide": "pane", "compact": "stack"},
+            },
+            {
+                "id": "detail",
+                "role": "utility",
+                "presentation": {"wide": "pane", "compact": "stack"},
+            },
         ],
     }
     lifecycle = next(
@@ -2851,14 +2882,14 @@ def test_application_manager_evaluation_rejects_technical_russian_lifecycle_comm
 def test_capability_validation_rejects_unknown_layout_and_board_lane() -> None:
     webui = _board_webui()
     page = webui["ui"]["application"]["desktop"]["pageSchema"]
-    page["layout"]["type"] = "masonry"
+    page["layout"]["pattern"] = "masonry"
     page["widgets"][0]["dataSource"]["value"][0]["status"] = "missing"
 
     result = validate_webui_capabilities(webui)
 
     assert result["ok"] is False
     assert {item["code"] for item in result["findings"]} == {
-        "ui.layout.type_unsupported",
+        "ui.layout.pattern_unsupported",
         "ui.board.item_lane_unknown",
     }
 
@@ -3144,8 +3175,16 @@ def test_modal_board_editor_selects_record_on_the_opening_event() -> None:
             "schema": {
                 "id": "edit-item-schema",
                 "layout": {
-                    "type": "single",
-                    "areas": [{"id": "main", "role": "main"}],
+                    "version": 2,
+                    "pattern": "task-flow",
+                    "density": "comfortable",
+                    "regions": [
+                        {
+                            "id": "main",
+                            "role": "main",
+                            "presentation": {"wide": "pane", "compact": "stack"},
+                        }
+                    ],
                 },
                 "widgets": [edit_form],
             },

@@ -45,9 +45,16 @@ def _empty_webui() -> dict:
                     "pageSchema": {
                         "id": "empty",
                         "layout": {
-                            "type": "single",
-                            "pattern": "stack",
-                            "areas": [{"id": "main", "role": "main"}],
+                            "version": 2,
+                            "pattern": "document",
+                            "density": "comfortable",
+                            "regions": [
+                                {
+                                    "id": "main",
+                                    "role": "main",
+                                    "presentation": {"wide": "pane", "compact": "stack"},
+                                }
+                            ],
                         },
                         "widgets": [],
                     }
@@ -84,17 +91,19 @@ def test_generic_catalog_contains_no_subject_recipe() -> None:
         get_ui_capability("recipe.application_manager")
 
 
-def test_flow_layout_contract_exposes_required_single_area_shape() -> None:
+def test_document_layout_contract_exposes_semantic_shape() -> None:
     catalog = ui_capability_catalog()
-    flow = next(item for item in catalog["layouts"] if item["id"] == "layout.flow")
+    document = next(
+        item for item in catalog["layouts"] if item["id"] == "layout.document"
+    )
 
-    assert flow["manifest"]["required_properties"] == ["type", "areas"]
-    assert flow["manifest"]["single_area_shape"] == {
-        "layout": {
-            "type": "single",
-            "areas": [{"id": "main", "role": "main"}],
-        },
-        "widget_area": "main",
+    assert document["manifest"] == {
+        "pattern": "document",
+        "primary_role": "main",
+    }
+    assert document["responsive"] == {
+        "wide": "ordered pane",
+        "compact": "ordered stack",
     }
 
 

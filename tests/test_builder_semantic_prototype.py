@@ -2169,18 +2169,18 @@ def test_semantic_runtime_resource_is_scoped_by_project() -> None:
 
 
 @pytest.mark.parametrize(
-    ("semantic_pattern", "runtime_type", "runtime_pattern"),
+    ("semantic_pattern", "runtime_pattern", "primary_role"),
     [
-        ("flow", "stack", "stack"),
-        ("split", "split", "split"),
-        ("grid", "grid", "grid"),
-        ("focus_detail", "split", "focus-detail"),
+        ("flow", "document", "main"),
+        ("split", "collection-detail", "collection"),
+        ("grid", "dashboard", "main"),
+        ("focus_detail", "collection-detail", "collection"),
     ],
 )
 def test_semantic_layout_maps_to_runtime_abi(
     semantic_pattern: str,
-    runtime_type: str,
     runtime_pattern: str,
+    primary_role: str,
 ) -> None:
     brief, semantic = _fixture()
     semantic["layout"]["pattern"] = semantic_pattern
@@ -2188,9 +2188,11 @@ def test_semantic_layout_maps_to_runtime_abi(
     result = compile_semantic_prototype(semantic, brief=brief)
 
     layout = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]["layout"]
-    assert layout["type"] == runtime_type
+    assert layout["version"] == 2
     assert layout["pattern"] == runtime_pattern
-    assert [area["id"] for area in layout["areas"]] == ["primary", "supporting"]
+    assert [region["id"] for region in layout["regions"]] == ["primary", "supporting"]
+    assert layout["regions"][0]["role"] == primary_role
+    assert layout["regions"][1]["role"] == "detail"
 
 
 def test_semantic_prototype_requires_a_primary_view_region() -> None:
@@ -2412,7 +2414,6 @@ def test_compiler_contract_failure_is_not_a_model_repair(monkeypatch) -> None:
 
 def test_view_only_state_repair_does_not_require_unchanged_state_echo() -> None:
     brief, semantic = _multi_resource_fixture()
-    view = semantic["views"][0]
     state = semantic["representative_states"][0]
     state["proof"] = {"kind": "query_empty", "visible_field_refs": ["title"]}
     state["filters"] = [{"field_ref": "title", "operator": "eq", "value": "No matching record"}]
@@ -2803,9 +2804,9 @@ def test_compiled_regions_use_client_placement_roles() -> None:
     semantic["views"][0]["region_role"] = "primary"
     semantic["views"][1]["region_role"] = "supporting"
     compiled = compile_semantic_prototype_candidate(_multi_resource_candidate(semantic), brief=brief)
-    areas = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["layout"]["areas"]
-    assert {item["id"]: item["role"] for item in areas}["supporting"] == "aux"
-    assert all(item["role"] in {"main", "aux", "footer"} for item in areas)
+    regions = compiled["webui"]["ui"]["application"]["desktop"]["pageSchema"]["layout"]["regions"]
+    assert {item["id"]: item["role"] for item in regions}["supporting"] == "detail"
+    assert all(item["role"] in {"collection", "main", "detail", "commands"} for item in regions)
 
 
 @pytest.mark.parametrize("locale", ["en", "ru"])

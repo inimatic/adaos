@@ -16,7 +16,7 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from adaos.services.ui_capabilities import validate_webui_capabilities
 
-from .prototype_context import prototype_state_requirements, prototype_requirement_inventory, prototype_process_constraints
+from .prototype_context import prototype_requirement_inventory, prototype_process_constraints
 from .prototype_stage import automation_obligations, PROTOTYPE_STAGE_CONTRACT
 from .prototype_contracts import STATE_PROOF_RULES
 from .workflow import BuilderWorkflowError
@@ -1634,6 +1634,75 @@ def _normalize_semantic_prototype_candidate_v1(
     )
 
 
+def _runtime_layout_v2(
+    document: Mapping[str, Any], *, region_roles: set[str]
+) -> dict[str, Any]:
+    semantic_pattern = str(document["layout"]["pattern"])
+    runtime_pattern = {
+        "flow": "document",
+        "split": "workbench",
+        "grid": "dashboard",
+        "focus_detail": "collection-detail",
+    }[semantic_pattern]
+    views = [view for view in document.get("views") or [] if isinstance(view, Mapping)]
+    primary_is_collection = any(
+        str(view.get("region_role") or "") == "primary"
+        and str(view.get("role") or "") == "collection"
+        for view in views
+    )
+    has_primary = "primary" in region_roles
+    if runtime_pattern == "workbench" and primary_is_collection and "supporting" in region_roles:
+        runtime_pattern = "collection-detail"
+    elif not has_primary:
+        runtime_pattern = "workbench" if len(region_roles) > 1 else "document"
+    primary_role = "collection" if runtime_pattern in {"collection", "collection-detail"} else "main"
+    role_map = {
+        "primary": primary_role,
+        "supporting": "detail",
+        "actions": "commands",
+    }
+    regions = [
+        {
+            "id": region_role,
+            "role": role_map[region_role],
+            "priority": {"primary": 100, "supporting": 70, "actions": 90}[region_role],
+            "scroll": "region" if region_role == "supporting" else "page",
+            "presentation": {
+                "wide": "pane",
+                "compact": "sheet" if region_role == "supporting" else "pane" if region_role == "actions" else "stack",
+            },
+            **(
+                {"size": {"minPx": 220, "preferredPx": 360, "maxPx": 600}}
+                if region_role == "supporting"
+                else {}
+            ),
+        }
+        for region_role in ("primary", "supporting", "actions")
+        if region_role in region_roles
+    ]
+    if regions and not has_primary:
+        regions[0]["role"] = "main"
+        regions[0]["priority"] = 100
+        regions[0]["scroll"] = "page"
+        regions[0]["presentation"] = {"wide": "pane", "compact": "stack"}
+    has_supporting = "supporting" in region_roles
+    return {
+        "version": 2,
+        "pattern": runtime_pattern,
+        "density": "comfortable",
+        "contentWidth": "fluid",
+        "scroll": "regions" if has_supporting else "page",
+        "regions": regions,
+        "interaction": {
+            "selection": "single" if primary_is_collection else "none",
+            "rowActivation": "open-detail" if primary_is_collection and has_supporting else "select" if primary_is_collection else "none",
+            "detail": "inline" if has_supporting else "modal",
+            "filters": "disclosure",
+            "actions": "adaptive",
+        },
+    }
+
+
 def _compile_semantic_prototype_candidate_v1(
     value: Mapping[str, Any],
     *,
@@ -2266,28 +2335,11 @@ def _compile_semantic_prototype_v1(
             }
         )
 
-    layout_type, layout_pattern = {
-        "flow": ("stack", "stack"),
-        "split": ("split", "split"),
-        "grid": ("grid", "grid"),
-        "focus_detail": ("split", "focus-detail"),
-    }[str(document["layout"]["pattern"])]
     page_schema = {
         "id": str(document["document_id"]),
         "title": title,
         "title_i18n": title_i18n,
-        "layout": {
-            "type": layout_type,
-            "pattern": layout_pattern,
-            "areas": [
-                {
-                    "id": region_role,
-                    "role": {"primary": "main", "supporting": "aux", "actions": "footer"}[region_role],
-                }
-                for region_role in ("primary", "supporting", "actions")
-                if region_role in region_roles
-            ],
-        },
+        "layout": _runtime_layout_v2(document, region_roles=region_roles),
         "widgets": widgets,
         "initialState": initial_state,
         "meta": {
@@ -3860,7 +3912,27 @@ def _compile_editor_surfaces(
             application.setdefault("modals", {})[modal_id] = {
                 "title": editor["title"], "title_i18n": editor["title_i18n"],
                 "presentation": {"kind": "sideSheet" if surface == "side_sheet" else "modal"},
-                "schema": {"id": modal_id, "layout": {"type": "stack", "areas": [{"id": "main"}]}, "widgets": [editor]},
+                "schema": {
+                    "id": modal_id,
+                    "layout": {
+                        "version": 2,
+                        "pattern": "task-flow",
+                        "density": "comfortable",
+                        "contentWidth": "reading",
+                        "scroll": "page",
+                        "regions": [
+                            {
+                                "id": "main",
+                                "role": "main",
+                                "priority": 100,
+                                "scroll": "page",
+                                "presentation": {"wide": "pane", "compact": "stack"},
+                            }
+                        ],
+                        "interaction": {"actions": "adaptive"},
+                    },
+                    "widgets": [editor],
+                },
             }
             old = f"ui.application.desktop.pageSchema.widgets.@{view['id']}"
             new = f"ui.application.modals.{modal_id}.schema.widgets.@{view['id']}"
@@ -4064,28 +4136,11 @@ def _compile_semantic_prototype_v2(
         )
 
     region_roles = {str(view["region_role"]) for view in document["views"]}
-    layout_type, layout_pattern = {
-        "flow": ("stack", "stack"),
-        "split": ("split", "split"),
-        "grid": ("grid", "grid"),
-        "focus_detail": ("split", "focus-detail"),
-    }[str(document["layout"]["pattern"])]
     page_schema = {
         "id": str(document["document_id"]),
         "title": title,
         "title_i18n": title_i18n,
-        "layout": {
-            "type": layout_type,
-            "pattern": layout_pattern,
-            "areas": [
-                {
-                    "id": region_role,
-                    "role": {"primary": "main", "supporting": "aux", "actions": "footer"}[region_role],
-                }
-                for region_role in ("primary", "supporting", "actions")
-                if region_role in region_roles
-            ],
-        },
+        "layout": _runtime_layout_v2(document, region_roles=region_roles),
         "widgets": widgets,
         "initialState": initial_state,
         "meta": {

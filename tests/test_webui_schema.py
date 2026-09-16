@@ -12,6 +12,49 @@ def _load_schema() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _layout(
+    *regions: tuple[str, str],
+    pattern: str = "document",
+    variants: list[dict] | None = None,
+) -> dict:
+    declared = regions or (("main", "main"),)
+    value = {
+        "version": 2,
+        "pattern": pattern,
+        "density": "comfortable",
+        "contentWidth": "fluid",
+        "scroll": "page",
+        "regions": [
+            {
+                "id": region_id,
+                "role": role,
+                "presentation": {"wide": "pane", "compact": "stack"},
+            }
+            for region_id, role in declared
+        ],
+    }
+    if variants is not None:
+        value["variants"] = variants
+    return value
+
+
+def _layout_variant(
+    variant_id: str,
+    *regions: tuple[str, str],
+    pattern: str = "document",
+    when: str | None = None,
+    default: bool = False,
+) -> dict:
+    value = _layout(*regions, pattern=pattern)
+    value.pop("version")
+    value["id"] = variant_id
+    if when is not None:
+        value["when"] = when
+    if default:
+        value["default"] = True
+    return value
+
+
 @pytest.mark.parametrize("definition", ["widgetConfig", "widgetCatalogEntry"])
 @pytest.mark.parametrize("media,valid", [
     ("/assets/icon.png", True), ({"path": "/media/files/content/icon.png"}, True),
@@ -94,7 +137,7 @@ def test_webui_schema_accepts_grouped_filterable_image_cards() -> None:
                 "desktop": {
                     "pageSchema": {
                         "id": "catalog",
-                        "layout": {"type": "stack", "areas": [{"id": "main", "role": "main"}]},
+                        "layout": _layout(),
                         "widgets": [
                             {
                                 "id": "cards",
@@ -139,7 +182,7 @@ def test_webui_schema_accepts_safe_state_mutations_and_membership_filter() -> No
                 "desktop": {
                     "pageSchema": {
                         "id": "interactive-catalog",
-                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "layout": _layout(),
                         "widgets": [
                             {
                                 "id": "catalog",
@@ -180,7 +223,7 @@ def test_webui_schema_accepts_app_shell_playback_endpoint_provider() -> None:
                 "desktop": {
                     "pageSchema": {
                         "id": "media",
-                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "layout": _layout(),
                         "widgets": [],
                         "playbackEndpoint": {
                             "schema": "adaos.playback.endpoint_provider.v1",
@@ -213,7 +256,7 @@ def test_webui_schema_accepts_singleton_widget_actions_and_tags() -> None:
                 "desktop": {
                     "pageSchema": {
                         "id": "builder-files",
-                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "layout": _layout(),
                         "widgets": [
                             {
                                 "id": "file-toolbar",
@@ -276,7 +319,7 @@ def test_webui_schema_requires_call_mcp_target() -> None:
                 "desktop": {
                     "pageSchema": {
                         "id": "applications",
-                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "layout": _layout(),
                         "widgets": [
                             {
                                 "id": "commands",
@@ -315,7 +358,7 @@ def test_webui_schema_requires_interval_for_auto_actions() -> None:
                 "desktop": {
                     "pageSchema": {
                         "id": "bad-auto-action",
-                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "layout": _layout(),
                         "widgets": [{"id": "content", "type": "item.details", "area": "main"}],
                         "autoActions": [{"id": "tick", "action": {"type": "updateState", "params": {"tick": True}}}],
                     }
@@ -337,7 +380,7 @@ def test_webui_schema_accepts_responsive_form_layout() -> None:
                 "desktop": {
                     "pageSchema": {
                         "id": "responsive-form",
-                        "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
+                        "layout": _layout(),
                         "widgets": [
                             {
                                 "id": "filters",
@@ -417,16 +460,12 @@ def test_webui_schema_accepts_responsive_split_widths_and_multiline_chat() -> No
                 "desktop": {
                     "pageSchema": {
                         "id": "builder",
-                        "layout": {
-                            "type": "split",
-                            "sidebarWidth": 320,
-                            "auxWidth": 360,
-                            "areas": [
-                                {"id": "left", "role": "nav", "width": 320},
-                                {"id": "main", "role": "main"},
-                                {"id": "right", "role": "aux"},
-                            ],
-                        },
+                        "layout": _layout(
+                            ("left", "navigation"),
+                            ("main", "main"),
+                            ("right", "inspector"),
+                            pattern="workbench",
+                        ),
                         "widgets": [
                             {
                                 "id": "builder-chat",
@@ -460,7 +499,7 @@ def test_webui_schema_accepts_semantic_danger_action_button() -> None:
                 "desktop": {
                     "pageSchema": {
                         "id": "project-overview",
-                        "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
+                        "layout": _layout(),
                         "widgets": [
                             {
                                 "id": "project-actions",
@@ -504,7 +543,7 @@ def test_webui_schema_accepts_semantic_danger_action_button() -> None:
         Draft202012Validator(schema).validate(payload)
 
 
-def test_webui_schema_rejects_unbounded_split_widths() -> None:
+def test_webui_schema_rejects_unbounded_region_widths() -> None:
     schema = _load_schema()
     payload = {
         "schema": "adaos.webui.v1",
@@ -514,9 +553,15 @@ def test_webui_schema_rejects_unbounded_split_widths() -> None:
                     "pageSchema": {
                         "id": "builder",
                         "layout": {
-                            "type": "split",
-                            "sidebarWidth": 900,
-                            "areas": [{"id": "main", "role": "main"}],
+                            **_layout(),
+                            "regions": [
+                                {
+                                    "id": "main",
+                                    "role": "main",
+                                    "presentation": {"wide": "pane", "compact": "stack"},
+                                    "size": {"preferredPx": 2500},
+                                }
+                            ],
                         },
                         "widgets": [],
                     }
@@ -538,7 +583,7 @@ def test_webui_schema_rejects_dotted_widget_properties() -> None:
                 "desktop": {
                     "pageSchema": {
                         "id": "invalid-form",
-                        "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
+                        "layout": _layout(),
                         "widgets": [
                             {
                                 "id": "form",
@@ -567,7 +612,7 @@ def test_webui_schema_validates_widgets_inside_application_modals() -> None:
                 "desktop": {
                     "pageSchema": {
                         "id": "catalog",
-                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "layout": _layout(),
                         "widgets": [{"id": "catalog", "type": "ui.list", "area": "main"}],
                     }
                 },
@@ -575,7 +620,7 @@ def test_webui_schema_validates_widgets_inside_application_modals() -> None:
                     "edit_modal": {
                         "schema": {
                             "id": "edit_modal",
-                            "layout": {"type": "stack", "areas": [{"id": "modal"}]},
+                            "layout": _layout(("modal", "main")),
                             "widgets": [
                                 {
                                     "id": "edit_form",
@@ -605,14 +650,11 @@ def test_webui_schema_accepts_details_image_mapping() -> None:
                 "desktop": {
                     "pageSchema": {
                         "id": "catalog-detail",
-                        "layout": {
-                            "type": "split",
-                            "pattern": "focus-detail",
-                            "areas": [
-                                {"id": "main", "role": "main"},
-                                {"id": "details", "role": "aux"},
-                            ],
-                        },
+                        "layout": _layout(
+                            ("main", "collection"),
+                            ("details", "detail"),
+                            pattern="collection-detail",
+                        ),
                         "widgets": [
                             {
                                 "id": "detail",
@@ -670,7 +712,7 @@ def test_webui_schema_accepts_staged_load_hints() -> None:
                     "schema": {
                         "id": "prompt_modal",
                         "load": {"structure": "interaction", "data": "deferred", "focus": "off_focus"},
-                        "layout": {"type": "single", "pattern": "stack", "areas": [{"id": "main"}]},
+                        "layout": _layout(),
                         "widgets": [
                             {
                                 "id": "prompt_widget",
@@ -776,11 +818,7 @@ def test_webui_schema_accepts_runtime_data_sources_and_auto_actions() -> None:
                                 },
                             }
                         ],
-                        "layout": {
-                            "type": "single",
-                            "pattern": "stack",
-                            "areas": [{"id": "main", "label": "Main"}],
-                        },
+                        "layout": _layout(),
                         "widgets": [
                             {
                                 "id": "skill_data",
@@ -843,7 +881,7 @@ def test_webui_schema_accepts_modal_domain_and_ownership_contract() -> None:
                     "implements": ["demo.notes.list", "demo.note.edit"],
                     "schema": {
                         "id": "demo_modal",
-                        "layout": {"type": "single", "areas": [{"id": "main", "role": "main"}]},
+                        "layout": _layout(),
                         "interface": {
                             "schema": "adaos.ui.modal.interface.v1",
                             "defaultRoute": "notes.list",
@@ -929,7 +967,7 @@ def test_webui_schema_accepts_interaction_resources_and_action_feedback() -> Non
                     },
                     "schema": {
                         "id": "weather_modal",
-                        "layout": {"type": "single", "pattern": "stack", "areas": [{"id": "main"}]},
+                        "layout": _layout(),
                         "interaction": {
                             "initialFocus": {"ref": "widget:weather-city-input", "strategy": "restore_or_first"},
                             "submit": {
@@ -1052,7 +1090,7 @@ def test_webui_schema_accepts_google_forms_like_form_fields() -> None:
                 "survey_modal": {
                     "schema": {
                         "id": "survey_modal",
-                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "layout": _layout(),
                         "widgets": [
                             {
                                 "id": "survey",
@@ -1380,30 +1418,23 @@ def test_webui_schema_accepts_state_selected_full_surface_layout_variants() -> N
                     "pageSchema": {
                         "id": "research_workbench",
                         "initialState": {"viewMode": "portfolio"},
-                        "layout": {
-                            "type": "single",
-                            "areas": [{"id": "portfolio", "role": "main"}],
-                            "variants": [
-                                {
-                                    "id": "direction",
-                                    "when": "$state.viewMode === 'direction'",
-                                    "type": "split",
-                                    "pattern": "focus-detail",
-                                    "auxWidth": 460,
-                                    "areas": [
-                                        {"id": "workspace", "role": "main"},
-                                        {"id": "context", "role": "aux"},
-                                    ],
-                                },
-                                {
-                                    "id": "portfolio",
-                                    "default": True,
-                                    "type": "single",
-                                    "pattern": "stack",
-                                    "areas": [{"id": "portfolio", "role": "main"}],
-                                },
+                        "layout": _layout(
+                            ("portfolio", "main"),
+                            variants=[
+                                _layout_variant(
+                                    "direction",
+                                    ("workspace", "main"),
+                                    ("context", "inspector"),
+                                    pattern="workbench",
+                                    when="$state.viewMode === 'direction'",
+                                ),
+                                _layout_variant(
+                                    "portfolio",
+                                    ("portfolio", "main"),
+                                    default=True,
+                                ),
                             ],
-                        },
+                        ),
                         "widgets": [
                             {"id": "directions", "type": "ui.list", "area": "portfolio"},
                             {"id": "discussion", "type": "ui.chat", "area": "workspace"},
@@ -1426,13 +1457,9 @@ def test_webui_schema_rejects_ambiguous_layout_variant_without_when_or_default()
                 "desktop": {
                     "pageSchema": {
                         "id": "invalid",
-                        "layout": {
-                            "type": "single",
-                            "areas": [{"id": "main"}],
-                            "variants": [
-                                {"id": "unknown", "type": "single", "areas": [{"id": "main"}]}
-                            ],
-                        },
+                        "layout": _layout(
+                            variants=[_layout_variant("unknown", ("main", "main"))]
+                        ),
                         "widgets": [],
                     }
                 }
@@ -1452,15 +1479,11 @@ def test_webui_schema_accepts_generic_outline_detail_navigation() -> None:
                 "desktop": {
                     "pageSchema": {
                         "id": "project_workbench",
-                        "layout": {
-                            "type": "split",
-                            "pattern": "outline-detail",
-                            "sidebarWidth": 320,
-                            "areas": [
-                                {"id": "navigation", "role": "sidebar"},
-                                {"id": "detail", "role": "main"},
-                            ],
-                        },
+                        "layout": _layout(
+                            ("navigation", "navigation"),
+                            ("detail", "main"),
+                            pattern="master-detail",
+                        ),
                         "widgets": [
                             {
                                 "id": "outline",

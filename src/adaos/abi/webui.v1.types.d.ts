@@ -532,21 +532,69 @@ export interface WebUiDetailsInputs {
   [key: string]: unknown
 }
 
-export interface WebUiLayoutArea {
+export type WebUiLayoutPattern =
+  | 'document'
+  | 'collection'
+  | 'collection-detail'
+  | 'master-detail'
+  | 'dashboard'
+  | 'board'
+  | 'task-flow'
+  | 'settings'
+  | 'workbench'
+
+export type WebUiLayoutRegionRole =
+  | 'navigation'
+  | 'toolbar'
+  | 'collection'
+  | 'main'
+  | 'detail'
+  | 'inspector'
+  | 'utility'
+  | 'status'
+  | 'commands'
+
+export type WebUiLayoutPresentation = 'pane' | 'stack' | 'drawer' | 'sheet' | 'route' | 'overflow' | 'hidden'
+
+export interface WebUiLayoutRegion {
   id: string
-  role?: string
+  role: WebUiLayoutRegionRole
   label?: string
-  width?: number
-  [key: string]: unknown
+  optional?: boolean
+  priority?: number
+  scroll?: 'page' | 'region' | 'none'
+  size?: {
+    minPx?: number
+    preferredPx?: number
+    maxPx?: number
+    grow?: number
+  }
+  presentation: {
+    wide: WebUiLayoutPresentation
+    compact: WebUiLayoutPresentation
+  }
 }
 
 export interface WebUiLayout {
-  type: string
-  pattern?: string
-  sidebarWidth?: number
-  auxWidth?: number
-  areas: readonly WebUiLayoutArea[]
-  [key: string]: unknown
+  version: 2
+  pattern: WebUiLayoutPattern
+  density: 'compact' | 'comfortable' | 'spacious'
+  contentWidth?: 'fluid' | 'bounded' | 'reading'
+  maxContentWidthPx?: number
+  scroll?: 'page' | 'regions'
+  regions: readonly WebUiLayoutRegion[]
+  interaction?: {
+    selection?: 'none' | 'single' | 'multiple'
+    rowActivation?: 'none' | 'select' | 'open-detail'
+    detail?: 'inline' | 'drawer' | 'sheet' | 'route' | 'modal'
+    filters?: 'inline' | 'disclosure'
+    actions?: 'inline' | 'overflow' | 'adaptive'
+  }
+  variants?: readonly (Omit<WebUiLayout, 'version' | 'variants'> & {
+    id: string
+    when?: string
+    default?: boolean
+  })[]
 }
 
 export interface WebUiChatInputs {

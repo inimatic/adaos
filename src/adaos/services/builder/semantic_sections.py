@@ -47,10 +47,23 @@ def compile_sections(document, webui, source_map, dictionaries, *, localize):
             if modal_id in application.get('modals', {}):
                 raise BuilderWorkflowError(f'Settings modal collision: {modal_id}')
             settings.append({**button, 'icon': 'settings-outline', 'modal_id': modal_id})
-            areas = [area for area in page['layout']['areas'] if any(widget['area'] == area['id'] for widget in members)]
+            regions = [copy.deepcopy(region) for region in page['layout']['regions'] if any(widget['area'] == region['id'] for widget in members)]
+            for index, region in enumerate(regions):
+                if index == 0:
+                    region['role'] = 'main'
+                    region['priority'] = 100
+                    region['scroll'] = 'page'
+                    region['presentation'] = {'wide': 'pane', 'compact': 'stack'}
+                elif region['role'] in {'collection', 'main', 'detail', 'inspector'}:
+                    region['role'] = 'utility'
+            modal_layout = {key: copy.deepcopy(value) for key, value in page['layout'].items() if key != 'variants'}
+            modal_layout['pattern'] = 'settings'
+            modal_layout['contentWidth'] = 'reading'
+            modal_layout['scroll'] = 'page'
+            modal_layout['regions'] = regions
             application.setdefault('modals', {})[modal_id] = {
                 'title': label, 'title_i18n': label_i18n,
-                'schema': {'id': modal_id, 'layout': {**copy.deepcopy(page['layout']), 'areas': areas}, 'widgets': members},
+                'schema': {'id': modal_id, 'layout': modal_layout, 'widgets': members},
             }
             for widget in members:
                 widgets.remove(widget)

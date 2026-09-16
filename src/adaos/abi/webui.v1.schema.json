@@ -1144,43 +1144,39 @@
     },
     "layout": {
       "type": "object",
-      "additionalProperties": true,
-      "required": ["type", "areas"],
+      "additionalProperties": false,
+      "required": ["version", "pattern", "density", "regions"],
       "properties": {
-        "type": {
-          "type": "string",
-          "enum": ["single", "stack", "split", "grid", "custom", "responsive"]
-        },
+        "version": { "const": 2 },
         "pattern": {
           "type": "string",
           "enum": [
-            "stack",
-            "split",
-            "tabs",
-            "grid",
-            "sidebar-content",
+            "document",
+            "collection",
+            "collection-detail",
+            "master-detail",
             "dashboard",
-            "modal",
-            "sheet",
-            "focus-detail",
-            "outline-detail",
-            "desktop-zones"
+            "board",
+            "task-flow",
+            "settings",
+            "workbench"
           ],
-          "description": "Renderer intent hint. Keeps skill manifests declarative without requiring renderer-specific CSS."
+          "description": "User-task composition pattern. It is semantic input, not a CSS template name."
         },
-        "sidebarWidth": {
-          "type": "integer",
-          "minimum": 200,
-          "maximum": 480,
-          "description": "Preferred desktop sidebar width in CSS pixels. Compact layouts still use the responsive drawer."
+        "density": {
+          "enum": ["compact", "comfortable", "spacious"]
         },
-        "auxWidth": {
-          "type": "integer",
-          "minimum": 220,
-          "maximum": 600,
-          "description": "Preferred desktop auxiliary-panel width in CSS pixels. Medium and compact layouts may stack it."
+        "contentWidth": {
+          "enum": ["fluid", "bounded", "reading"]
         },
-        "areas": { "type": "array", "items": { "$ref": "#/$defs/area" } },
+        "maxContentWidthPx": { "type": "integer", "minimum": 480, "maximum": 2400 },
+        "scroll": { "enum": ["page", "regions"] },
+        "regions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/layoutRegion" }
+        },
+        "interaction": { "$ref": "#/$defs/layoutInteraction" },
         "variants": {
           "type": "array",
           "minItems": 1,
@@ -1192,7 +1188,7 @@
     "layoutVariant": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "type", "areas"],
+      "required": ["id", "pattern", "density", "regions"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "when": {
@@ -1204,40 +1200,73 @@
           "type": "boolean",
           "description": "Use this variant when no when expression matches. Authors should declare at most one default."
         },
-        "type": {
-          "type": "string",
-          "enum": ["single", "stack", "split", "grid", "custom", "responsive"]
-        },
         "pattern": {
           "type": "string",
           "enum": [
-            "stack", "split", "tabs", "grid", "sidebar-content", "dashboard",
-            "modal", "sheet", "focus-detail", "outline-detail", "desktop-zones"
+            "document", "collection", "collection-detail", "master-detail",
+            "dashboard", "board", "task-flow", "settings", "workbench"
           ]
         },
-        "sidebarWidth": { "type": "integer", "minimum": 200, "maximum": 480 },
-        "auxWidth": { "type": "integer", "minimum": 220, "maximum": 600 },
-        "areas": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/area" } }
+        "density": { "enum": ["compact", "comfortable", "spacious"] },
+        "contentWidth": { "enum": ["fluid", "bounded", "reading"] },
+        "maxContentWidthPx": { "type": "integer", "minimum": 480, "maximum": 2400 },
+        "scroll": { "enum": ["page", "regions"] },
+        "regions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/layoutRegion" } },
+        "interaction": { "$ref": "#/$defs/layoutInteraction" }
       },
       "oneOf": [
         { "required": ["when"], "not": { "required": ["default"] } },
         { "properties": { "default": { "const": true } }, "required": ["default"], "not": { "required": ["when"] } }
       ]
     },
-    "area": {
+    "layoutRegion": {
       "type": "object",
-      "additionalProperties": true,
-      "required": ["id"],
+      "additionalProperties": false,
+      "required": ["id", "role", "presentation"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
-        "role": { "type": "string" },
+        "role": {
+          "enum": [
+            "navigation", "toolbar", "collection", "main", "detail",
+            "inspector", "utility", "status", "commands"
+          ]
+        },
         "label": { "type": "string" },
-        "width": {
-          "type": "integer",
-          "minimum": 160,
-          "maximum": 600,
-          "description": "Preferred desktop width in CSS pixels for nav/sidebar or auxiliary areas. Responsive layouts may stack or drawer the area."
-        }
+        "optional": { "type": "boolean" },
+        "priority": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "scroll": { "enum": ["page", "region", "none"] },
+        "size": { "$ref": "#/$defs/layoutRegionSize" },
+        "presentation": { "$ref": "#/$defs/layoutRegionPresentation" }
+      }
+    },
+    "layoutRegionSize": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minPx": { "type": "integer", "minimum": 160, "maximum": 1600 },
+        "preferredPx": { "type": "integer", "minimum": 160, "maximum": 1600 },
+        "maxPx": { "type": "integer", "minimum": 160, "maximum": 2400 },
+        "grow": { "type": "number", "minimum": 0, "maximum": 8 }
+      }
+    },
+    "layoutRegionPresentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wide", "compact"],
+      "properties": {
+        "wide": { "enum": ["pane", "stack", "drawer", "sheet", "route", "overflow", "hidden"] },
+        "compact": { "enum": ["pane", "stack", "drawer", "sheet", "route", "overflow", "hidden"] }
+      }
+    },
+    "layoutInteraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "selection": { "enum": ["none", "single", "multiple"] },
+        "rowActivation": { "enum": ["none", "select", "open-detail"] },
+        "detail": { "enum": ["inline", "drawer", "sheet", "route", "modal"] },
+        "filters": { "enum": ["inline", "disclosure"] },
+        "actions": { "enum": ["inline", "overflow", "adaptive"] }
       }
     },
 

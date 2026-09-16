@@ -10,6 +10,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 
+from adaos.services.webui_layout import layout_v2_findings
+
 
 CATALOG_SCHEMA = "adaos.ui.capability_catalog.v1"
 QUALIFICATION_SCHEMA = "adaos.ui.request_qualification.v1"
@@ -561,7 +563,7 @@ def qualify_ui_request(request: str) -> dict[str, Any]:
             {
                 "recipe_id": "recipe.kanban_board",
                 "component_type": "collection.board",
-                "layout_id": "layout.flow",
+                "layout_id": "layout.board",
                 "lane_count": lane_count,
                 "items_per_lane": items_per_lane,
                 "images_requested": images_requested,
@@ -786,24 +788,7 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
     }
     findings: list[dict[str, Any]] = []
     for schema_path, page in _page_schemas(webui):
-        layout = page.get("layout") if isinstance(page.get("layout"), Mapping) else {}
-        layout_type = str(layout.get("type") or "").strip()
-        if layout_type not in {
-            "single",
-            "stack",
-            "split",
-            "grid",
-            "custom",
-            "responsive",
-        }:
-            findings.append(
-                {
-                    "code": "ui.layout.type_unsupported",
-                    "severity": "error",
-                    "path": f"{schema_path}.layout.type",
-                    "message": f"Unsupported layout type {layout_type!r}",
-                }
-            )
+        findings.extend(layout_v2_findings(page, schema_path=schema_path))
         widgets = page.get("widgets") if isinstance(page.get("widgets"), list) else []
         initial_state = (
             page.get("initialState")
@@ -1386,22 +1371,34 @@ def evaluate_ui_request(
             layout
             for page in pages
             if isinstance((layout := page.get("layout")), Mapping)
-            and layout.get("type") == "split"
-            and layout.get("pattern") == "sidebar-content"
-            and layout.get("sidebarWidth") == 380
-            and layout.get("auxWidth") == 300
+            and layout.get("version") == 2
+            and layout.get("pattern") == "collection-detail"
             and {
-                str(area.get("role") or "")
-                for area in layout.get("areas") or []
-                if isinstance(area, Mapping)
+                str(region.get("role") or "")
+                for region in layout.get("regions") or []
+                if isinstance(region, Mapping)
             }
-            == {"sidebar", "main", "aux"}
+            == {"collection", "detail", "inspector"}
+            and any(
+                region.get("role") == "collection"
+                and (region.get("size") or {}).get("preferredPx") == 380
+                and (region.get("presentation") or {}).get("compact") == "drawer"
+                for region in layout.get("regions") or []
+                if isinstance(region, Mapping)
+            )
+            and any(
+                region.get("role") == "inspector"
+                and (region.get("size") or {}).get("preferredPx") == 300
+                and (region.get("presentation") or {}).get("compact") == "sheet"
+                for region in layout.get("regions") or []
+                if isinstance(region, Mapping)
+            )
         ]
         postconditions.append(
             {
                 "id": "applications.sidebar_layout",
                 "ok": len(application_layouts) == 1,
-                "expected": "one 380px/300px sidebar-content split with sidebar, main, and metadata areas",
+                "expected": "one v2 collection-detail layout with 380px collection, detail, and 300px inspector regions",
                 "actual": len(application_layouts),
             }
         )
@@ -2651,10 +2648,10 @@ def evaluate_ui_request(
             and (widget.get("inputs") or {}).get("stateOnly") is True
         ]
         area_roles = {
-            str(area.get("id") or ""): str(area.get("role") or "")
+            str(region.get("id") or ""): str(region.get("role") or "")
             for layout in application_layouts
-            for area in layout.get("areas") or []
-            if isinstance(area, Mapping)
+            for region in layout.get("regions") or []
+            if isinstance(region, Mapping)
         }
         expected_header_fields = [
             {"label": "Summary", "path": "application.display.summary"},
@@ -2670,7 +2667,7 @@ def evaluate_ui_request(
             and _contains_shape(
                 (widget.get("inputs") or {}).get("fields"), expected_header_fields
             )
-            and area_roles.get(str(widget.get("area") or "")) == "main"
+            and area_roles.get(str(widget.get("area") or "")) == "detail"
             and "$state.selectedApplicationId" in str(widget.get("visibleIf") or "")
         ]
         expected_detail_sections = {
@@ -2719,11 +2716,11 @@ def evaluate_ui_request(
             ],
         }
         expected_detail_roles = {
-            "Details": "main",
-            "Installation": "aux",
-            "Marketplace": "aux",
-            "Categories": "aux",
-            "My development": "aux",
+            "Details": "detail",
+            "Installation": "inspector",
+            "Marketplace": "inspector",
+            "Categories": "inspector",
+            "My development": "inspector",
         }
         detail_sections: dict[str, Mapping[str, Any]] = {}
         expected_detail_empty_titles = {"Installation", "Categories"}
@@ -2946,7 +2943,7 @@ def evaluate_ui_request(
                     continue
                 if inputs.get("label") != "Data on uninstall":
                     continue
-                if area_roles.get(str(widget.get("area") or "")) != "aux":
+                if area_roles.get(str(widget.get("area") or "")) != "inspector":
                     continue
                 if any(
                     action.get("on") == "change"

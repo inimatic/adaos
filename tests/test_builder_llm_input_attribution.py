@@ -20,7 +20,11 @@ def test_llm_input_attribution_is_content_addressed_and_schema_valid() -> None:
         "catalog_digest": "sha256:catalog",
         "items": [
             {"id": "collection.board", "kind": "component", "summary": "Board"},
-            {"id": "layout.split", "kind": "layout", "summary": "Split"},
+            {
+                "id": "layout.collection-detail",
+                "kind": "layout",
+                "summary": "Collection detail",
+            },
             {
                 "id": "recipe.resource_board_workbench",
                 "kind": "recipe",
@@ -61,7 +65,7 @@ def test_llm_input_attribution_is_content_addressed_and_schema_valid() -> None:
         "collection.board"
     ]
     assert [item["id"] for item in receipt["capabilities"]["generic_patterns"]] == [
-        "layout.split",
+        "layout.collection-detail",
         "recipe.resource_board_workbench",
     ]
     assert receipt["capabilities"]["examples"][0]["kind"] == "example"
