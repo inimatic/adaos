@@ -615,6 +615,21 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(
         "visibility": "listed",
         "channel": "beta",
     }
+    value["permission_profile"] = {
+        "schema": "adaos.application.permission_profile.v1",
+        "required": [
+            {"id": "workspace.read", "purpose": "Read application records."}
+        ],
+        "optional": [],
+    }
+    value["application_roles"] = [
+        {
+            "id": "viewer",
+            "title": "Viewer",
+            "grants": ["workspace.read"],
+            "assignable_to": ["member", "guest"],
+        }
+    ]
     value["catalog"]["title_i18n"] = {
         "en": "Candidate Project",
         "ru": "\u041a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u043d\u044b\u0439 \u043f\u0440\u043e\u0435\u043a\u0442",
@@ -657,6 +672,8 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(
         "visibility": "listed",
         "channel": "beta",
     }
+    assert normalized["permission_profile"] == value["permission_profile"]
+    assert normalized["application_roles"] == value["application_roles"]
     assert normalized["install"]["default"] is True
     assert normalized["install"]["features"] == [
         {

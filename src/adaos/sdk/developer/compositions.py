@@ -319,12 +319,31 @@ def normalized_definition(value: Mapping[str, Any]) -> dict[str, Any]:
         value = catalog.get(field)
         if isinstance(value, Mapping):
             catalog_payload[field] = dict(value)
+    permission_profile = payload.get("permission_profile")
+    application_roles = payload.get("application_roles")
+    flat_permissions = payload.get("permissions")
     return {
         "schema": payload["schema"],
         "kind": payload["kind"],
         "id": payload["id"],
         "version": payload["version"],
         "profiles": sorted(payload["profiles"]),
+        **(
+            {"permissions": sorted(str(item) for item in flat_permissions)}
+            if isinstance(flat_permissions, list)
+            else {}
+        ),
+        **(
+            {
+                "permission_profile": dict(permission_profile),
+                "application_roles": sorted(
+                    (dict(item) for item in application_roles or []),
+                    key=lambda item: str(item.get("id") or ""),
+                ),
+            }
+            if isinstance(permission_profile, Mapping)
+            else {}
+        ),
         "components": {
             "owned": sorted(members, key=lambda item: item["ref"]),
             "dependencies": sorted(dependencies, key=lambda item: item["ref"]),
