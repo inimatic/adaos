@@ -1024,7 +1024,9 @@ def test_remote_member_catalog_entries_are_node_scoped_and_auto_installed(monkey
     assert decl["apps"][0]["id"] == "node:member-1:infrastate_app"
     assert decl["apps"][0]["node_local_id"] == "infrastate_app"
     assert decl["apps"][0]["node_label"] == "Node 1"
+    assert decl["apps"][0]["title_i18n"] == {"key": "infrastate.text.infra_state"}
     assert decl["widgets"][0]["id"] == "node:member-1:infrastate_widget"
+    assert decl["widgets"][0]["title_i18n"] == {"key": "infrastate.text.infra_state"}
     assert decl["contributions"] == [
         {
             "extensionPoint": "desktop.apps",
