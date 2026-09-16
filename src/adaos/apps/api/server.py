@@ -162,7 +162,7 @@ from pydantic import BaseModel, Field
 import asyncio
 import json
 import logging
-import platform, time
+import platform
 import signal
 import sys
 import threading
@@ -691,6 +691,7 @@ async def _artifact_delayed_verification_worker(ctx: Any) -> None:
             )
         await asyncio.sleep(interval)
 from adaos.services.runtime_memory_profile import finish_active_runtime_memory_profile
+from adaos.services.personalization_runtime import current_user_id
 from adaos.services.root_mcp.logs import aggregate_subnet_logs, list_local_logs, normalize_log_category
 from adaos.services.root_mcp.service import invoke_tool as invoke_root_mcp_tool
 from adaos.services.supervisor_memory import supervisor_memory_session_artifacts_dir
@@ -2425,6 +2426,12 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
         "applications.list_development_reports": "applications.report",
         "applications.plan": "applications.plan",
         "applications.apply": "applications.apply",
+        "users_access.summary": "users_access.read",
+        "users_access.grant_role": "users_access.manage",
+        "users_access.create_invite": "users_access.invite",
+        "users_access.revoke_invite": "users_access.manage",
+        "users_access.revoke_device": "users_access.manage",
+        "users_access.revoke_session": "users_access.manage",
     }
     tool_id = str(body.tool_id or "").strip()
     if tool_id not in allowed_tools:
@@ -2435,18 +2442,22 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
     scope = dict(body.scope or {})
     scope.setdefault("subnet_id", str(getattr(conf, "subnet_id", "") or "").strip() or None)
     scope.setdefault("target_id", f"hub:{scope.get('subnet_id')}" if scope.get("subnet_id") else None)
+    # `require_token` authenticates the shared node credential as the local
+    # owner. Keep that subject identity through the Root MCP bridge so the
+    # access plane can apply and audit its owner policy.
+    actor = f"user:{current_user_id(get_ctx())}"
     response = invoke_root_mcp_tool(
         tool_id,
         arguments=dict(body.arguments or {}),
         request_id=body.request_id,
         trace_id=body.trace_id,
-        actor="root:route_proxy",
+        actor=actor,
         auth_method="root_token",
         dry_run=body.dry_run,
         scope=scope,
         auth_context={
             "method": "root_token",
-            "actor": "root:route_proxy",
+            "actor": actor,
             "capabilities": [required_capability],
             "allowed_target_ids": [scope.get("target_id")] if scope.get("target_id") else [],
             "subnet_id": scope.get("subnet_id"),

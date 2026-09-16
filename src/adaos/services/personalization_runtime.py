@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import os
 from pathlib import Path
-from pathlib import Path
 import threading
 import time
 from typing import Any
@@ -45,7 +44,7 @@ def _state_dir(ctx: AgentContext) -> Path:
 
 def current_user_id(ctx: AgentContext | None = None) -> str:
     resolved = _ctx(ctx)
-    owner = getattr(resolved.settings, "owner_id", None) or "local-owner"
+    owner = getattr(getattr(resolved, "settings", None), "owner_id", None) or "local-owner"
     return str(owner).strip() or "local-owner"
 
 

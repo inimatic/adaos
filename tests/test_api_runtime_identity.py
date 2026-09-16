@@ -874,7 +874,7 @@ def test_admin_root_mcp_call_allows_live_nlu_probe(monkeypatch) -> None:
     assert payload["scope"]["subnet_id"] == "sn-test"
     assert payload["scope"]["target_id"] == "hub:sn-test"
     assert calls[0]["tool_id"] == "nlu_authoring.check_phrase"
-    assert calls[0]["actor"] == "root:route_proxy"
+    assert calls[0]["actor"] == "user:local-owner"
     assert calls[0]["auth_method"] == "root_token"
     assert calls[0]["scope"]["target_id"] == "hub:sn-test"
 
@@ -973,6 +973,52 @@ def test_admin_root_mcp_call_allows_application_workbench_tools(monkeypatch, too
     )
 
     assert payload["ok"] is True
+    assert calls[0]["auth_context"]["capabilities"] == [capability]
+
+
+@pytest.mark.parametrize(
+    ("tool_id", "capability"),
+    [
+        ("users_access.summary", "users_access.read"),
+        ("users_access.grant_role", "users_access.manage"),
+        ("users_access.create_invite", "users_access.invite"),
+        ("users_access.revoke_invite", "users_access.manage"),
+        ("users_access.revoke_device", "users_access.manage"),
+        ("users_access.revoke_session", "users_access.manage"),
+    ],
+)
+def test_admin_root_mcp_call_projects_local_owner_for_users_access(monkeypatch, tool_id, capability) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _Resp:
+        ok = True
+
+        def to_dict(self) -> dict[str, object]:
+            return {"ok": True, "status": "ok", "result": {}}
+
+    context = types.SimpleNamespace(
+        config=types.SimpleNamespace(subnet_id="sn-test"),
+        settings=types.SimpleNamespace(owner_id="owner-test"),
+    )
+    monkeypatch.setattr(api_server, "get_ctx", lambda: context)
+    monkeypatch.setattr(
+        api_server,
+        "invoke_root_mcp_tool",
+        lambda requested_tool_id, **kwargs: calls.append(
+            {"tool_id": requested_tool_id, **kwargs}
+        )
+        or _Resp(),
+    )
+
+    payload = asyncio.run(
+        api_server.admin_root_mcp_call(
+            api_server.AdminRootMcpCallRequest(tool_id=tool_id, arguments={})
+        )
+    )
+
+    assert payload["ok"] is True
+    assert calls[0]["actor"] == "user:owner-test"
+    assert calls[0]["auth_context"]["actor"] == "user:owner-test"
     assert calls[0]["auth_context"]["capabilities"] == [capability]
 
 
