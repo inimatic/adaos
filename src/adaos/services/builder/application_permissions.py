@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,51 @@ from adaos.domain.application_access import (
 
 
 APPLICATION_PERMISSION_CONTEXT_SCHEMA = "adaos.builder.application_permissions.v1"
+
+
+def _authoring_contract() -> dict[str, Any]:
+    """Return the exact compact contract used to author Project access metadata."""
+
+    return {
+        "schema": "adaos.builder.application_permission_authoring.v1",
+        "permission_profile_schema": "adaos.application.permission_profile.v1",
+        "canonical_identifier": {
+            "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$",
+            "meaning": "stable machine identifier; never prose or localized copy",
+            "fields": [
+                "permission_profile.{required,optional}[].id",
+                "permission_profile.{required,optional}[].approval_policy",
+                "permission_profile.secrets[].{id,provider,binding}",
+                "permission_profile.data_practices.collected[]",
+                "permission_profile.data_practices.sent_off_device[]",
+                "permission_profile.data_practices.linked_to_user[]",
+                "permission_profile.{llm_model_use,notifications,background_actions,external_providers}[].id",
+                "application_roles[].{id,grants,assignable_to,requires_permissions}",
+                "application_roles[].default_for keys and values",
+            ],
+            "valid_examples": [
+                "volunteer_contact",
+                "shift_assignment",
+                "until_record_deleted",
+            ],
+            "invalid_examples": [
+                "private phone and email",
+                "Until a coordinator removes records",
+            ],
+        },
+        "semantics": {
+            "permission_ids": "runtime capabilities used by owned skills; declare each as required or optional with a concise purpose",
+            "role_grants": "application-scoped action identifiers granted by the role",
+            "role_requires_permissions": "runtime permission IDs needed to exercise the role grants",
+            "privacy_labels": "human- and policy-facing summary derived from data_practices; it does not replace canonical data category IDs",
+            "retention": "optional concise text, at most 120 characters; a stable identifier such as until_record_deleted is preferred",
+        },
+        "platform_roles": ["owner", "co_owner", "admin", "member", "child", "guest"],
+        "validation_boundary": (
+            "The model may repair an invalid declaration, but the declaration grants no authority "
+            "and Automation cannot complete until trusted validation accepts it."
+        ),
+    }
 
 
 def _manifest(path: Path) -> tuple[dict[str, Any], str | None]:
@@ -129,6 +174,7 @@ def application_permissions_context(
             "project_ref": project_ref,
             "declaration_status": "unavailable",
             "authority_status": "unavailable" if project_ref else "ambiguous",
+            "authoring_contract": _authoring_contract(),
             "diagnostics": diagnostics,
         }
 
@@ -151,12 +197,18 @@ def application_permissions_context(
         )
     except ApplicationAccessContractError as exc:
         return {
-            "status": "ambiguous",
+            # Ownership is resolved, so the invalid declaration is safe to expose
+            # as repair input. It remains non-authoritative and trusted candidate
+            # validation below still rejects it until the strict parser succeeds.
+            "status": "present",
             "schema": APPLICATION_PERMISSION_CONTEXT_SCHEMA,
             "project_ref": project_ref,
             "manifest_ref": f"projects/{manifest_path.parent.name}/project.yaml",
             "manifest_digest": project_digest,
             "declaration_status": "invalid",
+            "authority_status": "invalid",
+            "repair_required": True,
+            "authoring_contract": _authoring_contract(),
             "diagnostics": [str(exc)],
             "statically_inferred": inferred,
             "inference_sources": inference_sources,
@@ -181,6 +233,9 @@ def application_permissions_context(
         "manifest_ref": f"projects/{manifest_path.parent.name}/project.yaml",
         "manifest_digest": project_digest,
         "declaration_status": declaration_status,
+        "authority_status": "valid" if declaration_status == "present" else "undeclared",
+        "repair_required": declaration_status != "present",
+        "authoring_contract": _authoring_contract(),
         "profile": profile.to_dict(),
         "profile_digest": profile.digest,
         "roles": [role.to_dict() for role in roles],
@@ -196,6 +251,7 @@ def application_permissions_context(
             "Declare application_roles only when the application has differentiated rights; enforce rights in tools, not only in UI visibility.",
             "Add owner/member/child/guest access-matrix tests for every declared application role.",
             "Record secrets, external providers, model use, notifications, background work and data practices explicitly.",
+            "Use canonical machine identifiers for data-practice categories; keep prose in purposes, titles, retention policy, catalog copy or README.",
         ],
         "diagnostics": diagnostics,
     }

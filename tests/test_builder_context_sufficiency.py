@@ -188,9 +188,74 @@ capabilities:
     assert permissions["statically_inferred"] == ["network.read", "storage.relational"]
     assert permissions["undeclared_inferred"] == []
     assert permissions["role_matrix"]["guest"] == ["viewer"]
+    contract = permissions["authoring_contract"]
+    assert contract["canonical_identifier"]["pattern"] == "^[a-z0-9][a-z0-9_.-]{0,127}$"
+    assert "private phone and email" in contract["canonical_identifier"]["invalid_examples"]
     projected = context_packet_prompt_projection(packet)["facets"]["application_permissions"]
     assert projected["manifest_ref"] == "projects/recipes_app/project.yaml"
     assert projected["roles"][0]["id"] == "viewer"
+    assert projected["authoring_contract"] == contract
+
+
+def test_invalid_permission_profile_is_repairable_context_but_not_authority(
+    service: BuilderWorkflowService,
+) -> None:
+    project_root = service.dev_projects_root / "recipes_app"
+    project_root.mkdir(parents=True)
+    (project_root / "project.yaml").write_text(
+        """schema: adaos.project.v1
+kind: project
+id: recipes_app
+version: 0.1.0
+components:
+  owned:
+    - ref: scenario:recipes
+      role: primary
+    - ref: skill:recipes_skill
+      role: implementation
+  dependencies: []
+entrypoints:
+  - id: main
+    presentation: scenario:recipes
+    default: true
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: storage.relational
+      purpose: Store recipes owned by the application.
+  optional: []
+  data_practices:
+    collected: [recipe title and notes]
+""",
+        encoding="utf-8",
+    )
+    skill_root = service.dev_skills_root / "recipes_skill"
+    skill_root.mkdir()
+    (skill_root / "skill.yaml").write_text(
+        """name: recipes_skill
+version: 0.1.0
+capabilities: [storage.relational]
+""",
+        encoding="utf-8",
+    )
+    _plan(service, "widget:recipe-title")
+
+    packet = service.build_context_packet(
+        "scenario",
+        "recipes",
+        execution_phase="automation",
+        application_project_ref="project:recipes_app",
+        required_facets=["application_permissions"],
+        enforce_context_coverage=True,
+    )
+
+    permissions = packet["facets"]["application_permissions"]
+    assert packet["coverage"]["ready"] is True
+    assert permissions["status"] == "present"
+    assert permissions["declaration_status"] == "invalid"
+    assert permissions["authority_status"] == "invalid"
+    assert permissions["repair_required"] is True
+    assert "canonical identifier" in permissions["diagnostics"][0]
 
 
 def test_unknown_context_phase_is_rejected(service):

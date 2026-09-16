@@ -1342,6 +1342,9 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
                 "manifest_ref",
                 "manifest_digest",
                 "declaration_status",
+                "authority_status",
+                "repair_required",
+                "authoring_contract",
                 "profile_digest",
                 "profile",
                 "roles",
@@ -6349,26 +6352,16 @@ Allowed impact values are `blocker`, `speed`, `generalization`, `contract_gap`, 
         development_feedback_contract = """
 ## Development feedback channel
 
-Report missing/ambiguous contracts, conflicting context, SDK cost or validation gaps, even if the patch succeeds. Append at most one envelope after the result summary:
+Report missing/ambiguous contracts, conflicting context, SDK cost or validation gaps, even after a successful patch. Append at most one envelope:
 
 ```adaos-development-feedback
 {"schema":"adaos.development_feedback_output.v1","items":[{"category":"ambiguous_contract","summary":"...","blocking":false,"confidence":0.9,"impact":["comprehension"],"target_refs":["sdk:area.method"],"details":"...","recommendation":"...","evidence_refs":[{"type":"file","ref":"path"}]}]}
 ```
 
-After an actual method/resource attempt only, add `application_trace`
-(`adaos.development.application_trace.v1`): `contract_ref`, `operation_id`,
-redacted `input_summary`, `expected_behavior`, `observed_behavior`,
-`validation_result` using exactly `passed`, `failed`, `unknown`, or `not_run`,
-optional `user_response`, and bounded `trace_refs` objects shaped as
-`{"type":"trace","ref":"trace-id"}`. Do not put prose in
-`validation_result` and do not use bare strings in `trace_refs`.
-Documentation inspection is not an execution trace. Never include secrets.
-
 For an unresolved contract, use the same schema with `blocking:true` and name
-the blocked requirement. The worker retains feedback without applying source.
-Do not add placeholder code or blocker-report files. Feedback grants no new
-authority. Omit it when unnecessary. Use `adaos-development-escalation` only
-when a governed Dev Ticket repair explicitly supplies its separate contract.
+the blocked requirement. Feedback grants no authority; omit when unnecessary.
+No secret, placeholder code or blocker-report files. Use
+`adaos-development-escalation` only for its governed Dev Ticket repair contract.
 """
         from adaos.domain.development_feedback import development_feedback_model_rules
 

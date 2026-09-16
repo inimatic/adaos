@@ -159,6 +159,61 @@ permission_profile:
     assert checks[1]["ok"] is False
 
 
+def test_trusted_worker_rejects_noncanonical_data_practice_ids(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    project = workspace / "projects" / "chores"
+    skill = workspace / "skills" / "chores_skill"
+    project.mkdir(parents=True)
+    skill.mkdir(parents=True)
+    (project / "project.yaml").write_text(
+        """id: chores
+components:
+  owned:
+    - ref: scenario:chores
+    - ref: skill:chores_skill
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: storage.relational
+      purpose: Store chores.
+  optional: []
+  data_practices:
+    collected: [private notes about a chore]
+""",
+        encoding="utf-8",
+    )
+    (skill / "skill.yaml").write_text(
+        "name: chores_skill\nversion: 0.1.0\ncapabilities: [storage.relational]\n",
+        encoding="utf-8",
+    )
+    assignment = {
+        "target": {"type": "scenario", "id": "chores"},
+        "realize_request": {
+            "artifacts": {
+                "context_packet": {
+                    "facets": {
+                        "application_permissions": {
+                            "project_ref": "project:chores",
+                            "manifest_ref": "projects/chores/project.yaml",
+                        }
+                    }
+                }
+            }
+        },
+    }
+    checks: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_application_permissions(
+        assignment, workspace, checks, errors
+    )
+
+    assert checks[0]["kind"] == "application_permissions.profile"
+    assert checks[0]["status"] == "invalid"
+    assert checks[0]["ok"] is False
+    assert "canonical identifier" in errors[0]
+
+
 def test_codex_jsonl_usage_accepts_reasoning_output_tokens(tmp_path: Path) -> None:
     journal = tmp_path / "codex.jsonl"
     journal.write_text(
