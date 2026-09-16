@@ -79,6 +79,141 @@ def test_builder_application_sdk_has_no_raw_authority_parameters() -> None:
         assert forbidden.isdisjoint(inspect.signature(function).parameters), name
 
 
+def test_project_access_contract_uses_context_bound_dev_roots(monkeypatch, tmp_path: Path) -> None:
+    from adaos.services.builder import application_permissions
+
+    calls = []
+    paths = SimpleNamespace(
+        dev_dir=lambda: tmp_path / "dev",
+        dev_projects_dir=lambda: tmp_path / "dev" / "projects",
+        dev_skills_dir=lambda: tmp_path / "dev" / "skills",
+    )
+    monkeypatch.setattr(applications, "_ctx", lambda: SimpleNamespace(paths=paths))
+    monkeypatch.setattr(
+        application_permissions,
+        "application_permissions_context",
+        lambda **kwargs: calls.append(kwargs) or {"status": "present"},
+    )
+
+    result = applications.project_access_contract(
+        "scenario:roster", project_ref="project:roster"
+    )
+
+    assert result == {"status": "present"}
+    assert calls == [
+        {
+            "component_ref": "scenario:roster",
+            "requested_project_ref": "project:roster",
+            "dev_projects_root": (tmp_path / "dev" / "projects").resolve(),
+            "dev_skills_root": (tmp_path / "dev" / "skills").resolve(),
+        }
+    ]
+
+
+def test_publisher_owner_role_prefers_declared_default_and_has_bounded_legacy_fallback() -> None:
+    viewer = SimpleNamespace(
+        role_id="viewer",
+        grants=("workspace.read",),
+        assignable_to=("owner", "member"),
+        default_for={"owner": "viewer"},
+    )
+    coordinator = SimpleNamespace(
+        role_id="coordinator",
+        grants=("workspace.read", "workspace.write"),
+        assignable_to=("owner", "member"),
+        default_for={},
+    )
+
+    assert applications._publisher_owner_role_ids(
+        SimpleNamespace(application_roles=(viewer, coordinator))
+    ) == (("viewer",), "declared_default")
+    viewer.default_for = {}
+    assert applications._publisher_owner_role_ids(
+        SimpleNamespace(application_roles=(viewer, coordinator))
+    ) == (("coordinator",), "unique_maximal_compatibility")
+
+    auditor = SimpleNamespace(
+        role_id="auditor",
+        grants=("audit.read",),
+        assignable_to=("owner",),
+        default_for={},
+    )
+    with pytest.raises(ValueError, match="default_for.owner"):
+        applications._publisher_owner_role_ids(
+            SimpleNamespace(application_roles=(coordinator, auditor))
+        )
+
+
+def test_builder_provisions_and_rebinds_publisher_owner_access(monkeypatch) -> None:
+    role = SimpleNamespace(
+        role_id="coordinator",
+        grants=("workspace.read", "workspace.write"),
+        assignable_to=("owner",),
+        default_for={"owner": "coordinator"},
+    )
+    profile = SimpleNamespace(
+        flat_permissions=("workspace.read", "workspace.write"),
+        digest="sha256:" + "a" * 64,
+    )
+    release = SimpleNamespace(application_roles=(role,), permission_profile=profile)
+    grants = []
+
+    def make_grant(**values):
+        return SimpleNamespace(
+            grant_id="appgrant.owner",
+            status="active",
+            application_roles=tuple(values["application_roles"]),
+            permission_ceiling=tuple(values["permission_ceiling"]),
+            explicit_denies=tuple(values.get("explicit_denies") or ()),
+            constraints=dict(values["constraints"]),
+            reviewed_permission_profile_digest=profile.digest,
+            expires_at=values.get("expires_at"),
+            revision=(grants[0].revision + 1 if grants else 1),
+        )
+
+    class Access:
+        def grant_access(self, _application_id, **values):
+            grant = make_grant(**values)
+            grants[:] = [grant]
+            return grant
+
+        def change_access(self, _grant_id, **values):
+            grant = make_grant(**values)
+            grants[:] = [grant]
+            return grant
+
+    store = SimpleNamespace(
+        get_release=lambda *_args: release,
+        list_application_access_grants=lambda *_args, **_kwargs: tuple(grants),
+    )
+    service = SimpleNamespace(store=store)
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(
+        applications,
+        "_ctx",
+        lambda: SimpleNamespace(settings=SimpleNamespace(owner_id="owner")),
+    )
+    monkeypatch.setattr(
+        applications,
+        "ApplicationAccessManagementService",
+        lambda _service: SimpleNamespace(access=Access()),
+    )
+
+    first = applications._ensure_publisher_owner_access(
+        "roster", release_digest="sha256:" + "1" * 64
+    )
+    assert first["subject_ref"] == "user:owner"
+    assert first["application_roles"] == ["coordinator"]
+    assert first["revision"] == 1
+
+    profile.digest = "sha256:" + "b" * 64
+    second = applications._ensure_publisher_owner_access(
+        "roster", release_digest="sha256:" + "2" * 64
+    )
+    assert second["permission_profile_digest"] == profile.digest
+    assert second["revision"] == 2
+
+
 @pytest.mark.parametrize("difference", ["selection", "workflow", "publication_unconfirmed"])
 def test_local_trial_acceptance_preserves_selection_on_stale_or_unconfirmed_publication(monkeypatch, difference):
     from adaos.sdk.builder import lifecycle, workflow

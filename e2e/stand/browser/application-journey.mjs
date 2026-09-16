@@ -13,11 +13,18 @@ const token = env.ADAOS_E2E_HUB_TOKEN
 const hub = env.ADAOS_E2E_HUB_URL || 'http://127.0.0.1:8778'
 const subnet = env.ADAOS_E2E_SUBNET_ID
 const locale = env.ADAOS_E2E_LOCALE || 'en'
+const expectedRuntimeSource = env.ADAOS_E2E_EXPECTED_RUNTIME_SOURCE || null
+if (expectedRuntimeSource && !['dev', 'trial', 'workspace'].includes(expectedRuntimeSource)) {
+  throw new Error('ADAOS_E2E_EXPECTED_RUNTIME_SOURCE must be dev, trial, or workspace')
+}
+const spaceKind = expectedRuntimeSource === 'workspace' || expectedRuntimeSource === 'trial'
+  ? 'workspace' : 'development'
 if (env.ENV_TYPE !== 'dev' || pin.stage !== 'automation' || pin.scenario_id !== scenario
-  || !pin.revision.startsWith('task.') || pin.preview_webspace_id !== webspace || !token
+  || !pin.revision.startsWith('task.')
+  || (spaceKind === 'development' && pin.preview_webspace_id !== webspace) || !token
   || !checkpoint.cleanup?.test || !checkpoint.context?.retain_test_projects
   || !checkpoint.context.owned_artifacts.some(item => item.primary_ref === `scenario:${scenario}`)) {
-  throw new Error('Requires an explicit owned TEST Automation pin and existing DEV preview')
+  throw new Error('Requires an explicit owned TEST Automation pin and admitted runtime target')
 }
 if (plan.schema !== 'adaos.e2e.application_journey.v1' || !plan.steps?.length) throw new Error('Journey plan is empty')
 const stepIds = new Set()
@@ -33,11 +40,11 @@ const output = path.resolve(env.ADAOS_E2E_OUTPUT)
 await fs.mkdir(output, { recursive: true })
 const url = new URL(env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
 for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo', subnet_id: subnet,
-  webspace_id: webspace, space_kind: 'development', expected_scenario_id: scenario, try_local_hub: '1' })) {
+  webspace_id: webspace, space_kind: spaceKind, expected_scenario_id: scenario, try_local_hub: '1' })) {
   url.searchParams.set(key, value)
 }
-const report = { scope: 'Independent DEV-owner browser journey, not delegated authorization',
-  scenario, task: pin.revision, webspace, plan, samples: [] }
+const report = { scope: 'Independent owned TEST browser journey, not delegated authorization',
+  scenario, task: pin.revision, webspace, spaceKind, expectedRuntimeSource, plan, samples: [] }
 const browser = await chromium.launch({ headless: true })
 try {
   for (const [layout, viewport] of Object.entries({ wide: { width: 1440, height: 1000 }, compact: { width: 390, height: 844 } })) {
@@ -61,14 +68,26 @@ try {
     const started = new WeakMap()
     page.on('request', request => {
       started.set(request, Date.now())
-      if (new URL(request.url()).pathname === '/api/tools/call') {
-        sample.requests.push({ elapsedMs: Date.now() - sample.startedAt, body: request.postDataJSON() })
+      const pathname = new URL(request.url()).pathname
+      if (pathname === '/api/tools/call') {
+        sample.requests.push({ kind: 'tool', elapsedMs: Date.now() - sample.startedAt, body: request.postDataJSON() })
+      } else if (pathname.includes('/attachments')) {
+        sample.requests.push({ kind: 'attachment', method: request.method(), pathname,
+          elapsedMs: Date.now() - sample.startedAt })
       }
     })
     page.on('response', response => {
-      if (new URL(response.url()).pathname !== '/api/tools/call') return
+      const pathname = new URL(response.url()).pathname
+      if (pathname.includes('/attachments')) {
+        sample.network.push({ kind: 'attachment', method: response.request().method(), pathname,
+          status: response.status(), elapsedMs: Date.now() - started.get(response.request()) })
+        return
+      }
+      if (pathname !== '/api/tools/call') return
       responses.push(response.json().then(body => sample.network.push({
         status: response.status(), elapsedMs: Date.now() - started.get(response.request()), timing: response.request().timing(),
+        runtimeSource: response.headers()['x-adaos-runtime-source'] || null,
+        releaseDigest: response.headers()['x-adaos-release-digest'] || null,
         request: response.request().postDataJSON(), body,
       })).catch(() => {}))
     })
@@ -109,6 +128,24 @@ try {
             break
           }
           case 'fill': await locator(step).fill(expand(step.value)); break
+          case 'upload': {
+            const field = host(step.widget).locator(`[data-webui-field-id=${JSON.stringify(step.field)}]`)
+            const input = field.locator('input[type=file]')
+            await expect(input).toHaveCount(1)
+            const filePath = path.resolve(expand(step.file))
+            const pending = page.waitForResponse(response => {
+              const target = new URL(response.url())
+              return response.request().method() === 'PUT'
+                && target.pathname.includes('/attachments')
+                && (!step.tool || target.pathname.includes(`/${step.tool}/attachments`))
+            })
+            void pending.catch(() => {})
+            await input.setInputFiles(filePath)
+            const response = await pending
+            if (!response.ok()) throw new Error(`Attachment upload failed: HTTP ${response.status()}`)
+            await expect(field).toContainText(path.basename(filePath))
+            break
+          }
           case 'select': {
             const field = step.selector ? locator(step) : host(step.widget).locator(`[data-webui-field-id=${JSON.stringify(step.field)}]`)
             await expect(field).toBeVisible({ timeout: 15_000 })
@@ -254,6 +291,13 @@ try {
       sample.runtimeDiagnostics = await page.evaluate(() => window.__ADAOS_RUNTIME_DEBUG__?.get?.() ?? null)
     }
     await Promise.all(responses)
+    if (expectedRuntimeSource) {
+      for (const response of sample.network.filter(item => item.request && item.status >= 200 && item.status < 300)) {
+        if (response.runtimeSource !== expectedRuntimeSource) {
+          sample.errors.push(`Expected ${expectedRuntimeSource} runtime, received ${response.runtimeSource || 'none'}`)
+        }
+      }
+    }
     sample.text = await page.locator('body').innerText()
     await page.screenshot({ path: path.join(output, `${layout}-final.png`), fullPage: true, animations: 'disabled' })
     await fs.writeFile(path.join(output, 'journey.json'), JSON.stringify(report, null, 2) + '\n', 'utf8')

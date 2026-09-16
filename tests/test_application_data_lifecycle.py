@@ -5,6 +5,7 @@ import pytest
 
 from adaos.domain.application import RuntimeSelection
 from adaos.services.applications.configuration import ApplicationConfigurationStore
+from adaos.services.applications.blob_data_transition import BlobDataTransition
 from adaos.services.applications.data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent, declared_databases
 from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
 
@@ -27,6 +28,19 @@ def manifest(number):
         "execution": "native_tools", "databases": [{"path": "records.sqlite", "migrations": [
             {"version": i, "name": f"field{i}", "statements": [f"ALTER TABLE records ADD COLUMN field{i} TEXT"]}
             for i in range(1, number + 1)]}]}}
+
+
+def blob_manifest(number):
+    return {**manifest(number), "capabilities": ["storage.relational", "storage.blob"]}
+
+
+def blob(path, payload):
+    import hashlib
+    digest = hashlib.sha256(payload).hexdigest()
+    target = path / "files/photos/objects" / digest[:2] / f"{digest}.bin"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+    return target
 
 
 def seed(tmp_path):
@@ -132,6 +146,89 @@ def test_undeclared_data_remains_untouched(tmp_path):
     with pytest.raises(ValueError, match="Undeclared runtime data"):
         coordinator(tmp_path, 1).prepare_beta(webspace_id="desktop", activate=lambda _: pytest.fail("Must not activate"))
     assert (stable / "attachment.txt").read_text() == "private attachment"
+
+
+def test_declared_local_blob_objects_follow_the_fenced_data_cutover(tmp_path):
+    _state, stable, _channel = seed(tmp_path)
+    original = blob(stable, b"stable-photo")
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=tmp_path / "state",
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate1",
+        release_digest="sha256:" + "1" * 64,
+        stable_digest=DIGEST,
+        components=(OwnedDataComponent(
+            "skill:worker",
+            stable,
+            tmp_path / "beta1/data",
+            stable,
+            blob_manifest(0),
+            blob_manifest(1),
+        ),),
+    )
+
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    beta = tmp_path / "beta1/data"
+    assert (beta / original.relative_to(stable)).read_bytes() == b"stable-photo"
+    added = blob(beta, b"beta-photo")
+
+    lifecycle.accept_beta(webspace_id="desktop", publish=lambda _: {"ok": True})
+
+    assert original.read_bytes() == b"stable-photo"
+    assert (stable / added.relative_to(beta)).read_bytes() == b"beta-photo"
+
+
+def test_first_blob_capability_can_recover_a_pre_adapter_candidate(tmp_path):
+    _state, stable, _channel = seed(tmp_path)
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=tmp_path / "state",
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate1",
+        release_digest="sha256:" + "1" * 64,
+        stable_digest=DIGEST,
+        components=(OwnedDataComponent(
+            "skill:worker", stable, tmp_path / "beta1/data", stable, manifest(0), blob_manifest(1)
+        ),),
+    )
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    beta = tmp_path / "beta1/data"
+    added = blob(beta, b"first-beta-photo")
+    receipts = list((tmp_path / "recovery/applications").rglob("stable_blobs/files.receipt.json"))
+    assert len(receipts) == 1
+    receipts[0].unlink()
+
+    lifecycle.accept_beta(webspace_id="desktop", publish=lambda _: {"ok": True})
+
+    assert (stable / added.relative_to(beta)).read_bytes() == b"first-beta-photo"
+
+
+def test_blob_capability_does_not_admit_arbitrary_or_corrupted_files(tmp_path):
+    _state, stable, _channel = seed(tmp_path)
+    (stable / "files/photos/objects/aa").mkdir(parents=True)
+    (stable / "files/photos/objects/aa/not-a-digest.bin").write_bytes(b"payload")
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=tmp_path / "state",
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate1",
+        release_digest="sha256:" + "1" * 64,
+        stable_digest=DIGEST,
+        components=(OwnedDataComponent(
+            "skill:worker", stable, tmp_path / "beta1/data", stable, blob_manifest(0), blob_manifest(1)
+        ),),
+    )
+    with pytest.raises(ValueError, match="content-addressed object name"):
+        lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: pytest.fail("Must not activate"))
+
+
+def test_blob_transition_rejects_content_mismatch(tmp_path):
+    root = tmp_path / "owner"
+    target = blob(root, b"original")
+    target.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="bytes do not match"):
+        BlobDataTransition(tmp_path).inventory(root / "files")
 
 
 @pytest.mark.parametrize("path", ["../other.sqlite", "C:/other.sqlite", "a/../other.sqlite", "files/secrets.json"])

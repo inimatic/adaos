@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from adaos.sdk.builder import automation
 
 
@@ -67,3 +69,123 @@ def test_foreground_questions_are_not_reported_as_execution_failure():
         object_type="scenario", object_id="sample", webspace_id="desktop")
     assert result["ok"] and result["status"] == "automation_awaiting_input"
     assert result["session"]["status"] == "failed"
+
+
+def test_trial_verification_evidence_uses_sealed_automation_artifacts(
+    monkeypatch, tmp_path
+) -> None:
+    task_id = "task.01TEST"
+    output = tmp_path / task_id / "output"
+    output.mkdir(parents=True)
+    (output / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "commit_hash": "a" * 40,
+                "tests": {"status": "passed"},
+                "evidence": {
+                    "schema": "adaos.skill_factory.task_evidence_manifest.v1",
+                    "artifacts": [
+                        {
+                            "kind": "test_report",
+                            "logical_path": ".adaos/tasks/test/test_report.json",
+                            "digest": "sha256:" + "b" * 64,
+                        },
+                        {
+                            "kind": "provenance",
+                            "logical_path": ".adaos/tasks/test/provenance.json",
+                            "digest": "sha256:" + "c" * 64,
+                        },
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output / "test_report.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "errors": [],
+                "checks": [
+                    {
+                        "kind": "checkpoint_test_contract",
+                        "path": "scenarios/roster/tests/test_application_contract.py",
+                        "ok": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = _Service(background=True)
+    service.runs_root = tmp_path
+    service.projection = lambda **_kwargs: {
+        "automation": {
+            "status": "completed",
+            "terminal": True,
+            "task_id": task_id,
+        }
+    }
+    monkeypatch.setattr(automation, "_service", lambda: service)
+
+    evidence = automation.trial_verification_evidence(
+        object_type="scenario",
+        object_id="roster",
+    )
+
+    assert evidence["status"] == "ready"
+    assert evidence["source_commit"] == "a" * 40
+    assert evidence["release_scope"] == "trial"
+    assert evidence["regression_evidence"] == [
+        "suite:checkpoint:.adaos/tasks/test/test_report.json#" + "b" * 64
+    ]
+    assert evidence["access_matrix_evidence"] == [
+        "suite:access-matrix:scenarios/roster/tests/test_application_contract.py"
+    ]
+
+
+def test_trial_verification_evidence_blocks_without_access_matrix_test(
+    monkeypatch, tmp_path
+) -> None:
+    task_id = "task.01TEST"
+    output = tmp_path / task_id / "output"
+    output.mkdir(parents=True)
+    (output / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "commit_hash": "a" * 40,
+                "tests": {"status": "passed"},
+                "evidence": {
+                    "artifacts": [
+                        {"kind": "test_report", "logical_path": "test.json", "digest": "sha256:b"},
+                        {"kind": "provenance", "logical_path": "provenance.json", "digest": "sha256:c"},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output / "test_report.json").write_text(
+        json.dumps({"status": "passed", "errors": [], "checks": []}),
+        encoding="utf-8",
+    )
+    service = _Service(background=True)
+    service.runs_root = tmp_path
+    service.projection = lambda **_kwargs: {
+        "automation": {"status": "completed", "terminal": True, "task_id": task_id}
+    }
+    monkeypatch.setattr(automation, "_service", lambda: service)
+
+    evidence = automation.trial_verification_evidence(
+        object_type="scenario", object_id="roster"
+    )
+
+    assert evidence == {
+        "ok": False,
+        "status": "blocked",
+        "reason": "access_matrix_test_missing",
+        "task_id": task_id,
+    }

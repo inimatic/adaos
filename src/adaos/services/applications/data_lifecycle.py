@@ -19,6 +19,7 @@ from adaos.domain.application import RuntimeSelection
 from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from .configuration import ApplicationConfigurationStore, ConfigurationConflict, _digest
+from .blob_data_transition import BlobDataTransition
 from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
 from .runtime_transition import ApplicationRuntimeTransition, TransitionStep
 from .sqlite_data_transition import SQLiteDataTransition
@@ -61,6 +62,11 @@ def automation_data_contract() -> dict[str, Any]:
             "async": "Async handlers use a_read() / a_write(values, expected_revision=revision).",
             "boundary": "Settings are not application database rows. Do not hard-code production values in manifests or copy credential references into forms/model input. SDK write preserves separate secret bindings.",
         },
+        "blob_contract": {
+            "capability": "storage.blob",
+            "layout": "Core-owned local content-addressed objects under files/<binding>/objects/<prefix>/<sha256>.<ext>.",
+            "behavior": "The local lifecycle verifies object paths and bytes, snapshots Stable into Beta, and adopts Beta objects with the same fenced data cutover. Remote blob providers require a provider-native adapter.",
+        },
         "rules": [
             "Declare each owned SQLite store; use an empty databases list only when the skill has no mutable stores.",
             "Preserve applied migration versions/checksums. Append forward SQL migrations; keep fresh-install initialization compatible with the same schema.",
@@ -69,7 +75,7 @@ def automation_data_contract() -> dict[str, Any]:
             "Core snapshots accepted Stable and runs the pinned chain for each new Beta; Stable acceptance adopts Beta writes. Do not implement channel copying/resetting in handlers.",
             "Use adaos.sdk.data.configuration for declared non-secret settings; DEV is isolated and lifecycle inherits/adopts real settings. Secrets are separate scoped bindings.",
             "For new secret slots declare configuration.credentials.<name>.purpose and secrets.read/write, then use sdk.data.secrets. Values stay in the node vault; this adapter currently admits only the verified local owner, not delegated/background callers.",
-            "Background services, shared mutable stores, attachments and credential files require qualified adapters; report a platform gap instead of claiming migration support."
+            "Local storage.blob attachments use the verified Core content-addressed adapter. Background services, shared mutable stores, remote blob providers and credential files require qualified adapters; report a platform gap instead of claiming migration support."
         ],
     }
 
@@ -118,7 +124,7 @@ def require_native_tools(manifest: Mapping[str, Any]) -> None:
         raise ValueError("Background/lifecycle execution requires a verified owner drain adapter before data cutover")
 
 
-def inventory(root: Path | None, declared: Mapping[str, Any]) -> None:
+def inventory(root: Path | None, declared: Mapping[str, Any], *, blobs: BlobDataTransition | None = None) -> None:
     if root is None or not root.exists():
         return
     if root.absolute() != root.resolve():
@@ -129,8 +135,11 @@ def inventory(root: Path | None, declared: Mapping[str, Any]) -> None:
     for path in root.rglob("*"):
         if path.is_symlink() or getattr(path, "is_junction", lambda: False)() or not path.resolve().is_relative_to(root):
             raise ValueError("Linked runtime data requires an explicit storage adapter")
-        if path.is_file() and path.relative_to(root).as_posix() not in permitted:
+        relative = path.relative_to(root).as_posix()
+        if path.is_file() and relative not in permitted and not (blobs is not None and relative.startswith("files/")):
             raise ValueError("Undeclared runtime data requires a data/configuration/credential adapter")
+    if blobs is not None:
+        blobs.inventory(root / "files")
 
 
 class LocalApplicationDataLifecycle:
@@ -153,9 +162,12 @@ class LocalApplicationDataLifecycle:
         self.components = components
         self.channel = ApplicationRuntimeChannel(self.state, application_id)
         self.data = SQLiteDataTransition(self.private)
+        self.blobs = BlobDataTransition(self.private)
         key = hashlib.sha256(json.dumps([application_id, candidate_id, release_digest]).encode()).hexdigest()
         self.recovery = self.private / "recovery/applications" / key
         self.contracts = {}
+        self.blob_contracts = {}
+        self.stable_blob_contracts = {}
         owned_roots = []
         for component in components:
             if not component.component_ref.startswith("skill:") or component.component_ref in self.contracts:
@@ -180,6 +192,12 @@ class LocalApplicationDataLifecycle:
                 if any(child.startswith(parent + "/") for child in databases):
                     raise ValueError("SQLite store paths overlap")
             self.contracts[component.component_ref] = databases
+            stable_blobs = "storage.blob" in set(component.stable_manifest.get("capabilities") or [])
+            target_blobs = "storage.blob" in set(component.target_manifest.get("capabilities") or [])
+            if stable_blobs and not target_blobs:
+                raise ValueError("Removing storage.blob requires an explicit blob migration contract")
+            self.stable_blob_contracts[component.component_ref] = stable_blobs
+            self.blob_contracts[component.component_ref] = target_blobs
 
     def _root(self, component, name):
         key = hashlib.sha256(component.component_ref.encode()).hexdigest()
@@ -202,6 +220,18 @@ class LocalApplicationDataLifecycle:
                 raise RuntimeChannelConflict("Target data already exists without recovery provenance; refusing to overwrite")
             atomic_write_json(marker, intent)
         self.data.install(staged, target, staged_digest=digest)
+
+    def _install_blobs_new(self, component, mode, staged, digest, target):
+        marker = self._root(component, mode + "_blob_install") / "files.json"
+        intent = {"digest": digest, "target": str(target)}
+        if marker.exists():
+            if json.loads(marker.read_text(encoding="utf-8")) != intent:
+                raise RuntimeChannelConflict("Retained blob installation intent changed")
+        else:
+            if target.exists() and self.blobs.inventory(target)["objects"]:
+                raise RuntimeChannelConflict("Target blob data already exists without recovery provenance; refusing to overwrite")
+            atomic_write_json(marker, intent)
+        self.blobs.install(staged, target, staged_digest=digest)
 
     def _run(self, mode: str, webspace_id: str, steps, *, allow_beta_data_reset=False):
         path = self.recovery / f"{mode}.intent.json"
@@ -243,8 +273,9 @@ class LocalApplicationDataLifecycle:
         def transfer(key):
             for component in self.components:
                 databases = self.contracts[component.component_ref]
-                inventory(component.stable_root, databases)
-                inventory(component.beta_root, databases)
+                blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
+                inventory(component.stable_root, databases, blobs=blob_adapter)
+                inventory(component.beta_root, databases, blobs=blob_adapter)
                 for name, migrations in databases.items():
                     source = component.stable_root / name if component.stable_root else None
                     base = self._root(component, "stable") / name
@@ -259,6 +290,11 @@ class LocalApplicationDataLifecycle:
                     migrated = self.data.migrate(base, staged, snapshot_digest=snapshot["digest"],
                         migrations=migrations, operation_key=key + ":migrate:" + name)
                     self._install_new(component, "beta", name, staged, migrated["digest"], component.beta_root / name)
+                if blob_adapter is not None:
+                    source = component.stable_root / "files" if component.stable_root else None
+                    staged = self._root(component, "stable_blobs") / "files"
+                    snapshot = self.blobs.snapshot(source, staged, operation_key=key + ":base:files")
+                    self._install_blobs_new(component, "beta", staged, snapshot["digest"], component.beta_root / "files")
             return {"ok": True, "mode": "stable_snapshot_forward", "contract_digest": self._contract()}
 
         def configure(_key):
@@ -291,9 +327,10 @@ class LocalApplicationDataLifecycle:
         def transfer(key):
             for component in self.components:
                 databases = self.contracts[component.component_ref]
-                inventory(component.beta_root, databases)
-                inventory(component.stable_root, databases)
-                inventory(component.target_root, databases)
+                blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
+                inventory(component.beta_root, databases, blobs=blob_adapter)
+                inventory(component.stable_root, databases, blobs=blob_adapter)
+                inventory(component.target_root, databases, blobs=blob_adapter)
                 for name in databases:
                     base = self._root(component, "stable") / name
                     if component.stable_root and (component.stable_root / name).exists():
@@ -309,6 +346,31 @@ class LocalApplicationDataLifecycle:
                         self.data.install(accepted, target, staged_digest=snapshot["digest"])
                     else:
                         self._install_new(component, "stable", name, accepted, snapshot["digest"], target)
+                if blob_adapter is not None:
+                    base = self._root(component, "stable_blobs") / "files"
+                    base_receipt_path = base.parent / f"{base.name}.receipt.json"
+                    if component.stable_root:
+                        current = self.blobs.inventory(component.stable_root / "files")
+                        if base_receipt_path.is_file():
+                            base_digest = json.loads(base_receipt_path.read_text(encoding="utf-8"))["digest"]
+                        elif not self.stable_blob_contracts[component.component_ref] and current["objects"] == 0:
+                            # A Candidate prepared by Core before local blob cutover
+                            # existed can add its first blob capability. Its old
+                            # Stable manifest and an empty live inventory jointly
+                            # prove the only admissible base state.
+                            base_digest = self.blobs.inventory(None)["digest"]
+                        else:
+                            raise RuntimeChannelConflict("Stable blob snapshot evidence is missing")
+                        if current["digest"] != base_digest:
+                            raise RuntimeChannelConflict("Stable blob data changed while Beta was selected; explicit reconciliation required")
+                    accepted = self._root(component, "accepted_blobs") / "files"
+                    snapshot = self.blobs.snapshot(component.beta_root / "files", accepted,
+                                                   operation_key=key + ":accepted:files")
+                    target = component.target_root / "files"
+                    if component.target_root == component.stable_root:
+                        self.blobs.install(accepted, target, staged_digest=snapshot["digest"])
+                    else:
+                        self._install_blobs_new(component, "stable", accepted, snapshot["digest"], target)
             return {"ok": True, "keep_data": True}
 
         def configure(_key):

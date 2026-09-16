@@ -1,0 +1,26 @@
+{
+  "schema": "adaos.e2e.application_journey.v1",
+  "steps": [
+    {"id":"new-volunteer","type":"command","widget":"roster-actions-Volunteer","command":"new"},
+    {"id":"name","type":"fill","widget":"roster-form-Volunteer","field":"name","value":"${marker}"},
+    {"id":"role","type":"select","widget":"roster-form-Volunteer","field":"role","label":"Greeter"},
+    {"id":"age","type":"fill","widget":"roster-form-Volunteer","field":"age","value":"37"},
+    {"id":"availability","type":"fill","widget":"roster-form-Volunteer","field":"availability_notes","value":"Saturday morning and Sunday afternoon"},
+    {"id":"phone","type":"fill","widget":"roster-form-Volunteer","field":"contact_phone","value":"+10000000042"},
+    {"id":"email","type":"fill","widget":"roster-form-Volunteer","field":"contact_email","value":"cycle2@example.com"},
+    {"id":"photo","type":"upload","widget":"roster-form-Volunteer","field":"photo","tool":"upload_photo","file":"docs/assets/ADAOS_64_light.png"},
+    {"id":"save","type":"submit","widget":"roster-form-Volunteer","command":"save","tool":"save_record"},
+    {"id":"visible","type":"text","widget":"vw_volunteers","text":"${marker}"},
+    {"id":"select","type":"row","widget":"vw_volunteers","text":"${marker}"},
+    {"id":"photo-visible","type":"media","widget":"vw_volunteer_details","kind":"image","state":"ready"},
+    {"id":"edit","type":"command","widget":"roster-actions-Volunteer","command":"edit"},
+    {"id":"age-restored","type":"value","widget":"roster-form-Volunteer","field":"age","value":"37"},
+    {"id":"availability-restored","type":"value","widget":"roster-form-Volunteer","field":"availability_notes","value":"Saturday morning and Sunday afternoon"},
+    {"id":"edit-screenshot","type":"screenshot"},
+    {"id":"dismiss-edit","type":"dismiss"},
+    {"id":"reload","type":"reload"},
+    {"id":"persisted","type":"row","widget":"vw_volunteers","text":"${marker}"},
+    {"id":"persisted-photo","type":"media","widget":"vw_volunteer_details","kind":"image","state":"ready"},
+    {"id":"finished","type":"screenshot"}
+  ]
+}

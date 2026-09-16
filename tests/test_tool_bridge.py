@@ -177,6 +177,64 @@ def test_binary_attachment_upload_rejects_a_forged_tool_receipt(monkeypatch) -> 
     assert error.value.status_code == 409
 
 
+def test_binary_attachment_download_retains_runtime_provenance(tmp_path, monkeypatch) -> None:
+    content = tmp_path / "photo.png"
+    content.write_bytes(b"image-bytes")
+
+    async def execute(_body, _request, response, _ctx):
+        response.headers["X-AdaOS-Runtime-Source"] = "trial"
+        response.headers["X-AdaOS-Release-Digest"] = "sha256:" + "a" * 64
+        return {"ok": True, "result": {"ok": True, "ref": "sha256:" + "b" * 64}}
+
+    class Broker:
+        def materialize_digest(self, _binding, _digest, *, owner_ref):
+            assert owner_ref == "skill:roster_skill"
+            return content
+
+    async def store(*_args, **_kwargs):
+        return Broker(), object()
+
+    monkeypatch.setattr(tool_bridge_module, "_call_tool_with_identity", execute)
+    monkeypatch.setattr(tool_bridge_module, "_tool_attachment_store", store)
+    response = Response()
+    result = asyncio.run(
+        tool_bridge_module.download_tool_attachment(
+            "roster_skill",
+            "read_attachment",
+            "portraits",
+            "b" * 64,
+            "photo.png",
+            _BinaryRequest(b""),
+            response,
+            webspace_id="desktop",
+            dev=False,
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result.headers["x-adaos-runtime-source"] == "trial"
+    assert result.headers["x-adaos-release-digest"] == "sha256:" + "a" * 64
+
+
+def test_application_runtime_provenance_is_projected_to_http_headers() -> None:
+    response = Response()
+
+    tool_bridge_module._apply_application_runtime_headers(
+        response,
+        {
+            "context": {
+                "runtime_source": "workspace",
+                "release_digest": "sha256:" + "a" * 64,
+                "package_digest": "sha256:" + "b" * 64,
+            }
+        },
+    )
+
+    assert response.headers["x-adaos-runtime-source"] == "workspace"
+    assert response.headers["x-adaos-release-digest"] == "sha256:" + "a" * 64
+    assert response.headers["x-adaos-package-digest"] == "sha256:" + "b" * 64
+
+
 def test_trial_owned_tool_cannot_fall_back_to_dev_or_workspace(tmp_path, monkeypatch):
     from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
 

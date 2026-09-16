@@ -72,6 +72,158 @@ def _application_for_project(project_id: str) -> Application | None:
     return matches[0] if matches else None
 
 
+def _publisher_owner_role_ids(release) -> tuple[tuple[str, ...], str]:
+    """Resolve the local publisher's Application role without guessing broadly."""
+
+    owner_roles = [
+        role for role in release.application_roles if "owner" in role.assignable_to
+    ]
+    explicit = [
+        role
+        for role in owner_roles
+        if str(role.default_for.get("owner") or "") == role.role_id
+    ]
+    if len(explicit) == 1:
+        return (explicit[0].role_id,), "declared_default"
+    if len(explicit) > 1:
+        raise ValueError(
+            "Application declares multiple default owner roles; keep one "
+            "application_roles[].default_for.owner"
+        )
+
+    # Compatibility for releases authored before owner defaults were required:
+    # accept only a unique role whose grants are a strict superset of every
+    # other owner-compatible role. Incomparable roles need an explicit choice.
+    maximal = [
+        role
+        for role in owner_roles
+        if not any(
+            set(role.grants) < set(other.grants)
+            for other in owner_roles
+            if other.role_id != role.role_id
+        )
+    ]
+    if len(maximal) == 1:
+        return (maximal[0].role_id,), "unique_maximal_compatibility"
+    raise ValueError(
+        "Application owner role is ambiguous; declare exactly one "
+        "application_roles[].default_for.owner"
+    )
+
+
+def _ensure_publisher_owner_access(
+    application_id: str,
+    *,
+    release_digest: str,
+) -> dict[str, Any]:
+    """Materialize the publisher owner's reviewed access for an admitted release."""
+
+    from adaos.services.personalization_runtime import current_user_id
+
+    service = _application_service()
+    release = service.store.get_release(application_id, release_digest)
+    if not release.application_roles:
+        return {
+            "required": False,
+            "reason": "application_declares_no_roles",
+            "permission_profile_digest": release.permission_profile.digest,
+        }
+    role_ids, resolution = _publisher_owner_role_ids(release)
+    owner_ref = f"user:{current_user_id(_ctx())}"
+    constraints = {
+        "platform_role": "owner",
+        "subject_kind": "user",
+        "managed_by": "builder.publisher_owner",
+    }
+    management = ApplicationAccessManagementService(service)
+    managed = [
+        grant
+        for grant in service.store.list_application_access_grants(
+            application_id,
+            subject_ref=owner_ref,
+        )
+        if grant.constraints.get("managed_by") == "builder.publisher_owner"
+    ]
+    if len(managed) > 1:
+        raise ValueError("Builder publisher owner access is duplicated; reconcile grants")
+    ceiling = tuple(release.permission_profile.flat_permissions)
+    if managed:
+        grant = managed[0]
+        exact = (
+            grant.status == "active"
+            and grant.application_roles == role_ids
+            and grant.permission_ceiling == ceiling
+            and not grant.explicit_denies
+            and dict(grant.constraints) == constraints
+            and grant.reviewed_permission_profile_digest
+            == release.permission_profile.digest
+            and grant.expires_at is None
+        )
+        if not exact:
+            grant = management.access.change_access(
+                grant.grant_id,
+                release_digest=release_digest,
+                application_roles=role_ids,
+                issuer_ref=owner_ref,
+                expected_revision=grant.revision,
+                permission_ceiling=ceiling,
+                explicit_denies=(),
+                constraints=constraints,
+                expires_at=None,
+            )
+    else:
+        grant = management.access.grant_access(
+            application_id,
+            release_digest=release_digest,
+            subject_ref=owner_ref,
+            application_roles=role_ids,
+            issuer_ref=owner_ref,
+            idempotency_key="builder-publisher-owner-v1",
+            permission_ceiling=ceiling,
+            explicit_denies=(),
+            constraints=constraints,
+        )
+    return {
+        "required": True,
+        "grant_id": grant.grant_id,
+        "subject_ref": owner_ref,
+        "application_roles": list(grant.application_roles),
+        "permission_profile_digest": grant.reviewed_permission_profile_digest,
+        "role_resolution": resolution,
+        "revision": grant.revision,
+    }
+
+
+def project_access_contract(
+    component_ref: str,
+    *,
+    project_ref: str | None = None,
+) -> dict[str, Any]:
+    """Project the trusted DEV permission declaration for Builder review."""
+
+    from adaos.services.builder.application_permissions import (
+        application_permissions_context,
+    )
+
+    ctx = _ctx()
+    paths = ctx.paths
+    projects_method = getattr(paths, "dev_projects_dir", None)
+    skills_method = getattr(paths, "dev_skills_dir", None)
+    dev_root = Path(paths.dev_dir()).resolve()
+    projects_root = Path(
+        projects_method() if callable(projects_method) else dev_root / "projects"
+    ).resolve()
+    skills_root = Path(
+        skills_method() if callable(skills_method) else dev_root / "skills"
+    ).resolve()
+    return application_permissions_context(
+        component_ref=str(component_ref or "").strip(),
+        requested_project_ref=(str(project_ref or "").strip() or None),
+        dev_projects_root=projects_root,
+        dev_skills_root=skills_root,
+    )
+
+
 def verify_candidate_access(
     project_id: str,
     candidate_id: str,
@@ -315,6 +467,10 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
         candidate_release=envelope,
     )
     service.register_release(envelope)
+    owner_access = _ensure_publisher_owner_access(
+        application.application_id,
+        release_digest=envelope.release_digest,
+    )
     data = bind_local_data_lifecycle(_ctx(), runtime, release)
     activations = TrialActivationStore(_state_dir() / "artifact_pipeline/trial-activations")
 
@@ -339,10 +495,35 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
     transition = data.prepare_beta(webspace_id=webspace_id, activate=activate)
     selection = service.store.get_runtime_selection(webspace_id, application.application_id)
     activation = activations.load(candidate_id)
+    transition_proof = {
+        "operation_id": transition.get("operation_id"),
+        "contract_digest": data._contract(),
+        "completed": bool(transition.get("completed")),
+    }
+    migrated_from_stable = bool(data.stable_digest)
+    activation = activations.update(
+        candidate_id,
+        data_mode="snapshot",
+        safety_evidence={
+            **dict(activation.get("safety_evidence") or {}),
+            "status": "verified",
+            "mode": (
+                "stable_snapshot_forward"
+                if migrated_from_stable
+                else "empty_initialization"
+            ),
+            "reason": (
+                "Stable data was snapshotted and migrated into the isolated Trial."
+                if migrated_from_stable
+                else "The first release initialized an isolated Trial data store."
+            ),
+            "data_transition": transition_proof,
+        },
+    )
     refresh = _refresh_application_placements(application.application_id)
     return {"ok": True, "runtime_selection": selection.to_dict(), "trial_activation": activation,
             "runtime_refresh": refresh, "data_transition": transition,
-            "verification": verification}
+            "verification": verification, "publisher_owner_access": owner_access}
 
 
 def _refresh_application_placements(application_id: str) -> dict[str, Any]:
@@ -495,6 +676,10 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
         release_digest=release.release_digest,
         stage="publication",
     )
+    owner_access = _ensure_publisher_owner_access(
+        application_id,
+        release_digest=release.release_digest,
+    )
     metadata_root = Path(_ctx().paths.workspace_dir()) / ".adaos"
     with mutation_lock(metadata_root / ".workspace-writer.lock", timeout_s=30):
         lock = WorkspaceLock.from_mapping(json.loads((metadata_root / "workspace.lock.json").read_text(encoding="utf-8")))
@@ -529,7 +714,8 @@ def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: s
                 expected_generation=int(state["generation"]))["workflow"]
     refresh = _refresh_application_placements(application_id)
     return {"ok": True, "workflow": state, "installation": installation.to_dict(),
-            "runtime_selection": selection.to_dict(), "runtime_refresh": refresh}
+            "runtime_selection": selection.to_dict(), "runtime_refresh": refresh,
+            "publisher_owner_access": owner_access}
 
 
 def open_trial_placement(candidate_id: str, *, webspace_id: str, scenario_id: str) -> dict[str, Any]:
@@ -1273,6 +1459,7 @@ __all__ = [
     "abort_local_trial_preparation",
     "accept_local_trial",
     "production_webspace_id",
+    "project_access_contract",
     "place_local_trial",
     "place_local_stable",
     "refresh_placement",

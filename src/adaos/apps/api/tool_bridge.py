@@ -2041,10 +2041,24 @@ async def _authorize_application_tool_call(
         component_capabilities=component_capabilities,
     )
     application = management.store.get_application(runtime["application_id"])
+    runtime_selection = _mapping(runtime.get("runtime_selection"))
+    runtime_root_ref = _first_text(runtime_selection.get("runtime_root_ref"), "workspace")
+    runtime_source = "trial" if runtime_root_ref.startswith("trial:") else "workspace"
+    component = next(
+        (
+            item
+            for item in runtime["release"].project_release.components
+            if item.kind == "skill" and item.artifact_id == skill_name
+        ),
+        None,
+    )
     verified = {
         "application_id": runtime["application_id"],
         "application_title": application.display["title"],
         "release_digest": runtime["release_digest"],
+        "runtime_source": runtime_source,
+        "runtime_root_ref": runtime_root_ref,
+        "package_digest": component.digest if component is not None else "",
         "permission_profile_digest": runtime["permission_profile_digest"],
         "subject_ref": subject_ref,
         "holder_ref": holder_ref,
@@ -2080,6 +2094,21 @@ async def _authorize_application_tool_call(
         "context": verified,
         "component_capabilities": list(component_capabilities),
     }
+
+
+def _apply_application_runtime_headers(
+    response: Response, application_access: Mapping[str, Any] | None
+) -> None:
+    context = _mapping(_mapping(application_access).get("context"))
+    runtime_source = _first_text(context.get("runtime_source"))
+    release_digest = _first_text(context.get("release_digest"))
+    package_digest = _first_text(context.get("package_digest"))
+    if runtime_source:
+        response.headers["X-AdaOS-Runtime-Source"] = runtime_source
+    if release_digest:
+        response.headers["X-AdaOS-Release-Digest"] = release_digest
+    if package_digest:
+        response.headers["X-AdaOS-Package-Digest"] = package_digest
 
 
 @router.post("/tools/call", dependencies=[Depends(require_tool_caller)])
@@ -2352,12 +2381,23 @@ async def download_tool_attachment(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     guessed = mimetypes.guess_type(safe_filename)[0] or "application/octet-stream"
     allowed_inline = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=3600",
+    }
+    headers.update(
+        {
+            key: value
+            for key, value in response.headers.items()
+            if key.lower().startswith("x-adaos-")
+        }
+    )
     return FileResponse(
         path,
         media_type=guessed if guessed in allowed_inline else "application/octet-stream",
         filename=safe_filename,
         content_disposition_type="inline" if guessed in allowed_inline else "attachment",
-        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600"},
+        headers=headers,
     )
 
 
@@ -2627,6 +2667,7 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         component_capabilities=declared_component_permissions,
         application_contract=declared_application_access,
     )
+    _apply_application_runtime_headers(response, application_access)
     gate_started_at = time.perf_counter()
     action_risk = await _enforce_runtime_action_gate(
         body=body,

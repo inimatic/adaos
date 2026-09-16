@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 import os
+from pathlib import Path
 from typing import Any
 
 
@@ -273,6 +275,148 @@ def get_state(
     return result
 
 
+def trial_verification_evidence(
+    *,
+    object_type: str,
+    object_id: str,
+    webspace_id: str = "desktop",
+) -> dict[str, Any]:
+    """Project trusted Automation evidence for Application Trial admission.
+
+    The projection contains only evidence sealed by the Automation service. It
+    deliberately excludes browser and live-runtime observations, which belong
+    to the later publication gate after the Trial is active.
+    """
+
+    service = _service()
+    state = dict(
+        service.projection(
+            object_type=object_type,
+            object_id=object_id,
+            webspace_id=webspace_id,
+        )
+        or {}
+    )
+    automation = (
+        state.get("automation")
+        if isinstance(state.get("automation"), Mapping)
+        else {}
+    )
+    task_id = str(automation.get("task_id") or "").strip()
+    if (
+        automation.get("status") != "completed"
+        or not automation.get("terminal")
+        or not task_id
+        or Path(task_id).name != task_id
+    ):
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "completed_automation_required",
+        }
+
+    run_root = (Path(service.runs_root) / task_id).resolve()
+    runs_root = Path(service.runs_root).resolve()
+    if not run_root.is_relative_to(runs_root):
+        raise ValueError("Automation task path escapes the configured run root")
+    result_path = run_root / "output" / "result.json"
+    test_report_path = run_root / "output" / "test_report.json"
+    if not result_path.is_file() or not test_report_path.is_file():
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "automation_evidence_missing",
+            "task_id": task_id,
+        }
+
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    report = json.loads(test_report_path.read_text(encoding="utf-8"))
+    if (
+        result.get("status") != "completed"
+        or not isinstance(result.get("tests"), Mapping)
+        or result["tests"].get("status") != "passed"
+        or report.get("status") != "passed"
+        or report.get("errors")
+    ):
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "automation_tests_not_passed",
+            "task_id": task_id,
+        }
+
+    manifest = result.get("evidence") if isinstance(result.get("evidence"), Mapping) else {}
+    artifacts = [
+        dict(item)
+        for item in manifest.get("artifacts") or ()
+        if isinstance(item, Mapping)
+    ]
+    test_artifact = next(
+        (item for item in artifacts if item.get("kind") == "test_report"),
+        None,
+    )
+    provenance_artifact = next(
+        (item for item in artifacts if item.get("kind") == "provenance"),
+        None,
+    )
+    if not test_artifact or not provenance_artifact:
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "sealed_automation_artifacts_missing",
+            "task_id": task_id,
+        }
+
+    passed_checks = [
+        dict(item)
+        for item in report.get("checks") or ()
+        if isinstance(item, Mapping) and item.get("ok") is True
+    ]
+    access_checks = [
+        item
+        for item in passed_checks
+        if str(item.get("path") or "").endswith("test_application_contract.py")
+    ]
+    if not access_checks:
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "access_matrix_test_missing",
+            "task_id": task_id,
+        }
+
+    def artifact_ref(item: Mapping[str, Any], prefix: str) -> str:
+        return (
+            f"{prefix}:{item.get('logical_path')}"
+            f"#{str(item.get('digest') or '').removeprefix('sha256:')}"
+        )
+
+    source_commit = str(result.get("commit_hash") or "").strip()
+    if not source_commit:
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "automation_source_commit_missing",
+            "task_id": task_id,
+        }
+    return {
+        "ok": True,
+        "status": "ready",
+        "task_id": task_id,
+        "source_commit": source_commit,
+        "release_scope": "trial",
+        "regression_evidence": [artifact_ref(test_artifact, "suite:checkpoint")],
+        "access_matrix_evidence": list(
+            dict.fromkeys(
+                "suite:access-matrix:" + str(item.get("path") or "")
+                for item in access_checks
+            )
+        ),
+        "audit_evidence": [artifact_ref(provenance_artifact, "provenance")],
+        "evidence_manifest_schema": manifest.get("schema"),
+    }
+
+
 def reconcile_checkpoint(*, object_type: str, object_id: str) -> dict[str, Any]:
     """Explicitly recover a failed post-Codex Forge checkpoint without rerunning Codex."""
 
@@ -353,4 +497,5 @@ __all__ = [
     "start",
     "standard_prompt_version",
     "submit",
+    "trial_verification_evidence",
 ]
