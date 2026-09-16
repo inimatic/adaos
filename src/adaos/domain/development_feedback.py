@@ -356,12 +356,72 @@ def parse_development_feedback(message: str) -> list[dict[str, Any]]:
     return normalize_development_feedback(payload)
 
 
+def quarantine_invalid_nonblocking_feedback(message: str, *, reason: str) -> str | None:
+    """Replace malformed optional feedback while retaining the raw model evidence.
+
+    This is deliberately narrower than normalization: every item must explicitly
+    be nonblocking. Ambiguous, blocking, malformed, or duplicate envelopes remain
+    fail-closed.
+    """
+
+    text = str(message or "")
+    matches = list(_FENCE_PATTERN.finditer(text))
+    if len(matches) != 1:
+        return None
+    try:
+        payload = json.loads(
+            matches[0].group("payload"), object_pairs_hook=_strict_json_object
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, Mapping) or payload.get("schema") != DEVELOPMENT_FEEDBACK_OUTPUT_SCHEMA:
+        return None
+    items = payload.get("items")
+    if (
+        not isinstance(items, list)
+        or not 1 <= len(items) <= 8
+        or any(not isinstance(item, Mapping) or item.get("blocking") is not False for item in items)
+    ):
+        return None
+    replacement = {
+        "schema": DEVELOPMENT_FEEDBACK_OUTPUT_SCHEMA,
+        "items": [
+            {
+                "category": "observability_gap",
+                "summary": "Optional model development feedback was quarantined",
+                "blocking": False,
+                "confidence": 1.0,
+                "impact": ["observability", "efficiency"],
+                "target_refs": ["core:development_feedback"],
+                "details": (
+                    "The completed candidate remains subject to independent validation. "
+                    "Its optional feedback did not match the governed contract: "
+                    + str(reason or "invalid feedback")[:2500]
+                ),
+                "recommendation": (
+                    "Inspect the raw task completion evidence and improve the model-facing "
+                    "feedback schema projection."
+                ),
+                "evidence_refs": [],
+            }
+        ],
+    }
+    fenced = (
+        f"```{DEVELOPMENT_FEEDBACK_FENCE}\n"
+        + json.dumps(replacement, ensure_ascii=False, separators=(",", ":"))
+        + "\n```"
+    )
+    match = matches[0]
+    return text[: match.start()] + fenced + text[match.end() :]
+
+
 __all__ = [
     "DEVELOPMENT_FEEDBACK_FENCE",
     "DEVELOPMENT_FEEDBACK_OUTPUT_SCHEMA",
     "normalize_development_feedback",
     "development_feedback_model_rules",
     "parse_development_feedback",
+    "quarantine_invalid_nonblocking_feedback",
     "normalize_clarification_questions",
     "required_user_questions",
 ]

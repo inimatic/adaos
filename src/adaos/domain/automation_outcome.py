@@ -11,6 +11,7 @@ from adaos.domain.development_feedback import (
     DEVELOPMENT_FEEDBACK_OUTPUT_SCHEMA,
     normalize_clarification_questions,
     parse_development_feedback,
+    quarantine_invalid_nonblocking_feedback,
 )
 
 
@@ -88,7 +89,18 @@ def outcome_message(raw: str) -> str:
     status, report = value["status"], value["report"]
     if not report.strip():
         raise ValueError("Automation outcome report is empty")
-    feedback = parse_development_feedback(report)
+    try:
+        feedback = parse_development_feedback(report)
+    except (TypeError, ValueError) as exc:
+        quarantined = (
+            quarantine_invalid_nonblocking_feedback(report, reason=str(exc))
+            if status == "completed"
+            else None
+        )
+        if quarantined is None:
+            raise
+        report = quarantined
+        feedback = parse_development_feedback(report)
     escalations = parse_development_escalations(report)
     blocking = any(item["blocking"] for item in feedback)
     if status == "needs_input":

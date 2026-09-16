@@ -62,6 +62,55 @@ def test_platform_feedback_is_not_laundered_into_user_question():
         outcome_message(json.dumps(value))
 
 
+def test_completed_outcome_quarantines_only_explicitly_nonblocking_invalid_feedback():
+    raw = {
+        "status": "completed",
+        "report": "Implemented.\n```adaos-development-feedback\n" + json.dumps({
+            "schema": "adaos.development_feedback_output.v1",
+            "items": [{
+                "category": "missing_capability",
+                "summary": "Descriptor unavailable",
+                "blocking": False,
+                "application_trace": {
+                    "schema": "adaos.development.application_trace.v1",
+                    "contract_ref": "mcp:descriptor.get",
+                    "operation_id": "descriptor.get",
+                    "input_summary": "bounded",
+                    "expected_behavior": "Return schema",
+                    "observed_behavior": "Not found",
+                    "validation_result": "Fallback validation succeeded with the local ABI",
+                    "trace_refs": ["trace.demo"],
+                },
+            }],
+        }) + "\n```",
+        "questions": [],
+    }
+
+    message = outcome_message(json.dumps(raw))
+    feedback = parse_development_feedback(message)
+
+    assert message.startswith("Implemented.")
+    assert feedback[0]["category"] == "observability_gap"
+    assert feedback[0]["blocking"] is False
+    assert "validation_result" in feedback[0]["details"]
+
+
+@pytest.mark.parametrize("blocking", [True, None])
+def test_completed_outcome_does_not_quarantine_potentially_blocking_feedback(blocking):
+    item = {"category": "missing_capability", "summary": "Descriptor unavailable",
+            "application_trace": {"schema": "invalid"}}
+    if blocking is not None:
+        item["blocking"] = blocking
+    raw = {"status": "completed", "report": (
+        "Implemented.\n```adaos-development-feedback\n"
+        + json.dumps({"schema": "adaos.development_feedback_output.v1", "items": [item]})
+        + "\n```"
+    ), "questions": []}
+
+    with pytest.raises(ValueError):
+        outcome_message(json.dumps(raw))
+
+
 @pytest.mark.parametrize("raw,expected_code", [(json.dumps(clarification()), 0), ("An ordinary question?", 1)])
 def test_subprocess_uses_schema_and_preserves_raw_outcome(tmp_path, monkeypatch, raw, expected_code):
     captured = []
@@ -118,4 +167,3 @@ def test_final_schema_does_not_instruct_the_model_to_abandon_tool_work():
     assert "Use the available tools normally" in OUTCOME_INSTRUCTION
     assert "Attempt the relevant admitted tool" in OUTCOME_INSTRUCTION
     assert "does not disable tools" in OUTCOME_SCHEMA["description"]
-
