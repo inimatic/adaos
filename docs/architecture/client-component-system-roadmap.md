@@ -2,7 +2,7 @@
 
 Status: active prerequisite and growth roadmap for the universal AdaOS Client.
 
-Last reviewed: 2026-09-14.
+Last reviewed: 2026-09-16.
 
 Architecture owner: [Web UI Architecture](web-ui-architecture.md).
 Builder dependency: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
@@ -41,6 +41,30 @@ after the clean baseline from the observed cross-domain gap taxonomy.
 - `deferred`: deliberately excluded from the current correction.
 
 ## Current Audit
+
+Layout baseline, 2026-09-16:
+
+- [x] `[must]` Record the current layout failure boundary in the target
+  architecture: inferred roles, three renderer strategies, global compact
+  stacking, weak pane sizing, heuristic demotion/inlining, canvas-like tool
+  placement, variant drift, and incomplete conformance evidence.
+- [ ] `[must]` Publish and validate Layout & Interaction ABI v2 as the only
+  page-layout contract. Keep `webui.json` canonical; a normalized LayoutGraph is
+  derived and immutable, never a second authored document.
+- [ ] `[must]` Upgrade the coherent Taiga UI package family and add only the
+  layout/table modules used by universal Client components.
+- [ ] `[must]` Implement universal semantic surface, region, collection-tools,
+  adaptive detail/inspector, command-overflow, and disclosure components. No
+  component may contain product ids, labels, endpoint rules, or workflow state.
+- [ ] `[must]` Add contract and browser conformance for each admitted pattern at
+  wide and compact sizes, including long EN/RU content, keyboard/focus,
+  overflow, empty/loading/error/permission states, DOM/a11y/screenshot evidence,
+  and stable render-plan identity.
+- [ ] `[must]` Migrate all authoritative local Workspace and DEV manifests,
+  delete obsolete TEST/E2E projects, reject legacy layouts, and run Workspace
+  browser qualification. DEV applications are qualified later when changed.
+- [ ] `[must]` Record successful `project push` and `dev project push` after
+  source validation; do not rewrite historical Trial/runtime/snapshot evidence.
 
 - [x] `[must]` Qualify generic schema-modal resize and fullscreen restoration on desktop
   and mobile. Persist current-user device/scenario/webspace scopes; resolve exact
@@ -333,6 +357,9 @@ baseline.
   manifest disagree. Do not diagnose this condition from display text.
 - [ ] `[must]` Emit an ABI impact report naming affected compiler mappings,
   applications/scenarios, migrations, fixtures, and Client tests.
+- [ ] `[must]` Generate the LayoutGraph normalizer and universal component
+  registrations from the same contract used by Core validation and Builder
+  retrieval. Handwritten aliases cannot introduce additional layout behavior.
 - [ ] `[should]` Replace public `any`/unbounded dictionary inputs with generated
   discriminated types at the renderer boundary.
 - [ ] `[should]` Require fixtures for empty, loading, error, permission-denied,
@@ -358,6 +385,10 @@ machine-checked impact set.
   locale formatting, and long-content layout for all admitted components.
 - [ ] `[must]` Enforce stable dimensions and no incoherent overlap in declared
   representative states.
+- [ ] `[must]` Exercise every layout pattern through the same conformance
+  harness with at least one multi-region and one compact-disclosure fixture;
+  assert region order, scroll owner, focus return, action reachability, and
+  absence of clipped or overlapping content.
 - [x] `[must]` Correct cross-widget stacking for an open adaptive-toolbar menu;
   later toolbars must not cover its options or intercept pointer events. Retain
   a long-menu browser regression. Generic Ionic root overlays replace the inline

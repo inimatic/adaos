@@ -566,6 +566,15 @@ Exit/remaining work: Qualify one action success/cancel/failure contract across u
   change -> intended view visibility -> reload hydration. Verify loaded images in
   cards/details with empty/error states; a retained media ID, HTTP 200 or substring
   assertion cannot replace a rendered outcome. Keep tests/component fixes generic.
+- [ ] `[must]` Retrieve and emit Layout & Interaction ABI v2 rather than relying
+  on area-name inference. The model chooses a task pattern, semantic regions,
+  wide/compact disclosure, and explicit collection/detail interaction from the
+  authoritative component contracts; it never writes Taiga directives or a
+  parallel YAML layout.
+- [ ] `[must]` Add layout conformance findings to Prototype and Automation
+  evidence. Capability gaps and optional UX richness remain review feedback;
+  malformed regions, unreachable primary actions, overlap, clipping, or a
+  missing compact path are correctness failures.
 
 ### BIP-17
 

@@ -36,8 +36,12 @@ The target is a stable universal client that:
   streams, and LLM-oriented UI evolution
 
 This document is target-state architecture.
-It is intentionally compatible with the current `webui.v1` runtime manifest and
-the current Angular/Ionic client while defining the next structural boundary.
+The transport envelope remains `adaos.webui.v1`, but the page-layout contract
+inside that envelope is making one deliberate incompatible cutover. Every
+authoritative `webui.json` on a development node must be migrated in the same
+change as Core validation and the Client renderer. Historical runtime copies,
+snapshots, Trials, and E2E artifacts are evidence, not authoring inputs, and are
+not compatibility targets.
 The [Client Component System Roadmap](client-component-system-roadmap.md) owns
 the corrective sequence for removing product logic from this universal layer,
 making component contracts authoritative, and growing the renderer set from
@@ -60,6 +64,12 @@ measured cross-domain capability gaps.
 7. A declared semantic capability is either lowered faithfully or rejected
    with a structured capability gap. Silent omission and approximate mapping
    to an unrelated component are invalid.
+8. `webui.json` is the only persisted composition source. Core and Client may
+   derive an immutable normalized layout graph, but no parallel YAML/component
+   document may acquire independent meaning.
+9. Layout intent is explicit. The Client must not infer pane ownership,
+   disclosure, or compact behavior from area names, widget titles, or product
+   identifiers.
 
 ## Current Implementation Base
 
@@ -74,6 +84,54 @@ The current runtime already provides important pieces of the target:
 - coarse intent-level `loadHint` support
 
 The target architecture builds on those pieces rather than replacing them.
+
+## Layout Baseline And Cutover
+
+Baseline recorded 2026-09-16 against the current Workspace manifests and
+Client renderer:
+
+- page layout is effectively limited to `flow`, `split`, and `grid`;
+- `main`, `sidebar`, `aux`, and `footer` placement is partly inferred from area
+  ids and aliases, so two equivalent manifests can render differently;
+- responsive behavior is mostly global CSS. A narrow split stacks every pane,
+  while the author cannot state whether navigation becomes a drawer, detail
+  becomes a route/sheet, a utility region moves to overflow, or a region stays
+  adjacent;
+- widths are page-level numbers. Regions cannot declare useful minimum,
+  preferred, maximum, priority, overflow, or scroll ownership constraints;
+- duplicate placement roles are silently demoted to document flow and weak
+  auxiliary panels are heuristically inlined;
+- tool groups, collection controls, inspectors, and details are widgets placed
+  on a canvas rather than first-class composition regions. This produces tall
+  filter stacks, ambiguous row interactions, clipped metadata, and overloaded
+  first viewports;
+- state-selected variants duplicate complete layouts without a shared semantic
+  region contract, making drift and accidental widget disappearance likely;
+- conformance tests cover selected render-plan classes, not a matrix of layout
+  patterns, representative states, wide/compact viewports, long EN/RU content,
+  keyboard focus, overflow, and screenshot evidence;
+- Builder sees component availability but not enough composition constraints to
+  choose a predictable shell, disclosure policy, and interaction model.
+
+The cutover keeps `webui.json` canonical and introduces Layout & Interaction
+ABI v2 inside each page schema. It is intentionally not a generic free-form CSS
+language. Its stable vocabulary is:
+
+- a surface `pattern` describing the user task: `document`, `collection`,
+  `collection-detail`, `master-detail`, `dashboard`, `board`, `task-flow`,
+  `settings`, or `workbench`;
+- named regions with semantic roles: `navigation`, `toolbar`, `collection`,
+  `main`, `detail`, `inspector`, `utility`, `status`, and `commands`;
+- density and content-width policy at the surface level;
+- per-region size, scroll ownership, priority, and wide/compact presentation;
+- explicit selection, row activation, detail, filter, action-overflow, and
+  modal/drawer interaction policies where the behavior is otherwise ambiguous;
+- complete state-selected variants that reuse the same vocabulary.
+
+Core validates this contract and produces the normalized layout graph. Client
+renders that graph through universal components. Builder retrieves the same
+contract and conformance examples. Taiga UI is an implementation toolkit for
+those components, never the authored ABI.
 
 ## Layer Model
 
@@ -638,35 +696,43 @@ first browser MVP as a fully generalized universal contract.
 
 ## Layout Model
 
-The current `layout.type + areas[]` contract should evolve into a stronger
-surface model while preserving compatibility.
+Every page and modal declares Layout & Interaction ABI v2. `layout.version` is
+`2`; `layout.pattern`, `layout.density`, and `layout.regions[]` are required.
+Widgets still refer to a stable region id through `area`; the region carries the
+composition semantics.
 
-Supported patterns should include:
+Supported task patterns are:
 
-- `stack`
-- `split`
-- `tabs`
-- `grid`
-- `sidebar-content`
+- `document`
+- `collection`
+- `collection-detail`
+- `master-detail`
 - `dashboard`
-- `modal`
-- `sheet`
-- `focus-detail`
-- `desktop-zones`
+- `board`
+- `task-flow`
+- `settings`
+- `workbench`
 
-Each layout should also support:
+Required region properties are `id`, `role`, and `presentation`. Presentation
+declares both `wide` and `compact` behavior using a bounded vocabulary:
+`pane`, `stack`, `drawer`, `sheet`, `route`, `overflow`, or `hidden`. A hidden
+region must be optional and cannot contain the only primary command. Optional
+size constraints use pixels only at the renderer boundary and obey
+`min <= preferred <= max`.
 
-- roles
-- responsive collapse rules
-- preferred focus phase
-- lazy boundaries
+The normalized graph also carries density, content-width policy, region
+priority, scroll ownership, and focus order. Client breakpoints select a
+declared presentation; they do not rewrite semantic roles. Interaction policy
+is colocated with the owning collection or surface and distinguishes selection,
+open-details, edit, primary commands, overflow commands, and destructive
+confirmation. A row click is never inferred to mean edit.
 
 ### State-selected full-surface variants
 
-`webui.v1` pages may declare `layout.variants[]` when one workflow needs
+Pages may declare `layout.variants[]` when one workflow needs
 materially different full-surface compositions, such as a portfolio and an
-entity workbench. Each variant owns its complete `type`, `pattern`, areas, and
-optional widths. The first matching safe `when` expression wins and one
+entity workbench. Each variant owns its complete `pattern`, density, regions,
+and interaction overrides. The first matching safe `when` expression wins and one
 `default: true` variant provides deterministic fallback. Widgets assigned to
 areas absent from the selected variant are outside the active view.
 
@@ -793,7 +859,15 @@ Keep:
 - `contributions`
 - `loadHint`
 
-Add on top:
+Replace the legacy page-layout subset in one coordinated local cutover with:
+
+- `layout.version = 2`
+- semantic task patterns and regions
+- explicit wide/compact region presentation
+- layout-level density, width, scroll, and focus policy
+- interaction policy for collections, details, tools, and overflow
+
+Continue to add on top:
 
 - semantic `view`
 - typed `actions`
@@ -923,7 +997,8 @@ Current pre-stand milestone:
 
 - [x] freeze the shell/manifest/semantic/renderer/data/action layer split
 - [x] publish semantic UI as the primary future browser contract
-- [x] explicitly preserve compatibility with current `webui.v1`
+- [x] preserve the `webui.v1` transport envelope and choose a coordinated,
+  incompatible Layout & Interaction ABI v2 cutover for local authoring sources
 
 ### 1. Browser Manifest Preservation
 
@@ -1086,10 +1161,14 @@ Recommended demo data shape:
 
 ### 8. Cleanup and Migration
 
+- [ ] migrate every authoritative Workspace and DEV `webui.json` on the
+  development node to Layout & Interaction ABI v2; remove old E2E projects
+  instead of carrying compatibility for them
+- [ ] reject legacy page layouts after the migration; runtime snapshots,
+  Trials, and historical evidence remain immutable and are not rewritten
 - [ ] migrate existing concrete widget types gradually to semantic view kinds
 - [ ] remove browser-core special cases once semantic equivalents are proven
-- [ ] keep legacy compatibility paths only where the runtime still depends on
-  them
+- [ ] keep no page-layout compatibility parser after the coordinated cutover
 
 ### 8a. Contract Hardening
 

@@ -1,6 +1,7 @@
 # Application Access, Permissions, and Roles Roadmap
 
-Status: V1 non-deferred implementation complete; deferred backlog retained.
+Status: policy/runtime V1 implemented; product-surface and full browser
+qualification reopened for Layout & Interaction ABI v2 migration.
 
 Last reviewed: 2026-09-16.
 
@@ -54,7 +55,11 @@ Application declaration -> install/update review -> access grant/role assignment
 
 ## Implementation Evidence: 2026-09-16 V1 Vertical Slice
 
-The non-deferred roadmap is implemented as a release-bound vertical slice.
+The policy and runtime contracts are implemented as a release-bound vertical
+slice. Generated DEV surfaces and bounded probes are implementation evidence,
+but they do not establish the complete user-facing Applications and Users &
+Access products. AAPR4 and the UI-dependent AAPR6 claims remain open until the
+new layout ABI, Workspace applications, and browser journeys are accepted.
 The durable contracts, policy path, management surfaces, Builder gates, and
 machine evidence use the same Application and permission-profile digests.
 Evidence:
@@ -260,29 +265,31 @@ replay.
 **Outcome:** Applications and Users & Access expose the same policy state from
 Application-centric and subject-centric views.
 
-- [x] `[must]` `AAPR4-01` Extend Application install/update review to show
+- [ ] `[must]` `AAPR4-01` Extend Application install/update review to show
   structured permissions, data practices, LLM/network use, secrets,
   notifications, background work, role model, and release-readiness summary.
-- [x] `[must]` `AAPR4-02` Add Application detail tabs or sections:
+- [ ] `[must]` `AAPR4-02` Add Application detail tabs or sections:
   Permissions, Access, Roles, Connected Accounts, Release Readiness, and
   Activity.
-- [x] `[must]` `AAPR4-03` Add minimal role assignment management from
+- [ ] `[must]` `AAPR4-03` Add minimal role assignment management from
   Applications: assign declared Application role, change role, revoke access,
   and show affected child/guest constraints.
-- [x] `[must]` `AAPR4-04` Add Users & Access V1 with People, Guests, Children,
+- [ ] `[must]` `AAPR4-04` Add Users & Access V1 with People, Guests, Children,
   Devices/Sessions, User Detail, Application Access, and Activity projections.
-- [x] `[must]` `AAPR4-05` Connect Pending Actions to Application permission
+- [ ] `[must]` `AAPR4-05` Connect Pending Actions to Application permission
   and Users & Access detail instead of showing only raw tool ids.
-- [x] `[must]` `AAPR4-06` Add Builder permission profiler: declared,
+- [ ] `[must]` `AAPR4-06` Add Builder permission profiler: declared,
   statically inferred, observed, undeclared observed, unused, child/guest
   compatibility, role diff, and inputs for Builder final verification.
-- [x] `[should]` `AAPR4-07` Add responsive compact/wide UI, keyboard flows, and
+- [ ] `[should]` `AAPR4-07` Add responsive compact/wide UI, keyboard flows, and
   EN/RU i18n fixtures for long permission, role, provider, and denial labels.
-- [x] `[could]` `AAPR4-08` Add app-embedded role management component that
+- [ ] `[could]` `AAPR4-08` Add app-embedded role management component that
   delegates all writes to platform APIs.
 
-**Exit proof:** browser tests cover Application-centric and user-centric
-access management without direct database edits.
+**Current boundary:** the shared management API, projections, generated DEV
+surfaces, and bounded contract probes exist. The exit proof is not met: the
+Workspace products, complete navigation, role/permission management UX, and
+wide/compact browser journeys are still required without direct database edits.
 
 ## AAPR5. Builder Final Verification
 
@@ -339,26 +346,26 @@ with an undeclared high-risk observed permission and accepts one that passes.
 **Outcome:** the first access-aware Applications slice works through real
 install, grant, runtime, audit, and revoke flows.
 
-- [x] `[must]` `AAPR6-01` Owner installs an Application with LLM/network/write
+- [ ] `[must]` `AAPR6-01` Owner installs an Application with LLM/network/write
   permissions, sees the profile, grants access, and covered runtime actions do
   not request raw method approval.
-- [x] `[must]` `AAPR6-02` Owner grants a child access with an app role that can
+- [ ] `[must]` `AAPR6-02` Owner grants a child access with an app role that can
   read or complete assigned work but cannot use LLM/network/secrets without
   guardian approval.
-- [x] `[must]` `AAPR6-03` Owner grants guest access through a TTL link with a
+- [ ] `[must]` `AAPR6-03` Owner grants guest access through a TTL link with a
   readonly app role, proves no profile binding, and revokes live access.
-- [x] `[must]` `AAPR6-04` Application update adds or elevates a permission and
+- [ ] `[must]` `AAPR6-04` Application update adds or elevates a permission and
   a role capability; auto-update pauses for review and shows affected users.
-- [x] `[must]` `AAPR6-05` Secret/connected-account use shows missing,
+- [ ] `[must]` `AAPR6-05` Secret/connected-account use shows missing,
   connected, revoked, and denied states without exposing secret values.
-- [x] `[must]` `AAPR6-06` Users & Access shows the same facts from a user,
+- [ ] `[must]` `AAPR6-06` Users & Access shows the same facts from a user,
   child, guest, device/session, and Application perspective.
 - [x] `[must]` `AAPR6-07` Builder final verification reports declared versus
   observed permissions, records regression/access-matrix evidence, and blocks
   release on undeclared observed high-risk access.
-- [x] `[should]` `AAPR6-08` Conversational read/explain/revoke works, with
+- [ ] `[should]` `AAPR6-08` Conversational read/explain/revoke works, with
   approval routed to Pending Actions or trusted device for sensitive changes.
-- [x] `[could]` `AAPR6-09` Telegram keyboard mirrors low-risk Pending Action
+- [ ] `[could]` `AAPR6-09` Telegram keyboard mirrors low-risk Pending Action
   decisions with the same grant and audit records.
 - [x] `[must]` `AAPR6-10` Run two local Builder cycles on a second generated
   Application with real runtime enforcement. Volunteer Roster proves managed
