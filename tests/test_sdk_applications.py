@@ -104,6 +104,91 @@ def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) 
     )
 
 
+def test_sdk_application_access_helpers_forward_review_context(monkeypatch) -> None:
+    calls = []
+
+    class Access:
+        def grant_access(self, *args, **kwargs):
+            calls.append(("grant_access", args, kwargs))
+            return _Record({"grant_id": "appgrant.1"})
+
+        def revoke_access(self, *args, **kwargs):
+            calls.append(("revoke_access", args, kwargs))
+            return _Record({"grant_id": args[0], "status": "revoked"})
+
+        def decide(self, *args, **kwargs):
+            calls.append(("decide", args, kwargs))
+            return _Record({"decision": "allow"})
+
+    access = Access()
+    monkeypatch.setattr(applications, "_service", lambda: SimpleNamespace(store=SimpleNamespace()))
+    monkeypatch.setattr(applications, "ApplicationAccessService", lambda _service: access)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:sn_home")
+    monkeypatch.setattr(applications, "_admit_active_skill_capability", lambda _capability: None)
+
+    assert applications.grant_application_access(
+        "app_demo",
+        release_digest="sha256:" + "a" * 64,
+        subject_ref="user:masha",
+        application_roles=("editor",),
+        issuer_ref="",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+        idempotency_key="grant-masha-editor",
+        permission_ceiling=("workspace.read",),
+    ) == {"grant_id": "appgrant.1"}
+    assert applications.decide_application_access(
+        "app_demo",
+        release_digest="sha256:" + "a" * 64,
+        subject_ref="user:masha",
+        permission_id="workspace.read",
+        app_capability="app.view",
+        component_capabilities=("workspace.read",),
+        actor_chain={"component_ref": "scenario:demo"},
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="decide-masha-read",
+    ) == {"decision": "allow"}
+    assert applications.revoke_application_access(
+        "appgrant.1",
+        issuer_ref="",
+        expected_revision=1,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    ) == {"grant_id": "appgrant.1", "status": "revoked"}
+
+    assert calls[0] == (
+        "grant_access",
+        ("app_demo",),
+        {
+            "release_digest": "sha256:" + "a" * 64,
+            "subject_ref": "user:masha",
+            "application_roles": ("editor",),
+            "permission_ceiling": ("workspace.read",),
+            "explicit_denies": (),
+            "constraints": None,
+            "expires_at": None,
+            "issuer_ref": "user:owner",
+            "idempotency_key": "grant-masha-editor",
+        },
+    )
+    assert calls[1][0] == "decide"
+    assert calls[1][2]["actor_chain"] == {
+        "actor_ref": "user:owner",
+        "subnet_ref": "subnet:sn_home",
+        "capability": "applications.plan",
+        "component_ref": "scenario:demo",
+    }
+    assert calls[2] == (
+        "revoke_access",
+        ("appgrant.1",),
+        {"issuer_ref": "user:owner", "expected_revision": 1},
+    )
+
+
 def test_sdk_application_surface_has_no_raw_path_or_process_parameters() -> None:
     forbidden = {"path", "filesystem_path", "command", "process", "git_credentials", "registry_path"}
     for name in applications.__all__:

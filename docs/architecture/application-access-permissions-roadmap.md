@@ -1,8 +1,8 @@
 # Application Access, Permissions, and Roles Roadmap
 
-Status: target implementation roadmap.
+Status: implementation roadmap with first backend/ABI slice in progress.
 
-Last reviewed: 2026-09-15.
+Last reviewed: 2026-09-16.
 
 Target architecture:
 [Application Access, Permissions, and Roles](application-access-permissions.md).
@@ -52,6 +52,44 @@ Application declaration -> install/update review -> access grant/role assignment
 -> revoke/update review
 ```
 
+## Implementation Evidence: 2026-09-16 Backend/ABI Slice
+
+The first non-UI slice now exists as versioned domain contracts, JSON schemas,
+store/service APIs, SDK helpers, registry-projection indexes, and focused
+tests. Evidence:
+
+- `src/adaos/domain/application_access.py` defines permission profiles,
+  Application roles, Application grants, access decisions, update diffs, and
+  Builder verification reports.
+- `src/adaos/domain/application.py` binds structured permission profiles,
+  profile digests, Application roles, and role-model digests into
+  `ApplicationRelease` while preserving legacy `ProjectRelease.permissions`.
+- `src/adaos/abi/application.permission-profile.v1.schema.json`,
+  `application.access-grant.v1.schema.json`,
+  `application.access-decision.v1.schema.json`,
+  `application.access-profile-diff.v1.schema.json`,
+  `application.verification-report.v1.schema.json`, and the extended
+  `application.release.v1.schema.json`/`project.v1.schema.json` publish the
+  ABI boundary.
+- `src/adaos/services/applications/access.py` and
+  `src/adaos/services/applications/store.py` persist and evaluate
+  Application-scoped grants, revoke state, profile-review pauses, child/guest
+  floors, policy explanations, actor-chain fields, and audit records.
+- `src/adaos/sdk/applications.py` exposes reviewed Application-access helpers
+  without raw path/process parameters.
+- `src/adaos/services/application_registry_projection.py` indexes permission
+  profiles and Application roles from DEV projects and ApplicationStore
+  releases for Applications/Users & Access read models.
+- Focused evidence: `tests/test_application_access_contracts.py`,
+  `tests/test_application_access_service.py`,
+  `tests/test_application_registry_projection.py`,
+  `tests/test_application_contracts.py`, and `tests/test_sdk_applications.py`.
+
+Still open after this slice: runtime tool/action bridge integration,
+Applications and Users & Access browser surfaces, conversational/Pending
+Actions routing, connected-account state UI, persisted Builder checklist
+surface, and a full AAPR6 end-to-end evidence bundle.
+
 ## Sequencing Rules
 
 1. Contract and normalization precede UI management.
@@ -84,7 +122,7 @@ Application declaration -> install/update review -> access grant/role assignment
 - [x] `[must]` `AAPR0-02` Link Application lifecycle, Personalization, Roadmap
   Inventory, Product Terminology, Builder, Pending Actions, and Users & Access
   planning to this architecture without duplicating its checklist.
-- [ ] `[must]` `AAPR0-03` Record the first implementation issue bundle with
+- [x] `[must]` `AAPR0-03` Record the first implementation issue bundle with
   named evidence gates for backend contracts, runtime enforcement, Applications
   UI, Users & Access UI, Builder permission profiling, and Builder final
   verification.
@@ -97,24 +135,24 @@ roles, and Application access grants to this roadmap.
 **Outcome:** Application releases can declare structured permissions and roles
 without a full policy engine.
 
-- [ ] `[must]` `AAPR1-01` Add
+- [x] `[must]` `AAPR1-01` Add
   `adaos.application.permission_profile.v1` with required/optional
   permissions, structured authorization details, data practices, LLM/model use,
   notifications, background actions, secrets, external providers, and approval
   policy.
-- [ ] `[must]` `AAPR1-02` Preserve the existing flat `permissions` list as a
+- [x] `[must]` `AAPR1-02` Preserve the existing flat `permissions` list as a
   compatibility projection derived from the structured profile.
-- [ ] `[must]` `AAPR1-03` Add a deterministic `permission_profile_digest` and
+- [x] `[must]` `AAPR1-03` Add a deterministic `permission_profile_digest` and
   bind install/update grants to the digest reviewed by the owner.
-- [ ] `[must]` `AAPR1-04` Add a minimal `application_roles` declaration:
+- [x] `[must]` `AAPR1-04` Add a minimal `application_roles` declaration:
   role id, title, app capabilities, `assignable_to`, `default_for`,
   `requires_permissions`, and `sensitive`.
-- [ ] `[must]` `AAPR1-05` Validate role ids, permission ids, and app capability
+- [x] `[must]` `AAPR1-05` Validate role ids, permission ids, and app capability
   ids; unknown ids fail closed.
-- [ ] `[must]` `AAPR1-06` Add role and permission diff classification:
+- [x] `[must]` `AAPR1-06` Add role and permission diff classification:
   unchanged, removed, added, elevated, sensitive-added, affected-users,
   remap-required.
-- [ ] `[should]` `AAPR1-07` Add privacy label and data-safety projection fields
+- [x] `[should]` `AAPR1-07` Add privacy label and data-safety projection fields
   mapped from `data_practices`.
 - [ ] `[could]` `AAPR1-08` Add developer-facing examples for Builder-generated
   Applications with owner/member/child/guest role fixtures.
@@ -127,28 +165,28 @@ compatibility, role validation, and update diffs.
 **Outcome:** AdaOS can grant and revoke Application access per subject,
 Application role, scope, and permission profile.
 
-- [ ] `[must]` `AAPR2-01` Add `application` to the access scope vocabulary or
+- [x] `[must]` `AAPR2-01` Add `application` to the access scope vocabulary or
   provide an equivalent Application-scoped grant object with deterministic
   refs such as `application:<id>`.
-- [ ] `[must]` `AAPR2-02` Add `ApplicationAccessGrant` records for subject,
+- [x] `[must]` `AAPR2-02` Add `ApplicationAccessGrant` records for subject,
   Application id, Application roles, permission ceiling, explicit denies,
   constraints, issuer, status, expiry, and reviewed permission profile digest.
-- [ ] `[must]` `AAPR2-03` Implement effective decision evaluation across
+- [x] `[must]` `AAPR2-03` Implement effective decision evaluation across
   declared permission, installed grant, actor membership/capability,
   Application role, resource scope, device/session trust, child/guest floors,
   and explicit denies.
-- [ ] `[must]` `AAPR2-04` Record actor chain fields on every Application access
+- [x] `[must]` `AAPR2-04` Record actor chain fields on every Application access
   decision: user, application, component, tool/agent/service, external
   provider, device/session, and approval id.
-- [ ] `[must]` `AAPR2-05` Enforce child floors: guardian approval for sensitive
+- [x] `[must]` `AAPR2-05` Enforce child floors: guardian approval for sensitive
   permissions, high privacy defaults, and no silent external data sharing.
-- [ ] `[must]` `AAPR2-06` Enforce guest floors: TTL/session-bound access, no
+- [x] `[must]` `AAPR2-06` Enforce guest floors: TTL/session-bound access, no
   profile binding by public guest join, no durable grants, no secrets, and no
   LLM/network/write/background actions by default.
-- [ ] `[must]` `AAPR2-07` Add audit records for grant create/revoke, role
+- [x] `[must]` `AAPR2-07` Add audit records for grant create/revoke, role
   assign/change, permission allow/deny, child/guardian approval, guest access,
   and update review.
-- [ ] `[should]` `AAPR2-08` Add policy explanations suitable for Applications,
+- [x] `[should]` `AAPR2-08` Add policy explanations suitable for Applications,
   Users & Access, Builder, chat, and logs.
 - [ ] `[could]` `AAPR2-09` Add coarse access-review detectors for long-lived
   guests, stale devices, unused grants, and sensitive app roles.
@@ -224,7 +262,7 @@ access management without direct database edits.
 blocks unsafe Application candidates before Trial, publication, or external
 install.
 
-- [ ] `[must]` `AAPR5-01` Add
+- [x] `[must]` `AAPR5-01` Add
   `adaos.application.verification_report.v1` with result states
   `passed|failed|inconclusive|skipped`, gate levels
   `hard_gate|warning|attestation`, report digest, release digest,
@@ -233,17 +271,17 @@ install.
 - [ ] `[must]` `AAPR5-02` Add Builder Final Verification UI/CLI output that
   renders the report as a checklist, names blocking checks first, and links
   each item to evidence or required follow-up.
-- [ ] `[must]` `AAPR5-03` Validate permission profile schema, normalization,
+- [x] `[must]` `AAPR5-03` Validate permission profile schema, normalization,
   flat compatibility projection, digest stability, install/update disclosure
   preview, and permission/role diff classification.
-- [ ] `[must]` `AAPR5-04` Compare declared, statically inferred, and observed
+- [x] `[must]` `AAPR5-04` Compare declared, statically inferred, and observed
   capabilities. Undeclared high-risk LLM, network, workspace write, secret,
   notification, background, external-provider, or child-data access is a hard
   gate.
-- [ ] `[must]` `AAPR5-05` Verify Application role declarations, role capability
+- [x] `[must]` `AAPR5-05` Verify Application role declarations, role capability
   expansion, `assignable_to`, `default_for`, sensitive flags, update impact,
   and owner/member/child/guest/custom-role access matrix fixtures.
-- [ ] `[must]` `AAPR5-06` Require regression-test evidence for changed
+- [x] `[must]` `AAPR5-06` Require regression-test evidence for changed
   behavior. For DEV/Candidate, focused affected tests may pass the gate; for
   publication, the report must name the broader release test profile or explain
   a bounded `skipped` scope.
@@ -254,7 +292,7 @@ install.
 - [ ] `[must]` `AAPR5-08` Verify Pending Action fallback cards and routing for
   uncovered or step-up actions, including chat/Telegram keyboard affordances
   and voice handoff text for trusted-device approval.
-- [ ] `[must]` `AAPR5-09` Verify auditability for allow, deny, approval,
+- [x] `[must]` `AAPR5-09` Verify auditability for allow, deny, approval,
   revoke, update-blocked, child, guest, secret, and external-provider
   decisions, including actor chain and reviewed profile digest.
 - [ ] `[should]` `AAPR5-10` Integrate the report into the MVP release evidence

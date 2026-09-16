@@ -11,6 +11,12 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from adaos.domain.application import TrialAccessGrant, utc_now
+from adaos.domain.application_access import (
+    ApplicationAccessDecision,
+    ApplicationAccessGrant,
+    evaluate_application_access,
+    is_high_risk_permission,
+)
 from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json, mutation_lock
 
 from .service import ApplicationService, ApplicationServiceError
@@ -18,6 +24,10 @@ from .store import _read
 
 
 class TrialAccessError(ApplicationServiceError):
+    pass
+
+
+class ApplicationAccessError(ApplicationServiceError):
     pass
 
 
@@ -254,4 +264,228 @@ class TrialAccessService:
         return self.store.save_grant(revoked, expected_revision=grant.revision)
 
 
-__all__ = ["TrialAccessError", "TrialAccessService"]
+class ApplicationAccessService:
+    """Application-scoped role and permission grants over release declarations."""
+
+    def __init__(self, applications: ApplicationService) -> None:
+        self.applications = applications
+        self.store = applications.store
+
+    @staticmethod
+    def _grant_id(application_id: str, subject_ref: str, idempotency_key: str) -> str:
+        identity = "\0".join(
+            (
+                str(application_id or "").strip(),
+                str(subject_ref or "").strip(),
+                str(idempotency_key or "").strip(),
+            )
+        )
+        return "appgrant." + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+
+    @staticmethod
+    def _subject_kind(subject_ref: str, constraints: dict[str, Any]) -> str:
+        explicit = str(constraints.get("subject_kind") or "").strip().lower()
+        if explicit:
+            return explicit
+        token = str(subject_ref or "")
+        if token.startswith("session:guest") or ":guest" in token:
+            return "guest"
+        if token.startswith("child:") or ":child" in token:
+            return "child"
+        return "user"
+
+    def _audit(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self.store.append_application_access_audit(
+            {
+                "occurred_at": utc_now(),
+                **dict(payload),
+            }
+        )
+
+    def grant_access(
+        self,
+        application_id: str,
+        *,
+        release_digest: str,
+        subject_ref: str,
+        application_roles: tuple[str, ...],
+        issuer_ref: str,
+        idempotency_key: str,
+        permission_ceiling: tuple[str, ...] | None = None,
+        explicit_denies: tuple[str, ...] = (),
+        constraints: Mapping[str, Any] | None = None,
+        expires_at: str | None = None,
+    ) -> ApplicationAccessGrant:
+        release = self.store.get_release(application_id, release_digest)
+        profile = release.permission_profile
+        role_ids = {item.role_id for item in release.application_roles}
+        unknown_roles = sorted(set(application_roles) - role_ids)
+        if unknown_roles:
+            raise ApplicationAccessError("unknown Application roles: " + ", ".join(unknown_roles))
+        ceiling = tuple(permission_ceiling or profile.flat_permissions)
+        unknown_permissions = sorted(set(ceiling) - set(profile.flat_permissions))
+        if unknown_permissions:
+            raise ApplicationAccessError("unknown Application permissions: " + ", ".join(unknown_permissions))
+        deny_unknown = sorted(set(explicit_denies) - set(profile.flat_permissions))
+        if deny_unknown:
+            raise ApplicationAccessError("unknown explicit deny permissions: " + ", ".join(deny_unknown))
+        constraint_payload = dict(constraints or {})
+        subject_kind = self._subject_kind(subject_ref, constraint_payload)
+        constraint_payload.setdefault("subject_kind", subject_kind)
+        high_risk = sorted(item for item in ceiling if is_high_risk_permission(item))
+        if subject_kind == "guest":
+            if expires_at is None:
+                raise ApplicationAccessError("guest Application access requires expires_at")
+            if high_risk and not constraint_payload.get("guest_sensitive_override"):
+                raise ApplicationAccessError("guest Application access cannot include sensitive permissions by default")
+        child_external_data = bool(
+            profile.privacy_labels.get("sent_off_device")
+            or profile.privacy_labels.get("tracking")
+        )
+        if (
+            subject_kind == "child"
+            and (high_risk or child_external_data)
+            and not constraint_payload.get("guardian_approval_id")
+        ):
+            raise ApplicationAccessError("child sensitive Application access requires guardian approval")
+        grant = ApplicationAccessGrant(
+            grant_id=self._grant_id(application_id, subject_ref, idempotency_key),
+            subject_ref=subject_ref,
+            application_id=application_id,
+            application_roles=application_roles,
+            permission_ceiling=ceiling,
+            explicit_denies=explicit_denies,
+            constraints=constraint_payload,
+            issuer_ref=issuer_ref,
+            reviewed_permission_profile_digest=profile.digest,
+            expires_at=expires_at,
+            revision=1,
+        )
+        try:
+            existing = self.store.get_application_access_grant(grant.grant_id)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            expected = replace(grant, created_at=existing.created_at, updated_at=existing.updated_at, revision=existing.revision)
+            if existing != expected:
+                raise ApplicationAccessError("idempotency key already names different Application access")
+            return existing
+        saved = self.store.save_application_access_grant(grant, expected_revision=0)
+        self._audit(
+            {
+                "action": "grant_create",
+                "application_id": saved.application_id,
+                "subject_ref": saved.subject_ref,
+                "grant_id": saved.grant_id,
+                "issuer_ref": issuer_ref,
+                "application_roles": list(saved.application_roles),
+                "permission_ceiling": list(saved.permission_ceiling),
+                "explicit_denies": list(saved.explicit_denies),
+                "constraints": dict(saved.constraints),
+                "expires_at": saved.expires_at,
+                "status": saved.status,
+                "reviewed_permission_profile_digest": saved.reviewed_permission_profile_digest,
+            }
+        )
+        return saved
+
+    def revoke_access(
+        self,
+        grant_id: str,
+        *,
+        issuer_ref: str,
+        expected_revision: int,
+    ) -> ApplicationAccessGrant:
+        grant = self.store.get_application_access_grant(grant_id)
+        if grant.revision != expected_revision:
+            from .store import ApplicationRevisionConflict
+
+            raise ApplicationRevisionConflict(expected=expected_revision, observed=grant.revision)
+        if grant.status == "revoked":
+            return grant
+        revoked = replace(grant, status="revoked", revision=grant.revision + 1, updated_at=utc_now())
+        saved = self.store.save_application_access_grant(revoked, expected_revision=grant.revision)
+        self._audit(
+            {
+                "action": "grant_revoke",
+                "application_id": saved.application_id,
+                "subject_ref": saved.subject_ref,
+                "grant_id": saved.grant_id,
+                "issuer_ref": issuer_ref,
+                "application_roles": list(saved.application_roles),
+                "permission_ceiling": list(saved.permission_ceiling),
+                "explicit_denies": list(saved.explicit_denies),
+                "constraints": dict(saved.constraints),
+                "expires_at": saved.expires_at,
+                "status": saved.status,
+                "reviewed_permission_profile_digest": saved.reviewed_permission_profile_digest,
+            }
+        )
+        return saved
+
+    def decide(
+        self,
+        application_id: str,
+        *,
+        release_digest: str,
+        subject_ref: str,
+        permission_id: str,
+        app_capability: str,
+        actor_chain: Mapping[str, Any],
+        component_capabilities: tuple[str, ...] = (),
+        approval_id: str | None = None,
+    ) -> ApplicationAccessDecision:
+        release = self.store.get_release(application_id, release_digest)
+        subject_grants = tuple(
+            self.store.list_application_access_grants(
+                application_id,
+                subject_ref=subject_ref,
+            )
+        )
+        grant = next(
+            (
+                item
+                for item in subject_grants
+                if item.reviewed_permission_profile_digest == release.permission_profile.digest
+            ),
+            subject_grants[0] if subject_grants else None,
+        )
+        chain = {
+            "application_id": application_id,
+            "subject_ref": subject_ref,
+            **dict(actor_chain or {}),
+        }
+        decision = evaluate_application_access(
+            profile=release.permission_profile,
+            roles=release.application_roles,
+            grant=grant,
+            permission_id=permission_id,
+            app_capability=app_capability,
+            actor_chain=chain,
+            component_capabilities=component_capabilities,
+            approval_id=approval_id,
+        )
+        self._audit(
+            {
+                "action": "permission_decision",
+                "application_id": application_id,
+                "subject_ref": subject_ref,
+                "grant_id": decision.grant_id,
+                "decision": decision.decision,
+                "reason_code": decision.reason_code,
+                "permission_id": decision.permission_id,
+                "app_capability": decision.app_capability,
+                "approval_id": decision.approval_id,
+                "reviewed_permission_profile_digest": release.permission_profile.digest,
+                "actor_chain": dict(decision.actor_chain),
+            }
+        )
+        return decision
+
+
+__all__ = [
+    "ApplicationAccessError",
+    "ApplicationAccessService",
+    "TrialAccessError",
+    "TrialAccessService",
+]

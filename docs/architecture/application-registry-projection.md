@@ -1,8 +1,8 @@
 # Application Registry Projection
 
-Status: target architecture and implementation roadmap.
+Status: target architecture with core projection slice implemented.
 
-Last reviewed: 2026-09-15.
+Last reviewed: 2026-09-16.
 
 This document defines the target AdaOS Application Registry Projection: a
 private, rebuildable, SQLite-backed read model for Application catalog,
@@ -12,6 +12,13 @@ role matrices, validation state, and subnet-visible Application facts.
 The projection exists to remove manifest scans and full YAML validation from
 hot startup, reload, search, and access-description paths. It does not replace
 Application, release, install, access, or skill-owned data authority.
+
+As of 2026-09-16, the local projection service indexes Application catalog
+summaries, component ownership, entrypoints, release/channel pointers,
+permission profiles, and Application roles from DEV project manifests and
+ApplicationStore release records. Dynamic grants, revocation freshness,
+effective authorization decisions, and audit remain outside this projection and
+are owned by the Application access service.
 
 Related owners:
 

@@ -23,6 +23,49 @@ class _StoreRecord:
         return dict(self._payload)
 
 
+def _permission_profile() -> dict:
+    return {
+        "schema": "adaos.application.permission_profile.v1",
+        "required": [
+            {"id": "workspace.read", "purpose": "Read application data"},
+            {"id": "workspace.write", "purpose": "Persist application data"},
+        ],
+        "optional": [
+            {
+                "id": "notifications.send",
+                "purpose": "Notify assigned users",
+                "approval_policy": "ask_in_context",
+            }
+        ],
+        "data_practices": {
+            "collected": ["user_content"],
+            "sent_off_device": ["project_metadata"],
+        },
+        "notifications": [{"id": "assignment_updates"}],
+    }
+
+
+def _application_roles() -> list[dict]:
+    return [
+        {
+            "id": "viewer",
+            "title": "Viewer",
+            "grants": ["app.view"],
+            "assignable_to": ["owner", "member", "child", "guest"],
+            "default_for": {"guest": "viewer"},
+            "requires_permissions": ["workspace.read"],
+        },
+        {
+            "id": "editor",
+            "title": "Editor",
+            "grants": ["app.view", "app.write"],
+            "assignable_to": ["owner", "member"],
+            "default_for": {},
+            "requires_permissions": ["workspace.write"],
+        },
+    ]
+
+
 class _FakeApplicationStore:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -94,6 +137,30 @@ class _FakeApplicationStore:
             "revision": 1,
             "channels": {"stable": _DIGEST_A, "prerelease": _DIGEST_B},
         }
+
+    def list_releases(self, application_id: str) -> tuple[_StoreRecord, ...]:
+        assert application_id == "app_demo"
+        return (
+            _StoreRecord(
+                {
+                    "schema": "adaos.application.release.v1",
+                    "application_id": application_id,
+                    "publisher_ref": "subnet:local",
+                    "legacy_project_id": "demo",
+                    "version": "1.0.0",
+                    "release_digest": _DIGEST_A,
+                    "project_release": {
+                        "schema": "adaos.artifact.project_release.v1",
+                        "project_id": "demo",
+                        "version": "1.0.0",
+                        "permissions": ["workspace.read", "workspace.write"],
+                    },
+                    "permission_profile": _permission_profile(),
+                    "application_roles": _application_roles(),
+                    "lifecycle": "stable",
+                }
+            ),
+        )
 
 
 def _project(project_id: str, component_ref: str = "scenario:demo") -> dict:
@@ -177,6 +244,32 @@ def test_registry_projection_rebuilds_dev_projects_and_queries_without_manifest_
     assert [item["id"] for item in listed] == ["beta"]
     assert owners[0]["id"] == "alpha"
     assert owners[0]["primary_ref"] == "scenario:alpha"
+
+
+def test_registry_projection_indexes_development_permission_profiles_and_roles(
+    tmp_path: Path,
+) -> None:
+    projects = tmp_path / "projects"
+    project = _project("alpha", "scenario:alpha")
+    project["permission_profile"] = _permission_profile()
+    project["application_roles"] = _application_roles()
+    _write_project(projects, project)
+    service = ApplicationRegistryProjection(tmp_path / "state")
+
+    _rebuild(service, projects)
+
+    profiles = service.application_permission_profiles("alpha", source_kind="dev_project")
+    roles = service.application_roles("alpha", source_kind="dev_project")
+
+    assert profiles[0]["flat_permissions"] == [
+        "notifications.send",
+        "workspace.read",
+        "workspace.write",
+    ]
+    assert profiles[0]["permission_profile_digest"].startswith("sha256:")
+    assert profiles[0]["declaration_summary"]["privacy_labels"]["sent_off_device"] is True
+    assert [item["role_id"] for item in roles] == ["editor", "viewer"]
+    assert roles[0]["capabilities"] == ["app.view", "app.write"]
 
 
 def test_registry_projection_rebuild_reuses_unchanged_sources_without_manifest_parse(
@@ -343,3 +436,17 @@ def test_registry_projection_indexes_application_store_inventory(tmp_path: Path)
 
     owners = service.applications_for_component("skill:demo")
     assert [item["application_id"] for item in owners] == ["app_demo"]
+
+    profiles = service.application_permission_profiles(
+        "app_demo",
+        release_digest=_DIGEST_A,
+        source_kind="application_store",
+    )
+    roles = service.application_roles(
+        "app_demo",
+        release_digest=_DIGEST_A,
+        source_kind="application_store",
+    )
+    assert profiles[0]["release_digest"] == _DIGEST_A
+    assert profiles[0]["required_permissions"] == ["workspace.read", "workspace.write"]
+    assert [item["role_id"] for item in roles] == ["editor", "viewer"]

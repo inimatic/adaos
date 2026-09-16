@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Sequence
 
 from .artifact_release import ProjectRelease, StableSubscription, canonical_payload_digest
+from .application_access import (
+    ApplicationPermissionProfile,
+    ApplicationRoleDeclaration,
+    normalize_application_roles,
+)
 from .project_deployment import ProjectDeployment
 
 
@@ -354,6 +359,8 @@ class ApplicationRelease:
     accepted_candidate_id: str
     acceptance_evidence: tuple[Mapping[str, Any], ...]
     provenance_refs: tuple[str, ...]
+    permission_profile: ApplicationPermissionProfile | Mapping[str, Any] | None = None
+    application_roles: tuple[ApplicationRoleDeclaration | Mapping[str, Any], ...] = ()
     addresses_report_ids: tuple[str, ...] = ()
     lifecycle: str = "candidate"
     published_at: str | None = None
@@ -374,6 +381,19 @@ class ApplicationRelease:
         if not refs:
             raise ApplicationContractError("ApplicationRelease requires provenance refs")
         object.__setattr__(self, "provenance_refs", refs)
+        if isinstance(self.permission_profile, ApplicationPermissionProfile):
+            permission_profile = self.permission_profile
+        else:
+            permission_profile = ApplicationPermissionProfile.from_mapping(
+                self.permission_profile,
+                legacy_permissions=sealed.permissions,
+            )
+        object.__setattr__(self, "permission_profile", permission_profile)
+        roles = normalize_application_roles(
+            tuple(self.application_roles or ()),
+            known_permissions=permission_profile.flat_permissions,
+        )
+        object.__setattr__(self, "application_roles", roles)
         report_ids = tuple(sorted({_identifier(item, "addresses_report_id") for item in self.addresses_report_ids}))
         object.__setattr__(self, "addresses_report_ids", report_ids)
         if self.lifecycle not in {"candidate", "trial", "prerelease", "stable", "superseded", "retired", "archived", "yanked"}:
@@ -384,6 +404,14 @@ class ApplicationRelease:
     @property
     def release_digest(self) -> str:
         return str(self.project_release.release_digest or self.project_release.computed_digest())
+
+    @property
+    def permission_profile_digest(self) -> str:
+        return self.permission_profile.digest
+
+    @property
+    def role_model_digest(self) -> str:
+        return canonical_payload_digest([item.to_dict() for item in self.application_roles])
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -397,6 +425,10 @@ class ApplicationRelease:
             "accepted_candidate_id": self.accepted_candidate_id,
             "acceptance_evidence": [dict(item) for item in self.acceptance_evidence],
             "provenance_refs": list(self.provenance_refs),
+            "permission_profile": self.permission_profile.to_dict(),
+            "permission_profile_digest": self.permission_profile_digest,
+            "application_roles": [item.to_dict() for item in self.application_roles],
+            "role_model_digest": self.role_model_digest,
             "addresses_report_ids": list(self.addresses_report_ids),
             "lifecycle": self.lifecycle,
         }
@@ -412,7 +444,9 @@ class ApplicationRelease:
             allowed={
                 "schema", "application_id", "publisher_ref", "legacy_project_id", "version",
                 "release_digest", "project_release", "accepted_candidate_id", "acceptance_evidence",
-                "provenance_refs", "addresses_report_ids", "lifecycle", "published_at",
+                "provenance_refs", "permission_profile", "permission_profile_digest",
+                "application_roles", "role_model_digest", "addresses_report_ids", "lifecycle",
+                "published_at",
             },
             required={
                 "schema", "application_id", "publisher_ref", "legacy_project_id", "version",
@@ -427,6 +461,21 @@ class ApplicationRelease:
             raise ApplicationContractError("ApplicationRelease compatibility identity does not match ProjectRelease")
         if (project_release.release_digest or project_release.computed_digest()) != expected_digest:
             raise ApplicationContractError("ApplicationRelease release_digest must preserve ProjectRelease identity")
+        permission_profile = ApplicationPermissionProfile.from_mapping(
+            payload.get("permission_profile"),
+            legacy_permissions=project_release.permissions,
+        )
+        if payload.get("permission_profile_digest") is not None:
+            if _digest(payload["permission_profile_digest"], "permission_profile_digest") != permission_profile.digest:
+                raise ApplicationContractError("ApplicationRelease permission_profile_digest mismatch")
+        application_roles = normalize_application_roles(
+            tuple(payload.get("application_roles") or ()),
+            known_permissions=permission_profile.flat_permissions,
+        )
+        if payload.get("role_model_digest") is not None:
+            expected_role_digest = canonical_payload_digest([item.to_dict() for item in application_roles])
+            if _digest(payload["role_model_digest"], "role_model_digest") != expected_role_digest:
+                raise ApplicationContractError("ApplicationRelease role_model_digest mismatch")
         return cls(
             application_id=payload["application_id"],
             publisher_ref=payload["publisher_ref"],
@@ -434,6 +483,8 @@ class ApplicationRelease:
             accepted_candidate_id=payload["accepted_candidate_id"],
             acceptance_evidence=_mapping_tuple(payload["acceptance_evidence"], "acceptance_evidence"),
             provenance_refs=tuple(payload["provenance_refs"]),
+            permission_profile=permission_profile,
+            application_roles=application_roles,
             addresses_report_ids=tuple(payload.get("addresses_report_ids") or ()),
             lifecycle=payload["lifecycle"],
             published_at=payload.get("published_at"),

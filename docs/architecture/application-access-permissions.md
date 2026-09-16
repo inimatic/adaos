@@ -1,8 +1,8 @@
 # Application Access, Permissions, and Roles
 
-Status: target architecture.
+Status: target architecture with first backend/ABI slice implemented.
 
-Last reviewed: 2026-09-15.
+Last reviewed: 2026-09-16.
 
 This document defines the target AdaOS architecture for Application-level
 permissions, Application-defined roles, per-user and guest access, child-safe
@@ -61,6 +61,32 @@ parts into an Application-level permission profile and per-subject access
 model. Method-level prompts such as `skill_name:tool_name (network)` remain
 valuable as enforcement detail, but they are too technical as the normal user
 consent experience.
+
+## Current Implementation Boundary
+
+As of 2026-09-16, AdaOS has the backend contract slice for this architecture:
+
+- release-bound `ApplicationPermissionProfile` and `application_roles`;
+- deterministic permission-profile and role-model digests;
+- ABI schemas for permission profiles, access grants, access decisions,
+  access-profile diffs, and Builder verification reports;
+- Application-scoped grants with permission ceilings, explicit denies,
+  expiry, constraints, reviewed-profile digest, revoke state, policy
+  explanations, actor-chain fields, child floors, guest floors, resource scope,
+  webspace scope, and trusted device/session constraints;
+- Application access audit records for grant, revoke, and allow/deny/pending
+  decisions;
+- Applications SDK helpers for listing, granting, revoking, deciding, and
+  auditing Application access;
+- registry-projection indexes for permission profiles and Application roles
+  from DEV project manifests and ApplicationStore releases;
+- Builder verification report generation for profile schema, declared versus
+  observed capabilities, role declarations, regression evidence, access-matrix
+  evidence, Pending Action fallback evidence, and auditability evidence.
+
+The runtime tool bridge, Applications and Users & Access browser surfaces,
+Pending Actions presentation, conversational/Telegram/voice routing,
+connected-account state UI, and the full AAPR6 evidence bundle remain open.
 
 ## Standard Practice Anchors
 

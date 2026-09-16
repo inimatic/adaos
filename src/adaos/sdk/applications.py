@@ -13,6 +13,7 @@ from typing import Any, Mapping, Sequence
 from adaos.domain.application import RuntimeSelection
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.applications import (
+    ApplicationAccessService,
     ApplicationDevelopmentCoordinator,
     ApplicationRolloutService,
     DevelopmentReportTriageService,
@@ -626,6 +627,135 @@ def list_trial_access(application_id: str | None = None) -> list[dict[str, Any]]
     return [item.to_dict() for item in _service().store.list_grants(application_id)]
 
 
+def list_application_access(
+    application_id: str | None = None,
+    *,
+    subject_ref: str | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        item.to_dict()
+        for item in _service().store.list_application_access_grants(
+            application_id,
+            subject_ref=subject_ref,
+        )
+    ]
+
+
+def grant_application_access(
+    application_id: str,
+    *,
+    release_digest: str,
+    subject_ref: str,
+    application_roles: tuple[str, ...],
+    issuer_ref: str,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+    permission_ceiling: tuple[str, ...] | None = None,
+    explicit_denies: tuple[str, ...] = (),
+    constraints: Mapping[str, Any] | None = None,
+    expires_at: str | None = None,
+) -> dict[str, Any]:
+    actor, _, _, key = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.apply",
+    )
+    return ApplicationAccessService(_service()).grant_access(
+        application_id,
+        release_digest=release_digest,
+        subject_ref=subject_ref,
+        application_roles=application_roles,
+        permission_ceiling=permission_ceiling,
+        explicit_denies=explicit_denies,
+        constraints=constraints,
+        expires_at=expires_at,
+        issuer_ref=issuer_ref or actor,
+        idempotency_key=key,
+    ).to_dict()
+
+
+def revoke_application_access(
+    grant_id: str,
+    *,
+    issuer_ref: str,
+    expected_revision: int,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+) -> dict[str, Any]:
+    actor, _, _, _ = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        f"revoke-application-access:{grant_id}:{expected_revision}",
+        required_capability="applications.apply",
+    )
+    return ApplicationAccessService(_service()).revoke_access(
+        grant_id,
+        issuer_ref=issuer_ref or actor,
+        expected_revision=expected_revision,
+    ).to_dict()
+
+
+def decide_application_access(
+    application_id: str,
+    *,
+    release_digest: str,
+    subject_ref: str,
+    permission_id: str,
+    app_capability: str,
+    actor_chain: Mapping[str, Any],
+    component_capabilities: tuple[str, ...] = (),
+    approval_id: str | None = None,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    actor, subnet, granted, _ = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.plan",
+    )
+    return ApplicationAccessService(_service()).decide(
+        application_id,
+        release_digest=release_digest,
+        subject_ref=subject_ref,
+        permission_id=permission_id,
+        app_capability=app_capability,
+        component_capabilities=component_capabilities,
+        approval_id=approval_id,
+        actor_chain={
+            "actor_ref": actor,
+            "subnet_ref": subnet,
+            "capability": granted,
+            **dict(actor_chain or {}),
+        },
+    ).to_dict()
+
+
+def list_application_access_audit(
+    application_id: str | None = None,
+    *,
+    subject_ref: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    return [
+        dict(item)
+        for item in _service().store.list_application_access_audit(
+            application_id,
+            subject_ref=subject_ref,
+            limit=limit,
+        )
+    ]
+
+
 def get_prerelease_rollout(application_id: str) -> dict[str, Any] | None:
     service = _service()
     policy = ApplicationRolloutService(service).get_policy(application_id)
@@ -1051,6 +1181,7 @@ def explain_plan(operation_id: str) -> dict[str, Any]:
 __all__ = [
     "accept_development_report",
     "apply_operation",
+    "decide_application_access",
     "explain_plan",
     "get_application",
     "get_identity",
@@ -1061,7 +1192,10 @@ __all__ = [
     "get_prerelease_rollout",
     "get_runtime_selection",
     "get_subscription",
+    "grant_application_access",
     "issue_trial_access",
+    "list_application_access",
+    "list_application_access_audit",
     "list_applications",
     "list_catalog",
     "list_development_report_intakes",
@@ -1081,6 +1215,7 @@ __all__ = [
     "request_development_report_resync",
     "resolve_development_report_appeal",
     "resolve_trial_link",
+    "revoke_application_access",
     "revoke_trial_access",
     "select_runtime",
     "set_prerelease_rollout",

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.access-grant.v1.schema.json",
+  "title": "AdaOS Application Access Grant v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "grant_id", "subject_ref", "application_id", "application_roles", "permission_ceiling", "explicit_denies", "constraints", "issuer_ref", "reviewed_permission_profile_digest", "status", "expires_at", "revision", "created_at", "updated_at"],
+  "properties": {
+    "schema": {"const": "adaos.application.access_grant.v1"},
+    "grant_id": {"$ref": "#/$defs/ref"},
+    "subject_ref": {"$ref": "#/$defs/ref"},
+    "application_id": {"$ref": "#/$defs/id"},
+    "application_roles": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "permission_ceiling": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "explicit_denies": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "constraints": {"type": "object"},
+    "issuer_ref": {"$ref": "#/$defs/ref"},
+    "reviewed_permission_profile_digest": {"$ref": "#/$defs/digest"},
+    "status": {"enum": ["active", "revoked", "expired", "suspended"]},
+    "expires_at": {"type": ["string", "null"], "format": "date-time"},
+    "revision": {"type": "integer", "minimum": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "ref": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

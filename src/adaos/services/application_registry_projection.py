@@ -11,6 +11,10 @@ import time
 from typing import Any, Callable, Mapping, Sequence
 import uuid
 
+from adaos.domain.application_access import (
+    ApplicationPermissionProfile,
+    normalize_application_roles,
+)
 from adaos.services.artifact_pipeline.storage import mutation_lock
 
 
@@ -1270,6 +1274,12 @@ class ApplicationRegistryProjection:
                     source_kind=DEVELOPMENT_PROJECT_SOURCE_KIND,
                     payload_digest=payload_digest,
                 )
+                self._replace_project_permission_profile_and_roles(
+                    con,
+                    project,
+                    source_kind=DEVELOPMENT_PROJECT_SOURCE_KIND,
+                    payload_digest=payload_digest,
+                )
                 self._insert_validation_report(
                     con,
                     self._validation_report(
@@ -1351,6 +1361,17 @@ class ApplicationRegistryProjection:
                 channels = dict(channels_payload.get("channels") or {})
             except Exception:
                 channels = {}
+            try:
+                releases_payload = [
+                    payload
+                    for payload in (
+                        _record_payload(item)
+                        for item in store.list_releases(application_id)
+                    )
+                    if payload is not None
+                ]
+            except Exception:
+                releases_payload = []
             display = (
                 application_payload.get("display")
                 if isinstance(application_payload.get("display"), Mapping)
@@ -1387,6 +1408,7 @@ class ApplicationRegistryProjection:
                 "application": application_payload,
                 "installation": installation_payload,
                 "runtime_selections": selections,
+                "releases": releases_payload,
             }
             payload_digest = _digest(payload)
             source_digest = _digest(
@@ -1395,6 +1417,7 @@ class ApplicationRegistryProjection:
                     "installation": installation_payload,
                     "channels": payload["channels"],
                     "runtime_selections": selections,
+                    "releases": releases_payload,
                 }
             )
             source_path = Path(source_root) / f"application-{application_id}.json"
@@ -1457,6 +1480,8 @@ class ApplicationRegistryProjection:
                 for table in (
                     "application_component_index",
                     "application_entrypoint_index",
+                    "application_permission_profile_index",
+                    "application_role_index",
                     "application_index",
                 ):
                     con.execute(
@@ -1484,6 +1509,11 @@ class ApplicationRegistryProjection:
                     self._replace_application_store_entrypoints(
                         con,
                         row["application"],
+                        payload_digest=str(row["payload_digest"]),
+                    )
+                    self._replace_application_store_permission_profiles_and_roles(
+                        con,
+                        row["payload"],
                         payload_digest=str(row["payload_digest"]),
                     )
                 for report in validation_rows:
@@ -1678,6 +1708,104 @@ class ApplicationRegistryProjection:
                 (APPLICATION_STORE_SOURCE_KIND, token, maximum),
             ).fetchall()
         return [deepcopy(_load_json(row["payload_json"], {})) for row in rows]
+
+    def application_permission_profiles(
+        self,
+        application_id: str,
+        *,
+        release_digest: str | None = None,
+        source_kind: str | None = None,
+    ) -> list[dict[str, Any]]:
+        token = str(application_id or "").strip()
+        if not token:
+            return []
+        where = ["application_id=?"]
+        params: list[Any] = [token]
+        if release_digest is not None:
+            where.append("release_digest=?")
+            params.append(release_digest)
+        if source_kind is not None:
+            where.append("source_kind=?")
+            params.append(source_kind)
+        with self._connect() as con:
+            rows = con.execute(
+                f"""
+                SELECT source_kind, application_id, release_digest, release_key,
+                       permission_profile_digest, required_permissions_json,
+                       optional_permissions_json, flat_permissions_json,
+                       declaration_summary_json, validation_status,
+                       payload_digest, payload_json
+                FROM application_permission_profile_index
+                WHERE {" AND ".join(where)}
+                ORDER BY source_kind, release_key
+                """,
+                tuple(params),
+            ).fetchall()
+        return [
+            {
+                "source_kind": row["source_kind"],
+                "application_id": row["application_id"],
+                "release_digest": row["release_digest"],
+                "release_key": row["release_key"],
+                "permission_profile_digest": row["permission_profile_digest"],
+                "required_permissions": _load_json(row["required_permissions_json"], []),
+                "optional_permissions": _load_json(row["optional_permissions_json"], []),
+                "flat_permissions": _load_json(row["flat_permissions_json"], []),
+                "declaration_summary": _load_json(row["declaration_summary_json"], {}),
+                "validation_status": row["validation_status"],
+                "payload_digest": row["payload_digest"],
+                "permission_profile": deepcopy(_load_json(row["payload_json"], {})),
+            }
+            for row in rows
+        ]
+
+    def application_roles(
+        self,
+        application_id: str,
+        *,
+        release_digest: str | None = None,
+        source_kind: str | None = None,
+    ) -> list[dict[str, Any]]:
+        token = str(application_id or "").strip()
+        if not token:
+            return []
+        where = ["application_id=?"]
+        params: list[Any] = [token]
+        if release_digest is not None:
+            where.append("release_digest=?")
+            params.append(release_digest)
+        if source_kind is not None:
+            where.append("source_kind=?")
+            params.append(source_kind)
+        with self._connect() as con:
+            rows = con.execute(
+                f"""
+                SELECT source_kind, application_id, release_digest, release_key,
+                       role_id, title, assignable, default_rule, sensitive,
+                       capabilities_json, payload_digest, payload_json
+                FROM application_role_index
+                WHERE {" AND ".join(where)}
+                ORDER BY source_kind, release_key, role_id
+                """,
+                tuple(params),
+            ).fetchall()
+        return [
+            {
+                "source_kind": row["source_kind"],
+                "application_id": row["application_id"],
+                "release_digest": row["release_digest"],
+                "release_key": row["release_key"],
+                "role_id": row["role_id"],
+                "title": row["title"],
+                "assignable": bool(row["assignable"]),
+                "default_rule": _load_json(row["default_rule"], {}),
+                "sensitive": bool(row["sensitive"]),
+                "capabilities": _load_json(row["capabilities_json"], []),
+                "payload_digest": row["payload_digest"],
+                "role": deepcopy(_load_json(row["payload_json"], {})),
+            }
+            for row in rows
+        ]
 
     def installed_summaries(self, *, limit: int = 500) -> list[dict[str, Any]]:
         maximum = max(1, min(int(limit), 5000))
@@ -1945,6 +2073,14 @@ class ApplicationRegistryProjection:
                         (application_source_kind,),
                     )
                     con.execute(
+                        "DELETE FROM application_permission_profile_index WHERE source_kind=?",
+                        (application_source_kind,),
+                    )
+                    con.execute(
+                        "DELETE FROM application_role_index WHERE source_kind=?",
+                        (application_source_kind,),
+                    )
+                    con.execute(
                         "DELETE FROM projection_source WHERE source_kind=?",
                         (manifest_source_kind,),
                     )
@@ -1965,6 +2101,12 @@ class ApplicationRegistryProjection:
                             payload_digest=str(row["payload_digest"]),
                         )
                         self._replace_project_entrypoints(
+                            con,
+                            project,
+                            source_kind=application_source_kind,
+                            payload_digest=str(row["payload_digest"]),
+                        )
+                        self._replace_project_permission_profile_and_roles(
                             con,
                             project,
                             source_kind=application_source_kind,
@@ -2459,6 +2601,203 @@ class ApplicationRegistryProjection:
             )
 
     @staticmethod
+    def _insert_permission_profile(
+        con: sqlite3.Connection,
+        *,
+        source_kind: str,
+        application_id: str,
+        release_digest: str | None,
+        release_key: str,
+        profile: ApplicationPermissionProfile,
+        payload_digest: str,
+        validation_status: str = "valid",
+    ) -> None:
+        summary = {
+            "permission_profile_digest": profile.digest,
+            "data_practices": dict(profile.data_practices),
+            "privacy_labels": dict(profile.privacy_labels),
+            "secrets": list(profile.secrets),
+            "llm_model_use": list(profile.llm_model_use),
+            "notifications": list(profile.notifications),
+            "background_actions": list(profile.background_actions),
+            "external_providers": list(profile.external_providers),
+        }
+        con.execute(
+            """
+            INSERT INTO application_permission_profile_index(
+                source_kind, application_id, release_digest, release_key,
+                permission_profile_digest, required_permissions_json,
+                optional_permissions_json, flat_permissions_json,
+                declaration_summary_json, validation_status,
+                payload_digest, payload_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(source_kind, application_id, release_key) DO UPDATE SET
+                release_digest=excluded.release_digest,
+                permission_profile_digest=excluded.permission_profile_digest,
+                required_permissions_json=excluded.required_permissions_json,
+                optional_permissions_json=excluded.optional_permissions_json,
+                flat_permissions_json=excluded.flat_permissions_json,
+                declaration_summary_json=excluded.declaration_summary_json,
+                validation_status=excluded.validation_status,
+                payload_digest=excluded.payload_digest,
+                payload_json=excluded.payload_json
+            """,
+            (
+                source_kind,
+                application_id,
+                release_digest,
+                release_key,
+                profile.digest,
+                _json_pretty([item.permission_id for item in profile.required]),
+                _json_pretty([item.permission_id for item in profile.optional]),
+                _json_pretty(list(profile.flat_permissions)),
+                _json_pretty(summary),
+                validation_status,
+                payload_digest,
+                _json_pretty(profile.to_dict()),
+            ),
+        )
+
+    @staticmethod
+    def _insert_application_roles(
+        con: sqlite3.Connection,
+        *,
+        source_kind: str,
+        application_id: str,
+        release_digest: str | None,
+        release_key: str,
+        roles: Sequence[Any],
+        payload_digest: str,
+    ) -> None:
+        for role in roles:
+            payload = role.to_dict()
+            con.execute(
+                """
+                INSERT INTO application_role_index(
+                    source_kind, application_id, release_digest, release_key,
+                    role_id, title, assignable, default_rule, sensitive,
+                    capabilities_json, payload_digest, payload_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(source_kind, application_id, release_key, role_id) DO UPDATE SET
+                    release_digest=excluded.release_digest,
+                    title=excluded.title,
+                    assignable=excluded.assignable,
+                    default_rule=excluded.default_rule,
+                    sensitive=excluded.sensitive,
+                    capabilities_json=excluded.capabilities_json,
+                    payload_digest=excluded.payload_digest,
+                    payload_json=excluded.payload_json
+                """,
+                (
+                    source_kind,
+                    application_id,
+                    release_digest,
+                    release_key,
+                    role.role_id,
+                    role.title,
+                    1 if role.assignable_to else 0,
+                    _json_pretty(dict(role.default_for)),
+                    1 if role.sensitive else 0,
+                    _json_pretty(list(role.grants)),
+                    payload_digest,
+                    _json_pretty(payload),
+                ),
+            )
+
+    @staticmethod
+    def _replace_project_permission_profile_and_roles(
+        con: sqlite3.Connection,
+        project: Mapping[str, Any],
+        *,
+        source_kind: str = DEVELOPMENT_PROJECT_SOURCE_KIND,
+        payload_digest: str,
+    ) -> None:
+        project_id = str(project.get("id") or "").strip()
+        con.execute(
+            "DELETE FROM application_permission_profile_index WHERE source_kind=? AND application_id=?",
+            (source_kind, project_id),
+        )
+        con.execute(
+            "DELETE FROM application_role_index WHERE source_kind=? AND application_id=?",
+            (source_kind, project_id),
+        )
+        profile = ApplicationPermissionProfile.from_mapping(
+            project.get("permission_profile") if isinstance(project.get("permission_profile"), Mapping) else None,
+            legacy_permissions=project.get("permissions") or (),
+        )
+        roles = normalize_application_roles(
+            tuple(project.get("application_roles") or ()),
+            known_permissions=profile.flat_permissions,
+        )
+        ApplicationRegistryProjection._insert_permission_profile(
+            con,
+            source_kind=source_kind,
+            application_id=project_id,
+            release_digest=None,
+            release_key="",
+            profile=profile,
+            payload_digest=payload_digest,
+        )
+        ApplicationRegistryProjection._insert_application_roles(
+            con,
+            source_kind=source_kind,
+            application_id=project_id,
+            release_digest=None,
+            release_key="",
+            roles=roles,
+            payload_digest=payload_digest,
+        )
+
+    @staticmethod
+    def _replace_application_store_permission_profiles_and_roles(
+        con: sqlite3.Connection,
+        payload: Mapping[str, Any],
+        *,
+        payload_digest: str,
+    ) -> None:
+        application_id = str(payload.get("application_id") or "").strip()
+        con.execute(
+            "DELETE FROM application_permission_profile_index WHERE source_kind=? AND application_id=?",
+            (APPLICATION_STORE_SOURCE_KIND, application_id),
+        )
+        con.execute(
+            "DELETE FROM application_role_index WHERE source_kind=? AND application_id=?",
+            (APPLICATION_STORE_SOURCE_KIND, application_id),
+        )
+        for raw in payload.get("releases") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            release_digest = str(raw.get("release_digest") or "").strip() or None
+            project_release = raw.get("project_release") if isinstance(raw.get("project_release"), Mapping) else {}
+            profile = ApplicationPermissionProfile.from_mapping(
+                raw.get("permission_profile") if isinstance(raw.get("permission_profile"), Mapping) else None,
+                legacy_permissions=project_release.get("permissions") or (),
+            )
+            roles = normalize_application_roles(
+                tuple(raw.get("application_roles") or ()),
+                known_permissions=profile.flat_permissions,
+            )
+            release_key = release_digest or ""
+            ApplicationRegistryProjection._insert_permission_profile(
+                con,
+                source_kind=APPLICATION_STORE_SOURCE_KIND,
+                application_id=application_id,
+                release_digest=release_digest,
+                release_key=release_key,
+                profile=profile,
+                payload_digest=payload_digest,
+            )
+            ApplicationRegistryProjection._insert_application_roles(
+                con,
+                source_kind=APPLICATION_STORE_SOURCE_KIND,
+                application_id=application_id,
+                release_digest=release_digest,
+                release_key=release_key,
+                roles=roles,
+                payload_digest=payload_digest,
+            )
+
+    @staticmethod
     def _insert_validation_report(
         con: sqlite3.Connection, report: Mapping[str, Any]
     ) -> None:
@@ -2493,6 +2832,14 @@ class ApplicationRegistryProjection:
         )
         con.execute(
             "DELETE FROM application_entrypoint_index WHERE source_kind=? AND application_id=?",
+            (DEVELOPMENT_PROJECT_SOURCE_KIND, project_id),
+        )
+        con.execute(
+            "DELETE FROM application_permission_profile_index WHERE source_kind=? AND application_id=?",
+            (DEVELOPMENT_PROJECT_SOURCE_KIND, project_id),
+        )
+        con.execute(
+            "DELETE FROM application_role_index WHERE source_kind=? AND application_id=?",
             (DEVELOPMENT_PROJECT_SOURCE_KIND, project_id),
         )
         rows = con.execute(

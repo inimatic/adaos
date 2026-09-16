@@ -24,7 +24,12 @@ from .runtime import (
     register_development_report_service_factory,
     register_stable_source_publisher,
 )
-from .access import TrialAccessError, TrialAccessService
+from .access import (
+    ApplicationAccessError,
+    ApplicationAccessService,
+    TrialAccessError,
+    TrialAccessService,
+)
 from .distribution import (
     ApplicationDistributionError,
     ApplicationDistributionService,
@@ -79,6 +84,8 @@ __all__ = [
     "ApplicationDevelopmentCoordinator",
     "ApplicationDevelopmentError",
     "ApplicationDevelopmentOutcomeUnknown",
+    "ApplicationAccessError",
+    "ApplicationAccessService",
     "ApplicationPlanConflict",
     "ApplicationRevisionConflict",
     "ApplicationRetentionError",

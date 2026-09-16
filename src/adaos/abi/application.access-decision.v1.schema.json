@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.access-decision.v1.schema.json",
+  "title": "AdaOS Application Access Decision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "application_id", "subject_ref", "permission_id", "app_capability", "decision", "reason_code", "actor_chain"],
+  "properties": {
+    "schema": {"const": "adaos.application.access_decision.v1"},
+    "application_id": {"$ref": "#/$defs/id"},
+    "subject_ref": {"$ref": "#/$defs/ref"},
+    "permission_id": {"$ref": "#/$defs/id"},
+    "app_capability": {"$ref": "#/$defs/id"},
+    "decision": {"enum": ["allow", "deny", "pending_action"]},
+    "reason_code": {"$ref": "#/$defs/id"},
+    "actor_chain": {"type": "object"},
+    "approval_id": {"$ref": "#/$defs/ref"},
+    "grant_id": {"$ref": "#/$defs/ref"},
+    "policy_explanation": {"type": "string", "minLength": 1, "maxLength": 500}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "ref": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$"}
+  }
+}

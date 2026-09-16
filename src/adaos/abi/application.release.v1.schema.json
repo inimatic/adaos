@@ -12,6 +12,14 @@
     "accepted_candidate_id": {"type": "string", "minLength": 1, "maxLength": 180},
     "acceptance_evidence": {"type": "array", "minItems": 1, "items": {"type": "object"}},
     "provenance_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/digest"}},
+    "permission_profile": {"$ref": "#/$defs/permissionProfile"},
+    "permission_profile_digest": {"$ref": "#/$defs/digest"},
+    "application_roles": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/applicationRole"}
+    },
+    "role_model_digest": {"$ref": "#/$defs/digest"},
     "addresses_report_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
     "lifecycle": {"enum": ["candidate", "trial", "prerelease", "stable", "superseded", "retired", "archived", "yanked"]},
     "published_at": {"type": "string", "format": "date-time"}
@@ -19,6 +27,50 @@
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
     "publisherRef": {"type": "string", "pattern": "^subnet:[a-z0-9][a-z0-9_.-]{0,127}$"},
-    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "permissionProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "required", "optional"],
+      "properties": {
+        "schema": {"const": "adaos.application.permission_profile.v1"},
+        "required": {"type": "array", "items": {"$ref": "#/$defs/permissionDeclaration"}},
+        "optional": {"type": "array", "items": {"$ref": "#/$defs/permissionDeclaration"}},
+        "secrets": {"type": "array", "items": {"type": "object"}},
+        "data_practices": {"type": "object"},
+        "llm_model_use": {"type": "array", "items": {"type": "object"}},
+        "notifications": {"type": "array", "items": {"type": "object"}},
+        "background_actions": {"type": "array", "items": {"type": "object"}},
+        "external_providers": {"type": "array", "items": {"type": "object"}},
+        "privacy_labels": {"type": "object"}
+      }
+    },
+    "permissionDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "purpose", "approval_policy"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 160},
+        "purpose": {"type": "string", "minLength": 1, "maxLength": 500},
+        "authorization_details": {"type": "object"},
+        "approval_policy": {"$ref": "#/$defs/id"},
+        "sensitive": {"type": "boolean"}
+      }
+    },
+    "applicationRole": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "grants", "assignable_to", "default_for", "requires_permissions"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 160},
+        "grants": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "assignable_to": {"type": "array", "uniqueItems": true, "items": {"enum": ["owner", "co_owner", "admin", "member", "child", "guest"]}},
+        "default_for": {"type": "object"},
+        "requires_permissions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "sensitive": {"type": "boolean"}
+      }
+    }
   }
 }

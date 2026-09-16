@@ -15,6 +15,7 @@ from adaos.domain.application import (
     RuntimeSelection,
     TrialAccessGrant,
 )
+from adaos.domain.application_access import ApplicationAccessGrant
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 
 
@@ -446,6 +447,87 @@ class ApplicationStore:
     def save_grant(self, value: TrialAccessGrant, *, expected_revision: int) -> TrialAccessGrant:
         self.get_application(value.application_id)
         return self._save_revisioned("trial_access_grants", value.grant_id, value, expected_revision=expected_revision, loader=TrialAccessGrant.from_mapping)
+
+    def get_application_access_grant(self, grant_id: str) -> ApplicationAccessGrant:
+        path = self._current_path("application_access_grants", grant_id)
+        if not path.is_file():
+            raise FileNotFoundError(f"ApplicationAccessGrant not found: {grant_id}")
+        value = ApplicationAccessGrant.from_mapping(_read(path))
+        if value.grant_id != grant_id:
+            raise ApplicationStoreError("ApplicationAccessGrant path identity mismatch")
+        return value
+
+    def list_application_access_grants(
+        self,
+        application_id: str | None = None,
+        *,
+        subject_ref: str | None = None,
+    ) -> tuple[ApplicationAccessGrant, ...]:
+        values = self._list_current("application_access_grants", ApplicationAccessGrant.from_mapping)
+        if application_id is not None:
+            values = tuple(item for item in values if item.application_id == application_id)
+        if subject_ref is not None:
+            values = tuple(item for item in values if item.subject_ref == subject_ref)
+        return tuple(sorted(values, key=lambda item: (item.updated_at, item.grant_id), reverse=True))
+
+    def save_application_access_grant(
+        self,
+        value: ApplicationAccessGrant,
+        *,
+        expected_revision: int,
+    ) -> ApplicationAccessGrant:
+        self.get_application(value.application_id)
+        return self._save_revisioned(
+            "application_access_grants",
+            value.grant_id,
+            value,
+            expected_revision=expected_revision,
+            loader=ApplicationAccessGrant.from_mapping,
+        )
+
+    def append_application_access_audit(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        application_id = str(payload.get("application_id") or "").strip()
+        subject_ref = str(payload.get("subject_ref") or "").strip()
+        event_action = str(payload.get("action") or payload.get("decision") or "access").strip()
+        if not application_id or not subject_ref:
+            raise ApplicationStoreError("Application access audit requires application_id and subject_ref")
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            parent = self.root / "application_access_audit"
+            sequence_path = parent / "sequence.json"
+            sequence = int(_read(sequence_path).get("sequence") or 0) + 1 if sequence_path.is_file() else 1
+            while (parent / f"{sequence:020d}.json").exists():
+                sequence += 1
+            event = {
+                "schema": "adaos.application.access_audit.v1",
+                "sequence": sequence,
+                "event_id": f"appaccess.{_key(f'{sequence}:{application_id}:{subject_ref}:{event_action}')}",
+                **dict(payload),
+            }
+            atomic_write_json(parent / f"{sequence:020d}.json", event)
+            atomic_write_json(sequence_path, {"schema": "adaos.application.access_audit_sequence.v1", "sequence": sequence})
+            return event
+
+    def list_application_access_audit(
+        self,
+        application_id: str | None = None,
+        *,
+        subject_ref: str | None = None,
+        limit: int = 200,
+    ) -> tuple[dict[str, Any], ...]:
+        parent = self.root / "application_access_audit"
+        size = max(1, min(int(limit), 1000))
+        events: list[dict[str, Any]] = []
+        if parent.is_dir():
+            for path in sorted(parent.glob("[0-9]*.json"), reverse=True):
+                event = _read(path)
+                if application_id is not None and event.get("application_id") != application_id:
+                    continue
+                if subject_ref is not None and event.get("subject_ref") != subject_ref:
+                    continue
+                events.append(event)
+                if len(events) >= size:
+                    break
+        return tuple(events)
 
     def get_trial_redemption(self, redemption_id: str) -> dict[str, Any]:
         path = self.root / "trial_access_redemptions" / f"{_key(redemption_id)}.json"

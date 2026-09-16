@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.access-profile-diff.v1.schema.json",
+  "title": "AdaOS Application Access Profile Diff v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "permission_changes", "role_changes"],
+  "properties": {
+    "schema": {"const": "adaos.application.access_profile_diff.v1"},
+    "permission_changes": {"$ref": "#/$defs/permissionChanges"},
+    "role_changes": {"$ref": "#/$defs/roleChanges"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "idList": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "permissionChanges": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unchanged", "removed", "added", "elevated", "sensitive_added"],
+      "properties": {
+        "unchanged": {"$ref": "#/$defs/idList"},
+        "removed": {"$ref": "#/$defs/idList"},
+        "added": {"$ref": "#/$defs/idList"},
+        "elevated": {"$ref": "#/$defs/idList"},
+        "sensitive_added": {"$ref": "#/$defs/idList"}
+      }
+    },
+    "roleChanges": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unchanged", "removed", "added", "elevated", "sensitive_added", "remap_required", "affected_users"],
+      "properties": {
+        "unchanged": {"$ref": "#/$defs/idList"},
+        "removed": {"$ref": "#/$defs/idList"},
+        "added": {"$ref": "#/$defs/idList"},
+        "elevated": {"$ref": "#/$defs/idList"},
+        "sensitive_added": {"$ref": "#/$defs/idList"},
+        "remap_required": {"$ref": "#/$defs/idList"},
+        "affected_users": {"type": "object"}
+      }
+    }
+  }
+}
