@@ -3807,11 +3807,24 @@ def test_accepted_literal_ui_prototype_is_validated_without_codex(
             "application": {
                 "desktop": {
                     "pageSchema": {
-                        "id": "board",
-                        "layout": {
-                            "type": "single",
-                            "areas": [{"id": "main", "role": "main"}],
-                        },
+                            "id": "board",
+                            "layout": {
+                                "version": 2,
+                                "pattern": "task-flow",
+                                "density": "comfortable",
+                                "contentWidth": "fluid",
+                                "scroll": "page",
+                                "regions": [
+                                    {
+                                        "id": "main",
+                                        "role": "main",
+                                        "presentation": {
+                                            "wide": "pane",
+                                            "compact": "stack",
+                                        },
+                                    }
+                                ],
+                            },
                         "widgets": [
                             {
                                 "id": "tasks",

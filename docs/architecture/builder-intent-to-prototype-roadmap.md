@@ -618,22 +618,35 @@ Exit/remaining work: Curate applicable, explained recommendations with alternati
 
 ### BIP-21
 
-- [ ] `[must]` **Bounded Browser Review And Feedback**. Status: `partial`.
+- [ ] `[must]` **Bounded Browser Review And Feedback**. Status: `in progress`.
 
 Owner/dependencies: Evaluation + Builder review/Dev Tickets.
 
-Implementation boundary: DOM/screenshot/task probes exist, including actual media visibility. Their presence in external stands does not expose them to the candidate Codex session. Integrated DOM/accessibility/screenshot feedback is not qualified.
+Implementation boundary: Automation now materializes the candidate in the one
+paired DEV preview before Forge checkpointing and runs a generic wide/compact
+browser gate. Its UTF-8 receipt binds the source WebUI, context packet, Client,
+UI ABI, capability catalog, runtime URL, DOM/console/network findings and
+screenshot digests. A failed receipt is projected into the implementing Codex
+context for at most two independently rechecked repairs. This path is DEV-only;
+it does not create case-specific webspaces or grant the model final acceptance.
 
-- [ ] `[must]` Expose candidate browser actions, DOM/accessibility, image bytes,
+- [x] `[must]` Expose candidate browser actions, DOM/accessibility, image bytes,
   console/network and synthetic data evidence through scoped check operations.
   Bind source/Client/ABI/runtime/fixture identities; reject stale/wrong targets,
   redact private data and preserve one paired preview without new case webspaces.
-- [ ] `[must]` Return independent runtime/UI failures to the implementing Codex
+- [x] `[must]` Return independent runtime/UI failures to the implementing Codex
   without manual copying. Protect final gates and revalidate the corrected digest;
   optional visual taste must not become a hidden requirement. Qualify selected
   wide/compact journeys, persistence and image loading, not screenshots alone.
 
-Exit/remaining work: Qualify bounded owning-layer feedback using the shared runner. Two targeted review repairs are the initial review profile, not a universal fixed track; adjust only with recorded progress/budget evidence. Route unresolved platform findings to Dev Tickets. BIP-34 is a separate optional model reviewer, not a prerequisite for Codex to observe its own result.
+Exit/remaining work: Qualify the integrated gate on retained Applications and
+Users & Access candidates, add stateful persistence and loaded-image journeys,
+and prove that stale/wrong-target evidence fails closed. Route exhausted or
+platform-owned findings to Dev Tickets instead of repeatedly editing the
+Application. Two targeted review repairs are the initial review profile, not a
+universal fixed track; adjust only with recorded progress/budget evidence.
+BIP-34 is a separate optional model reviewer, not a prerequisite for Codex to
+observe its own result.
 
 ### BIP-22
 

@@ -154,6 +154,15 @@ another selected project. Candidate isolation does not create per-task user
 webspaces or a parallel desktop Beta. An unavailable target is missing evidence,
 not permission to test a different loaded application.
 
+The current DEV implementation performs this check before any Forge checkpoint.
+It observes wide and compact layouts, semantic tabs, materialized scenario
+identity, renderer/runtime messages, DOM overflow, accessible names, browser
+exceptions and failed document/fetch/XHR requests. Screenshots and a structured
+receipt are content-digested together with Client, UI ABI, capability catalog,
+source WebUI and context-packet identities. A failure may schedule at most two
+scoped Codex repairs; every repaired candidate is observed again, and an exhausted
+failure remains a blocking gate. Production nodes skip this development harness.
+
 Select checks by changed contracts, affected behavior and reported failures, with
 mandatory final coverage retained. This is not a fixed series of model requests,
 mandatory screenshots for non-UI edits, or a mandatory multi-agent evaluator.

@@ -61,7 +61,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.11.0"
+RUNNER_VERSION = "adaos-local-codex-worker/0.11.1"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -1395,6 +1395,75 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
 
 # Compatibility for tests and extensions that imported the former private helper.
 _context_packet_prompt_projection = context_packet_prompt_projection
+
+
+def _browser_feedback_prompt_projection(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    report = value.get("report") if isinstance(value.get("report"), Mapping) else {}
+    samples: list[dict[str, Any]] = []
+    for item in report.get("samples") or []:
+        if not isinstance(item, Mapping):
+            continue
+        diagnostics = (
+            dict(item.get("diagnostics"))
+            if isinstance(item.get("diagnostics"), Mapping)
+            else {}
+        )
+        samples.append(
+            {
+                "layout": item.get("layout"),
+                "viewport": copy.deepcopy(item.get("viewport")),
+                "hard_failures": [
+                    str(entry)[:1000] for entry in item.get("hard_failures") or []
+                ][:16],
+                "warnings": [str(entry)[:1000] for entry in item.get("warnings") or []][
+                    :12
+                ],
+                "diagnostics": {
+                    key: (
+                        copy.deepcopy(diagnostics.get(key))[:160]
+                        if key == "visible_widget_ids"
+                        and isinstance(diagnostics.get(key), list)
+                        else copy.deepcopy(diagnostics.get(key))
+                    )
+                    for key in (
+                        "current_scenario",
+                        "viewport_width",
+                        "document_width",
+                        "viewport_height",
+                        "document_height",
+                        "visible_widget_ids",
+                        "unlabeled_interactives",
+                        "blocking_text",
+                    )
+                    if diagnostics.get(key) not in (None, "", [], {})
+                },
+            }
+        )
+    evidence = [
+        {
+            key: item.get(key)
+            for key in ("name", "path", "sha256", "bytes", "media_type")
+            if item.get(key) not in (None, "")
+        }
+        for item in value.get("evidence") or []
+        if isinstance(item, Mapping)
+    ][:12]
+    return {
+        "schema": value.get("schema"),
+        "status": value.get("status"),
+        "attempt": value.get("attempt"),
+        "scenario_id": value.get("scenario_id"),
+        "webspace_id": value.get("webspace_id"),
+        "source": copy.deepcopy(value.get("source")),
+        "runtime_contract": copy.deepcopy(value.get("runtime_contract")),
+        "report_digest": value.get("report_digest"),
+        "receipt_path": value.get("receipt_path"),
+        "receipt_digest": value.get("receipt_digest"),
+        "samples": samples,
+        "evidence": evidence,
+    }
 
 
 def _bounded_repair_brief_prompt(value: str) -> str:
@@ -6224,6 +6293,9 @@ class LocalSkillFactoryWorker:
             if isinstance(artifacts.get("repair_hints"), Mapping)
             else {}
         )
+        browser_feedback = _browser_feedback_prompt_projection(
+            artifacts.get("browser_feedback")
+        )
         _validate_repair_contract_closure(repair_hints, constraints)
         repair_target_context = _bounded_repair_target_context(
             workspace,
@@ -6307,6 +6379,7 @@ class LocalSkillFactoryWorker:
             "root_mcp": root_mcp,
             "descriptor_working_set": dict(descriptor_working_set or {}) or None,
             "repair_hints": repair_hints or None,
+            "browser_feedback": browser_feedback,
             "repair_target_context": repair_target_context or None,
             "prompt_rule_capsules": prompt_rule_capsules,
             "prototype_resource_handoff": prototype_resource_handoff,
@@ -6332,6 +6405,8 @@ class LocalSkillFactoryWorker:
             _write_json(input_dir / "implementation-bindings.json", implementation_binding_contract())
             packet["implementation_bindings_ref"] = (input_dir / "implementation-bindings.json").resolve().as_posix()
         _write_json(input_dir / "packet.json", packet)
+        if browser_feedback:
+            _write_json(input_dir / "browser-feedback.json", browser_feedback)
         if prototype_resource_handoff:
             _write_json(
                 input_dir / "prototype-resource-handoff.json",
@@ -6515,6 +6590,31 @@ No secret, placeholder code or blocker-report files. Use
             json.dumps(development_context, ensure_ascii=False, indent=2, sort_keys=True)
             if development_context
             else "No external Development Session inputs were admitted."
+        )
+        browser_feedback_section = (
+            """## Independent browser feedback
+
+The trusted orchestrator materialized the previous candidate in the paired DEV
+webspace and observed it at wide and compact viewports. Read the bounded receipt
+at `{path}`. The exact screenshot paths and source/runtime identity digests in
+that receipt are admitted read-only evidence. Repair only observed failures;
+do not weaken checks, discard accepted design, or infer requirements from
+unrelated pixels. The browser gate will run again independently after this turn.
+
+```json
+{projection}
+```
+""".format(
+                path=(input_dir / "browser-feedback.json").resolve().as_posix(),
+                projection=json.dumps(
+                    browser_feedback,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                ),
+            )
+            if browser_feedback
+            else ""
         )
         contract_execution_checklist = (
             json.dumps(contract_checklist, ensure_ascii=False, indent=2, sort_keys=True)
@@ -6706,6 +6806,8 @@ change, edit directly and do not rediscover the same structures.
 
 {development_feedback_contract}
 
+{browser_feedback_section}
+
 ## Required result
 
 {required_result}
@@ -6776,6 +6878,8 @@ part of the submitted source snapshot.
 
 {development_feedback_contract}
 
+{browser_feedback_section}
+
 ## Required result
 
 {required_result}
@@ -6783,7 +6887,7 @@ part of the submitted source snapshot.
 Conclude with a concise summary of implemented behavior and checks. The worker, not you, creates result/provenance files and the git commit.
 """
         context_files = []
-        for name in ("packet.json", "prototype-resource-handoff.json", "implementation-bindings.json", "descriptor-working-set.json"):
+        for name in ("packet.json", "prototype-resource-handoff.json", "implementation-bindings.json", "descriptor-working-set.json", "browser-feedback.json"):
             path = input_dir / name
             if path.is_file():
                 raw = path.read_bytes()

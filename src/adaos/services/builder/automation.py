@@ -41,7 +41,7 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker, context
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
-STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.18.1"
+STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.18.2"
 DESCRIPTOR_DISCOVERY_PROFILE_VERSION = "adaos-descriptor-search/1.1"
 FINALIZATION_HEARTBEAT_SECONDS = 10.0
 TRIAL_PREPARATION_RECOVERY_GRACE_SECONDS = 300.0
@@ -1118,6 +1118,7 @@ class BuilderAutomationService:
     workflow_service: BuilderWorkflowService | None = None
     context_service: ContextControlService | None = None
     codex_usage_reporter: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None
+    browser_feedback_service: Any | None = None
     background: bool = True
     materialize_on_completion: bool = True
     factory: SkillFactoryService = field(init=False)
@@ -1168,6 +1169,16 @@ class BuilderAutomationService:
         if self.context_service is None:
             self.context_service = ContextControlService(state_dir=self.state_dir)
         return self.context_service
+
+    def _browser_feedback(self):
+        if self.browser_feedback_service is None:
+            from adaos.services.builder.browser_feedback import BuilderBrowserFeedbackService
+
+            self.browser_feedback_service = BuilderBrowserFeedbackService(
+                state_dir=self.state_dir,
+                repo_root=self.repo_root,
+            )
+        return self.browser_feedback_service
 
     def current_workflow_head(
         self,
@@ -3536,6 +3547,8 @@ class BuilderAutomationService:
                         session["change_set_history"] = history[-50:]
                     session["change_set_id"] = active_change_set_id
                     session["canonical_change_id"] = active_change_set_id
+                    session["browser_feedback_repair_count"] = 0
+                    session.pop("pending_browser_feedback", None)
                     session.pop("context_packet_digest", None)
             if agent_profile is not None:
                 from adaos.services.codex_profiles import normalize_codex_profile
@@ -7387,6 +7400,9 @@ class BuilderAutomationService:
                 "continuation_checkpoint": copy.deepcopy(
                     session.get("pending_continuation_checkpoint")
                 ),
+                "browser_feedback": copy.deepcopy(
+                    session.get("pending_browser_feedback")
+                ),
                 "repair_hints": copy.deepcopy(repair_hints) or None,
             },
             "repo": {
@@ -8135,6 +8151,146 @@ class BuilderAutomationService:
             resolved_by_overlay=candidate_id,
         )
 
+    def _materialize_candidate_for_browser_feedback(
+        self,
+        current: Mapping[str, Any],
+        *,
+        webspace_id: str,
+    ) -> dict[str, Any]:
+        from adaos.services.builder.workbench import BuilderWorkbenchService
+
+        scenario_id = str(current.get("object_id") or "").strip()
+        workbench = BuilderWorkbenchService(state_dir=self.state_dir)
+        binding = asyncio.run(
+            workbench.ensure_dev_webspace(
+                webspace_id,
+                runtime_scenario_id=scenario_id,
+                wait_for_rebuild=True,
+            )
+        )
+        runtime = (
+            dict(binding.get("runtime"))
+            if isinstance(binding.get("runtime"), Mapping)
+            else {}
+        )
+        preview_webspace_id = str(
+            binding.get("preview_webspace_id")
+            or binding.get("dev_webspace_id")
+            or runtime.get("webspace_id")
+            or ""
+        ).strip()
+        result = {
+            **runtime,
+            "ok": bool(runtime.get("ok")),
+            "source": "candidate_browser_feedback",
+            "webspace_id": webspace_id,
+            "preview_webspace_id": preview_webspace_id or None,
+        }
+        if not result["ok"] or not preview_webspace_id:
+            raise RuntimeError(
+                str(
+                    runtime.get("detail")
+                    or runtime.get("error")
+                    or "candidate DEV materialization failed"
+                )
+            )
+        return result
+
+    @staticmethod
+    def _browser_feedback_repair_instruction(receipt: Mapping[str, Any]) -> str:
+        from adaos.services.builder.browser_feedback import browser_feedback_failures
+
+        failures = browser_feedback_failures(receipt)
+        rendered = "\n".join(f"- {item}" for item in failures[:16])
+        if not rendered:
+            rendered = "- The independently executed browser gate did not pass."
+        evidence = [
+            str(item.get("path") or "").strip()
+            for item in receipt.get("evidence") or []
+            if isinstance(item, Mapping) and str(item.get("path") or "").strip()
+        ][:8]
+        evidence_text = "\n".join(f"- {item}" for item in evidence)
+        return (
+            "Repair only the independently observed browser failures below. Preserve the "
+            "accepted prototype, working behavior, data contracts, and unrelated layout. "
+            "Do not weaken validation or suppress runtime errors. Re-run focused checks before "
+            "returning.\n\nObserved failures:\n"
+            + rendered
+            + ("\n\nRead-only evidence paths:\n" + evidence_text if evidence_text else "")
+        )
+
+    def _queue_browser_feedback_repair(
+        self,
+        current: dict[str, Any],
+        readiness: dict[str, Any],
+        receipt: Mapping[str, Any],
+    ) -> bool:
+        try:
+            max_attempts = max(
+                0,
+                min(
+                    5,
+                    int(os.getenv("ADAOS_BUILDER_BROWSER_REPAIR_ATTEMPTS") or "2"),
+                ),
+            )
+        except ValueError:
+            max_attempts = 2
+        repair_count = max(0, int(current.get("browser_feedback_repair_count") or 0))
+        if repair_count >= max_attempts:
+            return False
+
+        now = _now_iso()
+        current["browser_feedback_repair_count"] = repair_count + 1
+        current["pending_browser_feedback"] = copy.deepcopy(dict(receipt))
+        readiness["browser_feedback_repair"] = {
+            "status": "queued",
+            "attempt": repair_count + 1,
+            "max_attempts": max_attempts,
+            "receipt_path": receipt.get("receipt_path"),
+            "receipt_digest": receipt.get("receipt_digest"),
+        }
+        current["completion_readiness"] = copy.deepcopy(readiness)
+        current["status"] = "failed"
+        current["progress"] = {
+            "task_id": current.get("current_task_id"),
+            "status": "failed",
+            "stage": "browser_feedback",
+            "message": "Browser feedback found an independently reproducible candidate defect",
+            "updated_at": now,
+        }
+        current["last_failure"] = {
+            "stage": "browser_feedback",
+            "failure_class": "automatic_repair_required",
+            "message": "Candidate browser feedback failed",
+            "updated_at": now,
+        }
+        current["updated_at"] = now
+        current.pop("finalizing_task_id", None)
+        self._save_session(current)
+        try:
+            self._workflow().transition(
+                str(current.get("object_type") or ""),
+                str(current.get("object_id") or ""),
+                "automation_failed",
+                actor="builder.browser_feedback",
+                metadata={
+                    "task_id": current.get("current_task_id"),
+                    "change_id": current.get("change_id"),
+                    "error": "candidate_browser_feedback_failed",
+                    "receipt_digest": receipt.get("receipt_digest"),
+                },
+            )
+        except Exception:
+            pass
+        self.submit_turn(
+            text=self._browser_feedback_repair_instruction(receipt),
+            object_type=str(current.get("object_type") or ""),
+            object_id=str(current.get("object_id") or ""),
+            expected_session_id=str(current.get("session_id") or ""),
+            expected_iteration=int(current.get("iteration") or 0),
+        )
+        return True
+
     def _finalize_completed_session(self, session: Mapping[str, Any]) -> None:
         """Prepare the DEV runtime, refresh the paired UI, then notify chat."""
         reconciled = self._reconcile_completed_workflow(session)
@@ -8216,6 +8372,62 @@ class BuilderAutomationService:
                 readiness["skill"] = readiness["skills"][0]
 
             if pending_transition != "return_to_prototype":
+                from adaos.services.core_update_policy import current_env_type
+
+                browser_feedback_enabled = bool(
+                    current_env_type() == "dev"
+                    and str(os.getenv("ADAOS_BUILDER_BROWSER_FEEDBACK") or "1")
+                    .strip()
+                    .lower()
+                    not in {"0", "false", "no", "off"}
+                )
+                if object_type == "scenario" and object_id and browser_feedback_enabled:
+                    with self._finalization_stage(
+                        current,
+                        readiness,
+                        "candidate_materialization",
+                        "Materializing the candidate in the paired DEV webspace",
+                    ):
+                        readiness["materialization"] = (
+                            self._materialize_candidate_for_browser_feedback(
+                                current,
+                                webspace_id=webspace_id,
+                            )
+                        )
+                    with self._finalization_stage(
+                        current,
+                        readiness,
+                        "browser_feedback",
+                        "Observing the candidate in wide and compact browser layouts",
+                    ):
+                        readiness["browser_feedback"] = self._browser_feedback().evaluate(
+                            scenario_id=object_id,
+                            webspace_id=str(
+                                readiness["materialization"].get("preview_webspace_id")
+                                or ""
+                            ),
+                            subnet_id=str(_builder_subnet_id(current) or ""),
+                            task_id=str(current.get("current_task_id") or current.get("change_id") or ""),
+                            source_path=self.dev_scenarios_root / object_id,
+                            context_packet_digest=str(current.get("context_packet_digest") or "")
+                            or None,
+                        )
+                    feedback = readiness["browser_feedback"]
+                    history = [
+                        copy.deepcopy(dict(item))
+                        for item in current.get("browser_feedback_history") or []
+                        if isinstance(item, Mapping)
+                    ]
+                    history.append(copy.deepcopy(dict(feedback)))
+                    current["browser_feedback_history"] = history[-10:]
+                    if not bool(feedback.get("ok")):
+                        if self._queue_browser_feedback_repair(current, readiness, feedback):
+                            return
+                        raise RuntimeError(
+                            "Browser feedback failed after the bounded repair attempts"
+                        )
+                    current.pop("pending_browser_feedback", None)
+
                 with self._finalization_stage(
                     current,
                     readiness,
