@@ -130,6 +130,82 @@ def test_prepare_trial_resumes_observed_candidate_without_restarting(monkeypatch
     assert result["resumed"] is True
 
 
+def test_prepare_trial_keeps_checkpoint_retryable_after_conclusive_root_rejection(
+    monkeypatch,
+) -> None:
+    from adaos.services.root.client import RootHttpError
+
+    transitions: list[tuple[str, dict]] = []
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: _checkpoint_state())
+
+    def transition(_kind, _project, action, **kwargs):
+        transitions.append((action, dict(kwargs.get("metadata") or {})))
+        return {"workflow": {"governed": {"state": action}}}
+
+    monkeypatch.setattr(lifecycle.workflow, "transition", transition)
+    monkeypatch.setattr(
+        lifecycle.projects,
+        "prepare_candidate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RootHttpError(
+                "invalid project composition lock",
+                status_code=400,
+                error_code="errors.invalid_project_composition_lock",
+            )
+        ),
+    )
+
+    with pytest.raises(RootHttpError):
+        lifecycle.prepare_trial(
+            "scenario",
+            "recipes",
+            actor="user:test",
+            idempotency_key="trial-invalid-lock",
+        )
+
+    assert [item[0] for item in transitions] == [
+        "candidate_preparation_started",
+        "candidate_preparation_failed",
+    ]
+    assert transitions[1][1]["idempotency_key"] == "trial-invalid-lock:failure"
+
+
+def test_prepare_trial_requires_reconciliation_after_unknown_transport_outcome(
+    monkeypatch,
+) -> None:
+    from adaos.services.root.client import RootHttpError
+
+    transitions: list[tuple[str, dict]] = []
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: _checkpoint_state())
+
+    def transition(_kind, _project, action, **kwargs):
+        transitions.append((action, dict(kwargs.get("metadata") or {})))
+        return {"workflow": {"governed": {"state": action}}}
+
+    monkeypatch.setattr(lifecycle.workflow, "transition", transition)
+    monkeypatch.setattr(
+        lifecycle.projects,
+        "prepare_candidate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RootHttpError("response lost", status_code=0)
+        ),
+    )
+
+    with pytest.raises(RootHttpError):
+        lifecycle.prepare_trial(
+            "scenario",
+            "recipes",
+            actor="user:test",
+            idempotency_key="trial-response-lost",
+        )
+
+    assert [item[0] for item in transitions] == [
+        "candidate_preparation_started",
+        "candidate_preparation_unknown",
+    ]
+    assert transitions[1][1]["idempotency_key"] == "trial-response-lost:unknown"
+
+
 def test_prepare_trial_routes_component_checkpoint_through_owning_project(
     monkeypatch,
 ) -> None:

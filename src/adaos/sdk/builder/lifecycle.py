@@ -77,6 +77,16 @@ def _published_candidate_matches(
     return published_id == candidate_id and published_digest == candidate_digest
 
 
+def _candidate_preparation_failure_is_known(exc: Exception) -> bool:
+    """Return whether Root conclusively rejected the request without an unknown outcome."""
+
+    try:
+        status_code = int(getattr(exc, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    return 400 <= status_code < 500 and status_code != 408
+
+
 def prepare_trial(
     object_type: str,
     object_id: str,
@@ -188,14 +198,23 @@ def prepare_trial(
                 idempotency_key=idempotency_key,
             )
     except Exception as exc:
+        action = (
+            "candidate_preparation_failed"
+            if _candidate_preparation_failure_is_known(exc)
+            else "candidate_preparation_unknown"
+        )
         workflow.transition(
             object_type,
             object_id,
-            "candidate_preparation_unknown",
+            action,
             actor=actor,
             metadata={
                 "error": str(exc),
-                "idempotency_key": f"{idempotency_key}:unknown",
+                "idempotency_key": (
+                    f"{idempotency_key}:failure"
+                    if action == "candidate_preparation_failed"
+                    else f"{idempotency_key}:unknown"
+                ),
             },
         )
         raise
