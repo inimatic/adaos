@@ -412,8 +412,28 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
                     "max_sessions": 1,
                 }
             ],
-            "devices": [{"device_id": "phone-1", "status": "active"}],
-            "sessions": [{"session_id": "session-1", "status": "active"}],
+            "devices": [
+                {
+                    "device_id": "phone-1",
+                    "status": "active",
+                    "public_key": "must-not-be-projected",
+                }
+            ],
+            "sessions": [
+                {
+                    "session_id": "session-1",
+                    "device_id": "phone-1",
+                    "status": "active",
+                    "expires_at": 1_900_000_000,
+                    "key_id": "invite:guest-link-1",
+                    "subject": {"kind": "user", "id": "sasha"},
+                    "tool_credential": {
+                        "issued_at": 1_800_000_000,
+                        "scope": {"kind": "skill", "id": "family_tasks_skill"},
+                        "token_hash": "must-not-be-projected",
+                    },
+                }
+            ],
         }
     )
 
@@ -438,6 +458,23 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
         guest.grant_id,
     }
     assert users_view["diagnostics"]["content_redacted"] is True
+    assert users_view["devices"] == [
+        {"device_id": "phone-1", "status": "active"}
+    ]
+    assert users_view["sessions"] == [
+        {
+            "session_id": "session-1",
+            "device_id": "phone-1",
+            "status": "active",
+            "expires_at": "2030-03-17T17:46:40+00:00",
+            "subject_ref": "user:sasha",
+            "scope_ref": "skill:family_tasks_skill",
+            "opened_at": "2027-01-15T08:00:00+00:00",
+            "authentication_source": "invitation",
+        }
+    ]
+    assert "token_hash" not in json.dumps(users_view)
+    assert "public_key" not in json.dumps(users_view)
     permission_rows = {
         item["permission_id"]: item for item in users_view["permissions"]
     }

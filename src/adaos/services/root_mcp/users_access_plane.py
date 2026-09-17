@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import time
 from typing import Any, Callable, Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -247,6 +248,42 @@ def _expires_at(arguments: Mapping[str, Any]) -> float | None:
     return time.time() + int(value) * 60
 
 
+def _typed_ref(value: Any) -> str:
+    item = value if isinstance(value, Mapping) else {}
+    kind = str(item.get("kind") or "").strip()
+    identifier = str(item.get("id") or "").strip()
+    return f"{kind}:{identifier}" if kind and identifier else ""
+
+
+def _audit_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    decision = value.get("decision")
+    decision = decision if isinstance(decision, Mapping) else {}
+    metadata = value.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    timestamp = value.get("ts")
+    occurred_at = ""
+    if isinstance(timestamp, (int, float)) and timestamp > 0:
+        occurred_at = datetime.fromtimestamp(float(timestamp), tz=timezone.utc).isoformat()
+    elif timestamp:
+        occurred_at = str(timestamp)
+    return {
+        "audit_id": str(value.get("audit_id") or ""),
+        "event_type": str(value.get("event_type") or ""),
+        "actor": deepcopy(value.get("actor") or {}),
+        "actor_ref": _typed_ref(value.get("actor")),
+        "scope": deepcopy(value.get("scope") or {}),
+        "scope_ref": _typed_ref(value.get("scope")),
+        "decision": {
+            key: deepcopy(decision.get(key))
+            for key in ("decision", "reason_code", "action")
+            if key in decision
+        },
+        "resource": str(metadata.get("resource") or decision.get("resource") or ""),
+        "occurred_at": occurred_at,
+        "source": str(value.get("source") or ""),
+    }
+
+
 def _handle_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     directory = _service().admin_summary(
         actor=_actor(arguments),
@@ -283,11 +320,16 @@ def _handle_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
         for key, value in surface.items()
         if key in {"schema", "diagnostics"} or key in requested
     }
-    administration = {
-        key: deepcopy(directory.get(key) or [])
-        for key in ("memberships", "grants", "invites", "recovery_actions", "audit")
-        if key in requested
-    }
+    administration = {}
+    for key in ("memberships", "grants", "invites", "recovery_actions", "audit"):
+        if key not in requested:
+            continue
+        items = directory.get(key) or []
+        administration[key] = (
+            [_audit_projection(item) for item in items if isinstance(item, Mapping)]
+            if key == "audit"
+            else deepcopy(items)
+        )
     return {
         "users_access": surface_result,
         "administration": administration,

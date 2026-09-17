@@ -184,6 +184,57 @@ def test_summary_projects_requested_compact_sections(service: _Service, monkeypa
     assert result["administration"] == {}
 
 
+def test_summary_redacts_and_normalizes_access_audit(service: _Service, monkeypatch: pytest.MonkeyPatch) -> None:
+    original = service.admin_summary
+
+    def summary(*, actor, audit_limit: int) -> dict:
+        payload = original(actor=actor, audit_limit=audit_limit)
+        payload["audit"] = [
+            {
+                "audit_id": "audit-1",
+                "event_type": "policy.allow",
+                "actor": {"kind": "user", "id": "owner"},
+                "scope": {"kind": "skill", "id": "notes"},
+                "decision": {
+                    "decision": "allow",
+                    "reason_code": "owner",
+                    "action": "workspace.read",
+                    "resource": "skill:notes",
+                    "grant_ids": ["secret-grant"],
+                },
+                "metadata": {"resource": "skill:notes", "secret": "hidden"},
+                "ts": 1_800_000_000,
+                "source": "personalization_access",
+            }
+        ]
+        return payload
+
+    monkeypatch.setattr(service, "admin_summary", summary)
+    result = plane.handlers()["users_access.summary"](
+        {"sections": ["audit"], "detail": "compact", "_mcp_context": _context()},
+        dry_run=False,
+    )
+
+    assert result["administration"]["audit"] == [
+        {
+            "audit_id": "audit-1",
+            "event_type": "policy.allow",
+            "actor": {"kind": "user", "id": "owner"},
+            "actor_ref": "user:owner",
+            "scope": {"kind": "skill", "id": "notes"},
+            "scope_ref": "skill:notes",
+            "decision": {
+                "decision": "allow",
+                "reason_code": "owner",
+                "action": "workspace.read",
+            },
+            "resource": "skill:notes",
+            "occurred_at": "2027-01-15T08:00:00+00:00",
+            "source": "personalization_access",
+        }
+    ]
+
+
 def test_grant_role_is_state_idempotent(service: _Service) -> None:
     arguments = {
         "subject_id": "member",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import hashlib
 import logging
 from dataclasses import replace
@@ -99,6 +100,71 @@ def _redacted_account(value: Mapping[str, Any]) -> dict[str, Any]:
         "updated_at",
     }
     return {key: value[key] for key in sorted(allowed) if key in value}
+
+
+def _subject_ref(value: Any) -> str:
+    subject = value if isinstance(value, Mapping) else {}
+    kind = str(subject.get("kind") or "").strip()
+    identifier = str(subject.get("id") or "").strip()
+    return f"{kind}:{identifier}" if kind and identifier else ""
+
+
+def _display_timestamp(value: Any) -> Any:
+    if isinstance(value, (int, float)) and value > 0:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+    return value
+
+
+def _redacted_device(value: Mapping[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "device_id",
+        "label",
+        "status",
+        "created_at",
+        "expires_at",
+        "last_seen_at",
+    }
+    result = {
+        key: (
+            _display_timestamp(value[key])
+            if key in {"created_at", "expires_at", "last_seen_at"}
+            else deepcopy(value[key])
+        )
+        for key in sorted(allowed)
+        if key in value
+    }
+    subject_ref = _subject_ref(value.get("subject"))
+    if subject_ref:
+        result["subject_ref"] = subject_ref
+    return result
+
+
+def _redacted_session(value: Mapping[str, Any]) -> dict[str, Any]:
+    credential = value.get("tool_credential")
+    credential = credential if isinstance(credential, Mapping) else {}
+    result = {
+        key: (
+            _display_timestamp(value[key])
+            if key in {"expires_at", "revoked_at"}
+            else deepcopy(value[key])
+        )
+        for key in ("session_id", "device_id", "status", "expires_at", "revoked_at")
+        if key in value
+    }
+    subject_ref = _subject_ref(value.get("subject"))
+    if subject_ref:
+        result["subject_ref"] = subject_ref
+    scope_ref = _subject_ref(credential.get("scope"))
+    if scope_ref:
+        result["scope_ref"] = scope_ref
+    if credential.get("issued_at") is not None:
+        result["opened_at"] = _display_timestamp(credential.get("issued_at"))
+    key_id = str(value.get("key_id") or "").strip()
+    if key_id:
+        result["authentication_source"] = (
+            "invitation" if key_id.startswith("invite:") else "tool_credential"
+        )
+    return result
 
 
 class ApplicationAccessManagementService:
@@ -753,8 +819,16 @@ class ApplicationAccessManagementService:
                     },
                 }
             )
-        devices = list(directory.get("devices") or ())
-        sessions = list(directory.get("sessions") or ())
+        devices = [
+            _redacted_device(item)
+            for item in directory.get("devices") or ()
+            if isinstance(item, Mapping)
+        ]
+        sessions = [
+            _redacted_session(item)
+            for item in directory.get("sessions") or ()
+            if isinstance(item, Mapping)
+        ]
         audit_limit = max(1, min(int(activity_limit), 200))
         activity_values = self.store.list_application_access_audit(limit=audit_limit + 1)
         person_values = sorted(people.values(), key=lambda item: item["subject_ref"])
