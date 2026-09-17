@@ -7350,6 +7350,64 @@ def test_worker_admits_exact_bindings_for_incremental_scenario_automation(
     assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
 
 
+def test_worker_does_not_admit_attachment_bindings_from_system_context(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    project_id = "catalog_app"
+    workspace = tmp_path / "workspace"
+    scenario_root = workspace / "scenarios" / project_id
+    scenario_root.mkdir(parents=True)
+    (scenario_root / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assignment = {
+        "task_id": "task.compact-bindings",
+        "target": {"type": "scenario", "id": project_id},
+        "acceptance": {"checks": ["Catalog reads use the admitted MCP contract."]},
+        "forge": {"sparse_paths": [f"scenarios/{project_id}/"]},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "Implement the accepted catalog interface.",
+                "context_packet": {
+                    "schema": "adaos.builder.context_packet.v1",
+                    "source_snapshot": {"attachments": []},
+                    "facets": {
+                        "generic_platform_guidance": {
+                            "text": "storage.blob attachments require authorization"
+                        }
+                    },
+                    "artifacts": {
+                        "prototype": {
+                            "acceptance": {
+                                "schema": "adaos.builder.prototype_acceptance.v1",
+                                "decision": "accepted",
+                                "revision": "001",
+                                "prototype_resources": [],
+                            }
+                        }
+                    },
+                },
+            }
+        },
+    }
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+
+    worker._build_packet(assignment, workspace, tmp_path / "input")
+
+    bindings = json.loads(
+        (tmp_path / "input/implementation-bindings.json").read_text(encoding="utf-8")
+    )
+    assert "production_attachment" not in bindings["contracts"]
+    assert "attachments" not in bindings["binding_rules"]
+
+
 def test_worker_binds_exact_external_mcp_contracts_and_prototype_identity(
     tmp_path: Path,
 ) -> None:

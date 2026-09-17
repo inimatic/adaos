@@ -6560,11 +6560,16 @@ class LocalSkillFactoryWorker:
                 {
                     "brief": brief,
                     "acceptance": assignment.get("acceptance") or {},
-                    "context_packet": context_packet,
+                    "iteration_instruction": iteration,
+                    "change": context_packet.get("change") or {},
+                    "requirements": context_packet.get("requirements") or {},
                 },
                 ensure_ascii=False,
                 sort_keys=True,
             ).lower()
+            target_webui = workspace / "scenarios" / target_id / "webui.json"
+            if target_webui.exists():
+                binding_request += "\n" + target_webui.read_text(encoding="utf-8").lower()
             include_attachments = any(
                 token in binding_request
                 for token in (
