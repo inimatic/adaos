@@ -272,6 +272,17 @@ def test_project_release_binds_structured_application_contract(tmp_path: Path) -
     assert restored.project_release.composition_lock.permission_profile == _profile().to_dict()
 
 
+def test_access_surface_uses_latest_release_without_installation_or_channel(
+    tmp_path: Path,
+) -> None:
+    _, management, release = _services(tmp_path)
+
+    surface = management.application_detail("family_tasks")
+
+    assert surface["release"]["release_digest"] == release.release_digest
+    assert surface["installation"] is None
+
+
 def test_trial_runtime_context_resolves_without_stable_installation(tmp_path: Path) -> None:
     applications, management, release = _services(tmp_path)
     applications.store.save_runtime_selection(

@@ -608,6 +608,9 @@ class ApplicationAccessManagementService:
         if not digest:
             channels = self.store.get_channels(application_id).get("channels") or {}
             digest = str(channels.get("stable") or channels.get("prerelease") or "")
+        if not digest:
+            releases = self.store.list_releases(application_id)
+            digest = releases[-1].release_digest if releases else ""
         release = self.store.get_release(application_id, digest)
         grants = self.store.list_application_access_grants(application_id)
         reports = self.list_verification_reports(application_id)

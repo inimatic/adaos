@@ -404,6 +404,87 @@ def test_application_read_survives_missing_development_project(
     assert applications.list_applications(developed_only=True) == []
 
 
+def test_application_list_includes_read_only_workspace_project_projection(
+    monkeypatch, tmp_path: Path
+) -> None:
+    context = SimpleNamespace(
+        paths=SimpleNamespace(state_dir=lambda: tmp_path),
+        config=SimpleNamespace(subnet_id_value="sn_home"),
+    )
+    monkeypatch.setattr(applications, "require_ctx", lambda _reason: context)
+    monkeypatch.setattr(applications, "_local_development_index", lambda: {})
+
+    class Service:
+        def list_models(self, **_kwargs):
+            return []
+
+    class Projection:
+        def __init__(self, _state_dir):
+            pass
+
+        def list_workspace_projects(self, **_kwargs):
+            return [
+                {
+                    "id": "legacy_notes",
+                    "version": "1.2.3",
+                    "title": "Legacy Notes",
+                    "description": "Indexed from the Workspace project manifest.",
+                    "visibility": "listed",
+                    "categories": ["productivity"],
+                    "entrypoints": [
+                        {
+                            "id": "main",
+                            "presentation": "scenario:legacy_notes",
+                        }
+                    ],
+                    "permission_profile": {"required": [{"id": "notes.read"}]},
+                    "manifest_digest": "sha256:" + "a" * 64,
+                }
+            ]
+
+    monkeypatch.setattr(applications, "_service", lambda: Service())
+    monkeypatch.setattr(applications, "ApplicationRegistryProjection", Projection)
+
+    listed = applications.list_applications(available_only=True)
+
+    assert len(listed) == 1
+    assert listed[0]["application"]["application_id"] == "legacy_notes"
+    assert listed[0]["application"]["aggregate_backed"] is False
+    assert listed[0]["installed"] is True
+    assert listed[0]["installed_release"]["version"] == "1.2.3"
+
+
+def test_workspace_project_access_surface_is_read_only(monkeypatch) -> None:
+    projected = {
+        "application": {
+            "application_id": "legacy_notes",
+            "aggregate_backed": False,
+        },
+        "installation": {"application_id": "legacy_notes", "revision": 0},
+        "installed_release": {"application_id": "legacy_notes", "version": "1.2.3"},
+        "workspace_project": {
+            "manifest_digest": "sha256:" + "a" * 64,
+            "permission_profile": {"required": [{"id": "notes.read"}]},
+            "application_roles": [{"id": "viewer", "title": "Viewer"}],
+        },
+    }
+
+    class Access:
+        def application_detail(self, *_args, **_kwargs):
+            raise FileNotFoundError("not migrated")
+
+    monkeypatch.setattr(applications, "_access_management", lambda: Access())
+    monkeypatch.setattr(applications, "get_application", lambda _application_id: projected)
+
+    surface = applications.get_application_access_surface("legacy_notes")
+
+    assert surface["managed"] is False
+    assert surface["sections"]["permissions"]["profile"]["required"] == [
+        {"id": "notes.read"}
+    ]
+    assert surface["sections"]["roles"] == [{"id": "viewer", "title": "Viewer"}]
+
+
 def test_sdk_exposes_development_report_status_without_internal_store_access() -> None:
     class Reports:
         def list_reports(self):

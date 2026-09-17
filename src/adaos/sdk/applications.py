@@ -24,6 +24,7 @@ from adaos.services.applications import (
 )
 from adaos.services.builder.workbench import BuilderWorkbenchService
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
+from adaos.services.application_registry_projection import ApplicationRegistryProjection
 from adaos.services.policy.skill_capabilities import require_skill_capability
 
 
@@ -178,6 +179,9 @@ def _release_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def _application_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
     model = deepcopy(dict(value))
+    application = model.get("application")
+    if isinstance(application, dict):
+        application.setdefault("aggregate_backed", True)
     for field in ("installed_release", "marketplace_release", "prerelease_release"):
         if isinstance(model.get(field), Mapping):
             model[field] = _release_read_model(model[field])
@@ -185,6 +189,138 @@ def _application_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(effective, dict) and isinstance(effective.get("release"), Mapping):
         effective["release"] = _release_read_model(effective["release"])
     return model
+
+
+def _workspace_project_read_models(
+    existing: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project manifests remain visible while their Application aggregate is migrated."""
+    ctx = require_ctx("sdk.applications")
+    try:
+        projects = ApplicationRegistryProjection(
+            Path(ctx.paths.state_dir())
+        ).list_workspace_projects(include_hidden=False)
+    except (OSError, RuntimeError, ValueError):
+        return []
+    claimed = {
+        token
+        for item in existing
+        for token in (
+            str((item.get("application") or {}).get("application_id") or "").strip(),
+            str((item.get("application") or {}).get("legacy_project_id") or "").strip(),
+        )
+        if token
+    }
+    local_ref = _local_subnet_ref()
+    local_publisher = next(
+        (
+            dict(application.get("publisher") or {})
+            for item in existing
+            if isinstance(item, Mapping)
+            and isinstance((application := item.get("application")), Mapping)
+            and str(application.get("publisher_ref") or "").lower()
+            == local_ref.lower()
+            and isinstance(application.get("publisher"), Mapping)
+        ),
+        {
+            "publisher_ref": local_ref,
+            "display_name": local_ref.removeprefix("subnet:"),
+            "trust_relation": "local",
+        },
+    )
+    models: list[dict[str, Any]] = []
+    for project in projects:
+        project_id = str(project.get("id") or "").strip()
+        if not project_id or project_id in claimed:
+            continue
+        entrypoints = [
+            {
+                "entrypoint_id": str(item.get("id") or "main"),
+                "presentation_ref": str(item.get("presentation") or ""),
+            }
+            for item in project.get("entrypoints") or ()
+            if isinstance(item, Mapping) and str(item.get("presentation") or "").strip()
+        ]
+        version = str(project.get("version") or "").strip()
+        models.append(
+            {
+                "application": {
+                    "schema": "adaos.application.workspace_project_projection.v1",
+                    "application_id": project_id,
+                    "legacy_project_id": project_id,
+                    "publisher_ref": local_ref,
+                    "slug": project_id,
+                    "display": {
+                        "title": str(project.get("title") or project_id),
+                        "summary": str(project.get("description") or ""),
+                        "categories": list(project.get("categories") or ()),
+                    },
+                    "visibility": "private",
+                    "catalog_visibility": str(project.get("visibility") or "unlisted"),
+                    "entrypoints": entrypoints,
+                    "publisher": deepcopy(local_publisher),
+                    "protection": {
+                        "system_application": False,
+                        "bootstrap_capable": False,
+                        "active_installation_removable": False,
+                        "recovery_surfaces": ["cli"],
+                    },
+                    "lifecycle": "active",
+                    "aggregate_backed": False,
+                    "revision": 0,
+                },
+                "installed": True,
+                "available": True,
+                "update_available": False,
+                "pinned": False,
+                "prerelease_following": False,
+                "use_prerelease": False,
+                "local_beta_active": False,
+                "runtime_selections": [],
+                "auto_update_enabled": False,
+                "retired": False,
+                "channels": {},
+                "installation": {
+                    "schema": "adaos.application.workspace_project_installation.v1",
+                    "application_id": project_id,
+                    "status": "active",
+                    "revision": 0,
+                },
+                "installed_release": {
+                    "schema": "adaos.application.workspace_project_release.v1",
+                    "application_id": project_id,
+                    "version": version,
+                    "project_release": {
+                        "project_id": project_id,
+                        "version": version,
+                    },
+                },
+                "effective_release": {
+                    "application_id": project_id,
+                    "version": version,
+                    "update_track": "stable",
+                    "reason": "workspace_project_projection",
+                },
+                "icon": "apps-outline",
+                "workspace_project": {
+                    key: deepcopy(project[key])
+                    for key in (
+                        "id",
+                        "version",
+                        "profiles",
+                        "stage",
+                        "visibility",
+                        "primary_ref",
+                        "manifest_digest",
+                        "permission_profile",
+                        "application_roles",
+                    )
+                    if key in project
+                },
+                "local_development": None,
+            }
+        )
+    return models
 
 
 def _local_development_index() -> dict[str, dict[str, Any]]:
@@ -264,6 +400,7 @@ def list_applications(
             subscriber_subnet_ref=_local_subnet_ref(),
         )
     ]
+    models.extend(_workspace_project_read_models(models))
     for model in models:
         application = model.get("application") or {}
         application_id = str(application.get("application_id") or "")
@@ -377,13 +514,11 @@ def list_applications(
 
 
 def get_application(application_id: str) -> dict[str, Any]:
-    service = _service()
-    application = service.store.get_application(application_id)
-    return next(
-        item
-        for item in list_applications()
-        if item["application"]["application_id"] == application.application_id
-    )
+    token = str(application_id or "").strip()
+    for item in list_applications():
+        if item["application"]["application_id"] == token:
+            return item
+    raise FileNotFoundError(f"Application not found: {token}")
 
 
 def get_identity(application_id: str) -> dict[str, Any]:
@@ -795,11 +930,45 @@ def get_application_access_surface(
     release_digest: str | None = None,
     activity_limit: int = 50,
 ) -> dict[str, Any]:
-    return _access_management().application_detail(
-        application_id,
-        release_digest=release_digest,
-        activity_limit=activity_limit,
-    )
+    try:
+        return _access_management().application_detail(
+            application_id,
+            release_digest=release_digest,
+            activity_limit=activity_limit,
+        )
+    except FileNotFoundError:
+        projected = get_application(application_id)
+        project = dict(projected.get("workspace_project") or {})
+        if not project:
+            raise
+        profile = dict(project.get("permission_profile") or {})
+        roles = [
+            dict(item)
+            for item in project.get("application_roles") or ()
+            if isinstance(item, Mapping)
+        ]
+        return {
+            "schema": "adaos.application.access_surface.v1",
+            "application": deepcopy(projected["application"]),
+            "release": deepcopy(projected.get("installed_release")),
+            "installation": deepcopy(projected.get("installation")),
+            "managed": False,
+            "reason": "workspace_project_not_migrated_to_application_aggregate",
+            "sections": {
+                "permissions": {
+                    "profile": profile,
+                    "digest": project.get("manifest_digest"),
+                    "privacy_report": None,
+                    "badges": [],
+                },
+                "access": [],
+                "roles": roles,
+                "connected_accounts": [],
+                "release_readiness": None,
+                "activity": [],
+                "activity_page": {"limit": max(1, min(int(activity_limit), 200)), "has_more": False},
+            },
+        }
 
 
 def get_users_access_surface(
