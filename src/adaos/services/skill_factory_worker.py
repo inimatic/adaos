@@ -8104,15 +8104,35 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         *,
         changed_paths: set[str] | None = None,
     ) -> None:
+        def checkpoint_owner(node: ast.AST) -> bool:
+            current = node
+            while isinstance(current, ast.Subscript):
+                current = current.value
+            if isinstance(current, ast.Name):
+                owner = current.id.lower()
+            elif isinstance(current, ast.Attribute):
+                owner = current.attr.lower()
+            else:
+                return False
+            return any(
+                token in owner
+                for token in ("manifest", "scenario", "project", "skill")
+            )
+
         def checkpoint_key(node: ast.AST) -> str | None:
             if isinstance(node, ast.Subscript):
                 key = node.slice
-                if isinstance(key, ast.Constant) and key.value in {"version", "updated_at"}:
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value in {"version", "updated_at"}
+                    and checkpoint_owner(node)
+                ):
                     return str(key.value)
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "get"
+                and checkpoint_owner(node.func.value)
                 and node.args
                 and isinstance(node.args[0], ast.Constant)
                 and node.args[0].value in {"version", "updated_at"}

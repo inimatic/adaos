@@ -6358,6 +6358,32 @@ def test_worker_allows_semantic_manifest_version_checks(tmp_path: Path) -> None:
     ]
 
 
+def test_worker_allows_exact_non_manifest_abi_versions(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    tests_dir = workspace / "scenarios" / "demo" / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_layout.py").write_text(
+        "def test_layout_version(page):\n"
+        "    assert page['layout']['version'] == 2\n",
+        encoding="utf-8",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_tests_do_not_pin_checkpoint_metadata(
+        workspace, checks, errors
+    )
+
+    assert errors == []
+    assert checks == [
+        {
+            "kind": "checkpoint_test_contract",
+            "path": "scenarios/demo/tests/test_layout.py",
+            "ok": True,
+        }
+    ]
+
+
 def test_worker_rejects_package_tests_bound_to_development_context(
     tmp_path: Path,
 ) -> None:
