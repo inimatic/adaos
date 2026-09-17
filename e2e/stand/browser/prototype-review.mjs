@@ -19,8 +19,21 @@ if (!['prototype', 'automation', 'trial', 'publication'].includes(reviewStage)) 
 if (!['development', 'workspace'].includes(spaceKind)) throw new Error('Unsupported review space')
 if (emptyMode && spaceKind !== 'development') throw new Error('Empty fixture probes require development space')
 const dictionaryProbe = process.env.ADAOS_E2E_DICTIONARY_PROBE === '1'
-const expectedWebui = process.env.ADAOS_E2E_EXPECTED_WEBUI
-  ? JSON.parse(await fs.readFile(process.env.ADAOS_E2E_EXPECTED_WEBUI, 'utf8')) : null
+const expectedWebuiPath = process.env.ADAOS_E2E_EXPECTED_WEBUI
+  ? path.resolve(process.env.ADAOS_E2E_EXPECTED_WEBUI) : null
+const expectedWebui = expectedWebuiPath
+  ? JSON.parse(await fs.readFile(expectedWebuiPath, 'utf8')) : null
+let expectedTrialIdentity = null
+if (reviewStage === 'trial' && expectedWebuiPath) {
+  const trialRoot = path.dirname(path.dirname(path.dirname(expectedWebuiPath)))
+  const lock = JSON.parse(await fs.readFile(path.join(trialRoot, '.adaos', 'workspace.lock.json'), 'utf8'))
+  const releaseDigest = String(lock?.slots?.primary?.release_digest || '')
+  if (!releaseDigest.startsWith('sha256:')) throw new Error('Pinned Trial WorkspaceLock has no primary release digest')
+  expectedTrialIdentity = {
+    materializationRevision: path.basename(trialRoot),
+    sourceFingerprint: `trial:${releaseDigest}`,
+  }
+}
 let expectedTranslation
 if (dictionaryProbe) {
   const checkpoint = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CHECKPOINT, 'utf8'))
@@ -130,11 +143,14 @@ try {
         if (!isDeepStrictEqual(canonicalWidgetSources(actual), expected)) throw new Error('Rendered widget sources differ from the pinned WebUI')
       }
       if (reviewStage === 'trial') {
-        await page.waitForFunction(() => {
+        await page.waitForFunction(expectedIdentity => {
           const source = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization
-          return source?.materializationRevision
-            && /^trial[:_]/.test(source?.sourceFingerprint || '')
-        }, undefined, { timeout: 15_000 })
+          if (!source?.materializationRevision || !/^trial[:_]/.test(source?.sourceFingerprint || '')) return false
+          return !expectedIdentity || (
+            source.materializationRevision === expectedIdentity.materializationRevision
+            && source.sourceFingerprint === expectedIdentity.sourceFingerprint
+          )
+        }, expectedTrialIdentity, { timeout: 15_000 })
       }
       if (reviewStage !== 'prototype' && !expectTrialUnavailable) {
         await page.waitForFunction(() => {
@@ -203,7 +219,14 @@ try {
       if (selectWidget && !emptyMode) {
         await page.locator(`[data-webui-widget-id=${JSON.stringify(selectWidget)}]`)
           .locator('tr.row-selectable, .collection-focus-item').first().click()
-        await page.locator('ada-details-widget .details-row').first().waitFor({ timeout: 15_000 })
+        await page.waitForFunction(() => [...document.querySelectorAll('ada-details-widget')]
+          .some(element => {
+            const style = getComputedStyle(element)
+            return element.getClientRects().length > 0
+              && style.visibility !== 'hidden'
+              && style.display !== 'none'
+              && !!element.textContent?.trim()
+          }), undefined, { timeout: 15_000 })
       }
       if (!emptyMode && ['1', 'inspect'].includes(process.env.ADAOS_E2E_MEDIA_TESTS)) {
         const rows = page.locator(`[data-webui-widget-id=${JSON.stringify(selectWidget)}]`)
