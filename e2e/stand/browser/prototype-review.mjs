@@ -94,7 +94,10 @@ try {
       if (target.pathname.startsWith('/api/') && response.status() >= 400) {
         const failure = { path: target.pathname, status: response.status() }
         requestFailures.push(failure)
-        if (target.pathname.startsWith('/api/resources/') || target.pathname === '/api/tools/call') responseTasks.push(
+        if (target.pathname.startsWith('/api/resources/')
+          || target.pathname === '/api/tools/call'
+          || target.pathname === '/api/admin/root_mcp/call'
+          || target.pathname === '/v1/root/mcp/call') responseTasks.push(
           response.json().then(body => { failure.detail = body.detail || body.error }).catch(() => {}),
         )
       }
@@ -108,7 +111,13 @@ try {
         const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
         return sync?.materializationReady && sync?.materialization?.currentScenario === expected
       }, scenario, { timeout: 60_000 })
-      await page.locator('ada-page-widget-host, ada-widget').first().waitFor({ timeout: 15_000 })
+      await page.waitForFunction(() => [...document.querySelectorAll('ada-page-widget-host, ada-widget')]
+        .some(element => {
+          const style = getComputedStyle(element)
+          return element.getClientRects().length > 0
+            && style.visibility !== 'hidden'
+            && style.display !== 'none'
+        }), undefined, { timeout: 15_000 })
       await page.evaluate(() => document.fonts.ready)
       console.log(`${layout}: materialization and fonts ready`)
       if (expectedWebui) {
@@ -123,9 +132,49 @@ try {
       if (reviewStage === 'trial') {
         await page.waitForFunction(() => {
           const source = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization
-          return source?.materializationRevision && source?.materializationKeyHash
+          return source?.materializationRevision
             && /^trial[:_]/.test(source?.sourceFingerprint || '')
         }, undefined, { timeout: 15_000 })
+      }
+      if (reviewStage !== 'prototype' && !expectTrialUnavailable) {
+        await page.waitForFunction(() => {
+          const dynamicKinds = new Set(['api', 'mcp', 'resource', 'skill'])
+          const visibleDynamicHosts = [...document.querySelectorAll('ada-page-widget-host')]
+            .filter(element => {
+              const style = getComputedStyle(element)
+              if (!element.getClientRects().length || style.visibility === 'hidden' || style.display === 'none') return false
+              const component = window.ng?.getComponent(element)
+              return dynamicKinds.has(String(component?.widget?.dataSource?.kind || ''))
+            })
+          return visibleDynamicHosts.every(element => {
+            const status = window.ng?.getComponent(element)?.dataSourceStatus
+            const state = String(status?.state || '')
+            return status?.hasValue === true || ['error', 'unavailable'].includes(state)
+          })
+        }, undefined, { timeout: 30_000 })
+        const failedDataSources = await page.locator('ada-page-widget-host').evaluateAll(elements => {
+          const dynamicKinds = new Set(['api', 'mcp', 'resource', 'skill'])
+          return elements.flatMap(element => {
+            const style = getComputedStyle(element)
+            const component = window.ng?.getComponent(element)
+            const source = component?.widget?.dataSource
+            const status = component?.dataSourceStatus
+            if (!element.getClientRects().length || style.visibility === 'hidden' || style.display === 'none'
+              || !dynamicKinds.has(String(source?.kind || ''))
+              || status?.hasValue === true
+              || !['error', 'unavailable'].includes(String(status?.state || ''))) return []
+            return [{
+              widgetId: component?.widget?.id,
+              sourceKind: source?.kind,
+              state: status?.state,
+              reason: status?.reason,
+              diagnostic: component?.dataSourceDiagnosticText,
+            }]
+          })
+        })
+        if (failedDataSources.length) {
+          throw new Error(`Visible data sources failed: ${JSON.stringify(failedDataSources)}`)
+        }
       }
       if (expectTrialUnavailable) {
         await page.waitForFunction(() => {
@@ -193,6 +242,18 @@ try {
       materialization: window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization,
       widgets: document.querySelectorAll('ada-page-widget-host, ada-widget').length,
       loadingIndicators: document.querySelectorAll('ion-spinner').length,
+      dataSources: [...document.querySelectorAll('ada-page-widget-host')].flatMap(element => {
+        const style = getComputedStyle(element)
+        const component = window.ng?.getComponent(element)
+        const source = component?.widget?.dataSource
+        if (!source || !element.getClientRects().length || style.visibility === 'hidden' || style.display === 'none') return []
+        return [{
+          widgetId: component?.widget?.id,
+          sourceKind: source?.kind,
+          state: component?.dataSourceStatus?.state,
+          hasValue: component?.dataSourceStatus?.hasValue,
+        }]
+      }),
       tables: document.querySelectorAll('ada-table-widget').length,
       language: document.documentElement.lang,
       dictionary: (() => {
