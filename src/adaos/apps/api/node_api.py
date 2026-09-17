@@ -1185,6 +1185,7 @@ def _thin_runtime_reliability_payload(
             role=str(getattr(conf, "role", "") or ""),
             webspace_id=resolved_webspace_id,
             prefer_cached_gateway=requested_mode == "runtime",
+            compact_runtime=requested_mode == "runtime",
         )
     except Exception as exc:
         sync_runtime = {

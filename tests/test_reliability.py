@@ -3878,6 +3878,8 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
     from adaos.apps.api import node_api
     from adaos.apps.api.node_api import require_token, router
 
+    sync_kwargs: dict[str, object] = {}
+
     def _unexpected_full(*args, **kwargs):
         raise AssertionError("runtime summary must not build the full reliability payload")
 
@@ -3912,10 +3914,9 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
         },
     )
     monkeypatch.setattr(node_api, "load_config", lambda: SimpleNamespace(role="hub"))
-    monkeypatch.setattr(
-        node_api,
-        "yjs_sync_runtime_snapshot",
-        lambda **_: {
+    def _sync_snapshot(**kwargs):
+        sync_kwargs.update(kwargs)
+        return {
             "available": True,
             "assessment": {"state": "nominal", "reason": ""},
             "transport": {"server_ready": True, "active_yws_connections": 1},
@@ -3924,8 +3925,9 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
                 "rebuild": {"materialization": {"ready": True}},
                 "gateway_room": {"ready": True, "open_total": 1},
             },
-        },
-    )
+        }
+
+    monkeypatch.setattr(node_api, "yjs_sync_runtime_snapshot", _sync_snapshot)
     monkeypatch.setattr(node_api, "get_ctx", lambda: SimpleNamespace(paths=SimpleNamespace()))
 
     app = FastAPI()
@@ -3944,12 +3946,38 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
     assert "statusPlane" not in payload
     assert payload["memberAvailability"]["source"] == "hub_member_connection_state"
     assert payload["memberAvailability"]["role"] == "hub"
+    assert sync_kwargs["prefer_cached_gateway"] is True
+    assert sync_kwargs["compact_runtime"] is True
 
     unchanged = client.get(
         "/api/node/reliability/runtime?webspace_id=desktop",
         headers={"If-None-Match": response.headers["etag"]},
     )
     assert unchanged.status_code == 304
+
+
+def test_compact_yjs_selected_webspace_snapshot_avoids_workspace_index(monkeypatch) -> None:
+    from adaos.services import reliability
+
+    expected = {
+        "webspace_id": "desktop-cold",
+        "status": "ready",
+        "pending": False,
+        "materialization": {"ready": True},
+    }
+    monkeypatch.setattr(
+        "adaos.services.scenario.webspace_runtime.describe_webspace_rebuild_state",
+        lambda webspace_id: {**expected, "webspace_id": webspace_id},
+    )
+
+    snapshot = reliability._build_yjs_compact_selected_webspace_snapshot("desktop-cold")
+
+    assert snapshot == {
+        "webspace_id": "desktop-cold",
+        "rebuild": expected,
+    }
+    assert "title" not in snapshot
+    assert "projection_active_scenario" not in snapshot
 
 
 def test_compact_member_availability_skips_full_device_inventory(monkeypatch) -> None:

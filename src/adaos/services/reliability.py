@@ -5493,6 +5493,7 @@ def yjs_sync_runtime_snapshot(
     now_ts: float | None = None,
     webspace_id: str | None = None,
     prefer_cached_gateway: bool = False,
+    compact_runtime: bool = False,
 ) -> dict[str, Any]:
     now = time.time() if now_ts is None else float(now_ts)
     role_norm = str(role or "").strip().lower()
@@ -5564,26 +5565,29 @@ def yjs_sync_runtime_snapshot(
         )
     except Exception:
         gateway = {}
-    try:
-        from adaos.services.yjs.doc import live_room_command_diagnostics_snapshot
+    live_room_commands: dict[str, Any] = {}
+    named_entity_projection: dict[str, Any] = {}
+    if not compact_runtime:
+        try:
+            from adaos.services.yjs.doc import live_room_command_diagnostics_snapshot
 
-        live_room_commands = live_room_command_diagnostics_snapshot()
-    except Exception:
-        live_room_commands = {}
-    try:
-        from adaos.services.named_entity_projection import (
-            named_entity_projection_diagnostics_snapshot,
-            named_entity_projection_reconciler_snapshot,
-        )
+            live_room_commands = live_room_command_diagnostics_snapshot()
+        except Exception:
+            live_room_commands = {}
+        try:
+            from adaos.services.named_entity_projection import (
+                named_entity_projection_diagnostics_snapshot,
+                named_entity_projection_reconciler_snapshot,
+            )
 
-        named_entity_projection = {
-            "diagnostics": named_entity_projection_diagnostics_snapshot(),
-            "reconciler": named_entity_projection_reconciler_snapshot(
-                webspace_id=selected_webspace_id or None,
-            ),
-        }
-    except Exception:
-        named_entity_projection = {}
+            named_entity_projection = {
+                "diagnostics": named_entity_projection_diagnostics_snapshot(),
+                "reconciler": named_entity_projection_reconciler_snapshot(
+                    webspace_id=selected_webspace_id or None,
+                ),
+            }
+        except Exception:
+            named_entity_projection = {}
     try:
         from adaos.services.yjs.load_mark import yjs_load_mark_snapshot
 
@@ -5718,15 +5722,21 @@ def yjs_sync_runtime_snapshot(
         elif webspaces:
             selected_webspace_id = sorted(str(key) for key in webspaces.keys())[0]
     selected_entry = webspaces.get(selected_webspace_id) if isinstance(webspaces.get(selected_webspace_id), dict) else {}
-    replay_pressure_compaction_requested = _request_yjs_replay_pressure_compaction(
-        selected_webspace_id,
-        selected_entry,
-        assessment_state=assessment_state,
-        reasons=reasons,
-    )
+    replay_pressure_compaction_requested = False
+    if not compact_runtime:
+        replay_pressure_compaction_requested = _request_yjs_replay_pressure_compaction(
+            selected_webspace_id,
+            selected_entry,
+            assessment_state=assessment_state,
+            reasons=reasons,
+        )
     selected_webspace = _with_live_yjs_materialization_snapshot(
         selected_webspace_id,
-        _build_yjs_selected_webspace_snapshot(selected_webspace_id),
+        (
+            _build_yjs_compact_selected_webspace_snapshot(selected_webspace_id)
+            if compact_runtime
+            else _build_yjs_selected_webspace_snapshot(selected_webspace_id)
+        ),
     )
     selected_load_mark = load_mark.get("selected_webspace") if isinstance(load_mark.get("selected_webspace"), dict) else {}
     last_reload = (
@@ -5745,24 +5755,25 @@ def yjs_sync_runtime_snapshot(
         if isinstance(item, dict)
         and str(item.get("webspace_id") or "").strip() == selected_webspace_id
     ]
-    (
-        action_overrides,
-        recovery_playbook,
-        recovery_guidance,
-    ) = _build_yjs_recovery_policy(selected_entry, selected_webspace)
-    webspace_guidance = _build_yjs_webspace_guidance(selected_webspace, action_overrides)
-    ownership_boundaries = _build_yjs_ownership_boundaries(
-        selected_webspace_id=selected_webspace_id,
-        selected_webspace=selected_webspace,
-        transport={
-            "owner": yws_ownership.get("current_owner") or "runtime",
-            "lifecycle_manager": yws_ownership.get("lifecycle_manager"),
-            "planned_owner": yws_ownership.get("planned_owner"),
-            "migration_phase": yws_ownership.get("migration_phase"),
-            "handoff_ready": bool(yws_ownership.get("handoff_ready")),
-            "handoff_blockers": list(yws_ownership.get("handoff_blockers") or []),
-        },
-    )
+    if not compact_runtime:
+        (
+            action_overrides,
+            recovery_playbook,
+            recovery_guidance,
+        ) = _build_yjs_recovery_policy(selected_entry, selected_webspace)
+        webspace_guidance = _build_yjs_webspace_guidance(selected_webspace, action_overrides)
+        ownership_boundaries = _build_yjs_ownership_boundaries(
+            selected_webspace_id=selected_webspace_id,
+            selected_webspace=selected_webspace,
+            transport={
+                "owner": yws_ownership.get("current_owner") or "runtime",
+                "lifecycle_manager": yws_ownership.get("lifecycle_manager"),
+                "planned_owner": yws_ownership.get("planned_owner"),
+                "migration_phase": yws_ownership.get("migration_phase"),
+                "handoff_ready": bool(yws_ownership.get("handoff_ready")),
+                "handoff_blockers": list(yws_ownership.get("handoff_blockers") or []),
+            },
+        )
 
     return {
         "available": True,
@@ -8180,6 +8191,26 @@ def _build_yjs_selected_webspace_snapshot(webspace_id: str | None) -> dict[str, 
             "rebuild": {"status": "unknown", "error": f"{type(exc).__name__}: {exc}"},
             "error": f"{type(exc).__name__}: {exc}",
         }
+
+
+def _build_yjs_compact_selected_webspace_snapshot(webspace_id: str | None) -> dict[str, Any]:
+    """Build the browser beacon snapshot without persistent registry reads."""
+    target_webspace_id = str(webspace_id or "").strip() or "default"
+    try:
+        from adaos.services.scenario.webspace_runtime import describe_webspace_rebuild_state
+
+        rebuild = describe_webspace_rebuild_state(target_webspace_id)
+    except Exception as exc:
+        rebuild = {
+            "webspace_id": target_webspace_id,
+            "status": "unknown",
+            "pending": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "webspace_id": target_webspace_id,
+        "rebuild": rebuild if isinstance(rebuild, dict) else {},
+    }
 
 
 def _as_runtime_plain(value: Any) -> Any:
