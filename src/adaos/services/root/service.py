@@ -1003,7 +1003,11 @@ def _sync_scenario_content_metadata(
         if projected_ui != ui:
             webui["ui"] = projected_ui
             _write_manifest(webui_path, webui)
-        payload["ui"] = projected_ui
+        payload["ui"] = (
+            dict(canonical_ui)
+            if isinstance(canonical_ui, Mapping)
+            else {"manifest": "webui.json"}
+        )
     _write_manifest(content_path, payload)
 
 

@@ -53,11 +53,7 @@ def test_scenario_json_is_derived_from_yaml_and_webui(tmp_path: Path) -> None:
     assert materialized["version"] == "1.2.1"
     assert materialized["title"] == "Recipes"
     assert materialized["depends"] == ["shopping_skill"]
-    assert materialized["ui"] == {
-        "application": {"version": "2"},
-        "version": "1.2.1",
-        "manifest": "webui.json",
-    }
+    assert materialized["ui"] == {"manifest": "webui.json"}
     assert materialized["nlu"] == {"intents": ["recipes.open"]}
     webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
     assert webui["ui"] == {

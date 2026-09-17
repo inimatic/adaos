@@ -4553,6 +4553,59 @@ def test_automation_prompt_keeps_release_contract_but_not_runtime_values() -> No
     assert "legacy schema" in " ".join(contract["rules"])
 
 
+def test_context_packet_omits_unrequired_missing_workflow_facet() -> None:
+    packet = {
+        "facets": {
+            "execution_authority": {"status": "present"},
+            "workflow_definition": {
+                "status": "missing",
+                "inspection_status": "not_declared",
+                "authoring": {
+                    "status": "present",
+                    "definition_path": "workflow.json",
+                },
+            },
+        },
+        "coverage": {
+            "required": ["execution_authority"],
+            "present": ["execution_authority"],
+            "ready": True,
+        },
+    }
+
+    projection = _context_packet_prompt_projection(packet)
+
+    assert "workflow_definition" not in projection["facets"]
+    assert projection["facets"]["execution_authority"]["status"] == "present"
+
+
+def test_generated_test_cannot_pin_raw_manifest_digest(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    tests_dir = workspace / "scenarios" / "sample" / "tests"
+    tests_dir.mkdir(parents=True)
+    test_path = tests_dir / "test_manifest.py"
+    test_path.write_text(
+        "import hashlib\n"
+        "from pathlib import Path\n"
+        "ROOT = Path(__file__).parents[1]\n"
+        "def test_raw_digest():\n"
+        "    assert hashlib.sha256((ROOT / 'webui.json').read_bytes()).hexdigest() == "
+        "'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_tests_do_not_pin_checkpoint_metadata(
+        workspace,
+        [],
+        errors,
+        changed_paths={test_path.relative_to(workspace).as_posix()},
+    )
+
+    assert len(errors) == 1
+    assert "raw manifest digest" in errors[0]
+
+
 def test_context_packet_compacts_accepted_prototype_and_resolved_issues() -> None:
     packet = {
         "change": {
@@ -7295,6 +7348,98 @@ def test_worker_admits_exact_bindings_for_incremental_scenario_automation(
     assert "Exact Automation binding contract" in prompt
     assert bindings_path.resolve().as_posix() in prompt
     assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
+
+
+def test_worker_binds_exact_external_mcp_contracts_and_prototype_identity(
+    tmp_path: Path,
+) -> None:
+    from adaos.services.resources.prototype import prototype_webui_digest
+
+    repo_root = Path(__file__).resolve().parents[1]
+    project_id = "users_access"
+    workspace = tmp_path / "workspace"
+    scenario_root = workspace / "scenarios" / project_id
+    scenario_root.mkdir(parents=True)
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": project_id,
+                        "widgets": [
+                            {
+                                "id": "people",
+                                "type": "ui.list",
+                                "dataSource": {
+                                    "kind": "mcp",
+                                    "toolId": "users_access.summary",
+                                },
+                            },
+                            {
+                                "id": "invite",
+                                "type": "ui.form",
+                                "actions": [
+                                    {
+                                        "on": "submit",
+                                        "type": "callMcp",
+                                        "target": "users_access.create_invite",
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                }
+            }
+        },
+    }
+    (scenario_root / "webui.json").write_text(
+        json.dumps(webui, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assignment = {
+        "task_id": "task.users-access",
+        "target": {"type": "scenario", "id": project_id},
+        "forge": {"sparse_paths": [f"scenarios/{project_id}/"]},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "Automate the accepted UI.",
+                "prototype_acceptance": {
+                    "decision": "accepted",
+                    "revision": "001",
+                    "webui_digest": prototype_webui_digest(webui),
+                },
+            }
+        },
+    }
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+
+    packet = worker._build_packet(assignment, workspace, tmp_path / "input")
+
+    contracts_path = tmp_path / "input" / "external-mcp-contracts.json"
+    contracts = json.loads(contracts_path.read_text(encoding="utf-8"))
+    assert packet["external_mcp_contracts_ref"] == contracts_path.resolve().as_posix()
+    assert contracts["unresolved_tool_ids"] == []
+    assert {
+        (item["id"], tuple(item["binding_usage"]))
+        for item in contracts["contracts"]
+    } == {
+        ("users_access.create_invite", ("action",)),
+        ("users_access.summary", ("data_source",)),
+    }
+    identity_path = tmp_path / "input" / "accepted-prototype-identity.json"
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    assert identity["matches_acceptance"] is True
+    assert identity["verification_owner"] == "trusted_worker"
+    prompt = (tmp_path / "input" / "task.md").read_text(encoding="utf-8")
+    assert "Exact external MCP contracts" in prompt
+    assert "Do not invoke or reimplement the Builder browser-feedback gate" in prompt
+    assert "do not try to recreate its canonicalization" in prompt
 
 
 @pytest.mark.parametrize("aggregate_owner", [False, True])

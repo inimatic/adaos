@@ -292,7 +292,10 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["status"] == "completed"
     assert status["session"]["source_prototype_version"] == "UI 001"
     assert status["automation"]["source_prototype_version"] == "UI 001"
-    assert status["session"]["standard_prompt_version"] == "adaos-skill-realization/0.18.1"
+    assert (
+        status["session"]["standard_prompt_version"]
+        == automation_module.STANDARD_PROMPT_VERSION
+    )
     assert status["session"]["created_artifacts"] == []
     task = next(
         item
@@ -5341,7 +5344,13 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
                 "runtime": {"ok": True, "webspace_id": "desktop-dev"},
             }
 
+    class FakeBrowserFeedback:
+        def evaluate(self, **kwargs):  # noqa: ANN003
+            calls.append("browser_feedback")
+            return {"ok": True, "status": "passed", "task_id": kwargs["task_id"]}
+
     monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+    service.browser_feedback_service = FakeBrowserFeedback()
     monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
     monkeypatch.setattr(
         BuilderAutomationService,
@@ -5364,9 +5373,10 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
 
     assert calls == [
         "activate:recipes_skill:candidate:True",
+        "ensure",
+        "browser_feedback",
         "checkpoint",
         "activate:recipes_skill:0.1.1:False",
-        "ensure",
         "notify",
     ]
     assert saved[-1]["completion_readiness"]["ok"] is True
@@ -5390,6 +5400,7 @@ def test_finalize_activates_isolated_trial_after_checkpoint(
     monkeypatch,
 ) -> None:
     service = _service(tmp_path)
+    monkeypatch.setenv("ADAOS_BUILDER_BROWSER_FEEDBACK", "0")
     calls: list[str] = []
     saved: list[dict] = []
 
@@ -5601,6 +5612,7 @@ def test_finalize_scenario_only_repair_does_not_activate_unchanged_companion_ski
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _service(tmp_path)
+    monkeypatch.setenv("ADAOS_BUILDER_BROWSER_FEEDBACK", "0")
     calls: list[str] = []
     saved: list[dict] = []
 
@@ -7611,6 +7623,7 @@ def test_finalize_follows_completed_automation_only_when_preview_choice_is_uncha
     expected_transition: str,
 ) -> None:
     service = _service(tmp_path)
+    monkeypatch.setenv("ADAOS_BUILDER_BROWSER_FEEDBACK", "0")
     saved: list[dict] = []
     preview_calls: list[dict] = []
     public_target = {
@@ -8044,6 +8057,7 @@ def test_finalize_compensates_failed_follow_active_preview_after_workflow_comple
     monkeypatch,
 ) -> None:
     service = _service(tmp_path)
+    monkeypatch.setenv("ADAOS_BUILDER_BROWSER_FEEDBACK", "0")
     saved: list[dict] = []
     notified: list[dict] = []
     transitions: list[str] = []
@@ -8116,6 +8130,7 @@ def test_finalize_compensates_failed_follow_active_preview_after_workflow_comple
 
 def test_finalize_fails_when_forge_checkpoint_is_not_confirmed(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
+    monkeypatch.setenv("ADAOS_BUILDER_BROWSER_FEEDBACK", "0")
     saved: list[dict] = []
     activations: list[str] = []
     monkeypatch.setattr(

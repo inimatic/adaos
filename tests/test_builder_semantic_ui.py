@@ -120,7 +120,7 @@ def test_semantic_rename_creates_valid_revision_and_undo(
     scenario = json.loads((root / "scenario.json").read_text(encoding="utf-8"))
     field = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["fields"][0]
     assert field["label"] == "Recipe name"
-    assert scenario["ui"] == {**webui["ui"], "manifest": "webui.json"}
+    assert scenario["ui"] == {"manifest": "webui.json"}
     assert result["revision"] == "002"
     assert result["undo"] == {
         "operation": "set_property",

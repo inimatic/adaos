@@ -1270,11 +1270,22 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
     )[:100]
     projected_change["reviews"] = list(change.get("reviews") or [])[:100]
     facets = dict(packet.get("facets") or {})
+    required_facets = {
+        str(value).strip()
+        for value in dict(packet.get("coverage") or {}).get("required") or []
+        if str(value).strip()
+    }
     projected_facets: dict[str, Any] = {}
     for facet_name, raw_facet in facets.items():
         if not isinstance(raw_facet, Mapping):
             continue
         facet = dict(raw_facet)
+        if (
+            facet_name == "workflow_definition"
+            and facet_name not in required_facets
+            and str(facet.get("status") or "").strip() != "present"
+        ):
+            continue
         common = {
             key: facet.get(key)
             for key in (
@@ -1625,6 +1636,33 @@ def _selected_prompt_rule_capsules(
         if isinstance(repair_hints.get("prompt_facts"), Mapping)
         else {}
     )
+    coverage = (
+        dict(context_packet.get("coverage") or {})
+        if isinstance(context_packet.get("coverage"), Mapping)
+        else {}
+    )
+    required_facets = {
+        str(value).strip()
+        for value in coverage.get("required") or []
+        if str(value).strip()
+    }
+    required_facets.update(
+        str(value).strip()
+        for value in repair_hints.get("facet_keys") or []
+        if str(value).strip()
+    )
+    packet_facets = dict(context_packet.get("facets") or {})
+    required_facets.update(
+        str(key)
+        for key, value in packet_facets.items()
+        if isinstance(value, Mapping)
+        and str(value.get("status") or "").strip() == "present"
+    )
+    relevant_facets = {
+        key: packet_facets[key]
+        for key in sorted(required_facets)
+        if key in packet_facets
+    }
     evidence = json.dumps(
         {
             "target_type": target_type,
@@ -1633,17 +1671,12 @@ def _selected_prompt_rule_capsules(
             "target_refs": repair_hints.get("target_refs"),
             "acceptance_checks": repair_hints.get("acceptance_checks"),
             "prompt_facts": prompt_facts,
-            "facets": context_packet.get("facets"),
+            "facets": relevant_facets,
         },
         ensure_ascii=True,
         sort_keys=True,
     ).lower()
-    facet_keys = list(dict(context_packet.get("facets") or {}))
-    facet_keys.extend(
-        str(value).strip()
-        for value in repair_hints.get("facet_keys") or []
-        if str(value).strip()
-    )
+    facet_keys = sorted(required_facets)
     selected = select_prompt_rules(
         target_type=target_type,
         evidence=evidence,
@@ -5796,6 +5829,127 @@ class LocalSkillFactoryWorker:
             "covered_resource_types": sorted(source_types),
         }
 
+    @staticmethod
+    def _external_mcp_contract_bundle(
+        workspace: Path,
+        *,
+        target_id: str,
+    ) -> dict[str, Any] | None:
+        """Bind MCP-backed WebUI elements to exact, local Root contracts."""
+
+        webui_path = workspace / "scenarios" / target_id / "webui.json"
+        if not webui_path.is_file():
+            return None
+        webui = _read_json(webui_path)
+        usage: dict[str, set[str]] = {}
+
+        def collect(value: Any) -> None:
+            if isinstance(value, Mapping):
+                data_source = value.get("dataSource")
+                if isinstance(data_source, Mapping) and str(
+                    data_source.get("kind") or ""
+                ).strip() == "mcp":
+                    tool_id = str(
+                        data_source.get("toolId")
+                        or data_source.get("name")
+                        or ""
+                    ).strip()
+                    if tool_id:
+                        usage.setdefault(tool_id, set()).add("data_source")
+                if str(value.get("type") or "").strip() == "callMcp":
+                    tool_id = str(value.get("target") or "").strip()
+                    if tool_id:
+                        usage.setdefault(tool_id, set()).add("action")
+                for nested in value.values():
+                    collect(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect(nested)
+
+        collect(webui)
+        if not usage:
+            return None
+
+        from adaos.services.root_mcp import get_tool_contract
+
+        contracts: list[dict[str, Any]] = []
+        unresolved: list[str] = []
+        for tool_id in sorted(usage):
+            contract = get_tool_contract(tool_id)
+            if contract is None:
+                unresolved.append(tool_id)
+                continue
+            payload = contract.to_dict()
+            payload["binding_usage"] = sorted(usage[tool_id])
+            contracts.append(payload)
+        body = {
+            "schema": "adaos.builder.external_mcp_contract_bundle.v1",
+            "source": "installed_root_mcp_registry",
+            "target": {"type": "scenario", "id": target_id},
+            "contracts": contracts,
+            "unresolved_tool_ids": unresolved,
+        }
+        encoded = json.dumps(
+            body,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        body["digest"] = "sha256:" + hashlib.sha256(encoded).hexdigest()
+        return body
+
+    @staticmethod
+    def _accepted_prototype_identity(
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        *,
+        target_id: str,
+    ) -> dict[str, Any] | None:
+        request = dict(assignment.get("realize_request") or {})
+        artifacts = dict(request.get("artifacts") or {})
+        acceptance = artifacts.get("prototype_acceptance")
+        if not isinstance(acceptance, Mapping) or str(
+            acceptance.get("decision") or ""
+        ).strip() != "accepted":
+            return None
+        webui_path = workspace / "scenarios" / target_id / "webui.json"
+        if not webui_path.is_file():
+            raise ValueError("accepted Prototype canonical webui.json is missing")
+        webui_raw = webui_path.read_bytes()
+        try:
+            webui = json.loads(webui_raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("accepted Prototype canonical webui.json is invalid") from exc
+        from adaos.services.resources.prototype import prototype_webui_digest
+
+        expected = str(acceptance.get("webui_digest") or "").strip()
+        actual = prototype_webui_digest(webui)
+        identity = {
+            "schema": "adaos.builder.accepted_prototype_identity.v1",
+            "revision": str(acceptance.get("revision") or "").strip() or None,
+            "canonical_path": f"scenarios/{target_id}/webui.json",
+            "canonical_digest_algorithm": "prototype_webui_digest.v1",
+            "expected_canonical_digest": expected or None,
+            "actual_canonical_digest": actual,
+            "raw_sha256": "sha256:" + hashlib.sha256(webui_raw).hexdigest(),
+            "matches_acceptance": bool(expected and actual == expected),
+            "verification_owner": "trusted_worker",
+            "model_instruction": (
+                "Trust this receipt; do not reproduce the canonical digest. "
+                "Preserve the accepted WebUI unless the governed Automation brief "
+                "requires a change."
+            ),
+        }
+        pending_feedback = artifacts.get("browser_feedback")
+        if not identity["matches_acceptance"] and not isinstance(
+            pending_feedback, Mapping
+        ):
+            raise ValueError(
+                "accepted Prototype canonical webui.json does not match its "
+                "acceptance digest"
+            )
+        return identity
+
     def _prototype_resource_handoff_from_assignment(
         self,
         assignment: Mapping[str, Any],
@@ -6404,6 +6558,36 @@ class LocalSkillFactoryWorker:
 
             _write_json(input_dir / "implementation-bindings.json", implementation_binding_contract())
             packet["implementation_bindings_ref"] = (input_dir / "implementation-bindings.json").resolve().as_posix()
+        external_mcp_contracts = (
+            self._external_mcp_contract_bundle(workspace, target_id=target_id)
+            if target_type == "scenario"
+            else None
+        )
+        if external_mcp_contracts:
+            _write_json(
+                input_dir / "external-mcp-contracts.json",
+                external_mcp_contracts,
+            )
+            packet["external_mcp_contracts_ref"] = (
+                input_dir / "external-mcp-contracts.json"
+            ).resolve().as_posix()
+        accepted_prototype_identity = (
+            self._accepted_prototype_identity(
+                assignment,
+                workspace,
+                target_id=target_id,
+            )
+            if target_type == "scenario"
+            else None
+        )
+        if accepted_prototype_identity:
+            _write_json(
+                input_dir / "accepted-prototype-identity.json",
+                accepted_prototype_identity,
+            )
+            packet["accepted_prototype_identity_ref"] = (
+                input_dir / "accepted-prototype-identity.json"
+            ).resolve().as_posix()
         _write_json(input_dir / "packet.json", packet)
         if browser_feedback:
             _write_json(input_dir / "browser-feedback.json", browser_feedback)
@@ -6558,7 +6742,7 @@ No secret, placeholder code or blocker-report files. Use
 4. Inspect manifests/handlers, UI bindings, and tests in exact files or JSON slices: at most {command_output_lines} lines and {command_output_bytes} bytes per response; there is no fixed first-edit line quota for a full implementation. Do not scan the complete SDK, repository, or task tree.
 5. Search compact MCP headers, then read the selected method. Repeat for independently needed contracts and reuse prior results. Empty search/catalog headers are not proof of a missing capability: narrow the query or read the admitted public symbol before reporting a blocker.
 6. Use `ADAOS_PYTHON`, commit-bound `ADAOS_REPO_ROOT`/`PYTHONPATH`, `skill_data_root()` and ContentRef. Runtime files belong under `ADAOS_BASE_DIR`/`ADAOS_TASK_RUNTIME_DIR`. Declare imports, tools and data routes.
-7. Implement the behavior and focused hermetic coverage. Use `ADAOS_PYTHON` for bounded checks within {generated_test_timeout_seconds} seconds; inspect only scoped diff/status. Candidate checks are diagnostic. The trusted worker reruns tests and install-strict validation; independent acceptance owns browser journeys and deployed-runtime checks.
+7. Implement the behavior and focused coverage. Use `ADAOS_PYTHON` for bounded checks within {generated_test_timeout_seconds} seconds; inspect only scoped diff/status. Candidate checks are diagnostic. The trusted worker reruns tests and install-strict validation; independent acceptance owns browser journeys and deployed-runtime checks.
 8. Honor the application_permissions context facet: align Project declarations with inferred capabilities, enforce roles in tools, and test the access matrix.
 9. No publication, installation, activation or external IO beyond the admitted read-only MCP discovery; the trusted worker owns finalization and rollback evidence.
 10. Map each acceptance point to source/test or a blocker. These are implementation claims, not passing checks. Explicitly mark checks not executed. Never claim browser, restart or authorization success without evidence; report unsupported requirements."""
@@ -6614,6 +6798,15 @@ unrelated pixels. The browser gate will run again independently after this turn.
                 ),
             )
             if browser_feedback
+            else """## Trusted browser-feedback gate
+
+Do not invoke or reimplement the Builder browser-feedback gate in this Codex
+turn. The trusted orchestrator materializes the candidate and runs wide and
+compact browser checks after Codex returns. If that gate fails, Builder supplies
+a bounded receipt in the next repair turn. Codex owns focused hermetic checks;
+the orchestrator owns screenshots, deployed-runtime identity and final apply.
+"""
+            if target_type == "scenario"
             else ""
         )
         contract_execution_checklist = (
@@ -6687,6 +6880,33 @@ required permission matrix. Treat it as authoritative over a stale remote
 descriptor. Use task-scoped descriptor discovery only for an independently
 missing contract.
 """
+        external_mcp_section = ""
+        if packet.get("external_mcp_contracts_ref"):
+            external_mcp_section = """## Exact external MCP contracts
+
+Read `external-mcp-contracts.json` before source discovery. It contains the
+exact installed Root MCP contracts referenced by the accepted WebUI in its
+`contracts[]` array, including input schemas, capabilities, effects and binding
+usage. Do not look for a `tools` member and do not substitute the Application
+schema bundle or an SDK facade for these operation contracts. An entry in
+`unresolved_tool_ids` is a real contract gap; otherwise do not repeat remote
+descriptor discovery for these tools.
+"""
+        accepted_identity_section = ""
+        if packet.get("accepted_prototype_identity_ref"):
+            accepted_identity_section = """## Accepted Prototype identity
+
+Read `accepted-prototype-identity.json`. The trusted worker computed the
+canonical accepted WebUI digest before this model turn. Trust that receipt and
+do not try to recreate its canonicalization with raw JSON serialization. The
+manifest-bound `webui.json` is the UI source of truth; an inline
+`scenario.json.ui.application` copy must be removed or made exactly equivalent,
+never treated as a competing design source. Forge owns release bookkeeping and
+may update manifest versions after candidate checks. Never pin raw manifest
+bytes, raw SHA-256 values, `version`, or `updated_at` in package tests; validate
+the accepted UI semantics or a canonical projection that excludes release
+bookkeeping.
+"""
         resource_implementation_section = resource_implementation_section.replace(
             "`prototype-resource-handoff.json`",
             f"`{(input_dir / 'prototype-resource-handoff.json').resolve().as_posix()}`",
@@ -6694,6 +6914,14 @@ missing contract.
         resource_implementation_section = resource_implementation_section.replace(
             "`implementation-bindings.json`",
             f"`{(input_dir / 'implementation-bindings.json').resolve().as_posix()}`",
+        )
+        external_mcp_section = external_mcp_section.replace(
+            "`external-mcp-contracts.json`",
+            f"`{(input_dir / 'external-mcp-contracts.json').resolve().as_posix()}`",
+        )
+        accepted_identity_section = accepted_identity_section.replace(
+            "`accepted-prototype-identity.json`",
+            f"`{(input_dir / 'accepted-prototype-identity.json').resolve().as_posix()}`",
         )
         root_mcp_context = (
             json.dumps(root_mcp, ensure_ascii=False, indent=2, sort_keys=True)
@@ -6868,6 +7096,10 @@ part of the submitted source snapshot.
 
 {contract_execution_section}
 
+{external_mcp_section}
+
+{accepted_identity_section}
+
 {root_mcp_section}
 
 {dev_ticket_repair_requirements}
@@ -6887,7 +7119,15 @@ part of the submitted source snapshot.
 Conclude with a concise summary of implemented behavior and checks. The worker, not you, creates result/provenance files and the git commit.
 """
         context_files = []
-        for name in ("packet.json", "prototype-resource-handoff.json", "implementation-bindings.json", "descriptor-working-set.json", "browser-feedback.json"):
+        for name in (
+            "packet.json",
+            "prototype-resource-handoff.json",
+            "implementation-bindings.json",
+            "external-mcp-contracts.json",
+            "accepted-prototype-identity.json",
+            "descriptor-working-set.json",
+            "browser-feedback.json",
+        ):
             path = input_dir / name
             if path.is_file():
                 raw = path.read_bytes()
@@ -7856,6 +8096,30 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 return bool(node.elts) and all(exact_literal(item) for item in node.elts)
             return False
 
+        def pins_manifest_digest(node: ast.Compare) -> bool:
+            expressions = [node.left, *node.comparators]
+            if not any(
+                isinstance(item, ast.Constant)
+                and isinstance(item.value, str)
+                and re.fullmatch(r"(?:sha256:)?[0-9a-fA-F]{64}", item.value)
+                for item in expressions
+            ):
+                return False
+            rendered = ast.dump(node, include_attributes=False).lower()
+            return bool(
+                ("sha256" in rendered or "hexdigest" in rendered)
+                and ("read_bytes" in rendered or "read_text" in rendered)
+                and any(
+                    name in rendered
+                    for name in (
+                        "webui.json",
+                        "scenario.yaml",
+                        "scenario.json",
+                        "skill.yaml",
+                    )
+                )
+            )
+
         for path in sorted(workspace.glob("**/tests/test_*.py")):
             relative = path.relative_to(workspace).as_posix()
             if changed_paths is not None and relative not in changed_paths:
@@ -7867,6 +8131,11 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             violations: list[tuple[int, str]] = []
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Compare):
+                    continue
+                if pins_manifest_digest(node):
+                    violations.append(
+                        (int(getattr(node, "lineno", 0) or 0), "raw manifest digest")
+                    )
                     continue
                 expressions = [node.left, *node.comparators]
                 keys = [key for item in expressions if (key := checkpoint_key(item))]

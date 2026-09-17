@@ -635,6 +635,12 @@ disclosure, rejects renderer error/unsupported states and invalid semantic
 toolbar order, and retains per-view evidence. Only the known local missing
 runtime-config bootstrap and unauthenticated status probe are warnings; other
 HTTP failures, including retryable runtime `503`, remain failures.
+Users & Access additionally qualifies the complete trusted ordering through
+Automation: exact accepted-Prototype and Root MCP contracts are bound before the
+Codex turn; candidate materialization and six-tab wide/compact review precede
+Forge; the live reversible Root MCP journey passes 8/8. Finalization now checks
+that the Builder host is still active before touching Preview and reuses a
+successful browser materialization instead of rebuilding it after checkpoint.
 
 - [x] `[must]` Expose candidate browser actions, DOM/accessibility, image bytes,
   console/network and synthetic data evidence through scoped check operations.
@@ -670,6 +676,11 @@ Exit/remaining work: Qualify idempotent deletion admission/completion, absence a
 Owner/dependencies: Developer SDK + Root source persistence.
 
 Implementation boundary: Prototype local revision/hash receipts and Automation remote component receipts plus local composition reservation exist. They do not establish full remote DEV ProjectRelease checkpoints after each stage acceptance. Invalid-source quarantine, sparse checkout hydration, attachment GC and durable scenario-checkpoint fault qualification are not all closed.
+
+Scenario checkpoints now preserve `webui.json` as the sole executable UI source:
+derived `scenario.json` retains only `ui.manifest`. Worker validation rejects
+generated tests that pin checkpoint-owned versions, timestamps or raw manifest
+digests; canonical Prototype semantics explicitly ignore release bookkeeping.
 
 Exit/remaining work: Qualify version/task-bound durable acknowledgements and recovery without double version bumps; preserve exact source/task identity through transport failures. Add non-promotable diagnostic checkpoints, safe hydration and owner/revision-bound attachment reclamation. Preserve the must-level durable-checkpoint gate in builder-sdk-boundary.md.
 

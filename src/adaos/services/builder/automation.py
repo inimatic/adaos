@@ -41,7 +41,7 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker, context
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
-STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.18.2"
+STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.18.3"
 DESCRIPTOR_DISCOVERY_PROFILE_VERSION = "adaos-descriptor-search/1.1"
 FINALIZATION_HEARTBEAT_SECONDS = 10.0
 TRIAL_PREPARATION_RECOVERY_GRACE_SECONDS = 300.0
@@ -8318,6 +8318,7 @@ class BuilderAutomationService:
         preview_target: Mapping[str, Any] | None = None
         preview_host_active = True
         preview_host_inactive_reason: str | None = None
+        workbench: Any | None = None
         pending_transition = str(current.get("pending_workflow_transition") or "").strip()
         companion_skill_ids = self._session_changed_companion_skill_ids(session)
         session_links = (
@@ -8333,6 +8334,30 @@ class BuilderAutomationService:
         if not snapshot_project_ref.startswith("project:"):
             snapshot_project_ref = ""
         try:
+            if object_type == "scenario" and object_id:
+                from adaos.services.builder.workbench import BuilderWorkbenchService
+
+                workbench = BuilderWorkbenchService(state_dir=self.state_dir)
+                get_binding = getattr(workbench, "get_workspace_binding", None)
+                existing_binding = (
+                    dict(get_binding(webspace_id) or {})
+                    if callable(get_binding)
+                    else {}
+                )
+                resolve_builder_context = getattr(
+                    workbench, "resolve_builder_context", None
+                )
+                if callable(resolve_builder_context):
+                    try:
+                        resolve_builder_context(webspace_id)
+                    except ValueError as exc:
+                        preview_host_active = False
+                        preview_host_inactive_reason = str(exc)
+                preview_target = (
+                    existing_binding.get("preview_target")
+                    if isinstance(existing_binding.get("preview_target"), Mapping)
+                    else None
+                )
             with self._finalization_stage(
                 current,
                 readiness,
@@ -8381,7 +8406,12 @@ class BuilderAutomationService:
                     .lower()
                     not in {"0", "false", "no", "off"}
                 )
-                if object_type == "scenario" and object_id and browser_feedback_enabled:
+                if (
+                    object_type == "scenario"
+                    and object_id
+                    and preview_host_active
+                    and browser_feedback_enabled
+                ):
                     with self._finalization_stage(
                         current,
                         readiness,
@@ -8540,23 +8570,10 @@ class BuilderAutomationService:
                     )
 
             if object_type == "scenario" and object_id:
-                from adaos.services.builder.workbench import BuilderWorkbenchService
+                if workbench is None:
+                    from adaos.services.builder.workbench import BuilderWorkbenchService
 
-                workbench = BuilderWorkbenchService(state_dir=self.state_dir)
-                get_binding = getattr(workbench, "get_workspace_binding", None)
-                existing_binding = dict(get_binding(webspace_id) or {}) if callable(get_binding) else {}
-                resolve_builder_context = getattr(workbench, "resolve_builder_context", None)
-                if callable(resolve_builder_context):
-                    try:
-                        resolve_builder_context(webspace_id)
-                    except ValueError as exc:
-                        preview_host_active = False
-                        preview_host_inactive_reason = str(exc)
-                preview_target = (
-                    existing_binding.get("preview_target")
-                    if isinstance(existing_binding.get("preview_target"), Mapping)
-                    else None
-                )
+                    workbench = BuilderWorkbenchService(state_dir=self.state_dir)
                 aprobation_trial = (
                     readiness.get("aprobation")
                     if isinstance(readiness.get("aprobation"), Mapping)
@@ -8599,6 +8616,17 @@ class BuilderAutomationService:
                             or ""
                         ).strip(),
                     }
+                elif (
+                    isinstance(readiness.get("materialization"), Mapping)
+                    and bool(readiness["materialization"].get("ok"))
+                    and readiness["materialization"].get("source")
+                    == "candidate_browser_feedback"
+                ):
+                    # The browser gate already rebuilt and observed this exact
+                    # candidate in the paired DEV webspace. Rebuilding it again
+                    # after Forge would add latency without changing behavior;
+                    # checkpoint-owned version metadata is not a UI semantic.
+                    pass
                 else:
                     binding = asyncio.run(
                         workbench.ensure_dev_webspace(

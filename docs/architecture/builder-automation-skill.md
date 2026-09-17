@@ -162,6 +162,11 @@ receipt are content-digested together with Client, UI ABI, capability catalog,
 source WebUI and context-packet identities. A failure may schedule at most two
 scoped Codex repairs; every repaired candidate is observed again, and an exhausted
 failure remains a blocking gate. Production nodes skip this development harness.
+Builder resolves the source Webspace binding before materialization. If Builder
+is no longer active there, finalization preserves the validated checkpoint but
+does not reclaim or recreate Preview. A successful candidate materialization is
+reused after checkpointing; release-only version synchronization does not trigger
+a second rebuild or invalidate the accepted Prototype semantic digest.
 
 Select checks by changed contracts, affected behavior and reported failures, with
 mandatory final coverage retained. This is not a fixed series of model requests,
@@ -276,11 +281,15 @@ route a message using an unrelated stale Automation session.
 Worker completion is not the terminal Automation state. The session remains
 `commit_ready` while it:
 
-1. records the validated source snapshot and prepares/activates the DEV skills;
-2. runs any admitted consumer-owned acceptance checks;
-3. checkpoints the target and every project-owned changed component in Forge,
+1. records the validated source snapshot and prepares/activates candidate DEV skills;
+2. materializes the scenario in the one paired DEV Preview and runs the trusted
+   wide/compact browser gate;
+3. runs any admitted consumer-owned acceptance checks;
+4. checkpoints the target and every project-owned changed component in Forge,
    verifying exact source/task metadata and the owning composition;
-4. rematerializes the paired DEV scenario.
+5. activates exact checkpointed skill versions and preserves the already observed
+   scenario materialization unless an explicit Preview target or Trial policy owns
+   the final projection.
 
 Only then does it become `completed` as an implementation/finalization result.
 Component Forge receipts and local composition reservation do not certify the
@@ -315,6 +324,17 @@ uses tool search for deferred tools, and requests MCP only for missing contracts
 or explicitly required validation. Prefetched authoritative contracts must not
 cause redundant discovery. An initially hidden tool does not establish a Root
 outage, and no model should inspect bearer values to compensate.
+
+For scenario Automation, the trusted worker extracts every `dataSource.kind=mcp`
+and `callMcp` target from the accepted WebUI and supplies the exact installed Root
+contracts in `external-mcp-contracts.json:contracts[]`, including schemas,
+capabilities, side effects and binding usage. It also supplies a trusted accepted
+Prototype identity receipt. Codex must not recreate digest canonicalization,
+discover already bound tools again, or pin raw manifest bytes in package tests;
+Forge owns `version` and `updated_at` bookkeeping. `webui.json` is the executable
+UI source of truth. `scenario.yaml` and the derived `scenario.json` retain only
+the `ui.manifest` reference, so a checkpoint cannot recreate a competing inline
+application tree.
 
 The editable component set is read from the owning `adaos.project.v1`
 manifest. Runtime skill requirements and retained publications do not expand

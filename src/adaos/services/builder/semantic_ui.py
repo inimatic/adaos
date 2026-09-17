@@ -374,9 +374,14 @@ class BuilderSemanticUIService:
                 )
 
             scenario_json = _read_json(scenario_json_path, label="scenario.json")
-            scenario_json["ui"] = copy.deepcopy(after_webui.get("ui") or {})
-            if isinstance(scenario_json["ui"], dict):
-                scenario_json["ui"]["manifest"] = "webui.json"
+            scenario_ui = (
+                dict(scenario_json.get("ui") or {})
+                if isinstance(scenario_json.get("ui"), Mapping)
+                else {}
+            )
+            scenario_ui.pop("application", None)
+            scenario_ui["manifest"] = "webui.json"
+            scenario_json["ui"] = scenario_ui
 
             revision_dir = root / "ui_revisions"
             revision_dir.mkdir(parents=True, exist_ok=True)
