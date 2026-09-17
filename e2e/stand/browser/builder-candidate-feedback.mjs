@@ -15,6 +15,7 @@ const output = path.resolve(process.env.ADAOS_E2E_OUTPUT || 'e2e/artifacts/build
 const hub = String(process.env.ADAOS_E2E_HUB_URL || 'http://127.0.0.1:8777').replace(/\/$/, '')
 const client = String(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
 const sourceDigest = String(process.env.ADAOS_E2E_SOURCE_DIGEST || '').trim()
+const spaceKind = String(process.env.ADAOS_E2E_SPACE_KIND || 'development').trim()
 const timeoutMs = Number(process.env.ADAOS_E2E_TIMEOUT_MS || 90_000)
 
 if (!scenario || !webspace || !subnet || !token) {
@@ -28,7 +29,7 @@ for (const [key, value] of Object.entries({
   zone: 'lo',
   subnet_id: subnet,
   webspace_id: webspace,
-  space_kind: 'development',
+  space_kind: spaceKind,
   expected_scenario_id: scenario,
   try_local_hub: '1',
 })) url.searchParams.set(key, value)
@@ -37,6 +38,7 @@ const report = {
   schema: 'adaos.builder.browser_feedback.v1',
   scenario_id: scenario,
   webspace_id: webspace,
+  space_kind: spaceKind,
   source_digest: sourceDigest || null,
   runtime_url: hub,
   client_url: client,

@@ -406,6 +406,12 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
         }
     )
 
+    assert application_view["sections"]["activity_page"] == {
+        "limit": 50,
+        "has_more": False,
+    }
+    assert users_view["activity_page"] == {"limit": 50, "has_more": False}
+
     app_grant_ids = {
         item["grant_id"] for item in application_view["sections"]["access"]
     }

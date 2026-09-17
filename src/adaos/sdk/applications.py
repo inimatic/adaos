@@ -746,14 +746,24 @@ def get_application_access_surface(
     application_id: str,
     *,
     release_digest: str | None = None,
+    activity_limit: int = 50,
 ) -> dict[str, Any]:
-    return _access_management().application_detail(application_id, release_digest=release_digest)
+    return _access_management().application_detail(
+        application_id,
+        release_digest=release_digest,
+        activity_limit=activity_limit,
+    )
 
 
 def get_users_access_surface(
     personalization: Mapping[str, Any] | None = None,
+    *,
+    activity_limit: int = 50,
 ) -> dict[str, Any]:
-    return _access_management().users_access(personalization)
+    return _access_management().users_access(
+        personalization,
+        activity_limit=activity_limit,
+    )
 
 
 def simulate_application_access(application_id: str, **request: Any) -> dict[str, Any]:

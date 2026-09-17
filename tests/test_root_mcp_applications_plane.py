@@ -252,10 +252,10 @@ def test_application_access_contracts_are_secret_free_and_reads_share_sdk_projec
         connected.input_schema["properties"]
     )
     app_result = applications_plane.handlers()["applications.access.show"](
-        {"application_id": "app_recipes"}, dry_run=True
+        {"application_id": "app_recipes", "activity_limit": 25}, dry_run=True
     )
     users_result = applications_plane.handlers()["applications.access.users"](
-        {}, dry_run=True
+        {"activity_limit": 30}, dry_run=True
     )
 
     assert app_result["access"]["sections"]["access"] == []
@@ -264,6 +264,8 @@ def test_application_access_contracts_are_secret_free_and_reads_share_sdk_projec
         "get_application_access_surface",
         "get_users_access_surface",
     ]
+    assert stub.calls[0][2]["activity_limit"] == 25
+    assert stub.calls[1][2]["activity_limit"] == 30
 
 
 def test_application_access_connected_account_dry_run_never_mutates(monkeypatch) -> None:

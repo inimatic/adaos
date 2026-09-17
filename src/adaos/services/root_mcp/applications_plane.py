@@ -359,7 +359,11 @@ def contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="Read permissions, grants, roles, connected accounts, readiness and activity for one Application.",
             input_schema=schema_object(
-                properties={"application_id": {"type": "string"}, "release_digest": {"type": ["string", "null"]}},
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {"type": ["string", "null"]},
+                    "activity_limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                },
                 required=["application_id"],
             ),
             output_schema=response(),
@@ -371,7 +375,11 @@ def contracts() -> list[RootMcpToolContract]:
             title="Show Users and Access",
             surface=RootMcpSurface.OPERATIONS,
             summary="Read people, guests, children, devices, sessions, Application access and redacted activity.",
-            input_schema=schema_object(),
+            input_schema=schema_object(
+                properties={
+                    "activity_limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                }
+            ),
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_access_users"},
@@ -1191,12 +1199,17 @@ def _handle_access_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str
         "access": _sdk().get_application_access_surface(
             _application_id(arguments),
             release_digest=str(arguments.get("release_digest") or "").strip() or None,
+            activity_limit=int(arguments.get("activity_limit") or 50),
         )
     }
 
 
 def _handle_access_users(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return {"users_access": _sdk().get_users_access_surface()}
+    return {
+        "users_access": _sdk().get_users_access_surface(
+            activity_limit=int(arguments.get("activity_limit") or 50)
+        )
+    }
 
 
 def _handle_access_reviews(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:

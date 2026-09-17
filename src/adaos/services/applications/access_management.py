@@ -591,7 +591,13 @@ class ApplicationAccessManagementService:
         )
         return findings
 
-    def application_detail(self, application_id: str, *, release_digest: str | None = None) -> dict[str, Any]:
+    def application_detail(
+        self,
+        application_id: str,
+        *,
+        release_digest: str | None = None,
+        activity_limit: int = 50,
+    ) -> dict[str, Any]:
         application = self.store.get_application(application_id)
         installation = None
         try:
@@ -606,6 +612,11 @@ class ApplicationAccessManagementService:
         grants = self.store.list_application_access_grants(application_id)
         reports = self.list_verification_reports(application_id)
         latest_report = next((item for item in reports if item.get("release_digest") == digest), None)
+        audit_limit = max(1, min(int(activity_limit), 200))
+        activity = self.store.list_application_access_audit(
+            application_id=application_id,
+            limit=audit_limit + 1,
+        )
         return {
             "schema": "adaos.application.access_surface.v1",
             "application": application.to_dict(),
@@ -622,11 +633,20 @@ class ApplicationAccessManagementService:
                 "roles": [item.to_dict() for item in release.application_roles],
                 "connected_accounts": self.connected_accounts(application_id),
                 "release_readiness": latest_report,
-                "activity": self.store.list_application_access_audit(application_id=application_id),
+                "activity": list(activity[:audit_limit]),
+                "activity_page": {
+                    "limit": audit_limit,
+                    "has_more": len(activity) > audit_limit,
+                },
             },
         }
 
-    def users_access(self, personalization: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def users_access(
+        self,
+        personalization: Mapping[str, Any] | None = None,
+        *,
+        activity_limit: int = 50,
+    ) -> dict[str, Any]:
         grants = self.store.list_application_access_grants()
         people: dict[str, dict[str, Any]] = {}
         for grant in grants:
@@ -731,7 +751,8 @@ class ApplicationAccessManagementService:
             )
         devices = list(directory.get("devices") or ())
         sessions = list(directory.get("sessions") or ())
-        activity = self.store.list_application_access_audit()
+        audit_limit = max(1, min(int(activity_limit), 200))
+        activity_values = self.store.list_application_access_audit(limit=audit_limit + 1)
         person_values = sorted(people.values(), key=lambda item: item["subject_ref"])
         return {
             "schema": "adaos.users_access.surface.v1",
@@ -744,7 +765,11 @@ class ApplicationAccessManagementService:
             "devices": devices,
             "sessions": sessions,
             "application_access": [item.to_dict() for item in grants],
-            "activity": activity,
+            "activity": list(activity_values[:audit_limit]),
+            "activity_page": {
+                "limit": audit_limit,
+                "has_more": len(activity_values) > audit_limit,
+            },
             "diagnostics": {
                 "content_redacted": True,
                 "source": "personalization_metadata_and_application_access",
