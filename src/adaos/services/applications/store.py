@@ -147,6 +147,61 @@ class ApplicationStore:
             atomic_write_json(self._current_path("definitions", value.application_id), value.to_dict())
             return value
 
+    def delete_unpublished_application(
+        self,
+        application_id: str,
+        *,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        """Delete one exact local-only Application definition.
+
+        Published, installed, subscribed, selected, or access-bearing Applications
+        are lifecycle records rather than disposable development state.  Refuse
+        deletion whenever any of those durable references exist.
+        """
+
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            application = self.get_application(application_id)
+            if application.revision != expected_revision:
+                raise ApplicationRevisionConflict(
+                    expected=expected_revision,
+                    observed=application.revision,
+                )
+            if self.list_releases(application_id):
+                raise ApplicationStoreError(
+                    "published Application releases cannot be deleted as local development"
+                )
+            channels_path = self._channel_path(application_id)
+            if channels_path.is_file() and (self.get_channels(application_id).get("channels") or {}):
+                raise ApplicationStoreError(
+                    "published Application channels cannot be deleted as local development"
+                )
+            referenced = (
+                any(item.application_id == application_id for item in self.list_installations())
+                or any(item.application_id == application_id for item in self.list_subscriptions())
+                or any(item.application_id == application_id for item in self.list_runtime_selections())
+                or bool(self.list_grants(application_id))
+                or bool(self.list_application_access_grants(application_id))
+            )
+            if referenced:
+                raise ApplicationStoreError(
+                    "installed, selected, subscribed, or access-bearing Application cannot be deleted"
+                )
+            path = self._current_path("definitions", application_id)
+            path.unlink()
+            try:
+                path.parent.rmdir()
+            except OSError:
+                pass
+            if channels_path.is_file():
+                channels_path.unlink()
+            return {
+                "ok": True,
+                "application_id": application_id,
+                "revision": application.revision,
+                "definition_removed": True,
+            }
+
     def _release_path(self, application_id: str, release_digest: str) -> Path:
         digest = str(release_digest or "").split(":", 1)[-1]
         return self.root / "releases" / _key(application_id) / f"{digest}.json"

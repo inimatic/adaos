@@ -427,6 +427,20 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
         guest.grant_id,
     }
     assert users_view["diagnostics"]["content_redacted"] is True
+    permission_rows = {
+        item["permission_id"]: item for item in users_view["permissions"]
+    }
+    assert permission_rows["workspace.read"]["application_count"] == 1
+    assert permission_rows["workspace.read"]["active_grant_count"] == 3
+    assert permission_rows["workspace.read"]["applications"][0] == {
+        "application_id": "family_tasks",
+        "title": "Family Tasks",
+        "requirement": "required",
+        "purpose": "Read assigned household tasks.",
+        "approval_policy": "grant_on_install",
+        "active_grant_count": 3,
+        "explicit_deny_count": 0,
+    }
     assert any(item["subject_ref"] == "user:sasha" for item in users_view["children"])
     assert any(item["subject_ref"] == "invite:guest-link-1" for item in users_view["guests"])
     assert account["status"] == "connected"

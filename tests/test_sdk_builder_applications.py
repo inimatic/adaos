@@ -79,6 +79,81 @@ def test_builder_application_sdk_has_no_raw_authority_parameters() -> None:
         assert forbidden.isdisjoint(inspect.signature(function).parameters), name
 
 
+def test_delete_application_development_requires_exact_snapshot_and_confirmation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    application = Application(
+        application_id="notes",
+        legacy_project_id="notes",
+        publisher_ref="subnet:home",
+        slug="notes",
+        display={"title": "Notes", "summary": "Local notes"},
+        visibility="private",
+        entrypoints=(
+            {"entrypoint_id": "main", "presentation_ref": "scenario:notes"},
+        ),
+        publisher={
+            "publisher_ref": "subnet:home",
+            "display_name": "Home",
+            "subnet_short_ref": "home",
+            "release_key_ref": "artifact-signing:home:key",
+            "release_key_fingerprint": "sha256:" + "f" * 64,
+            "home_zone": "local",
+            "trust_relation": "local",
+        },
+    )
+    service = ApplicationService(ApplicationStore(tmp_path))
+    service.register(application, expected_revision=0)
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    snapshot = {
+        "project_id": "notes",
+        "manifest_digest": "sha256:" + "a" * 64,
+        "primary_ref": "scenario:notes",
+        "owned_refs": ["scenario:notes", "skill:notes_skill"],
+    }
+    effect_calls = []
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
+    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *args, **kwargs: None)
+    monkeypatch.setattr(applications, "_development_project_snapshot", lambda _app: snapshot)
+    monkeypatch.setattr(
+        applications,
+        "_delete_application_development_effect",
+        lambda *args, **kwargs: effect_calls.append((args, kwargs)) or {"ok": True},
+    )
+
+    with pytest.raises(ValueError, match="confirmation"):
+        applications.delete_application_development(
+            "notes",
+            expected_manifest_digest=snapshot["manifest_digest"],
+            expected_primary_ref=snapshot["primary_ref"],
+            confirmed=False,
+            actor_ref="user:owner",
+            subnet_ref="subnet:home",
+            capability="applications.develop",
+            expected_revision=1,
+            idempotency_key="delete-notes-no",
+        )
+
+    operation = applications.delete_application_development(
+        "notes",
+        expected_manifest_digest=snapshot["manifest_digest"],
+        expected_primary_ref=snapshot["primary_ref"],
+        confirmed=True,
+        actor_ref="user:owner",
+        subnet_ref="subnet:home",
+        capability="applications.develop",
+        expected_revision=1,
+        idempotency_key="delete-notes-yes",
+    )
+
+    assert operation["status"] == "succeeded"
+    assert effect_calls[0][1]["owned_refs"] == (
+        "scenario:notes",
+        "skill:notes_skill",
+    )
+
+
 def test_project_access_contract_uses_context_bound_dev_roots(monkeypatch, tmp_path: Path) -> None:
     from adaos.services.builder import application_permissions
 

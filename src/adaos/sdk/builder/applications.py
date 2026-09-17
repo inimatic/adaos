@@ -23,6 +23,7 @@ from adaos.services.policy.skill_capabilities import require_skill_capability
 _ACTION_CAPABILITIES = {
     "create": "applications.develop",
     "update_metadata": "applications.develop",
+    "delete": "applications.develop",
     "materialize": "applications.develop",
     "preview": "applications.develop",
     "create_trial": "applications.develop",
@@ -352,6 +353,54 @@ def _execute_development(
         capability=str(arguments.get("capability") or ""),
     )
     return _coordinator().execute(action, application_id, **arguments)
+
+
+def _development_project_snapshot(application: Application) -> dict[str, Any]:
+    from adaos.sdk.developer import compositions
+
+    project = compositions.get(application.legacy_project_id)
+    primary = next(
+        (
+            item
+            for item in project.get("components", {}).get("owned", ())
+            if item.get("role") == "primary"
+        ),
+        None,
+    )
+    primary_ref = str((primary or {}).get("ref") or "").strip()
+    if not primary_ref:
+        raise ValueError("Application DEV Project has no primary component")
+    owned_refs = tuple(
+        str(item.get("ref") or "").strip()
+        for item in project.get("components", {}).get("owned", ())
+        if str(item.get("ref") or "").strip()
+    )
+    dependents = []
+    owned_set = set(owned_refs)
+    for candidate in compositions.list_projects(limit=500):
+        candidate_id = str(candidate.get("id") or "").strip()
+        if not candidate_id or candidate_id == application.legacy_project_id:
+            continue
+        try:
+            candidate_project = compositions.get(candidate_id)
+        except (FileNotFoundError, compositions.ProjectCompositionNotFound):
+            continue
+        dependencies = {
+            str(item.get("ref") or "").strip()
+            for item in candidate_project.get("components", {}).get("dependencies", ())
+        }
+        if owned_set.intersection(dependencies):
+            dependents.append(candidate_id)
+    if dependents:
+        raise ValueError(
+            "Application DEV components are dependencies of: " + ", ".join(sorted(dependents))
+        )
+    return {
+        "project_id": application.legacy_project_id,
+        "manifest_digest": str(project["manifest_digest"]),
+        "primary_ref": primary_ref,
+        "owned_refs": list(owned_refs),
+    }
 
 
 def _application(application_id: str, expected_revision: int) -> Application:
@@ -905,6 +954,138 @@ def create_application(
     )
 
 
+def _delete_application_development_effect(
+    application_id: str,
+    *,
+    expected_revision: int,
+    project_id: str,
+    manifest_digest: str,
+    primary_ref: str,
+    owned_refs: Sequence[str],
+) -> Mapping[str, Any]:
+    from adaos.sdk.developer import compositions, projects
+
+    service = _application_service()
+    try:
+        application = service.store.get_application(application_id)
+    except FileNotFoundError:
+        application = None
+    if application is not None:
+        if application.protection.get("system_application"):
+            raise ValueError("system Application development cannot be deleted")
+        if application.legacy_project_id != project_id:
+            raise ValueError("Application DEV Project identity changed")
+        definition = service.store.delete_unpublished_application(
+            application_id,
+            expected_revision=expected_revision,
+        )
+    else:
+        definition = {
+            "ok": True,
+            "application_id": application_id,
+            "definition_removed": True,
+            "duplicate": True,
+        }
+
+    try:
+        project = compositions.get(project_id)
+    except (FileNotFoundError, compositions.ProjectCompositionNotFound):
+        project = None
+    if project is not None:
+        observed_refs = [
+            str(item.get("ref") or "").strip()
+            for item in project.get("components", {}).get("owned", ())
+        ]
+        if observed_refs != list(owned_refs):
+            raise ValueError("Application DEV Project ownership changed")
+        composition = compositions.delete(
+            project_id,
+            expected_manifest_digest=manifest_digest,
+            expected_primary_ref=primary_ref,
+        )
+    else:
+        composition = {
+            "ok": True,
+            "project_id": project_id,
+            "local_removed": True,
+            "duplicate": True,
+        }
+
+    components = []
+    for ref in owned_refs:
+        kind, separator, component_id = str(ref).partition(":")
+        if separator != ":" or kind not in {"skill", "scenario"} or not component_id:
+            raise ValueError("Application DEV Project contains an unsupported owned component")
+        try:
+            result = projects.delete(kind, component_id, remove_local=True)
+        except (FileNotFoundError, projects.ProjectNotFoundError):
+            result = {
+                "ok": True,
+                "kind": kind,
+                "project_id": component_id,
+                "local_removed": True,
+                "duplicate": True,
+            }
+        components.append(result)
+    return {
+        "ok": True,
+        "application_id": application_id,
+        "definition": definition,
+        "project": composition,
+        "components": components,
+    }
+
+
+def delete_application_development(
+    application_id: str,
+    *,
+    expected_manifest_digest: str,
+    expected_primary_ref: str,
+    confirmed: bool,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    expected_revision: int,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    if confirmed is not True:
+        raise ValueError("explicit deletion confirmation is required")
+    application = _application(application_id, expected_revision)
+    if application.protection.get("system_application"):
+        raise ValueError("system Application development cannot be deleted")
+    snapshot = _development_project_snapshot(application)
+    if snapshot["manifest_digest"] != str(expected_manifest_digest or "").strip():
+        raise ValueError("Application DEV Project changed since confirmation")
+    if snapshot["primary_ref"] != str(expected_primary_ref or "").strip():
+        raise ValueError("Application DEV primary component changed since confirmation")
+    intent = {
+        **snapshot,
+        "confirmed": True,
+    }
+
+    def execute() -> Mapping[str, Any]:
+        return _delete_application_development_effect(
+            application_id,
+            expected_revision=expected_revision,
+            project_id=str(snapshot["project_id"]),
+            manifest_digest=str(snapshot["manifest_digest"]),
+            primary_ref=str(snapshot["primary_ref"]),
+            owned_refs=tuple(snapshot["owned_refs"]),
+        )
+
+    return _execute_development(
+        "delete",
+        application_id,
+        actor_ref=actor_ref,
+        subnet_ref=subnet_ref,
+        capability=capability,
+        expected_revision=expected_revision,
+        idempotency_key=idempotency_key,
+        intent=intent,
+        callback=execute,
+    )
+
+
 def _update_application_metadata_effect(
     application_id: str,
     *,
@@ -1322,6 +1503,15 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
             categories=tuple(intent.get("categories") or ()),
             expected_revision=expected_revision,
         )
+    if action == "delete":
+        return _delete_application_development_effect(
+            application_id,
+            expected_revision=expected_revision,
+            project_id=str(intent.get("project_id") or ""),
+            manifest_digest=str(intent.get("manifest_digest") or ""),
+            primary_ref=str(intent.get("primary_ref") or ""),
+            owned_refs=tuple(intent.get("owned_refs") or ()),
+        )
     if action in {"materialize", "preview"}:
         from . import preview
 
@@ -1469,6 +1659,7 @@ __all__ = [
     "refresh_placement",
     "open_trial_placement",
     "create_application",
+    "delete_application_development",
     "create_trial",
     "decide_trial",
     "get_development_operation",

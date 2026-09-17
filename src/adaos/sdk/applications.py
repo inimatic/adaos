@@ -207,6 +207,8 @@ def _local_development_index() -> dict[str, dict[str, Any]]:
                 str(item.get("operation_id") or ""),
             ),
         )
+        if latest.get("action") == "delete" and latest.get("status") == "succeeded":
+            continue
         source_webspace_id = next(
             (
                 str((item.get("intent") or {}).get("source_webspace_id") or "").strip()
@@ -265,6 +267,7 @@ def list_applications(
     for model in models:
         application = model.get("application") or {}
         application_id = str(application.get("application_id") or "")
+        model.setdefault("icon", "apps-outline")
         local = development.get(application_id)
         if local is not None:
             entrypoints = application.get("entrypoints") or []
@@ -306,6 +309,38 @@ def list_applications(
                     local["accepted"] = workflow["accepted"]
                     local["publication_status"] = workflow["publication_status"]
                     local["updated_at"] = workflow["updated_at"] or local["updated_at"]
+            project_id = str(application.get("legacy_project_id") or "").strip()
+            if project_id:
+                try:
+                    from adaos.sdk.developer import compositions
+
+                    project = compositions.get(project_id)
+                    primary = next(
+                        (
+                            item
+                            for item in project.get("components", {}).get("owned", ())
+                            if item.get("role") == "primary"
+                        ),
+                        None,
+                    )
+                    local["deletion"] = {
+                        "project_id": project_id,
+                        "manifest_digest": str(project.get("manifest_digest") or ""),
+                        "primary_ref": str((primary or {}).get("ref") or ""),
+                        "allowed": not bool(
+                            (application.get("protection") or {}).get("system_application")
+                        )
+                        and not bool(model.get("installed"))
+                        and not bool(model.get("channels")),
+                    }
+                    if not local["deletion"]["allowed"]:
+                        local["deletion"]["reason"] = "published_installed_or_protected"
+                except (FileNotFoundError, ValueError, OSError):
+                    local["deletion"] = {
+                        "project_id": project_id,
+                        "allowed": False,
+                        "reason": "development_project_unavailable",
+                    }
         model["local_development"] = local
     if available_only:
         models = [

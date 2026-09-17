@@ -6,7 +6,7 @@ import logging
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from adaos.domain.application import ApplicationRelease, utc_now
 from adaos.sdk.core.decorators import subscribe
@@ -648,6 +648,7 @@ class ApplicationAccessManagementService:
         activity_limit: int = 50,
     ) -> dict[str, Any]:
         grants = self.store.list_application_access_grants()
+        permission_usage = self._permission_usage(grants)
         people: dict[str, dict[str, Any]] = {}
         for grant in grants:
             item = people.setdefault(
@@ -762,9 +763,11 @@ class ApplicationAccessManagementService:
                 *pending_guests,
             ],
             "children": [item for item in person_values if item["kind"] == "child"],
+            "subjects": person_values,
             "devices": devices,
             "sessions": sessions,
             "application_access": [item.to_dict() for item in grants],
+            "permissions": permission_usage,
             "activity": list(activity_values[:audit_limit]),
             "activity_page": {
                 "limit": audit_limit,
@@ -773,9 +776,73 @@ class ApplicationAccessManagementService:
             "diagnostics": {
                 "content_redacted": True,
                 "source": "personalization_metadata_and_application_access",
-                "fields": ["subject_ref", "grant_id", "roles", "permissions", "decision", "reason_code", "device/session status"],
+                "fields": ["subject_ref", "grant_id", "roles", "permissions", "permission usage", "decision", "reason_code", "device/session status"],
             },
         }
+
+    def _permission_usage(self, grants: Sequence[Any]) -> list[dict[str, Any]]:
+        """Project current Application permission declarations by permission id."""
+        active_grants = [item for item in grants if item.status == "active"]
+        by_permission: dict[str, dict[str, Any]] = {}
+        for application in self.store.list_applications():
+            channels = self.store.get_channels(application.application_id).get("channels") or {}
+            release_digest = str(channels.get("stable") or channels.get("prerelease") or "")
+            if not release_digest:
+                releases = self.store.list_releases(application.application_id)
+                release_digest = releases[-1].release_digest if releases else ""
+            if not release_digest:
+                continue
+            try:
+                release = self.store.get_release(application.application_id, release_digest)
+            except FileNotFoundError:
+                continue
+            declarations = [
+                *(dict(item.to_dict()) | {"requirement": "required"} for item in release.permission_profile.required),
+                *(dict(item.to_dict()) | {"requirement": "optional"} for item in release.permission_profile.optional),
+            ]
+            application_grants = [
+                item for item in active_grants if item.application_id == application.application_id
+            ]
+            for declaration in declarations:
+                permission_id = str(declaration.get("id") or "")
+                if not permission_id:
+                    continue
+                entry = by_permission.setdefault(
+                    permission_id,
+                    {
+                        "permission_id": permission_id,
+                        "application_count": 0,
+                        "active_grant_count": 0,
+                        "explicit_deny_count": 0,
+                        "applications": [],
+                    },
+                )
+                grant_count = sum(
+                    permission_id in item.permission_ceiling for item in application_grants
+                )
+                deny_count = sum(
+                    permission_id in item.explicit_denies for item in application_grants
+                )
+                entry["application_count"] += 1
+                entry["active_grant_count"] += grant_count
+                entry["explicit_deny_count"] += deny_count
+                entry["applications"].append(
+                    {
+                        "application_id": application.application_id,
+                        "title": str(application.display.get("title") or application.application_id),
+                        "requirement": declaration["requirement"],
+                        "purpose": declaration.get("purpose"),
+                        "approval_policy": declaration.get("approval_policy"),
+                        "active_grant_count": grant_count,
+                        "explicit_deny_count": deny_count,
+                    }
+                )
+        for entry in by_permission.values():
+            entry["applications"].sort(key=lambda item: (item["title"].casefold(), item["application_id"]))
+            entry["applications_summary"] = ", ".join(
+                item["title"] for item in entry["applications"]
+            )
+        return sorted(by_permission.values(), key=lambda item: item["permission_id"])
 
     def update_review(
         self,

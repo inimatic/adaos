@@ -59,6 +59,10 @@ class _StubBuilderSdk:
         self.calls.append(("update_application_metadata", args, kwargs))
         return {"operation_id": "appdevop.2", "status": "succeeded"}
 
+    def delete_application_development(self, *args, **kwargs):
+        self.calls.append(("delete_application_development", args, kwargs))
+        return {"operation_id": "appdevop.3", "status": "succeeded"}
+
     def reconcile_development_operation(self, *args, **kwargs):
         self.calls.append(("reconcile_development_operation", args, kwargs))
         return {"operation_id": args[0], "status": "succeeded"}
@@ -120,6 +124,7 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.development.reconcile_operation",
         "applications.development.create",
         "applications.development.update_metadata",
+        "applications.development.delete",
         "applications.development.materialize",
         "applications.development.preview",
         "applications.development.create_trial",
@@ -405,6 +410,26 @@ def test_builder_development_mcp_forwards_narrow_authority(monkeypatch) -> None:
     assert stub.calls[1][2]["categories"] == ("System", "Management")
     assert stub.calls[1][2]["capability"] == "applications.develop"
 
+    deleted = applications_plane.handlers()[
+        "applications.development.delete"
+    ](
+        {
+            "application_id": "applications",
+            "expected_manifest_digest": "sha256:" + "a" * 64,
+            "expected_primary_ref": "scenario:applications",
+            "confirmed": True,
+            "expected_revision": 2,
+            "idempotency_key": "delete-applications-1",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert deleted["status"] == "succeeded"
+    assert stub.calls[2][0] == "delete_application_development"
+    assert stub.calls[2][2]["confirmed"] is True
+    assert stub.calls[2][2]["capability"] == "applications.develop"
+
     recovered = applications_plane.handlers()[
         "applications.development.reconcile_operation"
     ](
@@ -413,8 +438,8 @@ def test_builder_development_mcp_forwards_narrow_authority(monkeypatch) -> None:
     )
 
     assert recovered["operation"]["status"] == "succeeded"
-    assert stub.calls[2][2]["capability"] == "applications.recover"
-    assert stub.calls[2][2]["subnet_ref"] == "subnet:sn_home"
+    assert stub.calls[3][2]["capability"] == "applications.recover"
+    assert stub.calls[3][2]["subnet_ref"] == "subnet:sn_home"
 
 
 def test_applications_contract_descriptor_and_capability_profile_are_published() -> None:

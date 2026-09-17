@@ -129,6 +129,29 @@ def test_store_enforces_one_to_one_legacy_project_mapping(tmp_path: Path) -> Non
         store.save_application(_application("app_other", "recipes"), expected_revision=0)
 
 
+def test_store_deletes_only_exact_unpublished_unreferenced_application(tmp_path: Path) -> None:
+    store = ApplicationStore(tmp_path)
+    store.save_application(_application(), expected_revision=0)
+
+    with pytest.raises(ApplicationRevisionConflict):
+        store.delete_unpublished_application("app_recipes", expected_revision=0)
+
+    result = store.delete_unpublished_application("app_recipes", expected_revision=1)
+
+    assert result["definition_removed"] is True
+    with pytest.raises(FileNotFoundError):
+        store.get_application("app_recipes")
+
+
+def test_store_refuses_to_delete_application_with_release(tmp_path: Path) -> None:
+    store = ApplicationStore(tmp_path)
+    store.save_application(_application(), expected_revision=0)
+    store.put_release(_release())
+
+    with pytest.raises(ApplicationStoreError, match="releases"):
+        store.delete_unpublished_application("app_recipes", expected_revision=1)
+
+
 def test_local_builder_beta_updates_display_flag_without_joining_public_testing(service):
     release = service.register_release(_release())
     subscription = service.set_subscription("app_recipes", update_track="stable", update_policy="auto_compatible",

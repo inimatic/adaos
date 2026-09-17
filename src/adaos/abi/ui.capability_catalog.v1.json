@@ -494,7 +494,8 @@
         "Separate list widgets do not form a semantic Kanban board."
       ],
       "postconditions": [
-        "Every visible collection item has a stable focus identity."
+        "Every visible collection item has a stable focus identity.",
+        "inputs.pagination=true enables bounded local paging after declared search, filters and sorting; pageSize and pageSizeOptions control the visible slice."
       ]
     },
     {

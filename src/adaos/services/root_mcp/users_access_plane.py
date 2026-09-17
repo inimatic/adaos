@@ -35,9 +35,11 @@ _SUMMARY_SECTIONS = [
     "people",
     "guests",
     "children",
+    "subjects",
     "devices",
     "sessions",
     "application_access",
+    "permissions",
     "activity",
     "memberships",
     "grants",
@@ -277,7 +279,7 @@ def _handle_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
         return rows
 
     surface_result = {
-        key: compact_people(value) if key in {"people", "guests", "children"} else deepcopy(value)
+        key: compact_people(value) if key in {"people", "guests", "children", "subjects"} else deepcopy(value)
         for key, value in surface.items()
         if key in {"schema", "diagnostics"} or key in requested
     }

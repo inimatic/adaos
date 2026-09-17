@@ -147,6 +147,42 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             },
         ),
         RootMcpToolContract(
+            id="applications.development.delete",
+            title="Delete local Application development",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary=(
+                "Delete one exact unpublished, uninstalled, publisher-owned DEV "
+                "Application after an explicit confirmation."
+            ),
+            input_schema=schema_object(
+                properties={
+                    **mutation,
+                    "expected_manifest_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "expected_primary_ref": {
+                        "type": "string",
+                        "pattern": "^(skill|scenario):[a-zA-Z0-9_.-]+$",
+                    },
+                    "confirmed": {"const": True},
+                },
+                required=[
+                    *mutation_required,
+                    "expected_manifest_digest",
+                    "expected_primary_ref",
+                    "confirmed",
+                ],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="applications.develop",
+            side_effects="write",
+            metadata={
+                **metadata,
+                "handler": "applications_development_delete",
+            },
+        ),
+        RootMcpToolContract(
             id="applications.development.materialize",
             title="Materialize Application DEV revision",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -1688,6 +1724,24 @@ def _handle_development_update_metadata(
     )
 
 
+def _handle_development_delete(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_delete_application_development": True,
+            "request": _builder_request(arguments),
+        }
+    return _builder_sdk().delete_application_development(
+        _application_id(arguments),
+        expected_manifest_digest=str(arguments.get("expected_manifest_digest") or ""),
+        expected_primary_ref=str(arguments.get("expected_primary_ref") or ""),
+        confirmed=arguments.get("confirmed") is True,
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        **_mcp_mutation_context(arguments, "applications.develop"),
+    )
+
+
 def _handle_development_preview(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
@@ -2049,6 +2103,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.development.reconcile_operation": _handle_development_reconcile_operation,
         "applications.development.create": _handle_development_create,
         "applications.development.update_metadata": _handle_development_update_metadata,
+        "applications.development.delete": _handle_development_delete,
         "applications.development.materialize": _handle_development_materialize,
         "applications.development.preview": _handle_development_preview,
         "applications.development.create_trial": _handle_development_create_trial,
