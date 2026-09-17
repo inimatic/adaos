@@ -4,11 +4,14 @@ import os
 import json
 from pathlib import Path
 from threading import RLock
-from typing import Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 from urllib.parse import urlsplit
 
 from .service import ApplicationExecutor, ApplicationService
 from .store import ApplicationStore
+
+if TYPE_CHECKING:
+    from adaos.services.agent_context import AgentContext
 
 
 _LOCK = RLock()
@@ -76,6 +79,67 @@ def get_application_distribution_service() -> Any:
         if _DISTRIBUTION_SERVICE is None:
             raise RuntimeError("Application distribution service is not configured")
         return _DISTRIBUTION_SERVICE
+
+
+def create_local_application_distribution_service(ctx: AgentContext) -> Any:
+    """Compose the local distribution service without booting deployment runtimes."""
+
+    from adaos.services.artifact_pipeline.candidates import CandidateStore
+    from adaos.services.artifact_pipeline.channels import ReleaseRepository
+    from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+    from adaos.services.artifact_pipeline.runtime_trust import (
+        compose_artifact_trust_runtime,
+    )
+    from adaos.services.root.service import RootDeveloperService
+
+    from .distribution import ApplicationDistributionService
+
+    state_dir = Path(ctx.paths.state_dir()).resolve()
+    artifact_root = state_dir / "artifact_pipeline"
+    remote_repository = RootDeveloperService(ctx=ctx).artifact_release_repository(
+        role="hub"
+    )
+    trust = compose_artifact_trust_runtime(
+        state_root=artifact_root,
+        client=remote_repository.client,
+        verify=remote_repository.verify,
+        cert=remote_repository.cert,
+    )
+    if trust.admission is None:
+        raise RuntimeError(
+            "Application publication requires required artifact attestation mode"
+        )
+    return ApplicationDistributionService(
+        applications=get_application_service(state_dir),
+        candidates=CandidateStore(artifact_root / "candidates"),
+        releases=ReleaseRepository(artifact_root / "release-cache"),
+        packages=ContentAddressedPackageStore(artifact_root / "packages"),
+        remote=remote_repository,
+        admission=trust.admission,
+        addressed_report_validator=lambda application_id, release_digest, report_ids: (
+            get_development_report_service().validate_release_addresses(
+                application_id,
+                release_digest,
+                report_ids,
+            )
+        ),
+        release_announcer=lambda application_id, release_digest: (
+            get_development_report_service().announce_release(
+                application_id,
+                release_digest,
+            )
+        ),
+    )
+
+
+def resolve_application_distribution_service(ctx: AgentContext) -> Any:
+    """Use the configured runtime service or compose the same service for a CLI."""
+
+    with _LOCK:
+        configured = _DISTRIBUTION_SERVICE is not None or _DISTRIBUTION_FACTORY is not None
+    if configured:
+        return get_application_distribution_service()
+    return create_local_application_distribution_service(ctx)
 
 
 def register_stable_source_publisher(
@@ -220,6 +284,7 @@ def get_application_service(state_dir: Path) -> ApplicationService:
 
 
 __all__ = [
+    "create_local_application_distribution_service",
     "get_application_service",
     "get_application_distribution_service",
     "get_development_report_service",
@@ -232,4 +297,5 @@ __all__ = [
     "register_development_report_service",
     "register_development_report_service_factory",
     "register_stable_source_publisher",
+    "resolve_application_distribution_service",
 ]

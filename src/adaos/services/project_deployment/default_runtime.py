@@ -842,11 +842,9 @@ def configure_default_distributed_runtimes(
             node_id=str(conf.node_id),
         )
         from adaos.services.applications import (
-            ApplicationDistributionService,
             GitStableSourcePublisher,
+            create_local_application_distribution_service,
             create_local_development_report_service,
-            get_application_service,
-            get_development_report_service,
             register_application_executor,
             register_application_distribution_service_factory,
             register_application_operation_publisher,
@@ -890,49 +888,9 @@ def configure_default_distributed_runtimes(
             )
         )
 
-        def application_distribution_service() -> ApplicationDistributionService:
-            from adaos.services.artifact_pipeline.candidates import CandidateStore
-            from adaos.services.artifact_pipeline.channels import ReleaseRepository
-            from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
-            from adaos.services.artifact_pipeline.runtime_trust import (
-                compose_artifact_trust_runtime,
-            )
-            root_service = RootDeveloperService(ctx=current)
-            remote_repository = root_service.artifact_release_repository(role="hub")
-            artifact_root = state_dir / "artifact_pipeline"
-            trust = compose_artifact_trust_runtime(
-                state_root=artifact_root,
-                client=remote_repository.client,
-                verify=remote_repository.verify,
-                cert=remote_repository.cert,
-            )
-            if trust.admission is None:
-                raise RuntimeError(
-                    "Application publication requires required artifact attestation mode"
-                )
-            return ApplicationDistributionService(
-                applications=get_application_service(state_dir),
-                candidates=CandidateStore(artifact_root / "candidates"),
-                releases=ReleaseRepository(artifact_root / "release-cache"),
-                packages=ContentAddressedPackageStore(artifact_root / "packages"),
-                remote=remote_repository,
-                admission=trust.admission,
-                addressed_report_validator=lambda application_id, release_digest, report_ids: (
-                    get_development_report_service().validate_release_addresses(
-                        application_id,
-                        release_digest,
-                        report_ids,
-                    )
-                ),
-                release_announcer=lambda application_id, release_digest: (
-                    get_development_report_service().announce_release(
-                        application_id,
-                        release_digest,
-                    )
-                ),
-            )
-
-        register_application_distribution_service_factory(application_distribution_service)
+        register_application_distribution_service_factory(
+            lambda: create_local_application_distribution_service(current)
+        )
         _configured_key = key
         _configured_authoritative = bool(authoritative)
         return {

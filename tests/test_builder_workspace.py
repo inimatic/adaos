@@ -1294,6 +1294,24 @@ def test_builder_application_permission_profiler_cli(monkeypatch) -> None:
     assert calls[0][1]["observed_capabilities"] == ["workspace.read"]
 
 
+def test_application_distribution_resolver_composes_cli_service(monkeypatch) -> None:
+    from adaos.services.applications import runtime
+
+    expected = object()
+    context = object()
+    calls: list[object] = []
+    monkeypatch.setattr(runtime, "_DISTRIBUTION_SERVICE", None)
+    monkeypatch.setattr(runtime, "_DISTRIBUTION_FACTORY", None)
+    monkeypatch.setattr(
+        runtime,
+        "create_local_application_distribution_service",
+        lambda ctx: calls.append(ctx) or expected,
+    )
+
+    assert runtime.resolve_application_distribution_service(context) is expected
+    assert calls == [context]
+
+
 def test_builder_application_verify_writes_ci_evidence_bundle(
     tmp_path: Path,
     monkeypatch,

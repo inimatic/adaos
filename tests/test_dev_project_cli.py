@@ -495,6 +495,11 @@ def test_dev_project_trial_uses_primary_checkpoint_and_structured_evidence(monke
             "test:kanban",
             "--zone",
             "lo",
+            "--approve-permissions",
+            "--actor",
+            "codex:e2e",
+            "--approval-id",
+            "approval:kanban-trial",
             "--json",
         ],
     )
@@ -507,8 +512,40 @@ def test_dev_project_trial_uses_primary_checkpoint_and_structured_evidence(monke
         "refs": ["test:kanban"],
     }
     assert calls[0]["target_zone"] == "lo"
+    assert calls[0]["permission_decision"] == {
+        "approved": True,
+        "actor": "codex:e2e",
+        "actor_type": "user",
+        "approval_id": "approval:kanban-trial",
+    }
     assert '"candidate_id": "candidate.kanban"' in result.output
     assert '"lifecycle_phase": "beta"' in result.output
+
+
+def test_dev_project_trial_does_not_approve_permissions_implicitly(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class RootService:
+        def prepare_project_candidate_from_primary_checkpoint(self, project_id, **kwargs):
+            calls.append({"project_id": project_id, **kwargs})
+            return {
+                "candidate": {
+                    "candidate_id": "candidate.kanban",
+                    "project_id": project_id,
+                    "version": "0.2.0",
+                    "status": "trial",
+                }
+            }
+
+    monkeypatch.setattr(dev_project, "_root_service", RootService)
+
+    result = CliRunner().invoke(
+        dev_project.app,
+        ["trial", "kanban", "--change-id", "change-1", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["permission_decision"] is None
 
 
 def test_dev_project_checkpoint_covers_all_owned_components(monkeypatch) -> None:

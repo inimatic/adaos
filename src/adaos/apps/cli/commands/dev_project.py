@@ -638,6 +638,13 @@ def prepare_trial(
     target_space_kind: str = typer.Option("development", "--space-kind"),
     target_zone: str | None = typer.Option(None, "--zone"),
     target_subnet_id: str | None = typer.Option(None, "--subnet"),
+    approve_permissions: bool = typer.Option(
+        False,
+        "--approve-permissions",
+        help="Explicitly approve permissions introduced by this Trial candidate.",
+    ),
+    actor: str = typer.Option("user:local", "--actor"),
+    approval_id: str | None = typer.Option(None, "--approval-id"),
     idempotency_key: str | None = typer.Option(None, "--idempotency-key"),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
@@ -662,6 +669,17 @@ def prepare_trial(
         target_zone=target_zone,
         target_subnet_id=target_subnet_id,
         idempotency_key=idempotency_key,
+        permission_decision=(
+            {
+                "approved": True,
+                "actor": actor,
+                "actor_type": "user",
+                "approval_id": approval_id
+                or f"project:{project_id}:trial:permissions",
+            }
+            if approve_permissions
+            else None
+        ),
     )
     result.setdefault("lifecycle_phase", "beta")
     _echo_candidate(result, json_output=json_output)

@@ -11,6 +11,7 @@ from .store import (
     ApplicationStoreError,
 )
 from .runtime import (
+    create_local_application_distribution_service,
     create_local_development_report_service,
     get_application_distribution_service,
     get_application_service,
@@ -23,6 +24,7 @@ from .runtime import (
     register_development_report_service,
     register_development_report_service_factory,
     register_stable_source_publisher,
+    resolve_application_distribution_service,
 )
 from .access import (
     ApplicationAccessError,
@@ -133,6 +135,7 @@ __all__ = [
     "get_development_report_service",
     "get_stable_source_publisher",
     "create_local_development_report_service",
+    "create_local_application_distribution_service",
     "register_application_executor",
     "register_application_distribution_service",
     "register_application_distribution_service_factory",
@@ -140,4 +143,5 @@ __all__ = [
     "register_development_report_service",
     "register_development_report_service_factory",
     "register_stable_source_publisher",
+    "resolve_application_distribution_service",
 ]

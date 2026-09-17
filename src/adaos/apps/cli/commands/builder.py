@@ -665,9 +665,9 @@ def _application_access_management():
 
 
 def _application_candidate_release(application_id: str, candidate_id: str):
-    from adaos.services.applications import get_application_distribution_service
+    from adaos.services.applications import resolve_application_distribution_service
 
-    distribution = get_application_distribution_service()
+    distribution = resolve_application_distribution_service(get_ctx())
     application = distribution.applications.store.get_application(application_id)
     return distribution.candidate_release_projection(
         application_id,
