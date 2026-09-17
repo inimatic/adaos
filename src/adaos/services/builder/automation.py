@@ -8409,7 +8409,6 @@ class BuilderAutomationService:
                 if (
                     object_type == "scenario"
                     and object_id
-                    and preview_host_active
                     and browser_feedback_enabled
                 ):
                     with self._finalization_stage(
@@ -8579,7 +8578,18 @@ class BuilderAutomationService:
                     if isinstance(readiness.get("aprobation"), Mapping)
                     else {}
                 )
-                if not preview_host_active:
+                if (
+                    isinstance(readiness.get("materialization"), Mapping)
+                    and bool(readiness["materialization"].get("ok"))
+                    and readiness["materialization"].get("source")
+                    == "candidate_browser_feedback"
+                ):
+                    # Independent browser feedback owns its paired DEV
+                    # materialization even when the Builder UI moved away.
+                    # Host activity only controls the user's Preview
+                    # selection below, not candidate validation.
+                    pass
+                elif not preview_host_active:
                     readiness["materialization"] = {
                         "ok": True,
                         "skipped": "builder_host_inactive",
@@ -8616,17 +8626,6 @@ class BuilderAutomationService:
                             or ""
                         ).strip(),
                     }
-                elif (
-                    isinstance(readiness.get("materialization"), Mapping)
-                    and bool(readiness["materialization"].get("ok"))
-                    and readiness["materialization"].get("source")
-                    == "candidate_browser_feedback"
-                ):
-                    # The browser gate already rebuilt and observed this exact
-                    # candidate in the paired DEV webspace. Rebuilding it again
-                    # after Forge would add latency without changing behavior;
-                    # checkpoint-owned version metadata is not a UI semantic.
-                    pass
                 else:
                     binding = asyncio.run(
                         workbench.ensure_dev_webspace(

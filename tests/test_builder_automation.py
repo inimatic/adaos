@@ -7710,6 +7710,7 @@ def test_finalize_preserves_checkpoint_when_builder_host_becomes_inactive(
     monkeypatch,
 ) -> None:
     service = _service(tmp_path)
+    monkeypatch.setenv("ADAOS_BUILDER_BROWSER_FEEDBACK", "0")
     saved: list[dict] = []
     preview_calls: list[dict] = []
 
@@ -7795,6 +7796,99 @@ def test_finalize_preserves_checkpoint_when_builder_host_becomes_inactive(
     assert readiness["materialization"]["skipped"] == "builder_host_inactive"
     assert readiness["preview_transition"]["reason"] == "builder_host_inactive"
     assert preview_calls == []
+
+
+def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "adaos.services.core_update_policy.current_env_type", lambda: "dev"
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_checkpoint_completed_artifacts",
+        lambda self, session: [
+            {
+                "ok": True,
+                "kind": "scenario",
+                "name": "recipes",
+                "version": "0.1.1",
+                "commit": "forge-1",
+                "package_digest": "sha256:" + "1" * 64,
+                "source_revision": "forge-1",
+            }
+        ],
+    )
+
+    class FakeWorkbench:
+        def __init__(self, **kwargs):  # noqa: ARG002
+            pass
+
+        def get_workspace_binding(self, source_webspace_id):  # noqa: ARG002
+            return {"preview_webspace_id": "desktop-dev"}
+
+        def resolve_builder_context(self, source_webspace_id):  # noqa: ARG002
+            raise ValueError("Builder is not active in Webspace 'desktop'")
+
+        async def ensure_dev_webspace(self, source_webspace_id, **kwargs):  # noqa: ARG002
+            calls.append("materialize")
+            return {
+                "preview_webspace_id": "desktop-dev",
+                "runtime": {"ok": True, "webspace_id": "desktop-dev"},
+            }
+
+    class FakeBrowserFeedback:
+        def evaluate(self, **kwargs):  # noqa: ANN003
+            calls.append("browser_feedback")
+            return {"ok": True, "status": "passed", "task_id": kwargs["task_id"]}
+
+    class FakeWorkflow:
+        def snapshot_current_automation(self, *args, **kwargs):  # noqa: ARG002
+            return {"path": "automation/0.1.1"}
+
+        def describe(self, *args, **kwargs):  # noqa: ARG002
+            return {"active_phase": "automation", "automation": {}}
+
+        def transition(self, *args, **kwargs):  # noqa: ARG002
+            return {"workflow": {"delivery": {"status": "checkpoint"}}}
+
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
+    service.browser_feedback_service = FakeBrowserFeedback()
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_notify_completed_session",
+        lambda self, value: dict(value),
+    )
+
+    service._finalize_completed_session(
+        {
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "webspace_id": "desktop",
+            "current_task_id": "task.1",
+            "change_id": "change-1",
+            "status": "commit_ready",
+        }
+    )
+
+    readiness = saved[-1]["completion_readiness"]
+    assert calls == ["materialize", "browser_feedback"]
+    assert readiness["browser_feedback"]["status"] == "passed"
+    assert readiness["materialization"]["source"] == "candidate_browser_feedback"
 
 
 @pytest.mark.parametrize(
