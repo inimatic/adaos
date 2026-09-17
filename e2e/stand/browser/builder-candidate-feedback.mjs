@@ -138,6 +138,12 @@ try {
               await page.waitForTimeout(150)
               if ((await trigger.getAttribute('aria-expanded')) !== 'false') {
                 sample.hard_failures.push('Compact detail/inspector disclosure did not close')
+              } else {
+                await trigger.click()
+                await page.waitForTimeout(150)
+                if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
+                  sample.hard_failures.push('Compact detail/inspector disclosure did not reopen')
+                }
               }
             }
           }

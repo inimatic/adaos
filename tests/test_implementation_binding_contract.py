@@ -20,8 +20,6 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
         ref = guide["schema_refs"][name].split("#", 1)[1]
         jsonschema.Draft202012Validator({**schema, "$ref": f"#{ref}"}).validate(guide["examples"][name])
     assert len(json.dumps(guide, ensure_ascii=False).encode("utf-8")) < 12_000
-    assert "Prototype" in guide["binding_rules"]["attachments"] or "Preview" in guide["binding_rules"]["attachments"]
-    assert "metadata only" in guide["binding_rules"]["attachments"]
     assert "workspace.write" in guide["binding_rules"]["authorization"]
     assert "data_routes[*].tool is the LOCAL" in guide["binding_rules"]["tool_declarations"]
     assert "callSkill.target are QUALIFIED" in guide["binding_rules"]["tool_declarations"]
@@ -58,6 +56,19 @@ def test_editor_binding_retains_loaded_revision_and_does_not_fake_upload():
     assert guide["examples"]["rejected_write"]["ok"] is False
 
 
+def test_attachment_contract_is_loaded_only_for_relevant_automation_context():
+    compact = implementation_binding_contract()
+    extended = implementation_binding_contract(include_attachments=True)
+    assert "production_attachment" not in compact["contracts"]
+    assert "attachments" not in compact["binding_rules"]
+    contract = extended["contracts"]["production_attachment"]
+    assert contract["upload_tool"]["manifest"]["permissions"] == [
+        "storage.blob",
+        "workspace.write",
+    ]
+    assert "metadata only" in extended["binding_rules"]["attachments"]
+
+
 def test_creation_contract_matches_state_hydration_instead_of_dynamic_defaults():
     guide = implementation_binding_contract()
     rule = guide["binding_rules"]["creation"]
@@ -82,3 +93,27 @@ def test_skill_choice_source_is_admitted_but_arbitrary_transports_are_not():
     assert not list(validator.iter_errors(field))
     field["optionsDataSource"] = {"kind": "api", "url": "https://example.org"}
     assert list(validator.iter_errors(field))
+
+
+def test_free_form_tag_input_is_a_typed_string_list_contract():
+    root = Path(__file__).resolve().parents[1] / "src/adaos/abi"
+    schema = json.loads((root / "webui.v1.schema.json").read_text(encoding="utf-8"))
+    validator = jsonschema.Draft202012Validator(
+        {**schema, "$ref": "#/$defs/formField"}
+    )
+    assert not list(
+        validator.iter_errors(
+            {
+                "id": "permission_ceiling",
+                "type": "tagInput",
+                "label": "Permissions",
+                "defaultValue": ["workspace.read"],
+            }
+        )
+    )
+    catalog = json.loads(
+        (root / "ui.capability_catalog.v1.json").read_text(encoding="utf-8")
+    )
+    form = next(item for item in catalog["components"] if item["id"] == "ui.form")
+    assert "tagInput" in form["manifest"]["supported_field_types"]
+    assert "open vocabularies" in form["manifest"]["free_form_string_lists"]

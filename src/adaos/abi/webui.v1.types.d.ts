@@ -206,6 +206,7 @@ export type WebUiFormInputType =
   | 'searchable_select'
   | 'chips'
   | 'tags'
+  | 'tagInput'
   | 'linearScale'
   | 'linear_scale'
   | 'scale'

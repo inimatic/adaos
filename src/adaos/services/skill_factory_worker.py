@@ -6556,7 +6556,33 @@ class LocalSkillFactoryWorker:
         if implementation_bindings_required:
             from adaos.sdk.web.ui_contract import implementation_binding_contract
 
-            _write_json(input_dir / "implementation-bindings.json", implementation_binding_contract())
+            binding_request = json.dumps(
+                {
+                    "brief": brief,
+                    "acceptance": assignment.get("acceptance") or {},
+                    "context_packet": context_packet,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ).lower()
+            include_attachments = any(
+                token in binding_request
+                for token in (
+                    "attachment",
+                    "fileupload",
+                    "file_upload",
+                    "storage.blob",
+                    "upload",
+                    "вложен",
+                    "загруз",
+                )
+            )
+            _write_json(
+                input_dir / "implementation-bindings.json",
+                implementation_binding_contract(
+                    include_attachments=include_attachments
+                ),
+            )
             packet["implementation_bindings_ref"] = (input_dir / "implementation-bindings.json").resolve().as_posix()
         external_mcp_contracts = (
             self._external_mcp_contract_bundle(workspace, target_id=target_id)
