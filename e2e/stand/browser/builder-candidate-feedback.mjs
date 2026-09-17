@@ -119,6 +119,14 @@ try {
       }, undefined, { timeout: timeoutMs })
       await page.screenshot({ path: path.join(output, `${layout}-initial.png`), fullPage: true })
 
+      const selectableSelector = [
+        'tr.row-selectable',
+        'tr.is-selectable',
+        'button.note-card-main',
+        'ion-item.collection-focus-item:not([disabled])',
+        '.tree-widget__node.is-selectable',
+      ].join(', ')
+
       if (layout === 'compact') {
         const compactTriggers = page.locator('.layout-region-trigger')
         const compactTriggerCount = await compactTriggers.count()
@@ -152,13 +160,30 @@ try {
         }
       }
 
-      const selectableSelector = [
-        'tr.row-selectable',
-        'tr.is-selectable',
-        'button.note-card-main',
-        'ion-item.collection-focus-item:not([disabled])',
-        '.tree-widget__node.is-selectable',
-      ].join(', ')
+      let selectableItems = page.locator(selectableSelector)
+      if (layout === 'compact') {
+        const openRegion = page.locator('ada-layout-region.is-open').first()
+        if (await openRegion.count()) {
+          const openItems = openRegion.locator(selectableSelector)
+          const openItemCount = await openItems.count()
+          let openItemVisible = false
+          for (let index = 0; index < openItemCount; index += 1) {
+            if (await openItems.nth(index).isVisible()) {
+              openItemVisible = true
+              break
+            }
+          }
+          if (openItemVisible) {
+            selectableItems = openItems
+          } else {
+            const close = openRegion.locator('.layout-region__header button').first()
+            if (await close.count()) {
+              await close.click()
+              await page.waitForTimeout(150)
+            }
+          }
+        }
+      }
       try {
         await page.waitForFunction(selector => [...document.querySelectorAll(selector)]
           .some(element => element.getClientRects().length > 0), selectableSelector, {
@@ -167,7 +192,6 @@ try {
       } catch {
         // An empty collection is valid. The result is recorded by the widget diagnostics below.
       }
-      const selectableItems = page.locator(selectableSelector)
       const selectableCount = await selectableItems.count()
       for (let index = 0; index < selectableCount; index += 1) {
         const item = selectableItems.nth(index)
