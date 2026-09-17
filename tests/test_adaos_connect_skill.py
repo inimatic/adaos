@@ -438,3 +438,27 @@ async def test_on_prepare_renews_code_after_cache_expires(monkeypatch):
     assert len(writes) == 1
     assert writes[0][1]["status"] == "ready"
     assert writes[0][1]["code"] == "CACHE-2"
+
+
+def test_prepare_cache_prunes_expired_entries_and_stays_bounded(monkeypatch):
+    mod = _load_adaos_connect_module()
+    now = 1_800_000_000.0
+    monkeypatch.setattr(mod.time, "time", lambda: now)
+    context = {
+        "hub_id": "sn_test",
+        "zone_id": "ru",
+        "root_base_url": "https://ru.api.inimatic.com",
+        "app_base_url": "https://inimatic.com",
+    }
+
+    for index in range(mod._PREPARE_CACHE_MAX_ITEMS + 20):
+        current = {"expires_at_epoch": now + index + 1, "code": f"CACHE-{index}"}
+        mod._cache_current(f"ws-{index}", "browser", context, current)
+
+    assert len(mod._prepare_cache) == mod._PREPARE_CACHE_MAX_ITEMS
+    assert ("ws-0", "browser") not in mod._prepare_cache
+    assert (f"ws-{mod._PREPARE_CACHE_MAX_ITEMS + 19}", "browser") in mod._prepare_cache
+
+    monkeypatch.setattr(mod.time, "time", lambda: now + mod._PREPARE_CACHE_MAX_ITEMS + 20)
+    mod._prune_prepare_cache()
+    assert mod._prepare_cache == {}
