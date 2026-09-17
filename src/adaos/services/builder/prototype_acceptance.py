@@ -123,6 +123,7 @@ def build_prototype_acceptance(
     prototype_resources: Sequence[Mapping[str, Any]] | None = None,
     prototype_resource_snapshots: Sequence[Mapping[str, Any]] | None = None,
     locale_dictionaries: Mapping[str, Mapping[str, Any]] | None = None,
+    domain_packs: Sequence[str] | None = None,
     accepted_at: str | None = None,
 ) -> dict[str, Any]:
     """Build acceptance only after deterministic, behavioral, and visual checks pass."""
@@ -136,6 +137,7 @@ def build_prototype_acceptance(
         prototype_records=prototype_records,
         prototype_resources=prototype_resource_snapshots,
         locale_dictionaries=locale_dictionaries,
+        domain_packs=domain_packs,
     )
     if not bool(evaluation.get("ok")):
         failures = [

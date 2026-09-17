@@ -271,6 +271,45 @@ def test_build_and_admit_prototype_acceptance() -> None:
     assert admitted["deterministic_evaluation"]["ok"] is True
 
 
+def test_build_acceptance_forwards_project_domain_packs(monkeypatch) -> None:
+    import adaos.services.builder.prototype_acceptance as acceptance_module
+
+    observed: dict = {}
+
+    def evaluate(request, webui, **kwargs):
+        observed.update(kwargs)
+        return {
+            "ok": True,
+            "qualification": {"requirements": {}},
+            "capability_validation": {"ok": True, "findings": []},
+            "postconditions": [],
+            "capability_gaps": [],
+        }
+
+    monkeypatch.setattr(acceptance_module, "evaluate_ui_request", evaluate)
+
+    build_prototype_acceptance(
+        acceptance_id="prototype-acceptance-domain-pack",
+        project_ref="project:applications",
+        change_id="change-applications",
+        revision="027",
+        webui=_webui(),
+        request="Manage installed Applications.",
+        reviewer={"id": "agent:codex", "kind": "agent"},
+        behavior_checks=[
+            {
+                "id": "render.ready",
+                "status": "passed",
+                "evidence_refs": ["browser:applications"],
+            }
+        ],
+        visual_checks=_visual_checks(),
+        domain_packs=("applications.compatibility.v1",),
+    )
+
+    assert observed["domain_packs"] == ("applications.compatibility.v1",)
+
+
 @pytest.mark.parametrize("disclosure", [{"en": "Rule not enforced yet."}, {"ru": "Правило пока не исполняется."},
                                        {"en": "Rule not enforced yet.", "ru": "Правило пока не исполняется."}])
 def test_acceptance_keeps_pending_rules_for_automation_and_does_not_mark_them_done(disclosure) -> None:

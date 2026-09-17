@@ -161,6 +161,47 @@ def _write_json_yaml(path: Path, value: dict[str, object]) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+def test_component_acceptance_resolves_owning_project_domain_packs(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    project_root = Path(service.dev_projects_root) / "applications"
+    _write_json_yaml(
+        project_root / "project.yaml",
+        {
+            "id": "applications",
+            "components": {"owned": [{"ref": "scenario:recipes"}]},
+            "development": {
+                "domain_packs": ["applications.compatibility.v1"]
+            },
+        },
+    )
+
+    assert service._target_domain_packs("scenario", "recipes") == (
+        "applications.compatibility.v1",
+    )
+
+
+def test_component_acceptance_rejects_ambiguous_project_ownership(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    for project_id in ("applications", "applications_fork"):
+        _write_json_yaml(
+            Path(service.dev_projects_root) / project_id / "project.yaml",
+            {
+                "id": project_id,
+                "components": {"owned": [{"ref": "scenario:recipes"}]},
+                "development": {
+                    "domain_packs": ["applications.compatibility.v1"]
+                },
+            },
+        )
+
+    with pytest.raises(BuilderWorkflowError, match="owned by multiple DEV projects"):
+        service._target_domain_packs("scenario", "recipes")
+
+
 def _write_minimal_conversational_package(root: Path) -> None:
     (root / "scenario.yaml").write_text(
         "id: recipes\nversion: 0.1.0\nworkflow:\n  manifest: workflow.json\nconversational:\n  manifest: conversational/manifest.yaml\n",

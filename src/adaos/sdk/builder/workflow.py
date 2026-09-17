@@ -228,6 +228,7 @@ def accept_prototype(
     acceptance_id: str | None = None,
     actor: str = "builder.prototype.reviewer",
     expected_generation: int | None = None,
+    domain_packs: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Accept one exact executable Prototype revision with review evidence."""
 
@@ -241,6 +242,7 @@ def accept_prototype(
             acceptance_id=acceptance_id,
             actor=actor,
             expected_generation=expected_generation,
+            domain_packs=domain_packs,
         )
     )
 

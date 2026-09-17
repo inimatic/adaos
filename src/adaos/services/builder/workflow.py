@@ -1140,6 +1140,58 @@ class BuilderWorkflowService:
             raise FileNotFoundError(f"DEV {kind} project not found: {project_id}")
         return root
 
+    def _target_domain_packs(
+        self, object_type: str, object_id: str
+    ) -> tuple[str, ...]:
+        """Resolve Project-owned UI policy for a Project or owned component."""
+
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        component_ref = f"{kind}:{project_id}"
+        projects_root = Path(self.dev_projects_root)
+        candidates = [projects_root / project_id] if kind == "project" else []
+        if kind != "project" and projects_root.is_dir():
+            candidates = sorted(
+                (item for item in projects_root.iterdir() if item.is_dir()),
+                key=lambda item: item.name,
+            )
+        owners: list[Mapping[str, Any]] = []
+        for root in candidates:
+            manifest_path = root / "project.yaml"
+            if not manifest_path.is_file():
+                continue
+            try:
+                manifest = yaml.safe_load(
+                    manifest_path.read_text(encoding="utf-8-sig")
+                ) or {}
+            except (OSError, ValueError, yaml.YAMLError) as exc:
+                raise BuilderWorkflowError(
+                    f"cannot resolve Builder domain packs from {manifest_path}"
+                ) from exc
+            if not isinstance(manifest, Mapping):
+                continue
+            manifest_id = str(manifest.get("id") or "").strip()
+            if manifest_id != root.name:
+                continue
+            if kind == "project" or component_ref in _project_component_refs_from_manifest(
+                manifest
+            ):
+                owners.append(manifest)
+        if len(owners) > 1:
+            raise BuilderWorkflowError(
+                f"{component_ref} is owned by multiple DEV projects"
+            )
+        if not owners:
+            return ()
+        development = _mapping(owners[0].get("development"))
+        return tuple(
+            dict.fromkeys(
+                str(item).strip()
+                for item in development.get("domain_packs") or []
+                if str(item).strip()
+            )
+        )
+
     def _governed_definition(self) -> CompiledWorkflowDefinition:
         self._active_package_digest = None
         self._active_binding_digest = None
@@ -2120,6 +2172,7 @@ class BuilderWorkflowService:
         acceptance_id: str | None = None,
         actor: str = "builder.prototype.reviewer",
         expected_generation: int | None = None,
+        domain_packs: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """Accept the exact executable prototype and advance its Change gate."""
 
@@ -2170,6 +2223,11 @@ class BuilderWorkflowService:
             prototype_resources=self._prototype_resource_evidence(snapshots),
             prototype_resource_snapshots=resource_snapshots,
             locale_dictionaries=locale_dictionaries,
+            domain_packs=(
+                tuple(domain_packs)
+                if domain_packs is not None
+                else self._target_domain_packs(object_type, object_id)
+            ),
         )
         governed_state = str(_mapping(current.get("governed")).get("state") or "").strip()
         if governed_state == "automation_ready":
