@@ -17,6 +17,11 @@ const client = String(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100
 const sourceDigest = String(process.env.ADAOS_E2E_SOURCE_DIGEST || '').trim()
 const spaceKind = String(process.env.ADAOS_E2E_SPACE_KIND || 'development').trim()
 const timeoutMs = Number(process.env.ADAOS_E2E_TIMEOUT_MS || 90_000)
+const commandSequence = String(process.env.ADAOS_E2E_COMMAND_SEQUENCE || '').split(',')
+  .map(value => value.trim()).filter(Boolean).map(value => {
+    const [command, option] = value.split(':', 2).map(part => part.trim())
+    return { command, option: option || null }
+  })
 
 if (!scenario || !webspace || !subnet || !token) {
   throw new Error('Scenario, paired DEV webspace, subnet, and local control token are required')
@@ -119,6 +124,53 @@ try {
       }, undefined, { timeout: timeoutMs })
       await page.screenshot({ path: path.join(output, `${layout}-initial.png`), fullPage: true })
 
+      for (const step of commandSequence) {
+        const command = page.locator(`[data-command-id="${step.command}"]`).filter({ visible: true }).first()
+        await command.waitFor({ state: 'visible', timeout: timeoutMs })
+        await command.click()
+        if (step.option) {
+          const option = page.locator(`[data-command-option="${step.option}"]`).filter({ visible: true }).first()
+          await option.waitFor({ state: 'visible', timeout: timeoutMs })
+          await option.click()
+        }
+        await page.waitForTimeout(350)
+        sample.checks.push({ kind: 'command-sequence', command: step.command, option: step.option })
+        const activeModal = page.locator('ion-modal.show-modal').last()
+        if (await activeModal.count()) {
+          const modalDiagnostics = await activeModal.evaluate(element => {
+            const visible = child => {
+              const style = getComputedStyle(child)
+              return child.getClientRects().length > 0
+                && style.visibility !== 'hidden'
+                && style.display !== 'none'
+            }
+            const widgets = [...element.querySelectorAll('[data-webui-widget-id]')].filter(visible)
+            return {
+              id: element.id || null,
+              schema: Boolean(element.querySelector('ada-schema-modal')),
+              title: String(element.querySelector('ion-title')?.textContent || '').replace(/\s+/g, ' ').trim(),
+              visible_widget_ids: widgets
+                .map(widget => widget.getAttribute('data-webui-widget-id'))
+                .filter(Boolean),
+            }
+          })
+          sample.checks.push({
+            kind: 'modal-surface',
+            command: step.command,
+            ...modalDiagnostics,
+          })
+          if (modalDiagnostics.schema && !modalDiagnostics.visible_widget_ids.length) {
+            sample.hard_failures.push(
+              `Schema modal opened by ${step.command} has no visible widgets`,
+            )
+          }
+          await page.screenshot({
+            path: path.join(output, `${layout}-command-${step.command}.png`),
+            fullPage: true,
+          })
+        }
+      }
+
       const selectableSelector = [
         'tr.row-selectable',
         'tr.is-selectable',
@@ -127,63 +179,76 @@ try {
         '.tree-widget__node.is-selectable',
       ].join(', ')
 
+      let compactSelectionRegion = null
+      const activeModal = page.locator('ion-modal.show-modal').last()
+      const interactionRoot = await activeModal.count() ? activeModal : page
       if (layout === 'compact') {
-        const compactTriggers = page.locator('.layout-region-trigger')
+        const compactTriggers = interactionRoot.locator('.layout-region-trigger')
         const compactTriggerCount = await compactTriggers.count()
         if (compactTriggerCount) {
-          const trigger = compactTriggers.first()
-          if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
-            await trigger.click()
-            await page.waitForTimeout(250)
-          }
-          const openRegions = page.locator('ada-layout-region.is-open')
-          if ((await trigger.getAttribute('aria-expanded')) !== 'true' || !(await openRegions.count())) {
-            sample.hard_failures.push('Compact detail/inspector disclosure did not open its semantic region')
-          } else {
-            sample.checks.push({ kind: 'compact-region-disclosure', count: compactTriggerCount })
-            await page.screenshot({ path: path.join(output, `${layout}-disclosure.png`), fullPage: true })
-            const close = openRegions.first().locator('.layout-region__header button').first()
+          for (let triggerIndex = 0; triggerIndex < compactTriggerCount; triggerIndex += 1) {
+            const trigger = compactTriggers.nth(triggerIndex)
+            if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
+              await trigger.click()
+              await page.waitForTimeout(250)
+            }
+            const openRegion = interactionRoot.locator('ada-layout-region.is-open').first()
+            if ((await trigger.getAttribute('aria-expanded')) !== 'true' || !(await openRegion.count())) {
+              sample.hard_failures.push(`Compact disclosure ${triggerIndex + 1} did not open its semantic region`)
+              continue
+            }
+            if (triggerIndex === 0) {
+              sample.checks.push({ kind: 'compact-region-disclosure', count: compactTriggerCount })
+              await page.screenshot({ path: path.join(output, `${layout}-disclosure.png`), fullPage: true })
+            }
+            const close = openRegion.locator('.layout-region__header button').first()
             if (await close.count()) {
               await close.click()
               await page.waitForTimeout(150)
               if ((await trigger.getAttribute('aria-expanded')) !== 'false') {
-                sample.hard_failures.push('Compact detail/inspector disclosure did not close')
+                sample.hard_failures.push(`Compact disclosure ${triggerIndex + 1} did not close`)
+              } else if (!(await trigger.evaluate(element => element === document.activeElement))) {
+                sample.hard_failures.push(`Compact disclosure ${triggerIndex + 1} did not restore trigger focus`)
               } else {
                 await trigger.click()
                 await page.waitForTimeout(150)
                 if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
-                  sample.hard_failures.push('Compact detail/inspector disclosure did not reopen')
+                  sample.hard_failures.push(`Compact disclosure ${triggerIndex + 1} did not reopen`)
                 }
               }
+            }
+            const reopened = interactionRoot.locator('ada-layout-region.is-open').first()
+            try {
+              await reopened.locator(selectableSelector).filter({ visible: true }).first()
+                .waitFor({ state: 'visible', timeout: Math.min(timeoutMs, 5_000) })
+            } catch {
+              // Empty collections are valid and remain visible for diagnostics.
+            }
+            const candidates = reopened.locator(selectableSelector)
+            const candidateCount = await candidates.count()
+            let hasVisibleCandidate = false
+            for (let index = 0; index < candidateCount; index += 1) {
+              if (await candidates.nth(index).isVisible()) {
+                hasVisibleCandidate = true
+                break
+              }
+            }
+            if (hasVisibleCandidate) {
+              compactSelectionRegion = reopened
+              break
+            }
+            if (triggerIndex < compactTriggerCount - 1 && await close.count()) {
+              await reopened.locator('.layout-region__header button').first().click()
+              await page.waitForTimeout(150)
+            } else {
+              compactSelectionRegion = reopened
             }
           }
         }
       }
 
-      let selectableItems = page.locator(selectableSelector)
-      if (layout === 'compact') {
-        const openRegion = page.locator('ada-layout-region.is-open').first()
-        if (await openRegion.count()) {
-          const openItems = openRegion.locator(selectableSelector)
-          const openItemCount = await openItems.count()
-          let openItemVisible = false
-          for (let index = 0; index < openItemCount; index += 1) {
-            if (await openItems.nth(index).isVisible()) {
-              openItemVisible = true
-              break
-            }
-          }
-          if (openItemVisible) {
-            selectableItems = openItems
-          } else {
-            const close = openRegion.locator('.layout-region__header button').first()
-            if (await close.count()) {
-              await close.click()
-              await page.waitForTimeout(150)
-            }
-          }
-        }
-      }
+      let selectableItems = interactionRoot.locator(selectableSelector)
+      if (compactSelectionRegion) selectableItems = compactSelectionRegion.locator(selectableSelector)
       try {
         await page.waitForFunction(selector => [...document.querySelectorAll(selector)]
           .some(element => element.getClientRects().length > 0), selectableSelector, {
@@ -196,6 +261,7 @@ try {
       for (let index = 0; index < selectableCount; index += 1) {
         const item = selectableItems.nth(index)
         if (!(await item.isVisible())) continue
+        await item.focus()
         await item.click()
         await page.waitForTimeout(500)
         sample.checks.push({ kind: 'primary-selection', count: selectableCount })
@@ -203,7 +269,7 @@ try {
         break
       }
 
-      const semanticTabs = page.locator(
+      const semanticTabs = interactionRoot.locator(
         '[data-webui-widget-type="navigation.tabs"] [role="tablist"] [role="tab"]',
       )
       const tabCount = await semanticTabs.count()
@@ -296,6 +362,23 @@ try {
           .map(source => new RegExp(source, 'i'))
           .filter(pattern => pattern.test(bodyText))
           .map(pattern => pattern.source)
+        const currentItems = [...document.querySelectorAll('.collection-item-current')]
+          .filter(visible)
+          .map(element => ({
+            ariaCurrent: element.getAttribute('aria-current'),
+            weight: getComputedStyle(element.querySelector('.title, .note-card-title') || element).fontWeight,
+          }))
+        const disabledItems = [...document.querySelectorAll(
+          '.collection-focus-item[disabled], .collection-focus-item[aria-disabled="true"], .collection-focus-item.item-disabled',
+        )]
+          .filter(visible)
+          .map(element => ({
+            disabled: ('disabled' in element && Boolean(element.disabled))
+              || element.hasAttribute('disabled')
+              || element.getAttribute('aria-disabled') === 'true'
+              || element.classList.contains('item-disabled'),
+            tabIndex: element.tabIndex,
+          }))
         return {
           current_scenario: window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization?.currentScenario || null,
           viewport_width: innerWidth,
@@ -309,6 +392,8 @@ try {
           visible_regions: visibleRegions,
           toolbar_after_body: Boolean(toolbarAfterBody),
           blocking_text: blockingText,
+          current_items: currentItems,
+          disabled_items: disabledItems,
         }
       }, blockingTextPatterns.map(pattern => pattern.source))
       sample.diagnostics = diagnostics
@@ -326,6 +411,19 @@ try {
       }
       if (diagnostics.unlabeled_interactives.length) {
         sample.warnings.push(`${diagnostics.unlabeled_interactives.length} visible interactive controls have no accessible name`)
+      }
+      if (diagnostics.current_items.some(item => item.ariaCurrent !== 'step' || Number.parseInt(item.weight, 10) < 600)) {
+        sample.hard_failures.push('A current collection item lacks aria-current=step or a visible emphasis')
+      }
+      if (diagnostics.disabled_items.some(item => !item.disabled || item.tabIndex >= 0)) {
+        sample.hard_failures.push('A disabled collection item remains enabled or keyboard-focusable')
+      }
+      if (diagnostics.current_items.length || diagnostics.disabled_items.length) {
+        sample.checks.push({
+          kind: 'current-disabled-collection-semantics',
+          current: diagnostics.current_items.length,
+          disabled: diagnostics.disabled_items.length,
+        })
       }
       for (const failure of diagnostics.renderer_failures) {
         sample.hard_failures.push(
