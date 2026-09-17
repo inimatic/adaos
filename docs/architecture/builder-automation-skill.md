@@ -71,11 +71,12 @@ Builder owns acceptance and delivery gates. Neither role requires hiding test or
 browser results from the implementing model. This supersedes the blanket prompt
 ban on tests, validation, status and diff commands, including repair prompts.
 
-The current worker already feeds deterministic validation errors into a bounded
-Codex repair turn. It does not yet provide the target interactive check/browser
-loop. The default repair count and existing prompt tests establish a mechanism,
-not an optimal quality, cost or latency policy. Implementation and qualification
-belong to [BIP-13](builder-intent-to-prototype-roadmap.md#bip-13) and
+The current worker feeds deterministic validation errors and exact-candidate
+wide/compact browser observations into bounded Codex repair turns. This closes
+the first observation loop, not the complete verification program: stateful
+persistence/media journeys, broader candidate-selected checks, cost/latency
+calibration, and final cross-project qualification remain under
+[BIP-13](builder-intent-to-prototype-roadmap.md#bip-13) and
 [BIP-21](builder-intent-to-prototype-roadmap.md#bip-21).
 
 ### Three Verification Levels
@@ -167,6 +168,10 @@ is no longer active there, finalization preserves the validated checkpoint but
 does not reclaim or recreate Preview. A successful candidate materialization is
 reused after checkpointing; release-only version synchronization does not trigger
 a second rebuild or invalidate the accepted Prototype semantic digest.
+Trial review additionally binds the full release digest and immutable candidate
+revision from `workspace.lock.json`. Transport-safe fingerprint spelling may be
+canonicalized, but a shortened, stale, DEV, Stable, or different Trial identity
+must fail closed.
 
 Select checks by changed contracts, affected behavior and reported failures, with
 mandatory final coverage retained. This is not a fixed series of model requests,

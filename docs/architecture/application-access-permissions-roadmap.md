@@ -1,7 +1,7 @@
 # Application Access, Permissions, and Roles Roadmap
 
-Status: policy/runtime V1 implemented; product-surface and full browser
-qualification reopened for Layout & Interaction ABI v2 migration.
+Status: policy/runtime V1 and the first Applications/Users & Access Trial
+surfaces implemented; complete install/update and child/guest proof remains open.
 
 Last reviewed: 2026-09-17.
 
@@ -53,13 +53,12 @@ Application declaration -> install/update review -> access grant/role assignment
 -> revoke/update review
 ```
 
-## Implementation Evidence: 2026-09-16 V1 Vertical Slice
+## Implementation Evidence: 2026-09-17 V1 Vertical Slice
 
 The policy and runtime contracts are implemented as a release-bound vertical
-slice. Generated DEV surfaces and bounded probes are implementation evidence,
-but they do not establish the complete user-facing Applications and Users &
-Access products. AAPR4 and the UI-dependent AAPR6 claims remain open until the
-new layout ABI, Workspace applications, and browser journeys are accepted.
+slice. Exact local Trial candidates now establish the first user-facing
+Applications and Users & Access products, but do not establish the complete
+install/update, Pending Actions, child/guest, or remote-consumer proof.
 The durable contracts, policy path, management surfaces, Builder gates, and
 machine evidence use the same Application and permission-profile digests.
 Evidence:
@@ -104,14 +103,18 @@ Evidence:
   `PersonalizationAccessService` and Application-access projection. The DEV
   `users_access` project composes the first separate EN/RU product surface with
   people, invitations, roles, devices, sessions, Application access, and
-  activity. This is implementation evidence, not yet the AAPR4-04 exit proof:
-  Trial projection and wide/compact browser journeys remain required.
+  activity. Exact candidate `users_access-0-1-3-4000e53e07fe` passes focused
+  source tests, four live reversible Root MCP checks, Final Verification, local
+  Trial placement, and wide/compact browser review against its full release
+  digest.
 - `src/adaos/services/builder/domain_packs/application_manager_legacy.py` and
   `applications.compatibility.v1.json` publish the DEV Applications and Users
   & Access surfaces, including assignment/change/revoke, simulation, privacy,
-  review, profiler, and Final Verification controls. Browser evidence covers
-  wide and compact keyboard flows with no request failures or horizontal
-  overflow.
+  review, profiler, and Final Verification controls. Exact candidate
+  `applications-0-1-8-a627bcd57e25` passes Final Verification, local Trial
+  placement, and wide/compact browser review with live list/detail data and no
+  renderer or document-overflow failure. The unauthenticated node-status probe
+  remains a warning and keyboard qualification remains open.
 - `adaos builder application-permissions` and
   `adaos builder application-verify` produce the profiler and blocking-first
   checklist. Trial/publication admission consumes persisted reports and the
@@ -275,17 +278,17 @@ Application-centric and subject-centric views.
 - [ ] `[must]` `AAPR4-01` Extend Application install/update review to show
   structured permissions, data practices, LLM/network use, secrets,
   notifications, background work, role model, and release-readiness summary.
-- [ ] `[must]` `AAPR4-02` Add Application detail tabs or sections:
+- [x] `[must]` `AAPR4-02` Add Application detail tabs or sections:
   Permissions, Access, Roles, Connected Accounts, Release Readiness, and
   Activity.
-- [ ] `[must]` `AAPR4-03` Add minimal role assignment management from
+- [x] `[must]` `AAPR4-03` Add minimal role assignment management from
   Applications: assign declared Application role, change role, revoke access,
   and show affected child/guest constraints.
-- [ ] `[must]` `AAPR4-04` Add Users & Access V1 with People, Guests, Children,
+- [x] `[must]` `AAPR4-04` Add Users & Access V1 with People, Guests, Children,
   Devices/Sessions, User Detail, Application Access, and Activity projections.
 - [ ] `[must]` `AAPR4-05` Connect Pending Actions to Application permission
   and Users & Access detail instead of showing only raw tool ids.
-- [ ] `[must]` `AAPR4-06` Add Builder permission profiler: declared,
+- [x] `[must]` `AAPR4-06` Add Builder permission profiler: declared,
   statically inferred, observed, undeclared observed, unused, child/guest
   compatibility, role diff, and inputs for Builder final verification.
 - [ ] `[should]` `AAPR4-07` Add responsive compact/wide UI, keyboard flows, and
@@ -293,14 +296,15 @@ Application-centric and subject-centric views.
 - [ ] `[could]` `AAPR4-08` Add app-embedded role management component that
   delegates all writes to platform APIs.
 
-**Current boundary:** the shared management API, projections, generated DEV
-surfaces, a dedicated Root MCP Users & Access plane, the first standalone DEV
-Users & Access application, and bounded contract probes exist. The exit proof
-is not met: Applications integration, Trial products, complete user-detail and
-Pending Actions routing, and wide/compact browser journeys are still required
-without direct database edits. AdaOS Connect keeps claim, pairing, and recovery
-entry flows; its duplicate owner administration panels are removed only after
-the Users & Access beta is accepted.
+**Current boundary:** the shared management API, projections, Applications
+integration, dedicated Root MCP Users & Access plane, and standalone exact
+Trial products now exist. Applications performs grant/change/revoke and shows
+the Application-centric policy sections; Users & Access exposes the
+subject-centric six-section workbench through shared services without direct
+database edits. Complete install/update disclosure (`AAPR4-01`), Pending Action
+routing (`AAPR4-05`), keyboard/long-label qualification (`AAPR4-07`), and the
+child/guest end-to-end matrix remain open. AdaOS Connect retains join, pairing,
+and recovery entry flows and links ongoing administration to Users & Access.
 
 ## AAPR5. Builder Final Verification
 

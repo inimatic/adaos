@@ -2,7 +2,7 @@
 
 Status: target implementation roadmap.
 
-Last reviewed: 2026-09-15.
+Last reviewed: 2026-09-17.
 
 Target architecture:
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
@@ -697,6 +697,11 @@ collaboration scope expands.
   migration before writes and explicitly confirmed snapshot restore after
   writes. Prove one desktop representation, no repeated migration on channel
   promotion, no silent reset and no user records in model requests or packages.
+  Implemented prerequisite: a publisher-owned new local Beta may replace an
+  existing Beta only with explicit data-reset acknowledgement. The replacement
+  is rebuilt from the accepted Stable snapshot, never from the previous Beta;
+  prior Beta data remains retained for diagnosis. Full successive-Beta browser,
+  write-loss disclosure, restart and Stable-adoption qualification remains open.
 
 **Exit proof:** every required proof in the target architecture passes without
 manual state/database edits or source changes outside Builder for Application

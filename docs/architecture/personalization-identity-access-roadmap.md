@@ -377,6 +377,9 @@ Checklist:
 - [x] List pending, accepted, expired, and revoked links for owner/co-owner,
   with revoke actions.
 - [x] Add audit-history drill-down to the link management panel.
+- [x] Bound short-lived AdaOS Connect preparation results by TTL and item
+  count, with deterministic cleanup; route ongoing user/access administration
+  to Users & Access while retaining join, pairing, and recovery in Connect.
 - [x] Wire invite/session revocation to access-link denial and browser/Yjs
   admission so revoked sessions are denied without manual database edits.
 - [ ] Add direct websocket disconnect orchestration for already-connected
@@ -461,6 +464,10 @@ Checklist:
 - [x] Add a shared runtime service API for users, profiles, devices,
   memberships, grants, invites, and recovery actions.
 - [x] Add owner/co-owner/admin-facing user management skill or control-plane UI.
+- [x] Publish the first standalone Users & Access local Trial with People,
+  Invitations, Devices, Sessions, Application Access, and Activity sections;
+  bind it to the shared policy services and Root MCP rather than a skill-local
+  authorization store.
 - [x] Use access presets for common flows: family member, child, guest, and
   admin. Custom capability editing remains future work.
 - [x] Show active grants, expired grants, revoked grants, pending invites,
@@ -489,7 +496,7 @@ Local verification:
 
 - [x] API/service tests.
 - [x] browser UI build smoke test.
-- [ ] dedicated skill action tests.
+- [x] dedicated application action and live reversible Root MCP tests.
 - [x] multi-admin grant and denial tests beyond owner/co-owner preset creation.
 - [x] audit query smoke tests.
 

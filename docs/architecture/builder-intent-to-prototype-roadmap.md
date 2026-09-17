@@ -4,7 +4,7 @@ Status: active corrective roadmap. Small generic Prototype and DEV Automation
 slices work; target ownership, repeatable reliability and installed lifecycle
 acceptance remain incomplete.
 
-Last reviewed: 2026-09-16.
+Last reviewed: 2026-09-17.
 
 Architecture: [Intent-to-Prototype](builder-intent-to-prototype.md).
 Cross-document owner: [Builder Roadmap](builder-roadmap.md).
@@ -47,7 +47,7 @@ The parent roadmap and SDK migration retain their distinct obligations.
 | Semantic Prototype | Typed multi-resource candidates, relations, state proof, requirement bindings, deterministic WebUI/locale/fixture compilation | Total admitted-component coverage, general incremental preservation and reliable unseen tasks |
 | Local UI substrate | CRUD, live choices, filtering, editor surfaces, sections, board/tree/chart/accordion/settings and display policies in qualified subsets | Uniform action cancellation/error semantics and complete compact/a11y/i18n acceptance |
 | Preview | Explicit production/DEV self-host topology and one paired preview | All deletion/reconnect/idempotency and readiness paths qualified |
-| Automation | Frozen-Prototype implementation, post-turn deterministic repair feedback, independent local HTTP/browser plans, owned persistence and bounded attempt archives | Candidate-selected checks/browser feedback, cross-stage baseline integrity, full-project acceptance checkpoints, repeated latency qualification and installed delegated roles |
+| Automation | Frozen-Prototype implementation, deterministic repair feedback, exact-candidate wide/compact browser observations, independent local HTTP/browser plans, owned persistence and bounded attempt archives | Broader candidate-selected checks, stateful persistence/media journeys, cross-stage baseline integrity, full-project acceptance checkpoints, repeated latency qualification and installed delegated roles |
 | Evaluation | Public CLI, immutable reports and model-input archives, component and browser probes | All stand paths under one lifecycle runner, calibrated holdout and complete cost accounting |
 
 ## Current Sequence
@@ -72,6 +72,13 @@ Automation and a complete isolated TEST application journey through the new
 Builder. This supersedes the earlier Trial/publication pause for that test
 journey only; it does not authorize replacing operational Workspace Builder
 before parity qualification or publishing unrelated applications.
+The accepted frozen design 071 is evidence, not the Workspace release source.
+As of 2026-09-17 the DEV and Workspace Builder scenario manifests are
+semantically equal while the DEV control skill is newer. A preview with a poor
+071 data projection must not replace the richer operational Workspace
+projection. Promotion requires a source, control-skill, live-data and browser
+parity receipt against the operational Workspace surface; `dev1-dev` is not a
+release authority.
 Do not regenerate accepted prototypes or manually repair generated application
 code. Use the existing DEV Builder and its single owned preview. Do not feed
 rubrics, held-out cases or finished domain solutions into generation. Preserve
@@ -635,6 +642,11 @@ disclosure, rejects renderer error/unsupported states and invalid semantic
 toolbar order, and retains per-view evidence. Only the known local missing
 runtime-config bootstrap and unauthenticated status probe are warnings; other
 HTTP failures, including retryable runtime `503`, remain failures.
+For Trial review, the gate derives the exact candidate revision and complete
+release digest from `workspace.lock.json`, canonicalizes only the admitted
+transport separators in `trial:sha256:<digest>`, and rejects a different or
+stale materialization. Visible nonempty detail content is checked through the
+semantic details component rather than a private DOM class.
 Users & Access additionally qualifies the complete trusted ordering through
 Automation: exact accepted-Prototype and Root MCP contracts are bound before the
 Codex turn; candidate materialization and six-tab wide/compact review precede

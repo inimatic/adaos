@@ -131,6 +131,11 @@ Cutover evidence, 2026-09-16:
   was corrected generically: toolbar spans row one, primary/auxiliary content
   occupies row two and footer occupies row three, with the equivalent compact
   ordering. Product-specific renderer logic was not introduced.
+  Exact local Trial reruns on 2026-09-17 bind Applications `0.1.8` and Users &
+  Access `0.1.3` to their complete release fingerprints. Both render live data
+  and compact detail disclosure without renderer failure. Users & Access still
+  needs a clearer compact affordance for overflowing section tabs; this is a
+  shared semantic-tabs UX task, not product-specific CSS.
 
 - [x] `[must]` Qualify generic schema-modal resize and fullscreen restoration on desktop
   and mobile. Persist current-user device/scenario/webspace scopes; resolve exact
