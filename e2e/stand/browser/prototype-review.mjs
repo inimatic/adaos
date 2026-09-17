@@ -146,9 +146,12 @@ try {
         await page.waitForFunction(expectedIdentity => {
           const source = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization
           if (!source?.materializationRevision || !/^trial[:_]/.test(source?.sourceFingerprint || '')) return false
+          const canonicalFingerprint = value => String(value || '')
+            .replace(/^trial[_:]sha256[_:]/, 'trial:sha256:')
           return !expectedIdentity || (
             source.materializationRevision === expectedIdentity.materializationRevision
-            && source.sourceFingerprint === expectedIdentity.sourceFingerprint
+            && canonicalFingerprint(source.sourceFingerprint)
+              === canonicalFingerprint(expectedIdentity.sourceFingerprint)
           )
         }, expectedTrialIdentity, { timeout: 15_000 })
       }
