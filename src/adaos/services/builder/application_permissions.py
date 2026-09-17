@@ -85,6 +85,21 @@ def _authoring_contract() -> dict[str, Any]:
             },
         },
         "platform_roles": ["owner", "co_owner", "admin", "member", "child", "guest"],
+        "trial_evidence_contract": {
+            "artifact_path": "tests/test_application_contract.py",
+            "required_when": "the owning Project declares a permission_profile",
+            "with_application_roles": (
+                "exercise the owner/member/child/guest access matrix for every declared role"
+            ),
+            "without_application_roles": (
+                "prove permission enforcement is delegated to the trusted Core/Root boundary "
+                "and that the package does not create a local role store"
+            ),
+            "admission": (
+                "Automation must execute and seal this exact package-relative test artifact; "
+                "passing equivalent tests under another filename is not Trial evidence"
+            ),
+        },
         "validation_boundary": (
             "The model may repair an invalid declaration, but the declaration grants no authority "
             "and Automation cannot complete until trusted validation accepts it."
@@ -281,7 +296,7 @@ def application_permissions_context(
             "For durable uploaded bytes declare storage.blob and separate authorized upload/read tools; workspace.write gates upload and workspace.read gates retrieval.",
             "Declare application_roles only when the application has differentiated rights; enforce rights in tools, not only in UI visibility.",
             "When roles are declared, mark exactly one owner-compatible role with default_for: {owner: <same-role-id>} so Builder can provision publisher access without guessing.",
-            "Add owner/member/child/guest access-matrix tests for every declared application role.",
+            "Create tests/test_application_contract.py for every declared permission_profile. With application roles, test the owner/member/child/guest matrix; without roles, prove trusted Core/Root enforcement and no local role store. Trial admission recognizes this exact sealed artifact path.",
             "Record secrets, external providers, model use, notifications, background work and data practices explicitly.",
             "Use canonical machine identifiers for data-practice categories; keep prose in purposes, titles, retention policy, catalog copy or README.",
         ],
