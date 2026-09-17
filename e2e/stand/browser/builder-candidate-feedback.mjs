@@ -150,15 +150,63 @@ try {
         }
       }
 
-      const semanticTabs = page.locator('[role="tablist"] [role="tab"]')
+      const selectableSelector = [
+        'tr.row-selectable',
+        'tr.is-selectable',
+        'button.note-card-main',
+        'ion-item.collection-focus-item:not([disabled])',
+        '.tree-widget__node.is-selectable',
+      ].join(', ')
+      try {
+        await page.waitForFunction(selector => [...document.querySelectorAll(selector)]
+          .some(element => element.getClientRects().length > 0), selectableSelector, {
+          timeout: Math.min(timeoutMs, 5_000),
+        })
+      } catch {
+        // An empty collection is valid. The result is recorded by the widget diagnostics below.
+      }
+      const selectableItems = page.locator(selectableSelector)
+      const selectableCount = await selectableItems.count()
+      for (let index = 0; index < selectableCount; index += 1) {
+        const item = selectableItems.nth(index)
+        if (!(await item.isVisible())) continue
+        await item.click()
+        await page.waitForTimeout(500)
+        sample.checks.push({ kind: 'primary-selection', count: selectableCount })
+        await page.screenshot({ path: path.join(output, `${layout}-selection.png`), fullPage: true })
+        break
+      }
+
+      const semanticTabs = page.locator(
+        '[data-webui-widget-type="navigation.tabs"] [role="tablist"] [role="tab"]',
+      )
       const tabCount = await semanticTabs.count()
       for (let index = 0; index < Math.min(tabCount, 12); index += 1) {
         const tab = semanticTabs.nth(index)
         if (!(await tab.isVisible())) continue
-        await tab.focus()
-        await tab.press('Enter')
+        if (await tab.isDisabled() || (await tab.getAttribute('aria-disabled')) === 'true') continue
+        const handle = await tab.elementHandle()
+        if (!handle) continue
+        const descriptor = await handle.evaluate(element => ({
+          controls: element.getAttribute('aria-controls'),
+          id: element.id,
+          listIndex: [...document.querySelectorAll('[data-webui-widget-type="navigation.tabs"] [role="tablist"]')]
+            .indexOf(element.closest('[role="tablist"]')),
+          text: String(element.textContent || '').replace(/\s+/g, ' ').trim(),
+        }))
+        await handle.focus()
+        await handle.press('Enter')
         await page.waitForTimeout(350)
-        const selected = await tab.getAttribute('aria-selected')
+        const selected = await page.evaluate(({ controls, id, listIndex, text }) => {
+          const list = document.querySelectorAll(
+            '[data-webui-widget-type="navigation.tabs"] [role="tablist"]',
+          )[listIndex]
+          const tabs = list ? [...list.querySelectorAll('[role="tab"]')] : []
+          const current = tabs.find(element => (id && element.id === id)
+            || (controls && element.getAttribute('aria-controls') === controls)
+            || String(element.textContent || '').replace(/\s+/g, ' ').trim() === text)
+          return current?.getAttribute('aria-selected') || null
+        }, descriptor)
         if (selected !== 'true') {
           sample.hard_failures.push(`Semantic tab ${index + 1} did not become selected`)
         }
@@ -181,7 +229,13 @@ try {
           .filter(visible)
           .filter(element => {
             const text = String(element.innerText || element.value || '').trim()
-            return !text && !element.getAttribute('aria-label') && !element.getAttribute('title')
+            const labels = 'labels' in element && element.labels ? element.labels.length : 0
+            return !text
+              && !labels
+              && !element.getAttribute('aria-label')
+              && !element.getAttribute('aria-labelledby')
+              && !element.getAttribute('title')
+              && !element.getAttribute('placeholder')
           })
           .slice(0, 24)
           .map(element => ({
