@@ -335,7 +335,12 @@ def list_applications(
                     }
                     if not local["deletion"]["allowed"]:
                         local["deletion"]["reason"] = "published_installed_or_protected"
-                except (FileNotFoundError, ValueError, OSError):
+                except (
+                    FileNotFoundError,
+                    ValueError,
+                    OSError,
+                    compositions.ProjectCompositionError,
+                ):
                     local["deletion"] = {
                         "project_id": project_id,
                         "allowed": False,

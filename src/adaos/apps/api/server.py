@@ -2424,6 +2424,7 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
         "applications.list_releases": "applications.read",
         "applications.list_operations": "applications.read",
         "applications.list_development_reports": "applications.report",
+        "applications.development.delete": "applications.develop",
         "applications.plan": "applications.plan",
         "applications.apply": "applications.apply",
         "users_access.summary": "users_access.read",

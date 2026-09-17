@@ -209,7 +209,10 @@ def test_application_reads_project_only_existing_local_developments(
     monkeypatch, tmp_path: Path
 ) -> None:
     context = SimpleNamespace(
-        paths=SimpleNamespace(state_dir=lambda: tmp_path),
+        paths=SimpleNamespace(
+            state_dir=lambda: tmp_path,
+            dev_dir=lambda: tmp_path / "dev",
+        ),
         config=SimpleNamespace(subnet_id_value="sn_home"),
     )
     monkeypatch.setattr(applications, "require_ctx", lambda _reason: context)
@@ -320,6 +323,66 @@ def test_application_reads_project_only_existing_local_developments(
         "applications",
         "foreign",
     ]
+
+
+def test_application_read_survives_missing_development_project(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.sdk.developer import compositions
+
+    context = SimpleNamespace(
+        paths=SimpleNamespace(
+            state_dir=lambda: tmp_path,
+            dev_dir=lambda: tmp_path / "dev",
+        ),
+        config=SimpleNamespace(subnet_id_value="sn_home"),
+    )
+    monkeypatch.setattr(applications, "require_ctx", lambda _reason: context)
+    monkeypatch.setattr(compositions, "require_ctx", lambda _reason: context)
+
+    ApplicationDevelopmentCoordinator(tmp_path).execute(
+        "create",
+        "stale-app",
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.develop",
+        expected_revision=0,
+        idempotency_key="create-stale-app",
+        intent={"source_webspace_id": "desktop"},
+        callback=lambda: {"ok": True},
+    )
+
+    class Service:
+        def list_models(self, **_kwargs):
+            return [
+                {
+                    "application": {
+                        "application_id": "stale-app",
+                        "legacy_project_id": "missing-project",
+                        "visibility": "private",
+                        "entrypoints": [
+                            {
+                                "entrypoint_id": "main",
+                                "presentation_ref": "scenario:stale-app",
+                            }
+                        ],
+                    },
+                    "installed": False,
+                    "channels": {},
+                }
+            ]
+
+    monkeypatch.setattr(applications, "_service", lambda: Service())
+    monkeypatch.setattr(applications, "_development_workflow_summary", lambda *_: None)
+
+    models = applications.list_applications()
+
+    assert len(models) == 1
+    assert models[0]["local_development"]["deletion"] == {
+        "project_id": "missing-project",
+        "allowed": False,
+        "reason": "development_project_unavailable",
+    }
 
 
 def test_sdk_exposes_development_report_status_without_internal_store_access() -> None:
