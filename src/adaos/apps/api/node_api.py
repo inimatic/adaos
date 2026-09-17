@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -14,6 +15,7 @@ import threading
 import tracemalloc
 import uuid
 from collections import Counter
+from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from typing import Any, Iterator, Literal, Mapping, Optional
@@ -100,6 +102,7 @@ from adaos.services.workspaces import index as workspace_index
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.runtime import SkillDirectoryNotFoundError, find_skill_dir
 from adaos.services.realtime_sidecar import (
+    realtime_sidecar_enablement_policy,
     realtime_sidecar_listener_snapshot,
     restart_realtime_sidecar_subprocess,
 )
@@ -208,6 +211,12 @@ _RUNTIME_ENDPOINT_METRICS: dict[str, Any] = {
     "slow_threshold_ms": 1000.0,
     "endpoints": {},
 }
+_RUNTIME_SUPPORT_SNAPSHOT_LOCK = threading.RLock()
+_RUNTIME_SUPPORT_SNAPSHOT_EXECUTOR: ThreadPoolExecutor | None = None
+_RUNTIME_SUPPORT_SNAPSHOT_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
+_RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT: dict[
+    tuple[str, int], Future[dict[str, Any]]
+] = {}
 
 
 def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
@@ -216,6 +225,135 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
     except Exception:
         value = float(default)
     return max(float(minimum), value)
+
+
+def _runtime_support_snapshot_executor() -> ThreadPoolExecutor:
+    global _RUNTIME_SUPPORT_SNAPSHOT_EXECUTOR
+    with _RUNTIME_SUPPORT_SNAPSHOT_LOCK:
+        if _RUNTIME_SUPPORT_SNAPSHOT_EXECUTOR is None:
+            _RUNTIME_SUPPORT_SNAPSHOT_EXECUTOR = ThreadPoolExecutor(
+                max_workers=2,
+                thread_name_prefix="adaos-runtime-support",
+            )
+        return _RUNTIME_SUPPORT_SNAPSHOT_EXECUTOR
+
+
+def _complete_runtime_support_snapshot(
+    key: tuple[str, int],
+    future: Future[dict[str, Any]],
+) -> None:
+    captured_at = time.monotonic()
+    try:
+        payload = future.result()
+        if not isinstance(payload, dict):
+            raise TypeError("runtime support snapshot builder must return a mapping")
+    except Exception as exc:
+        with _RUNTIME_SUPPORT_SNAPSHOT_LOCK:
+            if _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.get(key) is future:
+                _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.pop(key, None)
+            existing = _RUNTIME_SUPPORT_SNAPSHOT_CACHE.get(key)
+            if isinstance(existing, dict):
+                existing["last_error"] = f"{type(exc).__name__}: {exc}"
+                existing["refresh_failure_total"] = int(
+                    existing.get("refresh_failure_total") or 0
+                ) + 1
+        return
+
+    with _RUNTIME_SUPPORT_SNAPSHOT_LOCK:
+        if _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.get(key) is future:
+            _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.pop(key, None)
+        previous = _RUNTIME_SUPPORT_SNAPSHOT_CACHE.get(key) or {}
+        _RUNTIME_SUPPORT_SNAPSHOT_CACHE[key] = {
+            "payload": copy.deepcopy(payload),
+            "captured_at": captured_at,
+            "refresh_total": int(previous.get("refresh_total") or 0) + 1,
+            "refresh_failure_total": int(previous.get("refresh_failure_total") or 0),
+            "last_error": None,
+        }
+        if len(_RUNTIME_SUPPORT_SNAPSHOT_CACHE) > 8:
+            oldest_key = min(
+                _RUNTIME_SUPPORT_SNAPSHOT_CACHE,
+                key=lambda item: float(
+                    _RUNTIME_SUPPORT_SNAPSHOT_CACHE[item].get("captured_at") or 0.0
+                ),
+            )
+            if oldest_key != key:
+                _RUNTIME_SUPPORT_SNAPSHOT_CACHE.pop(oldest_key, None)
+
+
+def _runtime_support_snapshot(
+    name: str,
+    builder: Any,
+    fallback: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Serve node-wide browser support data without blocking a runtime beacon."""
+
+    key = (str(name), id(builder))
+    now = time.monotonic()
+    ttl_s = _env_float(
+        "ADAOS_RELIABILITY_RUNTIME_SUPPORT_CACHE_TTL_S",
+        2.0,
+        minimum=0.1,
+    )
+    max_stale_s = max(
+        ttl_s,
+        _env_float(
+            "ADAOS_RELIABILITY_RUNTIME_SUPPORT_MAX_STALE_S",
+            15.0,
+            minimum=1.0,
+        ),
+    )
+    with _RUNTIME_SUPPORT_SNAPSHOT_LOCK:
+        entry = _RUNTIME_SUPPORT_SNAPSHOT_CACHE.get(key)
+        captured_at = float((entry or {}).get("captured_at") or 0.0)
+        age_s = max(0.0, now - captured_at) if captured_at > 0.0 else None
+        fresh = age_s is not None and age_s <= ttl_s
+        usable_stale = age_s is not None and age_s <= max_stale_s
+        future = _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.get(key)
+        refreshing = future is not None and not future.done()
+        if not fresh and not refreshing:
+            future = _runtime_support_snapshot_executor().submit(builder)
+            _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT[key] = future
+            refreshing = True
+            future.add_done_callback(
+                lambda completed, cache_key=key: _complete_runtime_support_snapshot(
+                    cache_key,
+                    completed,
+                )
+            )
+        if fresh or usable_stale:
+            payload = copy.deepcopy((entry or {}).get("payload") or {})
+            state = "fresh" if fresh else "stale"
+        else:
+            payload = fallback()
+            state = "refreshing" if refreshing else "unavailable"
+        metadata = {
+            "state": state,
+            "ageMs": round(float(age_s or 0.0) * 1000.0, 3) if age_s is not None else None,
+            "refreshing": refreshing,
+            "refreshTotal": int((entry or {}).get("refresh_total") or 0),
+            "refreshFailureTotal": int((entry or {}).get("refresh_failure_total") or 0),
+            "lastError": (entry or {}).get("last_error"),
+        }
+    return payload, metadata
+
+
+def _reset_runtime_support_snapshot_cache() -> None:
+    """Reset process-local support snapshots for tests and controlled restarts."""
+
+    with _RUNTIME_SUPPORT_SNAPSHOT_LOCK:
+        futures = list(_RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.values())
+        _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.clear()
+        _RUNTIME_SUPPORT_SNAPSHOT_CACHE.clear()
+    for future in futures:
+        future.cancel()
+        try:
+            future.result(timeout=5.0)
+        except Exception:
+            pass
+    with _RUNTIME_SUPPORT_SNAPSHOT_LOCK:
+        _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.clear()
+        _RUNTIME_SUPPORT_SNAPSHOT_CACHE.clear()
 
 
 _YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S = _env_float(
@@ -533,6 +671,7 @@ def _strip_summary_etag_volatiles(value: Any) -> Any:
             if str(key)
             not in {
                 "age_s",
+                "ageMs",
                 "expires_at",
                 "updated_at",
                 "updatedAt",
@@ -1136,17 +1275,105 @@ def _current_compact_member_availability() -> dict[str, Any]:
         return _compact_member_availability({})
 
 
+def _pending_compact_member_availability() -> dict[str, Any]:
+    payload = _compact_member_availability({})
+    payload.update(
+        {
+            "source": "runtime_support_snapshot",
+            "state": "refreshing",
+            "reason": "member availability snapshot is refreshing",
+        }
+    )
+    return payload
+
+
+def _pending_sidecar_runtime_fields() -> dict[str, Any]:
+    role = None
+    try:
+        role = str(getattr(load_config(), "role", "") or "").strip().lower() or None
+    except Exception:
+        role = None
+    try:
+        enablement = realtime_sidecar_enablement_policy(role=role)
+    except Exception:
+        enablement = {
+            "enabled": role == "hub",
+            "default_enabled": role == "hub",
+            "explicit": False,
+            "source": "runtime_support_snapshot",
+            "role": role,
+            "env_var": None,
+            "env_value": None,
+        }
+    enabled = bool(enablement.get("enabled"))
+    return {
+        "sidecarEnablement": {
+            "enabled": enabled,
+            "defaultEnabled": bool(enablement.get("default_enabled")),
+            "explicit": bool(enablement.get("explicit")),
+            "source": str(enablement.get("source") or "runtime_support_snapshot"),
+            "role": enablement.get("role") or role,
+            "envVar": enablement.get("env_var"),
+            "envValue": enablement.get("env_value"),
+            "reason": "sidecar runtime snapshot is refreshing",
+        },
+        "sidecarContinuity": {
+            "currentSupport": "refreshing",
+            "hubRuntimeUpdate": "unknown",
+            "required": enabled,
+            "pendingBoundaries": [],
+            "readyBoundaries": [],
+            "blockers": ["sidecar_runtime_snapshot_refreshing"] if enabled else [],
+        },
+        "sidecarProgress": {
+            "state": "refreshing",
+            "percent": 0.0,
+            "completedMilestones": 0,
+            "milestoneTotal": 0,
+            "currentMilestone": None,
+            "nextBlocker": "sidecar_runtime_snapshot_refreshing" if enabled else None,
+        },
+        "sidecarTransportReady": False,
+        "sidecarRemoteSessionState": "refreshing" if enabled else "disabled",
+        "sidecarSessionState": "refreshing" if enabled else "disabled",
+        "sidecarStatusReason": "sidecar runtime snapshot is refreshing",
+        "routeTunnel": {
+            "currentSupport": "refreshing" if enabled else "disabled",
+            "ownershipBoundary": "unknown",
+            "ws": {},
+            "yws": {},
+        },
+        "browserWsHandoffReady": False,
+        "browserYwsHandoffReady": False,
+        "browserWsHandoffState": "starting" if enabled else "disabled",
+        "browserYwsHandoffState": "starting" if enabled else "disabled",
+        "browserWsHandoffBlocker": "sidecar_runtime_snapshot_refreshing" if enabled else None,
+        "browserYwsHandoffBlocker": "sidecar_runtime_snapshot_refreshing" if enabled else None,
+    }
+
+
 def _thin_runtime_reliability_payload(
     status_registry: dict[str, Any] | None,
     *,
     webspace_id: str | None = None,
     mode: str = "thin",
 ) -> dict[str, Any]:
+    started_at = time.perf_counter()
+    phase_started_at = started_at
+    phase_timings_ms: dict[str, float] = {}
+
+    def _finish_phase(name: str) -> None:
+        nonlocal phase_started_at
+        now = time.perf_counter()
+        phase_timings_ms[name] = round((now - phase_started_at) * 1000.0, 3)
+        phase_started_at = now
+
     resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
     requested_mode = str(mode or "thin").strip().lower()
     include_status_plane = requested_mode in {"thin", "details"}
     incidents = _current_incident_registry_snapshot()
     runtime_fault = _runtime_fault_from_incidents(incidents)
+    _finish_phase("incidents")
     if include_status_plane and str(runtime_fault.get("state") or "").strip().lower() == "degraded":
         status_registry = _with_derived_status_cards(
             status_registry or {},
@@ -1174,7 +1401,23 @@ def _thin_runtime_reliability_payload(
             "lastOversizedCard": _coerce_dict(diagnostics.get("lastOversizedCard")),
             "lastChangedAt": diagnostics.get("lastChangedAt"),
         }
-    sidecar_fields = _thin_sidecar_runtime_fields()
+    if requested_mode == "runtime":
+        sidecar_fields, sidecar_cache = _runtime_support_snapshot(
+            "sidecar",
+            _thin_sidecar_runtime_fields,
+            _pending_sidecar_runtime_fields,
+        )
+    else:
+        sidecar_fields = _thin_sidecar_runtime_fields()
+        sidecar_cache = {
+            "state": "direct",
+            "ageMs": 0.0,
+            "refreshing": False,
+            "refreshTotal": 0,
+            "refreshFailureTotal": 0,
+            "lastError": None,
+        }
+    _finish_phase("sidecar")
     sync_runtime: dict[str, Any] = {}
     try:
         ctx = get_ctx()
@@ -1197,7 +1440,9 @@ def _thin_runtime_reliability_payload(
             },
             "transport": {},
         }
+    _finish_phase("yjs")
     state_sync = _state_sync_snapshot(sync_runtime)
+    _finish_phase("state_sync")
     sidecar_enablement = _coerce_dict(sidecar_fields.get("sidecarEnablement"))
     sidecar_enabled = bool(sidecar_enablement.get("enabled"))
     ws_handoff_ready = bool(sidecar_fields.get("browserWsHandoffReady"))
@@ -1311,6 +1556,9 @@ def _thin_runtime_reliability_payload(
             "etag": True,
             "ifNoneMatch": True,
         },
+        "runtimeSupportCache": {
+            "sidecar": sidecar_cache,
+        },
     }
     if status_plane is not None:
         payload["updatedAt"] = status_plane.get("updatedAt")
@@ -1322,7 +1570,33 @@ def _thin_runtime_reliability_payload(
     # update can retain phase=validate in that projection and look active long
     # after the supervisor has reported success.
     if requested_mode in {"runtime", "details"}:
-        payload["memberAvailability"] = _current_compact_member_availability()
+        if requested_mode == "runtime":
+            member_availability, member_cache = _runtime_support_snapshot(
+                "member_availability",
+                _current_compact_member_availability,
+                _pending_compact_member_availability,
+            )
+        else:
+            member_availability = _current_compact_member_availability()
+            member_cache = {
+                "state": "direct",
+                "ageMs": 0.0,
+                "refreshing": False,
+                "refreshTotal": 0,
+                "refreshFailureTotal": 0,
+                "lastError": None,
+            }
+        payload["memberAvailability"] = member_availability
+        payload["runtimeSupportCache"]["memberAvailability"] = member_cache
+    _finish_phase("member_availability")
+    total_ms = (time.perf_counter() - started_at) * 1000.0
+    if requested_mode == "runtime" and total_ms >= 500.0:
+        _log.warning(
+            "slow reliability runtime beacon webspace=%s duration_ms=%.3f phases_ms=%s",
+            resolved_webspace_id,
+            total_ms,
+            phase_timings_ms,
+        )
     return payload
 
 

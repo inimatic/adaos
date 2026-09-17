@@ -5,6 +5,7 @@ import importlib
 import json
 import sys
 import threading
+import time
 from types import SimpleNamespace
 import types
 
@@ -3935,25 +3936,40 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
     app.include_router(router, prefix="/api/node")
     client = TestClient(app)
 
-    response = client.get("/api/node/reliability/runtime?webspace_id=desktop")
-    assert response.status_code == 200
-    assert response.headers["x-adaos-summary-mode"] == "runtime"
-    payload = response.json()
-    assert payload["schema"] == "adaos.reliability_summary.runtime.v1"
-    assert payload["observer"]["domain"] == "hub_browser"
-    assert payload["observer"]["authority"] == "local_runtime_only"
-    assert "root_browser" in payload["observer"]["doesNotImply"]
-    assert "statusPlane" not in payload
-    assert payload["memberAvailability"]["source"] == "hub_member_connection_state"
-    assert payload["memberAvailability"]["role"] == "hub"
-    assert sync_kwargs["prefer_cached_gateway"] is True
-    assert sync_kwargs["compact_runtime"] is True
+    node_api._reset_runtime_support_snapshot_cache()
+    try:
+        response = client.get("/api/node/reliability/runtime?webspace_id=desktop")
+        assert response.status_code == 200
+        assert response.headers["x-adaos-summary-mode"] == "runtime"
+        payload = response.json()
+        assert payload["schema"] == "adaos.reliability_summary.runtime.v1"
+        assert payload["observer"]["domain"] == "hub_browser"
+        assert payload["observer"]["authority"] == "local_runtime_only"
+        assert "root_browser" in payload["observer"]["doesNotImply"]
+        assert "statusPlane" not in payload
+        assert payload["runtimeSupportCache"]["memberAvailability"]["state"] == "refreshing"
+        assert payload["memberAvailability"]["source"] == "runtime_support_snapshot"
 
-    unchanged = client.get(
-        "/api/node/reliability/runtime?webspace_id=desktop",
-        headers={"If-None-Match": response.headers["etag"]},
-    )
-    assert unchanged.status_code == 304
+        for _ in range(50):
+            response = client.get("/api/node/reliability/runtime?webspace_id=desktop")
+            payload = response.json()
+            if payload["memberAvailability"]["source"] == "hub_member_connection_state":
+                break
+            time.sleep(0.01)
+
+        assert payload["memberAvailability"]["source"] == "hub_member_connection_state"
+        assert payload["memberAvailability"]["role"] == "hub"
+        assert payload["runtimeSupportCache"]["memberAvailability"]["state"] == "fresh"
+        assert sync_kwargs["prefer_cached_gateway"] is True
+        assert sync_kwargs["compact_runtime"] is True
+
+        unchanged = client.get(
+            "/api/node/reliability/runtime?webspace_id=desktop",
+            headers={"If-None-Match": response.headers["etag"]},
+        )
+        assert unchanged.status_code == 304
+    finally:
+        node_api._reset_runtime_support_snapshot_cache()
 
 
 def test_compact_yjs_selected_webspace_snapshot_avoids_workspace_index(monkeypatch) -> None:
