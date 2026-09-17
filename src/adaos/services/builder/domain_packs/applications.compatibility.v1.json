@@ -55,14 +55,14 @@
           "input.selector",
           "ui.list",
           "item.details",
-          "input.commandBar",
+          "navigation.tabs",
           "ui.actions",
           "ui.form"
         ]
       },
       "composition": {
         "page": "Use Layout ABI v2 with pattern=collection-detail and exactly three semantic regions: catalog role=collection with preferred width 380px, detail role=detail, and metadata role=inspector with preferred width 300px. Declare wide and compact presentation for each region; compact catalog uses a drawer and compact metadata uses a sheet.",
-        "navigation": "A compact stretched segmented input.commandBar writes catalogSection from $event.id and exposes Applications and My developments without clipping labels. Applications is one searchable applications.list projection over installed or public-stable records; a peer Installed only toggle writes installedOnly from $event.checked and refines that MCP read. My developments is a separate read-only projection that lists only existing local development state and never creates an Application. Every list writes selectedApplicationId from $event.application.application_id.",
+        "navigation": "Compact stretched navigation.tabs writes catalogSection from $event.id and exposes Applications and My developments without clipping labels. Applications is one searchable applications.list projection over installed or public-stable records; a peer Installed only toggle writes installedOnly from $event.checked and refines that MCP read. My developments is a separate read-only projection that lists only existing local development state and never creates an Application. Every list writes selectedApplicationId from $event.application.application_id.",
         "catalog_widget": {
           "type": "ui.list",
           "inputs": {
@@ -144,9 +144,8 @@
           }
         },
         "catalog_sections": {
-          "type": "input.commandBar",
+          "type": "navigation.tabs",
           "inputs": {
-            "variant": "segmented",
             "size": "small",
             "stretch": true,
             "selectedStateKey": "catalogSection",

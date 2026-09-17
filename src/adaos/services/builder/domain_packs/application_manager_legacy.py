@@ -1367,6 +1367,39 @@ def evaluate_ui_request(
                 return [item for item in raw if isinstance(item, Mapping)]
             return []
 
+        def semantic_tabs(
+            widget: Mapping[str, Any],
+            *,
+            state_key: str,
+            required_ids: set[str],
+        ) -> bool:
+            """Recognize the canonical accessible tabs ABI."""
+
+            if str(widget.get("type") or "") != "navigation.tabs":
+                return False
+            inputs = (
+                widget.get("inputs")
+                if isinstance(widget.get("inputs"), Mapping)
+                else {}
+            )
+            ids = {
+                str(button.get("id") or "").strip()
+                for button in inputs.get("buttons") or []
+                if isinstance(button, Mapping)
+            }
+            return bool(
+                inputs.get("selectedStateKey") == state_key
+                and required_ids.issubset(ids)
+                and any(
+                    action.get("on") == "click"
+                    and action.get("type") == "updateState"
+                    and _contains_shape(
+                        action.get("params"), {state_key: "$event.id"}
+                    )
+                    for action in widget_actions(widget)
+                )
+            )
+
         application_layouts = [
             layout
             for page in pages
@@ -2275,30 +2308,10 @@ def evaluate_ui_request(
         tab_ids = set(requirements.get("tabs") or [])
         tab_controls = []
         for widget in widgets:
-            inputs = (
-                widget.get("inputs")
-                if isinstance(widget.get("inputs"), Mapping)
-                else {}
-            )
-            buttons = (
-                inputs.get("buttons") if isinstance(inputs.get("buttons"), list) else []
-            )
-            ids = {
-                str(button.get("id") or "").strip()
-                for button in buttons
-                if isinstance(button, Mapping)
-            }
-            if (
-                str(widget.get("type") or "") == "input.commandBar"
-                and inputs.get("variant") in {"segmented", "toolbar"}
-                and inputs.get("selectedStateKey") == "activeTab"
-                and tab_ids.issubset(ids)
-                and any(
-                    action.get("on") == "click"
-                    and action.get("type") == "updateState"
-                    and action.get("params") == {"activeTab": "$event.id"}
-                    for action in widget_actions(widget)
-                )
+            if semantic_tabs(
+                widget,
+                state_key="activeTab",
+                required_ids=tab_ids,
             ):
                 tab_controls.append(widget)
         postconditions.append(
@@ -2367,23 +2380,10 @@ def evaluate_ui_request(
         users_access_controls = [
             widget
             for widget in widgets
-            if widget.get("type") == "input.commandBar"
-            and (widget.get("inputs") or {}).get("variant")
-            in {"segmented", "toolbar"}
-            and (widget.get("inputs") or {}).get("selectedStateKey")
-            == "usersAccessTab"
-            and users_access_sections.issubset(
-                {
-                    str(button.get("id") or "")
-                    for button in (widget.get("inputs") or {}).get("buttons") or []
-                    if isinstance(button, Mapping)
-                }
-            )
-            and any(
-                action.get("on") == "click"
-                and action.get("type") == "updateState"
-                and action.get("params") == {"usersAccessTab": "$event.id"}
-                for action in widget_actions(widget)
+            if semantic_tabs(
+                widget,
+                state_key="usersAccessTab",
+                required_ids=users_access_sections,
             )
         ]
         access_targets = {
@@ -2551,25 +2551,19 @@ def evaluate_ui_request(
         catalog_section_controls = [
             widget
             for widget in widgets
-            if widget.get("type") == "input.commandBar"
-            and (widget.get("inputs") or {}).get("variant") == "segmented"
+            if semantic_tabs(
+                widget,
+                state_key="catalogSection",
+                required_ids=set(catalog_sections),
+            )
             and (widget.get("inputs") or {}).get("size") == "small"
             and (widget.get("inputs") or {}).get("stretch") is True
-            and (widget.get("inputs") or {}).get("selectedStateKey") == "catalogSection"
             and {
                 str(button.get("id") or "")
                 for button in (widget.get("inputs") or {}).get("buttons") or []
                 if isinstance(button, Mapping)
             }
             == set(catalog_sections)
-            and any(
-                action.get("on") == "click"
-                and action.get("type") == "updateState"
-                and _contains_shape(
-                    action.get("params"), {"catalogSection": "$event.id"}
-                )
-                for action in widget_actions(widget)
-            )
         ]
         postconditions.append(
             {

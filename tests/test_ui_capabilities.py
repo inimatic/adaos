@@ -218,7 +218,7 @@ def test_application_manager_selection_exposes_mcp_master_detail_contract() -> N
         "input.selector",
         "ui.list",
         "item.details",
-        "input.commandBar",
+        "navigation.tabs",
         "ui.actions",
     } <= selected_ids
     recipe = get_ui_capability("recipe.application_manager")
@@ -818,10 +818,9 @@ def _application_manager_webui() -> dict:
                         "widgets": [
                             {
                                 "id": "catalog-sections",
-                                "type": "input.commandBar",
+                                "type": "navigation.tabs",
                                 "area": "master",
                                 "inputs": {
-                                    "variant": "segmented",
                                     "size": "small",
                                     "stretch": True,
                                     "selectedStateKey": "catalogSection",
@@ -951,10 +950,9 @@ def _application_manager_webui() -> dict:
                             ],
                             {
                                 "id": "tabs",
-                                "type": "input.commandBar",
+                                "type": "navigation.tabs",
                                 "area": "detail",
                                 "inputs": {
-                                    "variant": "toolbar",
                                     "selectedStateKey": "activeTab",
                                     "buttons": [
                                         {"id": value, "label": label, "icon": icon}
@@ -1206,11 +1204,10 @@ def _application_manager_webui() -> dict:
                             },
                             {
                                 "id": "users-access-tabs",
-                                "type": "input.commandBar",
+                                "type": "navigation.tabs",
                                 "area": "detail",
                                 "visibleIf": "$state.activeTab == 'users_access'",
                                 "inputs": {
-                                    "variant": "toolbar",
                                     "selectedStateKey": "usersAccessTab",
                                     "buttons": [
                                         {"id": value, "label": label, "icon": icon}
@@ -2382,7 +2379,7 @@ def test_application_access_prototype_fixtures_match_widget_shapes() -> None:
     )
     for tab_widget_id in ("tabs", "users-access-tabs"):
         tab_widget = widgets[tab_widget_id]
-        assert tab_widget["inputs"]["variant"] == "toolbar"
+        assert tab_widget["type"] == "navigation.tabs"
         assert all(
             button.get("icon") for button in tab_widget["inputs"]["buttons"]
         )
