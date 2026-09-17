@@ -251,7 +251,6 @@ class LocalApplicationDataLifecycle:
                 if mode == "beta" and current and current.runtime_root_ref.startswith("trial:"):
                     if not allow_beta_data_reset:
                         raise RuntimeChannelConflict("Replacing Beta working data requires explicit data-loss acknowledgement and recovery protection")
-                    raise RuntimeChannelConflict("Beta-to-Beta recovery protection is not qualified; accept or explicitly restore Stable first")
                 if mode == "stable" and (current.runtime_root_ref != f"trial:{self.candidate_id}" or current.release_digest != self.release_digest):
                     raise RuntimeChannelConflict("Accept only the exact selected Beta")
                 source, root = ("local_trial", f"trial:{self.candidate_id}") if mode == "beta" else ("stable_installation", "workspace")

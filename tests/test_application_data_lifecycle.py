@@ -102,6 +102,64 @@ def test_two_complete_local_data_cutovers_preserve_records_and_settings(tmp_path
     assert sql(stable / "records.sqlite", "SELECT id,value FROM records ORDER BY id") == [(1, "original"), (2, "beta1"), (3, "beta2")]
 
 
+def test_explicit_beta_replacement_reseeds_from_stable_and_retains_old_beta(tmp_path):
+    state, stable, channel = seed(tmp_path)
+    first = LocalApplicationDataLifecycle(
+        state_root=state,
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate1",
+        release_digest="sha256:" + "1" * 64,
+        stable_digest=DIGEST,
+        components=(OwnedDataComponent(
+            "skill:worker",
+            stable,
+            tmp_path / "beta1/data",
+            stable,
+            {},
+            manifest(1),
+        ),),
+    )
+    first.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    sql(tmp_path / "beta1/data/records.sqlite", "INSERT INTO records(id,value) VALUES(2,'beta-only')")
+
+    second = LocalApplicationDataLifecycle(
+        state_root=state,
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate2",
+        release_digest="sha256:" + "2" * 64,
+        stable_digest=DIGEST,
+        components=(OwnedDataComponent(
+            "skill:worker",
+            stable,
+            tmp_path / "beta2/data",
+            stable,
+            {},
+            manifest(1),
+        ),),
+    )
+    with pytest.raises(RuntimeChannelConflict, match="data-loss acknowledgement"):
+        second.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+
+    result = second.prepare_beta(
+        webspace_id="desktop",
+        activate=lambda _: {"ok": True},
+        allow_beta_data_reset=True,
+    )
+
+    assert result["completed"]
+    assert channel.read()[0].runtime_root_ref == "trial:candidate2"
+    assert channel.read()[0].revision == 3
+    assert sql(tmp_path / "beta2/data/records.sqlite", "SELECT id,value FROM records ORDER BY id") == [
+        (1, "original"),
+    ]
+    assert sql(tmp_path / "beta1/data/records.sqlite", "SELECT id,value FROM records ORDER BY id") == [
+        (1, "original"),
+        (2, "beta-only"),
+    ]
+
+
 def test_publication_interruption_keeps_both_runtimes_fenced_and_retries_exact_effect(tmp_path):
     _state, _stable, channel = seed(tmp_path)
     lifecycle = coordinator(tmp_path, 1)

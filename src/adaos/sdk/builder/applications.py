@@ -492,7 +492,11 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
             safety_evidence=dict(activation.get("safety_evidence") or {}) | {"data_transition": proof})
         return {"ok": True, **proof}
 
-    transition = data.prepare_beta(webspace_id=webspace_id, activate=activate)
+    transition = data.prepare_beta(
+        webspace_id=webspace_id,
+        activate=activate,
+        allow_beta_data_reset=True,
+    )
     selection = service.store.get_runtime_selection(webspace_id, application.application_id)
     activation = activations.load(candidate_id)
     transition_proof = {
