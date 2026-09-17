@@ -186,6 +186,8 @@ def _reset_compatibility_head_for_new_change(
     }
     workflow["delivery"] = {"status": "idle"}
     workflow["pending_transition"] = None
+    workflow["context_packet"] = None
+    workflow.pop("context_packet_external", None)
     if prototype_first:
         prototype = _mapping(workflow.get("prototype"))
         prototype.update(
@@ -4415,7 +4417,10 @@ class BuilderWorkflowService:
         return {
             "ok": True,
             "action": action_token,
-            "updated_change_id": originating_change_id or mutation_change_id or None,
+            "updated_change_id": originating_change_id
+            or str((current_after or {}).get("change_id") or "").strip()
+            or mutation_change_id
+            or None,
             "workflow": projection,
         }
 

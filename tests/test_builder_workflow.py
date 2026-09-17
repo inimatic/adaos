@@ -1895,6 +1895,7 @@ def test_active_change_set_requires_explicit_supersession(
         "plan_change_set",
         metadata={"change_set_id": "CS-1", "request": "First change", "issues": [issue]},
     )
+    first_packet = service.build_context_packet("scenario", "recipes", persist=True)
 
     with pytest.raises(BuilderWorkflowError, match="supersedes_change_set_id"):
         service.transition(
@@ -1904,7 +1905,7 @@ def test_active_change_set_requires_explicit_supersession(
             metadata={"change_set_id": "CS-2", "request": "Second change", "issues": [issue]},
         )
 
-    superseded = service.transition(
+    transition = service.transition(
         "scenario",
         "recipes",
         "plan_change_set",
@@ -1914,10 +1915,18 @@ def test_active_change_set_requires_explicit_supersession(
             "request": "Second change",
             "issues": [issue],
         },
-    )["workflow"]
+    )
+    superseded = transition["workflow"]
+    assert transition["updated_change_id"] == "CS-2"
     assert superseded["change_set"]["change_set_id"] == "CS-2"
     assert superseded["change"]["supersedes_change_id"] == "CS-1"
     assert superseded["change_set"]["supersedes_change_set_id"] == "CS-1"
+    assert superseded.get("context_packet") is None
+
+    second_packet = service.build_context_packet("scenario", "recipes", persist=True)
+    assert second_packet["change"]["change_id"] == "CS-2"
+    assert second_packet["change"]["intent"] == "Second change"
+    assert second_packet["digest"] != first_packet["digest"]
 
 
 def test_followup_request_extends_active_change_set_and_invalidates_trial(
