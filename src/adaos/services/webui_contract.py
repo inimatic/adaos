@@ -13,6 +13,7 @@ from adaos.services.agent_context import get_ctx
 _log = logging.getLogger("adaos.webui.contract")
 _PARAM_TOKEN_RE = re.compile(r"\$(?:params|address\.params)\.([A-Za-z0-9_.-]+)")
 _DYNAMIC_TOKEN_RE = re.compile(r"^\$")
+_NLU_CONTEXT_TOKEN_RE = re.compile(r"\$ctx(?:\.|$)")
 _SAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _LOG_DEDUP_TTL_S = 300.0
 _LOG_DEDUP: dict[str, float] = {}
@@ -162,6 +163,14 @@ _DIAGNOSTIC_CATALOG: dict[str, dict[str, str]] = {
         "owner": "skill",
         "remediation": "Declare the same-skill callSkill target in skill.yaml or change the target.",
     },
+    "webui.action.nlu_context_reference": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": (
+            "Use the WebUI expression ABI ($client/$state/$event/$data); "
+            "$ctx is reserved for NLU dispatch."
+        ),
+    },
     "webui.data_source.skill_tool_unknown": {
         "severity": "error",
         "owner": "skill",
@@ -212,6 +221,7 @@ def validate_webui_contract(
     return (
         validate_form_action_bindings(raw, source=source)
         + validate_production_attachment_fields(raw, source=source)
+        + validate_declarative_action_references(raw, source=source)
         + _validate_contract(
             interfaces=interfaces,
             modals=modals,
@@ -220,6 +230,35 @@ def validate_webui_contract(
             default_skill=declared_skill,
         )
     )
+
+
+def validate_declarative_action_references(
+    webui: Mapping[str, Any] | None,
+    *,
+    source: str = "webui.json",
+) -> list[WebUiContractIssue]:
+    """Keep UI action parameters inside the Client expression namespace."""
+
+    issues: list[WebUiContractIssue] = []
+    action_types = {"callHost", "callSkill", "callMcp", "updateState"}
+    for path, action in _walk_mappings(_mapping(webui)):
+        if str(action.get("type") or "").strip() not in action_types:
+            continue
+        if "params" not in action:
+            continue
+        for value_path, value in _walk_values(action.get("params"), f"{path}.params"):
+            if isinstance(value, str) and _NLU_CONTEXT_TOKEN_RE.search(value):
+                issues.append(
+                    _issue(
+                        "error",
+                        "webui.action.nlu_context_reference",
+                        "$ctx is an NLU-only context reference and cannot be "
+                        "resolved by WebUI actions.",
+                        f"{source}:{value_path}",
+                        source=source,
+                    )
+                )
+    return issues
 
 
 def validate_form_action_bindings(
@@ -1128,6 +1167,17 @@ def _walk_mappings(
     elif isinstance(value, list):
         for index, nested in enumerate(value):
             yield from _walk_mappings(nested, f"{path}[{index}]")
+
+
+def _walk_values(value: Any, path: str) -> Iterable[tuple[str, Any]]:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            yield from _walk_values(nested, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            yield from _walk_values(nested, f"{path}[{index}]")
+    else:
+        yield path, value
 
 
 def _same_skill_tool_name(target: str, skill_id: str) -> str | None:

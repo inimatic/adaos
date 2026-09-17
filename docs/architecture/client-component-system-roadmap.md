@@ -496,6 +496,14 @@ machine-checked impact set.
   bundle budgets per loading class.
 - [ ] `[should]` Run focused component tests on contract changes and a complete
   cross-component suite on Client/semantic ABI changes.
+- [x] `[must]` Keep runtime expression namespaces explicit at host-action
+  boundaries. WebUI actions use `$client/$state/$event/$data`; `$ctx` remains an
+  NLU-dispatch-only namespace. The WebUI contract now rejects `$ctx.*` action
+  parameters, while the Client refuses to turn an unresolved routing token into
+  a real webspace id and falls back to the attached live webspace. The retained
+  AdaOS Connect browser smoke proves `desktop` switches to the exact Users &
+  Access Trial instead of creating a literal `$ctx.webspace_id` webspace; 82
+  focused Client action tests and 17 Core contract/Connect tests pass.
 
 Exit gate: contract conformance and browser behavior are reproducible without
 running a subject-specific Builder prompt.

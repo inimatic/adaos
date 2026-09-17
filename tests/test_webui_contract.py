@@ -16,6 +16,7 @@ from adaos.sdk.web import (
     validate_webui,
 )
 from adaos.services.webui_contract import (
+    validate_declarative_action_references,
     validate_form_action_bindings,
     validate_production_attachment_fields,
     validate_skill_tool_references,
@@ -76,6 +77,31 @@ def test_same_skill_tool_reference_validation_covers_actions_and_data_sources() 
         "webui.data_source.skill_tool_unknown",
         "webui.action.skill_tool_unknown"
     ]
+
+
+def test_webui_actions_reject_nlu_only_context_references() -> None:
+    action = {
+        "on": "click:open",
+        "type": "callHost",
+        "target": "desktop.scenario.set",
+        "params": {
+            "scenario_id": "users_access",
+            "webspace_id": "$ctx.webspace_id",
+        },
+    }
+    webui = {
+        "widgets": [
+            {"id": "commands", "type": "input.commandBar", "actions": [action]}
+        ]
+    }
+
+    issues = validate_declarative_action_references(webui)
+    assert [issue.code for issue in issues] == ["webui.action.nlu_context_reference"]
+    assert "webspace_id" in issues[0].where
+    assert any(issue.code == issues[0].code for issue in validate_webui_contract(webui))
+
+    action["params"]["webspace_id"] = "$client.webspaceId"
+    assert validate_declarative_action_references(webui) == []
 
 
 def test_sdk_helpers_build_valid_addressed_modal_contract() -> None:

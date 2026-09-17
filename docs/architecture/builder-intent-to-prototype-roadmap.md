@@ -573,6 +573,11 @@ Exit/remaining work: Qualify one action success/cancel/failure contract across u
   change -> intended view visibility -> reload hydration. Verify loaded images in
   cards/details with empty/error states; a retained media ID, HTTP 200 or substring
   assertion cannot replace a rendered outcome. Keep tests/component fixes generic.
+  Progress: WebUI action validation now rejects the NLU-only `$ctx.*` namespace,
+  the Client prevents unresolved routing references from becoming resource ids,
+  and AdaOS Connect -> Users & Access is browser-proven against the exact Trial.
+  The item remains open for the other expression namespaces, settings hydration,
+  rendered media states and generated action outcomes.
 - [x] `[must]` Retrieve and emit Layout & Interaction ABI v2 rather than relying
   on area-name inference. The model chooses a task pattern, semantic regions,
   wide/compact disclosure, and explicit collection/detail interaction from the

@@ -380,6 +380,11 @@ Checklist:
 - [x] Bound short-lived AdaOS Connect preparation results by TTL and item
   count, with deterministic cleanup; route ongoing user/access administration
   to Users & Access while retaining join, pairing, and recovery in Connect.
+- [x] Route AdaOS Connect's administration command to the current webspace by
+  the WebUI `$client.webspaceId` contract. Reject NLU-only `$ctx.*` references
+  during WebUI validation and retain Client-side routing protection. Browser
+  evidence switches `desktop` to exact Trial `users_access@0.1.3`; no literal
+  context-token webspace remains.
 - [x] Wire invite/session revocation to access-link denial and browser/Yjs
   admission so revoked sessions are denied without manual database edits.
 - [ ] Add direct websocket disconnect orchestration for already-connected
