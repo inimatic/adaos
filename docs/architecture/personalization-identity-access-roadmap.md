@@ -477,6 +477,10 @@ Checklist:
   admin. Custom capability editing remains future work.
 - [x] Show active grants, expired grants, revoked grants, pending invites,
   devices, sessions, and audit history.
+- [x] Keep every potentially large Users & Access collection searchable and
+  paginated. Selection of a person or invitation must populate the related
+  action, sessions must expose decision-relevant identity/time/device metadata,
+  and an empty Devices section must explain its credential scope.
 - [x] Allow role preset changes through policy-checked shared services.
 - [x] Allow device/session revoke through shared services.
 - [x] Show admin-visible privacy metadata without showing private content.
@@ -504,6 +508,12 @@ Local verification:
 - [x] dedicated application action and live reversible Root MCP tests.
 - [x] multi-admin grant and denial tests beyond owner/co-owner preset creation.
 - [x] audit query smoke tests.
+
+The 2026-09-17 `users_access@0.1.7` Trial passes the live six-section browser
+journey with Root-backed data and no renderer/network errors. The permission-
+centric Application Access projection is read-only at this checkpoint; subject
+grant/deny toggles and activity-to-person navigation remain open and must not be
+reported as completed access management.
 
 ## Phase 8 - Privacy Zone Enforcement and User Data Management
 

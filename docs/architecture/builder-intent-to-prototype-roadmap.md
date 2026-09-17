@@ -139,11 +139,16 @@ review/start/delivery forms are reused. Capability parity is checked across page
 and modal surfaces, not by restoring the obsolete layout. This is partial live
 integration, not closure of the remaining interaction/continuation obligations.
 
-The exact candidate was promoted to local Workspace as `builder@0.2.159` after
-492 owned tests; its current operational shell renders without page errors or
-horizontal overflow in wide and compact browser smoke checks. That activation
-does not prove recovery from every stale/terminal historical selection or close
-the unchecked projection items below.
+The rich Workspace source was refreshed into DEV before the 2026-09-17
+checkpoint so a poorer experimental DEV shell could not replace the accepted
+Applications/Revisions/Settings surfaces. The exact candidate was promoted to
+local Workspace as `builder@0.2.167`; its active scenario is `0.2.93`, control
+skill `0.1.120`, and Builder skill `0.3.175`. The operational shell renders all
+three populated surfaces without page errors. Explicit user cancellation is
+projected as `cancelled`, not `Automation failed`; real provider, validation or
+runtime failures retain their distinct failed states. This activation does not
+prove recovery from every stale/terminal historical selection or close the
+unchecked projection items below.
 
 - [x] `[must]` Exercise retained TEST/non-test picker filters and native template
   creation in the browser; preserve the acknowledged Project/primary selection
@@ -291,6 +296,11 @@ the unchecked projection items below.
   the reported task usage, including fresh/cached/output totals and unpriced
   cost coverage. The period aggregate is not an exact per-task financial ledger;
   browser presentation remains under the parent model-setting qualification.
+- [x] `[must]` Make Subscription refresh observable before the Root request
+  completes and replace that receipt with the authoritative result. Browser
+  evidence for `subscription_status@0.1.11` / skill `0.1.24` observes
+  `refreshing -> refreshed`, the RU Root authority and effective `gpt-5` model;
+  historical `gpt-4.1` evaluation fixtures are not active-model evidence.
 - [ ] `[must]` Attach external independent Automation review to canonical
   task/source-bound evidence shown by Review. Distinguish automatic Forge
   checkpointing from reviewer acceptance; an empty consumer requirement set
@@ -658,6 +668,9 @@ Codex turn; candidate materialization and six-tab wide/compact review precede
 Forge; the live reversible Root MCP journey passes 8/8. Finalization now checks
 that the Builder host is still active before touching Preview and reuses a
 successful browser materialization instead of rebuilding it after checkpoint.
+Acceptance must inspect the materialized active semantic view. Source-only
+checks over legacy `pageSchema.widgets` are insufficient when `semantic.views`
+owns rendering; the Taiga UI Demo regression demonstrates this boundary.
 
 - [x] `[must]` Expose candidate browser actions, DOM/accessibility, image bytes,
   console/network and synthetic data evidence through scoped check operations.

@@ -175,7 +175,11 @@ Implementation status, 2026-08-31:
 - The AdaOS client exposes a header Dev Tickets button, ticket list/detail,
   feedback intake, source/materialization options, evidence preview, postpone,
   Builder handoff, autonomous repair, resolve, verify, close, reopen, and
-  stage/component filters.
+  stage/component filters. Scenario invocation defaults the component filter to
+  that scenario, the component selector is searchable, and the user may attach
+  bounded external PNG/JPEG/WebP evidence as a distinct provenance class from
+  an in-browser screenshot. Closing an accidental report is immediately
+  available and does not imply successful repair.
 - Builder handoff links the ticket to a repair task, opens the Builder
   workbench with ticket/target context, and records development-source choices
   (`use_existing_dev_source`, `materialize_dev_source`, `create_local_fork`,
@@ -192,9 +196,9 @@ Implementation status, 2026-08-31:
   split above keeps final acceptance as a separate `verify`/`closed` step.
   Close without a fix uses the separate `close` lifecycle.
 - The UI is still a custom client surface, not yet a declarative Resource
-  Workbench rendering, and it still needs stronger context filters from modal
-  invocation, comment/edit flows, claim/in-progress, related/duplicate links,
-  subscriptions, artifact-open commands, and agent-oriented SDK helpers.
+  Workbench rendering, and it still needs stronger modal/selected-element
+  identity, claim/in-progress, related/duplicate links, subscriptions,
+  artifact-open commands, and agent-oriented SDK helpers.
 
 Target lifecycle, 2026-08-30:
 

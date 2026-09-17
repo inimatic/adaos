@@ -146,6 +146,16 @@ resulting Dev Ticket is visible in the same context.
   Dev Tickets panel.
 - [x] `[must]` `DS1-15` Add comment/edit flow for ticket text and ticket notes
   after screenshot-first capture.
+- [x] `[must]` `DS1-17` Default the component filter to the invoking scenario
+  when Dev Tickets opens from scenario chrome. Keep the wider queue one visible,
+  reversible filter change away; do not infer a component narrower than the
+  trusted invocation scope.
+- [x] `[should]` `DS1-18` Make the component selector searchable and admit a
+  bounded external PNG/JPEG/WebP attachment in addition to in-browser capture.
+  Preserve attachment provenance and allow attachment-only intake.
+- [x] `[should]` `DS1-19` Allow the author/operator to close an accidentally
+  created ticket directly from the ticket surface. Close is a lifecycle action,
+  not proof that the reported capability was repaired.
 - [ ] `[should]` `DS1-16` Move Dev Tickets UI toward the Declarative Resource
   Workbench rendering model once the resource definition supports the current
   custom surface.
@@ -159,6 +169,12 @@ filtering, optional text search from the feedback note field for dedup
 inspection, summary edit, and ticket comments. Full Feedback Skill ownership,
 voice intake, bounded conversational clarification, and hardened artifact
 storage/retention remain open.
+
+The 2026-09-17 Client checkpoint extends this surface without moving it into
+Builder: scenario invocation now selects that scenario by default, component
+choices are searchable, external images are bounded to four files of at most
+6 MiB each, and an erroneous ticket can be closed immediately. Browser capture
+and external attachment remain distinct evidence origins.
 
 ## DS2. Conversational Failure Triage
 

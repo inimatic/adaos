@@ -455,7 +455,11 @@ Every model or agent run records `adaos.agent.context_receipt.v1` with:
 
 Subscription may present both provider-billable usage and the optimization
 view (`fresh_plus_output`, cache ratio, avoided model tokens). Neither metric
-may silently replace the other.
+may silently replace the other. A user-initiated refresh must first project an
+explicit in-progress receipt, then replace it with the authoritative Root
+snapshot or a typed error; retaining stale data without visible refresh state
+is not a successful refresh. The snapshot exposes the Root-observed effective
+model separately from editable local preferences.
 
 ## Initial Performance Gates
 

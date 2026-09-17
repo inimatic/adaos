@@ -711,6 +711,15 @@ adds a parallel Beta launcher. Turning it off requests an admitted transition,
 not an unconditional downgrade of the current data schema. A required snapshot
 restore shows its recovery point and possible newer-write loss before consent.
 
+Every potentially large Applications projection is searchable and paginated;
+the Client may persist page size and filter presentation only in the owning
+scenario scope. `Save update settings` and `Uninstall` use explicit review
+modals, including the uninstall data decision, while section navigation uses
+adaptive overflow rather than an unstable horizontal scroll position. Local
+Workspace, Trial and DEV records may be combined by the Application read model,
+but public catalog/Root delivery remains separately authoritative. A local
+fallback is not evidence that the public `inimatic.com` path is healthy.
+
 Static scenario localization is owned by the scenario package. The scenario
 declares locale resources in `webui.json` and stores string dictionaries under
 `assets/i18n/<locale>.json`; Applications initially requires `en` and `ru`.

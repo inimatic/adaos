@@ -131,11 +131,22 @@ Cutover evidence, 2026-09-16:
   was corrected generically: toolbar spans row one, primary/auxiliary content
   occupies row two and footer occupies row three, with the equivalent compact
   ordering. Product-specific renderer logic was not introduced.
-  Exact local Trial reruns on 2026-09-17 bind Applications `0.1.8` and Users &
-  Access `0.1.3` to their complete release fingerprints. Both render live data
-  and compact detail disclosure without renderer failure. Users & Access still
-  needs a clearer compact affordance for overflowing section tabs; this is a
-  shared semantic-tabs UX task, not product-specific CSS.
+  Exact local Trial reruns on 2026-09-17 bind Applications `0.1.13` and Users &
+  Access `0.1.7` to their complete release fingerprints. Both render live data,
+  scoped search/pagination and compact detail disclosure without renderer
+  failure. Adaptive section overflow is a shared semantic-tabs responsibility,
+  not product-specific CSS.
+
+- [x] `[must]` Qualify scenario-scoped Dev Tickets defaults, searchable
+  component selection, bounded external image attachment, immediate lifecycle
+  close, and native Ctrl+C behavior without weakening Ctrl-drag review
+  gestures. The implementation remains generic Client chrome and does not add
+  Builder or product-specific renderer branches.
+- [x] `[must]` Require browser qualification against the active semantic view,
+  not only declarations left in a superseded legacy page schema. The Taiga UI
+  Demo workbench now exposes breadcrumbs, tabs, automatic action overflow,
+  responsive typed form and accordion specimens through the materialized
+  semantic action/modal path.
 
 - [x] `[must]` Qualify generic schema-modal resize and fullscreen restoration on desktop
   and mobile. Persist current-user device/scenario/webspace scopes; resolve exact

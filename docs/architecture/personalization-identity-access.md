@@ -593,6 +593,16 @@ The default UI should expose simple access presets first. Expanded capability
 editing, policy simulation, and enterprise group synchronization are advanced
 governance surfaces, not prerequisites for the first household/classroom flow.
 
+Potentially large People, Invitations, Sessions, permission and Activity
+projections use searchable, paginated collections. A selected record must
+populate the related action rather than leave an ambiguous blank form. Session
+and device decisions expose only bounded administrative metadata such as
+subject, device reference, open/expiry time, authentication source and status;
+credential material, token hashes and public keys never enter this projection.
+Users & Access groups applications by declared permission for inspection.
+Subject grant/deny mutations remain in the selected Application access surface
+until a shared permission-centric mutation contract is admitted.
+
 ## SDK and manifest surface
 
 Skills need a stable contract for personalization and access-aware behavior.

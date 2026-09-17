@@ -463,6 +463,10 @@ Builder development and consumes only public contracts.
   `Save update settings`, `Uninstall`) while retaining plan digest and apply as
   the internal reviewed protocol. Default auto-update to `true` and
   prerelease-following to `false`.
+  Applications `0.1.13` qualifies the corresponding review modal, uninstall
+  data decision, adaptive section overflow, and search/pagination across the
+  potentially large local projections. It does not close the unchecked
+  permission-toggle, registry-completeness, or public-Root delivery work.
 - [x] `[must]` `APP4-18` Keep scenario creation subject-neutral. Builder starts
   Applications from the universal `scenario_default`; `recipe.application_manager`
   supplies only versioned capability compositions, phase dependencies, and
