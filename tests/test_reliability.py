@@ -1332,7 +1332,7 @@ def test_hub_member_transport_evidence_counts_only_media_capable_members(monkeyp
         sys.modules,
         "adaos.services.yjs.gateway_ws",
         SimpleNamespace(
-            gateway_transport_snapshot=lambda: {
+            gateway_transport_snapshot=lambda **_kwargs: {
                 "transports": {},
                 "ownership": {
                     "ws": {
@@ -1971,7 +1971,7 @@ def test_yjs_sync_runtime_snapshot_exposes_transport_ownership(monkeypatch) -> N
         sys.modules,
         "adaos.services.yjs.gateway_ws",
         SimpleNamespace(
-            gateway_transport_snapshot=lambda: {
+            gateway_transport_snapshot=lambda **_kwargs: {
                 "transports": {
                     "yws": {
                         "active_connections": 2,
@@ -2528,7 +2528,7 @@ def test_yjs_sync_runtime_snapshot_marks_reconnect_storm_as_pressure(monkeypatch
         sys.modules,
         "adaos.services.yjs.gateway_ws",
         SimpleNamespace(
-            gateway_transport_snapshot=lambda: {
+            gateway_transport_snapshot=lambda **_kwargs: {
                 "transports": {
                     "yws": {
                         "active_connections": 1,
@@ -2592,7 +2592,7 @@ def test_yjs_sync_runtime_snapshot_marks_recent_browser_disconnect_without_activ
         sys.modules,
         "adaos.services.yjs.gateway_ws",
         SimpleNamespace(
-            gateway_transport_snapshot=lambda: {
+            gateway_transport_snapshot=lambda **_kwargs: {
                 "transports": {
                     "yws": {
                         "active_connections": 0,
@@ -2656,7 +2656,7 @@ def test_yjs_sync_runtime_snapshot_marks_browser_ws_without_yws_as_degraded(monk
         sys.modules,
         "adaos.services.yjs.gateway_ws",
         SimpleNamespace(
-            gateway_transport_snapshot=lambda: {
+            gateway_transport_snapshot=lambda **_kwargs: {
                 "transports": {
                     "ws": {
                         "active_connections": 1,
@@ -2724,7 +2724,7 @@ def test_yjs_sync_runtime_snapshot_accepts_webrtc_yjs_without_active_yws(monkeyp
         sys.modules,
         "adaos.services.yjs.gateway_ws",
         SimpleNamespace(
-            gateway_transport_snapshot=lambda: {
+            gateway_transport_snapshot=lambda **_kwargs: {
                 "transports": {
                     "ws": {
                         "active_connections": 1,
@@ -3950,6 +3950,30 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
         headers={"If-None-Match": response.headers["etag"]},
     )
     assert unchanged.status_code == 304
+
+
+def test_compact_member_availability_skips_full_device_inventory(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        node_api,
+        "load_config",
+        lambda: SimpleNamespace(role="hub", node_id="node-1", node_names=[]),
+    )
+    monkeypatch.setattr(node_api, "route_info", lambda _role: ("local", True))
+
+    def _snapshot(**kwargs):
+        captured.update(kwargs)
+        return {"role": "hub", "members": [], "known_members": []}
+
+    monkeypatch.setattr(node_api, "hub_member_connection_state_snapshot", _snapshot)
+
+    payload = node_api._current_compact_member_availability()
+
+    assert captured["include_device_inventory"] is False
+    assert payload["role"] == "hub"
 
 
 def test_node_reliability_runtime_builder_does_not_block_event_loop(monkeypatch) -> None:

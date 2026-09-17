@@ -1129,6 +1129,7 @@ def _current_compact_member_availability() -> dict[str, Any]:
             connected_to_hub=connected,
             node_id=str(getattr(conf, "node_id", "") or "").strip(),
             node_names=list(getattr(conf, "node_names", []) or []),
+            include_device_inventory=False,
         )
         return _compact_member_availability(snapshot)
     except Exception:
@@ -1183,6 +1184,7 @@ def _thin_runtime_reliability_payload(
         sync_runtime = yjs_sync_runtime_snapshot(
             role=str(getattr(conf, "role", "") or ""),
             webspace_id=resolved_webspace_id,
+            prefer_cached_gateway=requested_mode == "runtime",
         )
     except Exception as exc:
         sync_runtime = {

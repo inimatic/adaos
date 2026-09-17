@@ -4066,6 +4066,75 @@ def _member_device_inventory_map() -> dict[str, dict[str, Any]]:
     return result
 
 
+def _member_access_policy_inventory_map() -> dict[str, dict[str, Any]]:
+    """Return the member policy overlay without rebuilding live inventory.
+
+    The runtime browser beacon already reads the live link manager and subnet
+    directory below. Re-entering ``DeviceInventoryService.list_devices`` here
+    repeats both of those relatively expensive projections for every poll.
+    """
+
+    try:
+        from adaos.services.access_links import list_links
+
+        entries = list(list_links("member") or [])
+    except Exception:
+        return {}
+    now = time.time()
+    result: dict[str, dict[str, Any]] = {}
+    for raw in entries:
+        if not isinstance(raw, dict):
+            continue
+        node_id = str(raw.get("id") or "").strip()
+        if not node_id:
+            continue
+        admission_policy = str(raw.get("admission_policy") or "").strip().lower()
+        revoked = bool(raw.get("revoked"))
+        try:
+            expires_at = float(raw.get("expires_at")) if raw.get("expires_at") is not None else None
+        except (TypeError, ValueError):
+            expires_at = None
+        expired = expires_at is not None and expires_at <= now
+        managed_state = (
+            "denied"
+            if admission_policy == "deny" or revoked
+            else "detached"
+            if admission_policy == "detached"
+            else "expired"
+            if expired
+            else "managed"
+        )
+        node_names = [
+            str(item).strip()
+            for item in list(raw.get("node_names") or [])
+            if str(item).strip()
+        ]
+        display_name = str(raw.get("display_name") or "").strip()
+        effective_name = (
+            display_name
+            or (node_names[0] if node_names else "")
+            or str(raw.get("hostname") or "").strip()
+            or node_id
+        )
+        result[node_id] = {
+            "ref": f"member:{node_id}",
+            "policy": {
+                "present": True,
+                "managed_state": managed_state,
+                "display_name": display_name or None,
+                "effective_name": effective_name,
+                "access_class": str(raw.get("access_class") or "device").strip() or "device",
+                "lifetime_mode": str(raw.get("lifetime_mode") or "permanent").strip() or "permanent",
+                "expires_at": expires_at,
+                "expired": expired,
+                "revoked": revoked,
+                "admission_policy": admission_policy or ("deny" if revoked else "allow"),
+            },
+            "runtime": {},
+        }
+    return result
+
+
 def _member_inventory_overlay(item: dict[str, Any] | None) -> dict[str, Any]:
     payload = item if isinstance(item, dict) else {}
     policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
@@ -4259,6 +4328,7 @@ def hub_member_connection_state_snapshot(
     connected_to_hub: bool | None,
     node_id: str,
     node_names: list[str] | None = None,
+    include_device_inventory: bool = True,
 ) -> dict[str, Any]:
     role_norm = str(role or "").strip().lower()
     now = time.time()
@@ -4285,7 +4355,11 @@ def hub_member_connection_state_snapshot(
         version_counts: dict[str, int] = {}
         connected_ids: set[str] = set()
         directory_by_id: dict[str, dict[str, Any]] = {}
-        inventory_by_id = _member_device_inventory_map()
+        inventory_by_id = (
+            _member_device_inventory_map()
+            if include_device_inventory
+            else _member_access_policy_inventory_map()
+        )
         for node in directory_nodes:
             if not isinstance(node, dict):
                 continue
@@ -4579,6 +4653,7 @@ def hub_member_connection_state_snapshot(
             "hub_event_total": int(raw.get("hub_event_total") or 0),
             "hub_core_update_broadcast_total": int(raw.get("hub_core_update_broadcast_total") or 0),
             "updated_at": float(raw.get("updated_at") or now),
+            "inventory_scope": "full" if include_device_inventory else "access_policy",
         }
 
     try:
@@ -5417,6 +5492,7 @@ def yjs_sync_runtime_snapshot(
     role: str,
     now_ts: float | None = None,
     webspace_id: str | None = None,
+    prefer_cached_gateway: bool = False,
 ) -> dict[str, Any]:
     now = time.time() if now_ts is None else float(now_ts)
     role_norm = str(role or "").strip().lower()
@@ -5482,7 +5558,10 @@ def yjs_sync_runtime_snapshot(
     try:
         from adaos.services.yjs.gateway_ws import gateway_transport_snapshot
 
-        gateway = gateway_transport_snapshot()
+        gateway = gateway_transport_snapshot(
+            now_ts=now,
+            prefer_cached_off_owner=prefer_cached_gateway,
+        )
     except Exception:
         gateway = {}
     try:

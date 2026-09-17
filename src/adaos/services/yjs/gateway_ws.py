@@ -163,6 +163,8 @@ _GATEWAY_SNAPSHOT_OWNER_LOCK = threading.RLock()
 _GATEWAY_SNAPSHOT_OWNER_THREAD_ID: int | None = None
 _GATEWAY_SNAPSHOT_OWNER_LOOP: asyncio.AbstractEventLoop | None = None
 _GATEWAY_SNAPSHOT_CACHE: dict[str, Any] = {}
+_GATEWAY_SNAPSHOT_REFRESH_PENDING = False
+_GATEWAY_SNAPSHOT_REFRESH_LAST_STARTED_AT = 0.0
 _WS_EVENT_SUBSCRIPTIONS_LOCK = threading.RLock()
 _WS_EVENT_SUBSCRIBERS: dict[int, dict[str, Any]] = {}
 _WS_EVENT_FORWARDER_INSTALLED = False
@@ -6382,7 +6384,69 @@ async def _build_gateway_transport_snapshot_on_owner(now_ts: float | None) -> di
     return _build_gateway_transport_snapshot(now_ts=now_ts)
 
 
-def gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
+def _schedule_gateway_transport_snapshot_refresh(
+    owner_loop: asyncio.AbstractEventLoop,
+    *,
+    now_ts: float | None,
+) -> None:
+    global _GATEWAY_SNAPSHOT_REFRESH_PENDING
+    global _GATEWAY_SNAPSHOT_REFRESH_LAST_STARTED_AT
+
+    requested_at = time.monotonic()
+    with _GATEWAY_SNAPSHOT_OWNER_LOCK:
+        if _GATEWAY_SNAPSHOT_REFRESH_PENDING:
+            return
+        if requested_at - _GATEWAY_SNAPSHOT_REFRESH_LAST_STARTED_AT < 1.0:
+            return
+        _GATEWAY_SNAPSHOT_REFRESH_PENDING = True
+        _GATEWAY_SNAPSHOT_REFRESH_LAST_STARTED_AT = requested_at
+
+    def _refresh() -> None:
+        global _GATEWAY_SNAPSHOT_REFRESH_PENDING
+        try:
+            _build_gateway_transport_snapshot(now_ts=now_ts)
+        except Exception:
+            _ylog.debug("background gateway diagnostics refresh failed", exc_info=True)
+        finally:
+            with _GATEWAY_SNAPSHOT_OWNER_LOCK:
+                _GATEWAY_SNAPSHOT_REFRESH_PENDING = False
+
+    try:
+        owner_loop.call_soon_threadsafe(_refresh)
+    except Exception:
+        with _GATEWAY_SNAPSHOT_OWNER_LOCK:
+            _GATEWAY_SNAPSHOT_REFRESH_PENDING = False
+
+
+def _cached_gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
+    now = time.time() if now_ts is None else float(now_ts)
+    with _GATEWAY_SNAPSHOT_OWNER_LOCK:
+        if _GATEWAY_SNAPSHOT_CACHE:
+            snapshot = json.loads(json.dumps(_GATEWAY_SNAPSHOT_CACHE))
+            updated_at = float(snapshot.get("updated_at") or 0.0)
+            snapshot["snapshot_mode"] = "cached"
+            snapshot["snapshot_age_s"] = round(max(0.0, now - updated_at), 3) if updated_at else None
+            return snapshot
+    with _TRANSPORT_LOCK:
+        transports = json.loads(json.dumps(_TRANSPORT_STATE))
+    return {
+        "transports": transports,
+        "servers": {},
+        "rooms": {},
+        "commands": {},
+        "ownership": {},
+        "webio_snapshot_demand": {},
+        "updated_at": now,
+        "snapshot_mode": "transport_fallback",
+        "snapshot_age_s": 0.0,
+    }
+
+
+def gateway_transport_snapshot(
+    *,
+    now_ts: float | None = None,
+    prefer_cached_off_owner: bool = False,
+) -> dict[str, Any]:
     """Return plain gateway diagnostics without moving live Yjs objects across threads."""
 
     current_thread_id = threading.get_ident()
@@ -6394,6 +6458,9 @@ def gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[str, Any]
         return _build_gateway_transport_snapshot(now_ts=now_ts)
 
     if owner_loop is not None and owner_loop.is_running() and not owner_loop.is_closed():
+        if prefer_cached_off_owner:
+            _schedule_gateway_transport_snapshot_refresh(owner_loop, now_ts=now_ts)
+            return _cached_gateway_transport_snapshot(now_ts=now_ts)
         future = asyncio.run_coroutine_threadsafe(
             _build_gateway_transport_snapshot_on_owner(now_ts),
             owner_loop,

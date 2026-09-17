@@ -2652,6 +2652,50 @@ def test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread(mon
         gc.collect()
 
 
+def test_gateway_transport_snapshot_prefers_cached_data_off_owner(monkeypatch) -> None:
+    class _OwnerLoop:
+        @staticmethod
+        def is_running() -> bool:
+            return True
+
+        @staticmethod
+        def is_closed() -> bool:
+            return False
+
+    owner_loop = _OwnerLoop()
+    scheduled: list[tuple[object, float | None]] = []
+    monkeypatch.setattr(
+        gateway_module,
+        "_GATEWAY_SNAPSHOT_OWNER_THREAD_ID",
+        threading.get_ident() + 1,
+    )
+    monkeypatch.setattr(gateway_module, "_GATEWAY_SNAPSHOT_OWNER_LOOP", owner_loop)
+    monkeypatch.setattr(
+        gateway_module,
+        "_GATEWAY_SNAPSHOT_CACHE",
+        {
+            "transports": {"command": {"ready": True}},
+            "rooms": {"desktop": {"ready": True}},
+            "updated_at": 100.0,
+        },
+    )
+    monkeypatch.setattr(
+        gateway_module,
+        "_schedule_gateway_transport_snapshot_refresh",
+        lambda loop, *, now_ts: scheduled.append((loop, now_ts)),
+    )
+
+    snapshot = gateway_module.gateway_transport_snapshot(
+        now_ts=105.0,
+        prefer_cached_off_owner=True,
+    )
+
+    assert scheduled == [(owner_loop, 105.0)]
+    assert snapshot["snapshot_mode"] == "cached"
+    assert snapshot["snapshot_age_s"] == 5.0
+    assert snapshot["rooms"]["desktop"]["ready"] is True
+
+
 def test_apply_materialized_payload_reports_gateway_phase_timings(monkeypatch) -> None:
     key = "gateway-phase-timings"
     update = b"phase-update"
