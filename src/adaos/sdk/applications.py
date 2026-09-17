@@ -341,6 +341,8 @@ def list_applications(
                     OSError,
                     compositions.ProjectCompositionError,
                 ):
+                    local["exists"] = False
+                    local["status"] = "source_unavailable"
                     local["deletion"] = {
                         "project_id": project_id,
                         "allowed": False,
@@ -352,6 +354,7 @@ def list_applications(
             item
             for item in models
             if bool(item.get("installed"))
+            or bool(item.get("local_beta_active"))
             or (
                 item["application"]["visibility"] == "public"
                 and bool(item.get("channels", {}).get("stable"))
@@ -365,7 +368,11 @@ def list_applications(
             and bool(item.get("channels", {}).get("stable"))
         ]
     if developed_only:
-        models = [item for item in models if item.get("local_development") is not None]
+        models = [
+            item
+            for item in models
+            if bool((item.get("local_development") or {}).get("exists"))
+        ]
     return models
 
 

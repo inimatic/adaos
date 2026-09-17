@@ -272,6 +272,21 @@ def test_application_reads_project_only_existing_local_developments(
                     "installed": False,
                     "channels": {"stable": "sha256:" + "a" * 64},
                 },
+                {
+                    "application": {
+                        "application_id": "local-beta",
+                        "visibility": "private",
+                        "entrypoints": [
+                            {
+                                "entrypoint_id": "main",
+                                "presentation_ref": "scenario:local-beta",
+                            }
+                        ],
+                    },
+                    "installed": False,
+                    "local_beta_active": True,
+                    "channels": {},
+                },
             ]
 
     monkeypatch.setattr(applications, "_service", lambda: Service())
@@ -322,6 +337,7 @@ def test_application_reads_project_only_existing_local_developments(
     assert [item["application"]["application_id"] for item in available] == [
         "applications",
         "foreign",
+        "local-beta",
     ]
 
 
@@ -383,6 +399,9 @@ def test_application_read_survives_missing_development_project(
         "allowed": False,
         "reason": "development_project_unavailable",
     }
+    assert models[0]["local_development"]["exists"] is False
+    assert models[0]["local_development"]["status"] == "source_unavailable"
+    assert applications.list_applications(developed_only=True) == []
 
 
 def test_sdk_exposes_development_report_status_without_internal_store_access() -> None:
