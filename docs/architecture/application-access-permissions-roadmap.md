@@ -278,6 +278,12 @@ Application-centric and subject-centric views.
 - [ ] `[must]` `AAPR4-01` Extend Application install/update review to show
   structured permissions, data practices, LLM/network use, secrets,
   notifications, background work, role model, and release-readiness summary.
+- [x] `[must]` `AAPR4-01a` Bind install/update plans to
+  `adaos.application.permission_review.v1`, render required and optional
+  declarations as structured rows, and block apply until newly added or
+  elevated permissions are acknowledged. Unchanged updates do not request the
+  same approval again. Data-practice, provider, secret, background-work and
+  role-impact disclosure remain under `AAPR4-01`.
 - [x] `[must]` `AAPR4-02` Add Application detail tabs or sections:
   Permissions, Access, Roles, Connected Accounts, Release Readiness, and
   Activity.
@@ -301,7 +307,8 @@ integration, dedicated Root MCP Users & Access plane, and standalone exact
 Trial products now exist. Applications performs grant/change/revoke and shows
 the Application-centric policy sections; Users & Access exposes the
 subject-centric six-section workbench through shared services without direct
-database edits. Complete install/update disclosure (`AAPR4-01`), Pending Action
+database edits. Install/update plans now carry structured permission rows and
+an added/elevated-permission gate; complete disclosure (`AAPR4-01`), Pending Action
 routing (`AAPR4-05`), keyboard/long-label qualification (`AAPR4-07`), and the
 child/guest end-to-end matrix remain open. AdaOS Connect retains join, pairing,
 and recovery entry flows and links ongoing administration to Users & Access.

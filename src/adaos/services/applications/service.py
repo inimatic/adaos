@@ -14,6 +14,7 @@ from adaos.domain.application import (
     utc_now,
 )
 from adaos.domain.artifact_release import WorkspaceLock, canonical_payload_digest
+from adaos.domain.application_access import classify_access_profile_diff
 
 from .store import ApplicationStore
 
@@ -414,6 +415,48 @@ class ApplicationService:
             "validation_evidence_count": len(release.project_release.validation_evidence),
         }
 
+    @staticmethod
+    def _permission_review(
+        release: ApplicationRelease,
+        *,
+        previous_release: ApplicationRelease | None = None,
+    ) -> dict[str, Any]:
+        profile = release.permission_profile
+        items = [
+            {**item.to_dict(), "requirement": requirement}
+            for requirement, declarations in (
+                ("required", profile.required),
+                ("optional", profile.optional),
+            )
+            for item in declarations
+        ]
+        diff = None
+        approval_permissions = list(profile.flat_permissions)
+        if previous_release is not None:
+            diff = classify_access_profile_diff(
+                previous_release.permission_profile,
+                profile,
+                old_roles=previous_release.application_roles,
+                new_roles=release.application_roles,
+            )
+            changes = diff["permission_changes"]
+            approval_permissions = sorted(
+                {
+                    *changes.get("added", ()),
+                    *changes.get("elevated", ()),
+                }
+            )
+        return {
+            "schema": "adaos.application.permission_review.v1",
+            "profile_digest": profile.digest,
+            "items": items,
+            "required": [item.permission_id for item in profile.required],
+            "optional": [item.permission_id for item in profile.optional],
+            "approval_required": bool(approval_permissions),
+            "approval_permissions": approval_permissions,
+            "diff": diff,
+        }
+
     def plan_operation(
         self,
         application_id: str,
@@ -478,6 +521,7 @@ class ApplicationService:
         components: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
         compatibility: dict[str, Any] = {}
+        previous_release: ApplicationRelease | None = None
         if operation_kind in {"install", "update"}:
             if not release_digest:
                 effective = self.effective_release(
@@ -518,6 +562,10 @@ class ApplicationService:
             components = self._release_components(release)
             conflicts = self._component_conflicts(application_id, components)
             compatibility = self._compatibility_summary(release)
+            if operation_kind == "update" and current is not None:
+                previous_release = self.store.get_release(
+                    application_id, current.installed_release_digest
+                )
         removal = self.simulate_removal(application_id, data_policy=data_policy) if operation_kind == "remove" else None
         subscription_change = None
         if operation_kind == "select_track":
@@ -567,6 +615,14 @@ class ApplicationService:
                 list(release.project_release.permissions)
                 if release is not None
                 else []
+            ),
+            "permission_review": (
+                self._permission_review(
+                    release,
+                    previous_release=previous_release,
+                )
+                if release is not None
+                else None
             ),
             "components": components,
             "conflicts": conflicts,

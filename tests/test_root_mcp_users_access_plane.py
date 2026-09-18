@@ -251,6 +251,37 @@ def test_grant_role_is_state_idempotent(service: _Service) -> None:
     assert len(service.store.grants) == 1
 
 
+def test_grant_role_accepts_typed_user_reference_from_people_projection(service: _Service) -> None:
+    result = plane.handlers()["users_access.grant_role"](
+        {
+            "subject_id": "user:member",
+            "role": "member",
+            "scope_kind": "subnet",
+            "scope_id": "sn_test",
+            "idempotency_key": "grant-typed-member-1",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert result["grant"]["subject"] == {"kind": "user", "id": "member"}
+
+
+def test_grant_role_rejects_non_user_typed_reference(service: _Service) -> None:
+    with pytest.raises(ValueError, match="identify a user"):
+        plane.handlers()["users_access.grant_role"](
+            {
+                "subject_id": "device:phone",
+                "role": "member",
+                "scope_kind": "subnet",
+                "scope_id": "sn_test",
+                "idempotency_key": "grant-device-1",
+                "_mcp_context": _context(),
+            },
+            dry_run=False,
+        )
+
+
 def test_invite_creation_and_revocation_are_replay_safe(service: _Service) -> None:
     arguments = {
         "kind": "targeted",

@@ -62,6 +62,7 @@ def _release(
     version: str = "1.0.0",
     package_digest: str = DIGEST_A,
     lifecycle: str = "trial",
+    permissions: tuple[str, ...] = ("workspace.read", "workspace.write"),
 ) -> ApplicationRelease:
     source = ArtifactSourceRef(
         forge="github",
@@ -82,7 +83,7 @@ def _release(
         version=version,
         source_ref=source,
         components=(package,),
-        permissions=("workspace.read", "workspace.write"),
+        permissions=permissions,
         validation_evidence=({"status": "passed"},),
     ).seal()
     return ApplicationRelease(
@@ -150,6 +151,87 @@ def test_store_refuses_to_delete_application_with_release(tmp_path: Path) -> Non
 
     with pytest.raises(ApplicationStoreError, match="releases"):
         store.delete_unpublished_application("app_recipes", expected_revision=1)
+
+
+def test_operation_plan_projects_structured_permission_review(service: ApplicationService) -> None:
+    release = service.register_release(_release())
+
+    install = service.plan_operation(
+        "app_recipes",
+        "install",
+        release_digest=release.release_digest,
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="permission-review-install",
+    )
+
+    review = install.plan["permission_review"]
+    assert review["profile_digest"] == release.permission_profile.digest
+    assert review["approval_required"] is True
+    assert review["approval_permissions"] == ["workspace.read", "workspace.write"]
+    assert [item["requirement"] for item in review["items"]] == ["required", "required"]
+
+
+def test_update_permission_review_requires_only_added_or_elevated_permissions(
+    service: ApplicationService,
+) -> None:
+    first = service.register_release(_release())
+    install = service.plan_operation(
+        "app_recipes",
+        "install",
+        release_digest=first.release_digest,
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="permission-review-base-install",
+    )
+    service.apply_operation(
+        install.operation_id,
+        plan_digest=install.plan_digest,
+        idempotency_key=install.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+    unchanged = service.register_release(
+        _release(version="1.0.1", package_digest=DIGEST_B)
+    )
+    expanded = service.register_release(
+        _release(
+            version="1.1.0",
+            package_digest=DIGEST_C,
+            permissions=("network.fetch", "workspace.read", "workspace.write"),
+        )
+    )
+
+    unchanged_plan = service.plan_operation(
+        "app_recipes",
+        "update",
+        release_digest=unchanged.release_digest,
+        expected_revision=1,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="permission-review-unchanged",
+    )
+    expanded_plan = service.plan_operation(
+        "app_recipes",
+        "update",
+        release_digest=expanded.release_digest,
+        expected_revision=1,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="permission-review-expanded",
+    )
+
+    assert unchanged_plan.plan["permission_review"]["approval_required"] is False
+    assert expanded_plan.plan["permission_review"]["approval_permissions"] == [
+        "network.fetch"
+    ]
 
 
 def test_local_builder_beta_updates_display_flag_without_joining_public_testing(service):

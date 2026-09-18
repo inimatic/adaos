@@ -205,6 +205,18 @@ def _subject(value: str) -> SubjectRef:
     return SubjectRef(kind, identifier)  # type: ignore[arg-type]
 
 
+def _user_subject(value: Any) -> SubjectRef:
+    token = str(value or "").strip()
+    if not token:
+        raise ValueError("subject_id is required")
+    kind, separator, identifier = token.partition(":")
+    if separator:
+        if kind != "user" or not identifier:
+            raise ValueError("subject_id must identify a user")
+        return SubjectRef("user", identifier)
+    return SubjectRef("user", token)
+
+
 def _actor(arguments: Mapping[str, Any]) -> SubjectRef:
     return _subject(_mcp_context(arguments)["actor_ref"])
 
@@ -340,7 +352,7 @@ def _handle_grant_role(arguments: dict[str, Any], *, dry_run: bool) -> dict[str,
     if dry_run:
         return {"would_grant": True, "subject_id": arguments.get("subject_id"), "role": arguments.get("role")}
     service = _service()
-    subject = SubjectRef("user", str(arguments.get("subject_id") or "").strip())
+    subject = _user_subject(arguments.get("subject_id"))
     scope = _scope(arguments)
     role = str(arguments.get("role") or "").strip()
     for grant in service.store.iter_grants(status="active"):

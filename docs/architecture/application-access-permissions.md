@@ -2,7 +2,7 @@
 
 Status: target architecture with the V1 non-deferred vertical slice implemented.
 
-Last reviewed: 2026-09-16.
+Last reviewed: 2026-09-18.
 
 This document defines the target AdaOS architecture for Application-level
 permissions, Application-defined roles, per-user and guest access, child-safe
@@ -443,6 +443,22 @@ Update flow:
 - Builder updates its managed publisher-owner grant only after the new release
   passes the same review/admission boundary. Manually assigned member, child or
   guest grants remain independent and follow the normal update-impact flow.
+
+The lifecycle plan is the machine-readable consent boundary. Install and
+update plans carry `adaos.application.permission_review.v1`, including the
+structured required/optional declarations, permission-profile digest,
+classified profile/role diff, and the exact newly added or elevated
+permissions that require approval. Applications renders that structure rather
+than collapsing it into one comma-separated field. The apply command remains
+disabled until the required review is acknowledged. An unchanged update does
+not ask the owner to approve the same permission set again; an old grant never
+implicitly admits a newly added or elevated permission.
+
+This acknowledgement is currently bound to the immutable operation plan and
+its digest. Per-optional-permission grants and durable step-up approval remain
+separate access-policy operations; the UI must not present independent
+allow/deny controls until those decisions are represented and enforced by the
+platform grant model.
 
 ## Multi-User, Child, and Guest Access
 
