@@ -310,6 +310,47 @@ def test_webui_schema_accepts_singleton_widget_actions_and_tags() -> None:
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_command_overflow_priority() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "commands",
+                        "layout": _layout(),
+                        "widgets": [
+                            {
+                                "id": "toolbar",
+                                "type": "ui.actions",
+                                "area": "main",
+                                "inputs": {
+                                    "variant": "autoOverflow",
+                                    "buttons": [
+                                        {
+                                            "id": "save",
+                                            "label": "Save",
+                                            "kind": "primary",
+                                            "priority": 100,
+                                            "overflow": "never",
+                                        }
+                                    ],
+                                },
+                                "actions": [
+                                    {"on": "click:save", "type": "updateState", "params": {"saved": True}}
+                                ],
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_requires_call_mcp_target() -> None:
     schema = _load_schema()
     payload = {

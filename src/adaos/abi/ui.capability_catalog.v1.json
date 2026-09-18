@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.1.0",
+  "catalog_version": "3.3.7",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -82,6 +82,7 @@
       "manifest": {
         "pattern": "collection-detail",
         "primary_role": "collection",
+        "variant_composition": "For one page with state-selected sections, preserve the base layout and append a complete layout.variants entry with id, when, pattern, density, contentWidth, scroll, regions and interaction. A variant replaces the active region set; include every shared toolbar/navigation region plus collection and detail regions in that variant. Do not append section-only regions to the base layout.regions.",
         "supporting_roles": [
           "detail",
           "inspector"
@@ -147,7 +148,10 @@
       "manifest": {
         "pattern": "dashboard",
         "primary_role": "main",
+        "composition": "Declare shell-wide controls in a toolbar or navigation region; both span the dashboard width. Declare independent peer dashboard blocks as separate layout.regions and place each widget in its owning area. Multiple widgets in one region remain one vertical region; a single region cannot produce a peer dashboard grid.",
         "supporting_roles": [
+          "toolbar",
+          "navigation",
           "utility",
           "status"
         ]
@@ -467,7 +471,32 @@
           "list",
           "cards"
         ],
-        "row_state": "For flat list rows, inputs.disabledKey names a boolean field that disables activation; inputs.currentKey names a separate boolean field that bolds the title and marks aria-current=step. Current work is independent of selected detail. Selection and row-button events expose row fields directly as $event.<field>, not $event.item.<field>.",
+        "optional_inputs": [
+          "titleKey",
+          "subtitleKey",
+          "iconKey",
+          "previewKey",
+          "imageKey",
+          "imageAltKey",
+          "badgeKey",
+          "meta",
+          "buttons",
+          "cardMinWidth",
+          "cardImageRatio",
+          "groupBy",
+          "groupDisplay",
+          "search",
+          "filters",
+          "sort",
+          "pagination",
+          "pageSize",
+          "pageSizeOptions"
+        ],
+        "projection": "Rows default to id/title/subtitle/icon. Cards additionally render previewKey, imageKey with imageAltKey, badgeKey and inputs.meta. Configure these input keys when source fields use different names; arbitrary source fields are not visible unless projected or consumed by an action.",
+        "meta_shape": "inputs.meta entries require key and may declare label, kind=text|badge|boolean, overflow=wrap|truncate and align=start|center|end.",
+        "button_shape": "inputs.buttons entries require id and may declare label, itemLabelKey, icon, whenKey and whenEquals. Every such button is repeated for each visible row or card. A collection-level command such as Add, Invite, Import, or Refresh belongs in a separate sibling ui.actions widget, never in ui.list inputs.buttons. itemLabelKey reads a per-record visible label and falls back to label. Buttons are presentation only; bind each visible row command with a top-level widget.actions entry on=click:<buttonId>. A row field such as primaryAction does not create a button.",
+        "query_binding": "inputs.search is boolean, never an object. To share a ui.queryToolbar value with this static collection, use inputs.filters entries shaped {key,stateKey,operator}; stateKey is the bare page-state key without a $state. prefix. Use operator=contains for text search and equals for exact filters. For equals, each non-All select option value must equal the corresponding record field value; keep user-facing meaning in the option label. Filter definitions do not contain options or equalsField; options belong to ui.queryToolbar controls.",
+        "row_state": "For flat list rows, inputs.disabledKey names a boolean field that disables activation; inputs.currentKey names a separate boolean field that bolds the title and marks aria-current=step. Current work is independent of selected detail. Selection and row-button events expose row fields directly as $event.<field>, not $event.item.<field>. updateState params accept direct references or structured expressions such as {kind:'expression',op:'equals',args:['$event.status','ready']}; binary expressions use args and never left/right. A string such as $event.status === 'ready' is not evaluated. Prefer exposing the required boolean on the row and binding $event.<booleanField>.",
         "canonical_value_i18n": [
           "titleI18nPrefix",
           "subtitleI18nPrefix",
@@ -475,6 +504,7 @@
           "badgeI18nPrefix",
           "meta[*].valueI18nPrefix"
         ],
+        "static_data": "For synthetic rows use widget.dataSource={kind:'static',value:[...]}. The renderer does not read inputs.rows or inputs.items.",
         "value_labels": "meta entries support valueLabels as authored choice fallbacks, or optionsDataSource.kind=resourceQuery with optionValuePath and optionLabelPaths for live related-record captions. Unknown identities remain visible as canonical values; display never changes stored IDs."
       },
       "data_shape": {
@@ -640,6 +670,7 @@
         "conditional_required": "Set required=true on the dependent field and use a string visibleIf expression such as $state.result === 'defect'. ui.form evaluates the expression against a snapshot that includes sibling form values and validates visible required fields before submit. Never use an object-shaped condition or synthesize errors with updateState.",
         "record_editor": "A resourceQuery with query.id=$state.<selection> loads the selected record into local fields. Empty selection means create mode, not the first returned record. inputs.buttons[*].id dispatches only matching actions[*].id in declaration order. Post-success steps share that SAME id; on=submit alone does not bind them. False/throw (including cancelled confirmation) stops the sequence. Multiple unrelated submit mutations must never execute together. Declared button enabledIf controls availability. closeOnSuccess dismisses the editor only after a successful command.",
         "state_initialized_creation": "A form without dataSource hydrates fields from page state using each field's stateKey (alias state_key), defaulting to form.<widget.id>.<field.id>. Before opening a creation modal, updateState initializes draft-specific keys, including a selected parent, and clears old values. defaultValue/default/value are literals, not $state expressions. A dataSource form instead loads the selected record; it does not hydrate page-state fields, and an empty selected id ignores returned records. Use a separate state-initialized create form when parent defaults are needed. Show the parent caption through live choices or an explicitly bound read-only caption.",
+        "modal_composition": "ui.application.modals is an object keyed by the literal modal id, never an array. Each modal value is a wrapper {title, presentation:{kind:'modal'}, schema:{id, layout, widgets:[...]}}. The nested schema is a complete page schema: its layout includes version:2 plus pattern, density, contentWidth, scroll, regions and interaction. Put ui.form and any companion command widgets inside modal.schema.widgets; a widget is not itself a modal definition. Open it with {type:'openModal',params:{modalId:'<literal-id>'}}; target is not the modal id.",
         "read_only_record": "inputs.readOnlyIf is evaluated against the stored selected record, not the draft or page state. The Prototype resource provider enforces the same declared read_only_when predicate before update/delete.",
         "live_choices": "A choice field may use optionsDataSource.kind=resourceQuery, optionValuePath and optionLabelPaths. Automation also admits kind=skill with name, params and invalidationTags; return an array or {items:[...]}. Related record invalidation refreshes options without resetting the draft; unavailable or malformed options block submission and expose retry. Prototype relationships validate current references atomically, including deletion of referenced targets. Collection filter options remain seed-based pending separate live-lookup qualification. Read-only captions in tables, list metadata and details support Resource Workbench sources; absent captions expose the canonical identity.",
         "free_form_string_lists": "tagInput captures an ordered, deduplicated string array from comma or Enter-delimited values. Use it for open vocabularies such as scopes, roles, identifiers, and evidence references; use chips only for a closed predefined option set.",
@@ -683,10 +714,12 @@
       },
       "manifest": {
         "widget_type": "item.details",
+        "presentation": "Use inputs.presentation='section' when details are one compact dashboard or page section, 'header' for a primary record header, 'media' for inspectable media, and the default card only for a genuinely framed detail surface.",
+        "static_data": "For one synthetic record use widget.dataSource={kind:'static',value:{...}}. With inputs.selectedStateKey, put keyed records directly in value, for example value:{'item-1':{...},'item-2':{...}}; do not wrap them in records or put selectedId in the value. Field path/key/id reads from the selected record; inputs.fields[*].value may be a selected-record {path} template or a direct $state.path reference/display template, but is not itself a data source. The visible widget heading belongs in top-level widget.title, including a dynamic value such as $state.selectedItemTitle; inputs.title is ignored. Remove title_i18n when title is dynamic because localization is applied before state or selected-record interpolation and would replace the dynamic template.",
         "canonical_value_i18n": "inputs.fields[*].valueI18nPrefix",
         "value_labels": "Field entries support valueLabels as authored choice fallbacks, or optionsDataSource.kind=resourceQuery with optionValuePath and optionLabelPaths for live related-record captions. Unknown identities remain visible; labels do not mutate records.",
         "media": "inputs.mediaKey binds an image/video/audio source on the selected record. Optional mediaKindKey selects image, video or audio; mediaPosterKey binds a poster. Native controls, loading, unavailable and empty states are provided. A filename field without mediaKey is not a viewer.",
-        "commands": "Actions sharing named on=click:<command> execute in declaration order; awaited false/throw stops the sequence. Label one step to expose one button. Generic on=click actions remain independent. enabledIf guards the command; repeated clicks are blocked while it is pending."
+        "commands": "Actions sharing named on=click:<command> execute in declaration order; awaited false/throw stops the sequence. Every visible item.details command requires label on one action step. Generic on=click actions remain independent. enabledIf guards the command; repeated clicks are blocked while it is pending. For keyed static details, command params should use $state.selectedId (or another page-state key); there is no implicit $record command context."
       },
       "data_shape": {
         "kind": "record_or_keyed_records"
@@ -759,7 +792,32 @@
         ]
       },
       "manifest": {
-        "widget_type": "ui.actions"
+        "widget_type": "ui.actions",
+        "variants": [
+          "tabs",
+          "segmented",
+          "toolbar",
+          "adaptiveToolbar",
+          "autoOverflow",
+          "stack",
+          "header"
+        ],
+        "button_kind_values": [
+          "primary",
+          "secondary",
+          "danger"
+        ],
+        "button_fill_values": [
+          "solid",
+          "outline",
+          "clear"
+        ],
+        "button_overflow_values": [
+          "auto",
+          "never"
+        ],
+        "button_priority": "number; higher values remain visible longer",
+        "scope": "commands only; use a details or list component for passive status text. A standalone ui.actions widget has page state and click-event context, not an implicit selected $record; selection-dependent commands must use explicit $state keys populated by the selecting collection."
       },
       "data_shape": {
         "kind": "none"
@@ -799,7 +857,9 @@
         ]
       },
       "manifest": {
-        "widget_type": "ui.queryToolbar"
+        "widget_type": "ui.queryToolbar",
+        "control_shape": "inputs.controls contains 1..12 entries shaped exactly {id,label,label_i18n?,kind:'search'|'filter',stateKey,inputType:'search'|'text'|'date'|'number'|'select',options?}. stateKey is a bare page-state identifier such as appSearch, never $state.appSearch. select controls require options [{value,label,label_i18n?}]. Controls do not accept placeholder, placeholder_i18n, resetLabel or resetLabel_i18n; the renderer owns compact disclosure, active values and reset UI.",
+        "collection_binding": "Bind the same bare stateKey in collection filters. For ui.list use inputs.filters [{key,stateKey,operator:'contains'|'equals'|...}]. Query-toolbar options stay on the control and are not copied into list filters."
       },
       "data_shape": {
         "kind": "none"

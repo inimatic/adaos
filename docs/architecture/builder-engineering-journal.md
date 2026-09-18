@@ -1815,3 +1815,31 @@ actual design-prototype title. Re-run evidence passes at 1440x1000 and 390x844
 without page errors or horizontal overflow. The visible selected historical
 Automation remains terminal `cancelled`; publication success does not establish
 all remaining BIP-02 status and recovery behavior.
+
+### 2026-09-18: Scoped Web Desktop Correction And Browser Matrix
+
+The DEV Web Desktop design reached revision `020` with Home, Applications,
+Users & Access, Devices, Activity, Settings, System and Development sections.
+Each section passed the same 1440/390 browser matrix with no page or console
+errors and no horizontal overflow. A subsequent context experiment changed only
+`development-details` record `dev-web-desktop.uiRevision` from `017` to `020`;
+canonical comparison of revisions `020` and `021` found only that value and the
+two Builder revision metadata fields.
+
+The named-widget correction route keeps the complete WebUI server-side and sends
+the provider only target/dependency widgets, relevant layout/modal/locale slices
+and an omitted identity inventory. The real GPT-5 job
+`llm_job_9f44a234eec747ca9edfca3b` succeeded without repair at 8,722 input and
+861 output tokens. The comparable earlier full-document correction consumed
+34,948 input tokens, a 75.0% reduction without lowering the output ceiling.
+Revision `021` then passed the Development browser check on both viewports.
+
+Full Core capability tests and the complete DEV Builder skill suite pass after
+updating old fixtures to the current source-required ABI and preserving
+qualification-owned no-op handling. Focused Client list/details tests pass 70/70;
+YDoc tests pass 156/156. Client boundary inventory reports 44 current widgets,
+and the development build succeeds. The Client now serves an empty default
+`runtime-config.json` and authenticates its initial loopback status probe, which
+removes the previously tolerated background `404` and `401`. This increment does
+not qualify broad section-generation context, large-project orchestration or a
+sealed held-out cohort; those remain BIP-14, BIP-D01 and BIP-04 respectively.

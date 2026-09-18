@@ -436,6 +436,8 @@ export interface WebUiActionButton {
   id: string
   label?: string
   label_i18n?: WebUiI18nTextSpec
+  /** Per-record label field for repeated collection commands. */
+  itemLabelKey?: string
   title?: string
   title_i18n?: WebUiI18nTextSpec
   description?: string
@@ -443,7 +445,10 @@ export interface WebUiActionButton {
   icon?: string
   kind?: WebUiActionButtonKind
   fill?: WebUiActionButtonFill
+  priority?: number
+  overflow?: 'auto' | 'never'
   disabled?: boolean
+  visibleIf?: string
   enabledIf?: string
   value?: unknown
   stateKey?: string
@@ -466,7 +471,7 @@ export interface WebUiListItemButton extends WebUiActionButton {}
 
 export interface WebUiActionsInputs {
   buttons?: readonly WebUiActionButton[]
-  variant?: 'tabs' | 'segmented' | 'toolbar' | 'stack' | 'header' | 'adaptiveToolbar'
+  variant?: 'tabs' | 'segmented' | 'toolbar' | 'stack' | 'header' | 'adaptiveToolbar' | 'autoOverflow'
   size?: 'small' | 'default' | 'medium'
   [key: string]: unknown
 }

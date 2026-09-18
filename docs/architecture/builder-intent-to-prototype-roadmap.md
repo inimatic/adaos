@@ -546,6 +546,12 @@ Implementation boundary: Binding/reference/state repairs, additive visibility, v
   in-flight work and reuse only exact hermetic receipts. Tune configurable repair
   budgets from measured progress; do not impose a fixed model-call sequence or
   claim lower latency merely by forbidding checks or shortening timeouts.
+- [x] `[must]` Recheck a retained normalized failed candidate before querying
+  Root again. Bind replay to the original request, scenario and current source
+  revision, run the current full-document validation and request postconditions,
+  and retain zero-token replay separately from paid repair. Unit qualification
+  covers valid replay, stale identity and invalid-candidate refusal; matched
+  end-to-end benefit remains part of BIP-05.
 
 Exit/remaining work: Aggregate all independent findings before selecting scope; qualify fixture/value/binding repair, exact replay and unchanged accepted semantics on fresh repeated runs. Compare authoritative slices with full-context/full-regeneration controls before reducing payloads.
 
@@ -556,6 +562,19 @@ Exit/remaining work: Aggregate all independent findings before selecting scope; 
 Owner/dependencies: Core execution + provider adapter.
 
 Implementation boundary: Semantic requests use typed output and stable/dynamic context separation; selected repairs are scoped. Effective implicit Root profiles, all-route budget enforcement and matched correction-context savings remain unqualified.
+
+- [x] `[must]` Add an explicit named-widget correction route that keeps the
+  canonical WebUI server-side and sends only target widgets, state-writer
+  dependencies, relevant layout/modal/locale fragments and an omitted identity
+  inventory. Stable `@id` patches merge into the canonical document and undergo
+  full validation. Bound recent history and development-context fields. On the
+  retained Web Desktop correction, actual input fell from 34,948 to 8,722 tokens
+  (75.0%) and the accepted revision changed only the requested static value plus
+  Builder revision metadata; no output cap was reduced.
+- [ ] `[must]` Extend measured stage-specific composition to section additions,
+  cross-cutting redesigns, semantic planning and repair without misclassifying
+  broad work as a local correction. Compare accepted outcomes, repairs, cached
+  tokens and wall time against the full-context control before changing defaults.
 
 Exit/remaining work: Use stage-specific authoritative slices and retrievable refs, byte-stable selected bundles, explicit fresh/cached/output/time/attempt budgets and deterministic stop/fallback. Promote efficient/full/visual routes only by matched evaluation; measure schema-cache tradeoffs and the 60% cache target where supported.
 
@@ -588,6 +607,13 @@ Exit/remaining work: Qualify one action success/cancel/failure contract across u
   and AdaOS Connect -> Users & Access is browser-proven against the exact Trial.
   The item remains open for the other expression namespaces, settings hydration,
   rendered media states and generated action outcomes.
+- [x] `[must]` Reject conflicting state writes, unreachable controlled values,
+  unreachable layout/widget guards, JavaScript-like action expressions, malformed
+  structured expressions and unresolvable static detail selections before
+  Preview. Resolve details `$state.*` values through the shared declarative
+  resolver and expose stable repeated-row command ids for browser feedback.
+  Core capability suites and focused Client list/details tests qualify this
+  generic subset; settings reload and media outcomes remain open above.
 - [x] `[must]` Retrieve and emit Layout & Interaction ABI v2 rather than relying
   on area-name inference. The model chooses a task pattern, semantic regions,
   wide/compact disclosure, and explicit collection/detail interaction from the
@@ -654,9 +680,10 @@ it does not create case-specific webspaces or grant the model final acceptance.
 Applications and Users & Access now qualify this integrated route on wide and
 compact layouts. The gate exercises semantic tabs and compact region
 disclosure, rejects renderer error/unsupported states and invalid semantic
-toolbar order, and retains per-view evidence. Only the known local missing
-runtime-config bootstrap and unauthenticated status probe are warnings; other
-HTTP failures, including retryable runtime `503`, remain failures.
+toolbar order, and retains per-view evidence. The local Client now serves a
+neutral runtime bootstrap and authenticates its first loopback status probe, so
+those former background `404`/`401` exceptions are no longer accepted warnings.
+Other HTTP failures, including retryable runtime `503`, remain failures.
 For Trial review, the gate derives the exact candidate revision and complete
 release digest from `workspace.lock.json`, canonicalizes only the admitted
 transport separators in `trial:sha256:<digest>`, and rejects a different or

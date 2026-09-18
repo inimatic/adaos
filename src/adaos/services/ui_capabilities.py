@@ -357,6 +357,62 @@ def _contains_any(text: str, values: Iterable[str]) -> bool:
     return any(value in text for value in values)
 
 
+def _contains_any_term(text: str, values: Iterable[str]) -> bool:
+    """Match complete intent terms instead of substrings inside other words."""
+
+    normalized = _normalized_text(text)
+    return any(
+        re.search(
+            rf"(?<!\w){re.escape(_normalized_text(value))}(?!\w)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        for value in values
+        if _normalized_text(value)
+    )
+
+
+def _requires_prototype_resource(operation: Mapping[str, Any]) -> bool:
+    kind = str(operation.get("kind") or "").strip()
+    if kind not in {"create", "update", "assign", "transition", "delete", "archive"}:
+        return False
+    statement = _normalized_text(operation.get("statement"))
+    source_clause = _normalized_text(operation.get("source_clause"))
+    # Declarative navigation and local view state are interactions, not an
+    # application resource model.
+    if re.search(
+        r"\b(?:bounded\s+)?local\s+(?:prototype\s+)?state\b|"
+        r"\b(?:ui|interface|layout|widget|navigation)\s+state\b",
+        statement,
+        flags=re.IGNORECASE,
+    ):
+        return False
+    if statement in {"update", "change", "edit", "add", "create"}:
+        return False
+    # A Builder refinement commonly edits the declarative UI, fixture shape,
+    # or projection metadata. Those authoring mutations must not be promoted
+    # into end-user persistence requirements merely because the instruction
+    # contains verbs such as add/change and nouns such as record/field.
+    authoring_text = f"{statement} {source_clause}".strip()
+    if re.search(
+        r"\b(?:prototype|revision|webui|dashboard|layout|region|widget|"
+        r"viewport|presentation|semantic|toolbar|navigation|card|button|"
+        r"icon|badge|locale|datasource|actionlabel|itemlabelkey|command|surface|"
+        r"page|initialstate|statekey|modal|form|manifest|schema|submit|reset|"
+        r"updatestate|actionmessage|last[a-z0-9_]*action|static\s+(?:fixture|record)|"
+        r"click:[a-z0-9_.-]+|\$event(?:\.[a-z0-9_.-]+)?)\w*\b",
+        authoring_text,
+        flags=re.IGNORECASE,
+    ) and re.search(
+        r"\b(?:field|label|key|role|width|sizing|projection|metadata|"
+        r"structure|content|purpose|lastactivity|inputs?|variant|state|action)\w*\b",
+        authoring_text,
+        flags=re.IGNORECASE,
+    ):
+        return False
+    return True
+
+
 def _number(value: str) -> int | None:
     token = _normalized_text(value)
     if token.isdigit():
@@ -595,16 +651,43 @@ def qualify_ui_request(
         if isinstance(item, Mapping)
     ]
     brief_operations = set(brief_operation_kinds)
+    scope_text = str(request or "")
+    has_synthetic_prototype_data = bool(
+        re.search(
+            r"\bsynthetic\s+(?:records|data|fixtures)\b",
+            scope_text,
+            flags=re.IGNORECASE,
+        )
+    )
+    has_bounded_local_state = bool(
+        re.search(
+            r"\bbounded\s+local(?:[\s-]+prototype)?[\s-]+state\b|"
+            r"\bbounded\s+local[\s-]+state\s+prototype\b",
+            scope_text,
+            flags=re.IGNORECASE,
+        )
+    )
+    explicit_local_prototype_scope = bool(
+        has_bounded_local_state
+        and (
+            has_synthetic_prototype_data
+            or re.search(r"\bprototype\b", scope_text, flags=re.IGNORECASE)
+        )
+    )
+    resource_mutations = not explicit_local_prototype_scope and any(
+        _requires_prototype_resource(item)
+        for item in prototype_brief.get("operations") or []
+        if isinstance(item, Mapping)
+    )
     prototype_resource_required = bool(
-        brief_operations
-        & {"create", "update", "assign", "transition", "delete", "archive"}
+        resource_mutations
         and brief_operations & {"inspect", "list", "search", "filter"}
     )
     included_request, _ = partition_intent_scope(request)
     text = _normalized_text(included_request)
     literal_text_change = _literal_text_change(included_request)
     prototype_iteration = _prototype_iteration(included_request)
-    board = _contains_any(text, _BOARD_TERMS) or bool(
+    board = _contains_any_term(text, _BOARD_TERMS) or bool(
         literal_text_change and literal_text_change.get("target_kind") == "column"
     )
     lane_count = (
@@ -739,24 +822,73 @@ def selected_ui_capabilities(
     ):
         selected_ids.append("recipe.resource_collection_workbench")
     if (
+        requirements.get("prototype_resource")
+        and
         brief_operation_kinds & {"inspect", "list"}
         and brief_operation_kinds
         & {"create", "update", "assign", "transition", "delete", "archive"}
         and "recipe.master_detail" not in selected_ids
     ):
         selected_ids.append("recipe.master_detail")
-    if "create" in brief_operation_kinds and "recipe.data_entry" not in selected_ids:
+    if (
+        requirements.get("prototype_resource")
+        and "create" in brief_operation_kinds
+        and "recipe.data_entry" not in selected_ids
+    ):
         selected_ids.append("recipe.data_entry")
     if (
         requirements.get("brief_information_kinds")
         and "recipe.data_entry" not in selected_ids
     ):
         selected_ids.append("recipe.data_entry")
+    explicit_layouts = (
+        (
+            "layout.collection-detail",
+            r"\b(?:collection[- ]detail|collection\s+and\s+detail|list[- ]detail|table[- ]detail)\b",
+        ),
+        ("layout.master-detail", r"\bmaster[- ]detail\b"),
+        ("layout.dashboard", r"\bdashboard\b"),
+        ("layout.workbench", r"\bworkbench\b"),
+        ("layout.settings", r"\bsettings\s+(?:layout|surface|section)\b"),
+        ("layout.task-flow", r"\btask[- ]flow\b"),
+    )
+    for layout_id, pattern in explicit_layouts:
+        if re.search(pattern, str(request or ""), flags=re.IGNORECASE) and layout_id not in selected_ids:
+            selected_ids.append(layout_id)
     if brief_operation_kinds & {"search", "filter"}:
         for component_id in ("input.text", "input.selector"):
             if component_id not in selected_ids:
                 selected_ids.append(component_id)
     request_text = str(request or "")
+    if brief_operation_kinds & {"inspect", "list"}:
+        for component_id in ("ui.list", "item.details"):
+            if component_id not in selected_ids:
+                selected_ids.append(component_id)
+    if brief_operation_kinds & {"search", "filter"}:
+        if "ui.queryToolbar" not in selected_ids:
+            selected_ids.append("ui.queryToolbar")
+    interaction_text = _normalized_text(request_text)
+    if re.search(
+        r"\b(?:typed\s+forms?|data[- ]entry\s+forms?|forms?|"
+        r"\u0444\u043e\u0440\u043c\w*|\u0430\u043d\u043a\u0435\u0442\w*)\b",
+        interaction_text,
+        flags=re.IGNORECASE,
+    ) and "ui.form" not in selected_ids:
+        selected_ids.append("ui.form")
+    if re.search(
+        r"\b(?:navigation|destinations?|sections?|tabs?|"
+        r"\u043d\u0430\u0432\u0438\u0433\u0430\u0446|\u0440\u0430\u0437\u0434\u0435\u043b|\u0432\u043a\u043b\u0430\u0434)\w*\b",
+        interaction_text,
+        flags=re.IGNORECASE,
+    ) and "navigation.tabs" not in selected_ids:
+        selected_ids.append("navigation.tabs")
+    if re.search(
+        r"\b(?:actions?|commands?|open(?:ing)?|launch|"
+        r"\u0434\u0435\u0439\u0441\u0442\u0432|\u043a\u043e\u043c\u0430\u043d\u0434|\u043e\u0442\u043a\u0440)\w*\b",
+        interaction_text,
+        flags=re.IGNORECASE,
+    ) and "ui.actions" not in selected_ids:
+        selected_ids.append("ui.actions")
     for item_id in index:
         if (
             re.search(
@@ -908,11 +1040,134 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
     for schema_path, page in schemas:
         findings.extend(layout_v2_findings(page, schema_path=schema_path))
         widgets = page.get("widgets") if isinstance(page.get("widgets"), list) else []
+        query_controls_by_state: dict[str, Mapping[str, Any]] = {}
+        for candidate in widgets:
+            if not isinstance(candidate, Mapping) or candidate.get("type") != "ui.queryToolbar":
+                continue
+            candidate_inputs = (
+                candidate.get("inputs")
+                if isinstance(candidate.get("inputs"), Mapping)
+                else {}
+            )
+            controls = (
+                candidate_inputs.get("controls")
+                if isinstance(candidate_inputs.get("controls"), list)
+                else []
+            )
+            for control in controls:
+                if not isinstance(control, Mapping):
+                    continue
+                state_key = str(control.get("stateKey") or "").strip()
+                if state_key:
+                    query_controls_by_state[state_key] = control
         initial_state = (
             page.get("initialState")
             if isinstance(page.get("initialState"), Mapping)
             else {}
         )
+        controlled_state_values: dict[str, set[str]] = {}
+        for candidate in widgets:
+            if not isinstance(candidate, Mapping):
+                continue
+            candidate_inputs = (
+                candidate.get("inputs")
+                if isinstance(candidate.get("inputs"), Mapping)
+                else {}
+            )
+            selected_state_key = str(
+                candidate_inputs.get("selectedStateKey") or ""
+            ).strip()
+            if selected_state_key.startswith("$state."):
+                selected_state_key = selected_state_key[7:]
+            choices = candidate_inputs.get("buttons")
+            if not isinstance(choices, list):
+                choices = candidate_inputs.get("options")
+            if selected_state_key and isinstance(choices, list):
+                values = {
+                    str(item.get("value") or item.get("id") or "").strip()
+                    for item in choices
+                    if isinstance(item, Mapping)
+                    and str(item.get("value") or item.get("id") or "").strip()
+                }
+                if values:
+                    controlled_state_values.setdefault(selected_state_key, set()).update(
+                        values
+                    )
+            candidate_actions = (
+                candidate.get("actions")
+                if isinstance(candidate.get("actions"), list)
+                else []
+            )
+            for action in candidate_actions:
+                if (
+                    not isinstance(action, Mapping)
+                    or str(action.get("type") or "") != "updateState"
+                    or not isinstance(action.get("params"), Mapping)
+                ):
+                    continue
+                for state_key, value in action["params"].items():
+                    if isinstance(value, (str, int, float, bool)) and not str(
+                        value
+                    ).startswith("$"):
+                        controlled_state_values.setdefault(str(state_key), set()).add(
+                            str(value)
+                        )
+        layout = page.get("layout") if isinstance(page.get("layout"), Mapping) else {}
+        variants = layout.get("variants") if isinstance(layout.get("variants"), list) else []
+        simple_variant_guard = re.compile(
+            r"^\s*\$state\.([A-Za-z_][A-Za-z0-9_.-]*)\s*===\s*(['\"])(.*?)\2\s*$"
+        )
+        for variant_index, variant in enumerate(variants):
+            if not isinstance(variant, Mapping):
+                continue
+            match = simple_variant_guard.match(str(variant.get("when") or ""))
+            if not match:
+                continue
+            state_key, expected = match.group(1), match.group(3)
+            reachable_values = controlled_state_values.get(state_key)
+            if reachable_values and expected not in reachable_values:
+                findings.append(
+                    {
+                        "code": "ui.layout.variant_state_unreachable",
+                        "severity": "error",
+                        "path": f"{schema_path}.layout.variants[{variant_index}].when",
+                        "message": (
+                            f"Layout variant expects {state_key!r}={expected!r}, but the "
+                            "declared controls/actions can only write: "
+                            + ", ".join(sorted(reachable_values))
+                        ),
+                        "state_key": state_key,
+                        "expected": expected,
+                        "reachable_values": sorted(reachable_values),
+                    }
+                )
+        visible_state_guard = re.compile(
+            r"\$state\.([A-Za-z_][A-Za-z0-9_.-]*)\s*===\s*(['\"])(.*?)\2"
+        )
+        for widget_index, candidate in enumerate(widgets):
+            if not isinstance(candidate, Mapping):
+                continue
+            for match in visible_state_guard.finditer(
+                str(candidate.get("visibleIf") or "")
+            ):
+                state_key, expected = match.group(1), match.group(3)
+                reachable_values = controlled_state_values.get(state_key)
+                if reachable_values and expected not in reachable_values:
+                    findings.append(
+                        {
+                            "code": "ui.component.visible_state_unreachable",
+                            "severity": "error",
+                            "path": f"{schema_path}.widgets[{widget_index}].visibleIf",
+                            "message": (
+                                f"Widget visibility expects {state_key!r}={expected!r}, but "
+                                "the declared controls/actions can only write: "
+                                + ", ".join(sorted(reachable_values))
+                            ),
+                            "state_key": state_key,
+                            "expected": expected,
+                            "reachable_values": sorted(reachable_values),
+                        }
+                    )
         if schema_path.startswith("ui.application.modals."):
             initial_state = {**shared_initial_state, **initial_state}
         for index, widget in enumerate(widgets):
@@ -935,20 +1190,350 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 if isinstance(widget.get("dataSource"), Mapping)
                 else {}
             )
+            inputs = (
+                widget.get("inputs")
+                if isinstance(widget.get("inputs"), Mapping)
+                else {}
+            )
+            misplaced_structural = sorted(
+                key
+                for key in ("actions", "area", "dataSource", "enabledIf", "visibleIf")
+                if key in inputs
+            )
+            if misplaced_structural:
+                findings.append(
+                    {
+                        "code": "ui.component.structural_input_misplaced",
+                        "severity": "error",
+                        "path": f"{widget_path}.inputs",
+                        "message": (
+                            "Widget structural properties belong on the widget, not under inputs: "
+                            + ", ".join(misplaced_structural)
+                        ),
+                    }
+                )
+            if widget_type == "desktop.widgets" and not (
+                str(data_source.get("kind") or "") == "y"
+                and str(data_source.get("transform") or "") == "desktop.widgets"
+            ):
+                findings.append(
+                    {
+                        "code": "ui.desktop_widgets.source_invalid",
+                        "severity": "error",
+                        "path": f"{widget_path}.dataSource",
+                        "message": (
+                            "desktop.widgets is the system projection for installed desktop widgets; "
+                            "it is not a generic content container. Use ui.list, item.details, "
+                            "ui.actions, or another selected universal component for authored content."
+                        ),
+                    }
+                )
+            if widget_type in {"ui.list", "item.details"} and not data_source:
+                findings.append(
+                    {
+                        "code": "ui.component.source_missing",
+                        "severity": "error",
+                        "path": f"{widget_path}.dataSource",
+                        "message": (
+                            f"{widget_type} requires a resolvable widget.dataSource. "
+                            "For synthetic prototype content use "
+                            "dataSource={kind:'static',value:...}."
+                        ),
+                    }
+                )
+            if widget_type == "ui.list" and any(
+                key in inputs for key in ("rows", "items")
+            ):
+                findings.append(
+                    {
+                        "code": "ui.list.inline_source_unsupported",
+                        "severity": "error",
+                        "path": f"{widget_path}.inputs",
+                        "message": (
+                            "ui.list does not read inputs.rows or inputs.items. Put static "
+                            "records in widget.dataSource={kind:'static',value:[...]} instead."
+                        ),
+                    }
+                )
+            if widget_type == "item.details" and "title" in inputs:
+                findings.append(
+                    {
+                        "code": "ui.details.title_input_misplaced",
+                        "severity": "error",
+                        "path": f"{widget_path}.inputs.title",
+                        "message": (
+                            "item.details renders its heading from the top-level widget.title. "
+                            "Move inputs.title to widget.title; $state references are supported there."
+                        ),
+                    }
+                )
+            dynamic_title = str(widget.get("title") or "").strip()
+            if (
+                widget_type == "item.details"
+                and widget.get("title_i18n") is not None
+                and (
+                    "$state." in dynamic_title
+                    or bool(re.search(r"\{[^{}]+\}", dynamic_title))
+                )
+            ):
+                findings.append(
+                    {
+                        "code": "ui.details.dynamic_title_i18n_conflict",
+                        "severity": "error",
+                        "path": f"{widget_path}.title_i18n",
+                        "message": (
+                            "item.details title_i18n is localized before the selected record "
+                            "or page-state title is resolved, so it overrides a dynamic widget.title. "
+                            "Remove title_i18n when widget.title contains $state references or "
+                            "record templates."
+                        ),
+                    }
+                )
             actions = (
                 widget.get("actions") if isinstance(widget.get("actions"), list) else []
             )
+            state_writes_by_event: dict[str, dict[str, list[int]]] = {}
             for action_index, action in enumerate(actions):
                 if (
                     not isinstance(action, Mapping)
-                    or str(action.get("type") or "") != "resourceOperation"
+                    or str(action.get("type") or "") != "updateState"
                 ):
                     continue
+                event = str(action.get("on") or "").strip()
                 params = (
                     action.get("params")
                     if isinstance(action.get("params"), Mapping)
                     else {}
                 )
+                for state_key in params:
+                    state_writes_by_event.setdefault(event, {}).setdefault(
+                        str(state_key), []
+                    ).append(action_index)
+            for event, state_writes in state_writes_by_event.items():
+                for state_key, action_indexes in state_writes.items():
+                    if event and len(action_indexes) > 1:
+                        findings.append(
+                            {
+                                "code": "ui.action.conflicting_state_writes",
+                                "severity": "error",
+                                "path": f"{widget_path}.actions",
+                                "message": (
+                                    f"Multiple updateState actions for event {event!r} write "
+                                    f"state key {state_key!r}. Use one event action and derive "
+                                    "the value from $event, or use distinct button/event ids."
+                                ),
+                                "action_indexes": action_indexes,
+                            }
+                        )
+            if widget_type == "ui.list":
+                action_events = {
+                    str(action.get("on") or "").strip()
+                    for action in actions
+                    if isinstance(action, Mapping)
+                }
+                buttons = (
+                    inputs.get("buttons")
+                    if isinstance(inputs.get("buttons"), list)
+                    else []
+                )
+                for button_index, button in enumerate(buttons):
+                    button_id = (
+                        str(button.get("id") or "").strip()
+                        if isinstance(button, Mapping)
+                        else ""
+                    )
+                    if button_id and f"click:{button_id}" not in action_events:
+                        findings.append(
+                            {
+                                "code": "ui.list.button_action_missing",
+                                "severity": "error",
+                                "path": f"{widget_path}.inputs.buttons[{button_index}]",
+                                "message": (
+                                    f"ui.list button {button_id!r} requires a top-level "
+                                    f"widget.actions entry with on='click:{button_id}'."
+                                ),
+                            }
+                        )
+                rows = (
+                    data_source.get("value")
+                    if str(data_source.get("kind") or "") == "static"
+                    and isinstance(data_source.get("value"), list)
+                    else []
+                )
+                filters = (
+                    inputs.get("filters")
+                    if isinstance(inputs.get("filters"), list)
+                    else []
+                )
+                for filter_index, filter_spec in enumerate(filters):
+                    if (
+                        not isinstance(filter_spec, Mapping)
+                        or str(filter_spec.get("operator") or "equals") != "equals"
+                    ):
+                        continue
+                    state_key = str(filter_spec.get("stateKey") or "").strip()
+                    field_key = str(filter_spec.get("key") or "").strip()
+                    control = query_controls_by_state.get(state_key)
+                    options = (
+                        control.get("options")
+                        if isinstance(control, Mapping)
+                        and isinstance(control.get("options"), list)
+                        else []
+                    )
+                    actual_values = {
+                        str(_read_path(row, field_key)).strip().lower()
+                        for row in rows
+                        if isinstance(row, Mapping)
+                        and _read_path(row, field_key) is not None
+                    }
+                    option_values = {
+                        str(option.get("value")).strip().lower()
+                        for option in options
+                        if isinstance(option, Mapping)
+                        and option.get("value") is not None
+                        and str(option.get("value")).strip().lower() not in {"", "all"}
+                    }
+                    if actual_values and option_values and actual_values.isdisjoint(option_values):
+                        findings.append(
+                            {
+                                "code": "ui.list.filter_options_nonmatching",
+                                "severity": "error",
+                                "path": f"{widget_path}.inputs.filters[{filter_index}]",
+                                "message": (
+                                    f"Filter options for state {state_key!r} cannot match any "
+                                    f"static value at field {field_key!r}. Use option values "
+                                    "that equal the record values; labels may remain user-facing."
+                                ),
+                                "actual_values": sorted(actual_values),
+                                "option_values": sorted(option_values),
+                            }
+                        )
+            if (
+                widget_type == "item.details"
+                and str(data_source.get("kind") or "") == "static"
+            ):
+                selected_state_key = str(inputs.get("selectedStateKey") or "").strip()
+                selected_value = (
+                    _read_path(initial_state, selected_state_key)
+                    if selected_state_key
+                    else None
+                )
+                static_value = data_source.get("value")
+                if (
+                    selected_state_key
+                    and selected_value not in {None, ""}
+                    and (
+                        not isinstance(static_value, Mapping)
+                        or str(selected_value) not in static_value
+                    )
+                ):
+                    findings.append(
+                        {
+                            "code": "ui.details.static_selection_unresolvable",
+                            "severity": "error",
+                            "path": f"{widget_path}.dataSource.value",
+                            "message": (
+                                f"item.details selectedStateKey {selected_state_key!r} resolves "
+                                f"to {selected_value!r}, but the static value is not a direct "
+                                "map containing that key. Put keyed records directly in "
+                                "dataSource.value."
+                            ),
+                        }
+                    )
+            for action_index, action in enumerate(actions):
+                params = (
+                    action.get("params")
+                    if isinstance(action, Mapping)
+                    and isinstance(action.get("params"), Mapping)
+                    else {}
+                )
+                expression_strings: list[str] = []
+
+                def _collect_expression_strings(value: Any) -> None:
+                    if isinstance(value, str):
+                        if re.search(
+                            r"\$(?:event|state)\.[A-Za-z0-9_.-]+\s*(?:===|!==|==|!=|&&|\|\||[<>]=?)",
+                            value,
+                        ):
+                            expression_strings.append(value)
+                        return
+                    if isinstance(value, Mapping):
+                        for nested in value.values():
+                            _collect_expression_strings(nested)
+                    elif isinstance(value, list):
+                        for nested in value:
+                            _collect_expression_strings(nested)
+
+                _collect_expression_strings(params)
+                if expression_strings:
+                    findings.append(
+                        {
+                            "code": "ui.action.expression_string_unsupported",
+                            "severity": "error",
+                            "path": f"{widget_path}.actions[{action_index}].params",
+                            "message": (
+                                "Action params do not evaluate JavaScript-like expression strings. "
+                                "Use a direct $event/$state reference, a bounded structured "
+                                "{kind:'expression',op:...} value, or expose the computed value "
+                                "as an event field."
+                            ),
+                            "actual": expression_strings,
+                        }
+                    )
+                invalid_expressions: list[dict[str, Any]] = []
+
+                def _collect_invalid_expressions(value: Any, path: str) -> None:
+                    if isinstance(value, Mapping):
+                        if value.get("kind") == "expression":
+                            op = str(value.get("op") or "").strip()
+                            args = value.get("args")
+                            if "left" in value or "right" in value:
+                                invalid_expressions.append(
+                                    {
+                                        "path": path,
+                                        "op": op,
+                                        "reason": "left_right_unsupported",
+                                    }
+                                )
+                            elif op in {"equals", "gt", "gte", "lt", "lte"} and (
+                                not isinstance(args, list) or len(args) != 2
+                            ):
+                                invalid_expressions.append(
+                                    {
+                                        "path": path,
+                                        "op": op,
+                                        "reason": "binary_args_required",
+                                    }
+                                )
+                        for nested_key, nested in value.items():
+                            _collect_invalid_expressions(nested, f"{path}.{nested_key}")
+                    elif isinstance(value, list):
+                        for nested_index, nested in enumerate(value):
+                            _collect_invalid_expressions(
+                                nested, f"{path}[{nested_index}]"
+                            )
+
+                _collect_invalid_expressions(params, "params")
+                if invalid_expressions:
+                    findings.append(
+                        {
+                            "code": "ui.action.expression_shape_invalid",
+                            "severity": "error",
+                            "path": f"{widget_path}.actions[{action_index}].params",
+                            "message": (
+                                "Declarative binary expressions use args, for example "
+                                "{kind:'expression',op:'equals',args:['$event.status','ready']}. "
+                                "The runtime does not read left/right. Prefer a direct $event "
+                                "boolean field when one is available."
+                            ),
+                            "actual": invalid_expressions,
+                        }
+                    )
+                if (
+                    not isinstance(action, Mapping)
+                    or str(action.get("type") or "") != "resourceOperation"
+                ):
+                    continue
                 if (
                     not str(action.get("target") or "").strip()
                     or not str(params.get("operation_id") or "").strip()
@@ -1008,11 +1593,6 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     )
             if widget_type != "collection.board":
                 continue
-            inputs = (
-                widget.get("inputs")
-                if isinstance(widget.get("inputs"), Mapping)
-                else {}
-            )
             lanes = inputs.get("lanes") if isinstance(inputs.get("lanes"), list) else []
             lane_ids = [
                 str(item.get("id") or "").strip()

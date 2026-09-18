@@ -75,7 +75,7 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     catalog = ui_capability_catalog()
     component_ids = {item["id"] for item in catalog["components"]}
 
-    assert catalog["catalog_version"] == "3.1.0"
+    assert catalog["catalog_version"] == "3.3.7"
     assert {
         "navigation.tabs",
         "navigation.breadcrumbs",
@@ -87,6 +87,225 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     )
     actions = get_ui_capability("ui.actions")
     assert "autoOverflow" in actions["interactions"]["overflow"]
+    assert actions["manifest"]["button_kind_values"] == [
+        "primary",
+        "secondary",
+        "danger",
+    ]
+    assert actions["manifest"]["button_overflow_values"] == ["auto", "never"]
+    assert "passive status text" in actions["manifest"]["scope"]
+    list_capability = get_ui_capability("ui.list")
+    assert "separate sibling ui.actions" in list_capability["manifest"]["button_shape"]
+    assert "object keyed by the literal modal id" in form["manifest"]["modal_composition"]
+    assert "params:{modalId:'<literal-id>'}" in form["manifest"]["modal_composition"]
+
+
+def test_natural_typed_form_request_selects_form_capability() -> None:
+    selected = selected_ui_capabilities(
+        "Add a typed form in an invite-person modal with email and role fields."
+    )
+
+    assert "ui.form" in selected["root_item_ids"]
+
+
+def test_ui_revision_correction_does_not_require_domain_persistence() -> None:
+    from adaos.services.ui_capabilities import qualify_ui_request as qualify_generic
+
+    request = (
+        "Correct only the current Web Desktop revision. Add five keys to the page "
+        "initialState, remove Invite button metadata, add one sibling ui.actions "
+        "widget, and make both form submit steps use the same action id."
+    )
+
+    qualification = qualify_generic(request)
+    assert qualification["requirements"]["prototype_resource"] is False
+
+
+def test_developer_ui_contract_validation_exposes_unreachable_form_step() -> None:
+    from adaos.sdk.developer import ui as developer_ui
+
+    webui = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "main",
+                        "layout": {
+                            "version": 2,
+                            "pattern": "document",
+                            "density": "comfortable",
+                            "contentWidth": "fluid",
+                            "scroll": "page",
+                            "regions": [],
+                            "interaction": {},
+                        },
+                        "widgets": [],
+                    }
+                },
+                "modals": {
+                    "invite": {
+                        "schema": {
+                            "id": "invite",
+                            "layout": {
+                                "version": 2,
+                                "pattern": "document",
+                                "density": "comfortable",
+                                "contentWidth": "fluid",
+                                "scroll": "page",
+                                "regions": [],
+                                "interaction": {},
+                            },
+                            "widgets": [
+                                {
+                                    "id": "invite-form",
+                                    "type": "ui.form",
+                                    "inputs": {
+                                        "fields": [{"id": "email", "type": "email"}],
+                                        "buttons": [{"id": "submit", "label": "Submit"}],
+                                    },
+                                    "actions": [
+                                        {"id": "submit", "on": "submit", "type": "updateState", "params": {"saved": True}},
+                                        {"id": "submit-close", "on": "submit", "type": "closeModal"},
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                },
+            }
+        },
+    }
+
+    result = developer_ui.validate_contract(webui)
+    assert result["ok"] is False
+    assert result["error"] == "webui_contract_invalid"
+    assert result["findings"][0]["code"] == "webui.form.submit_action_unreachable"
+
+
+def test_capability_validation_rejects_conflicting_state_writes_for_one_event() -> None:
+    from adaos.services.ui_capabilities import (
+        validate_webui_capabilities as validate_generic_capabilities,
+    )
+
+    webui = _board_webui()
+    board = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]
+    board["actions"] = [
+        {
+            "id": "open-first",
+            "on": "click:open",
+            "type": "updateState",
+            "params": {"lastAction": "first"},
+        },
+        {
+            "id": "open-second",
+            "on": "click:open",
+            "type": "updateState",
+            "params": {"lastAction": "second"},
+        },
+    ]
+
+    result = validate_generic_capabilities(webui)
+
+    assert result["ok"] is False
+    finding = next(
+        item
+        for item in result["findings"]
+        if item["code"] == "ui.action.conflicting_state_writes"
+    )
+    assert finding["action_indexes"] == [0, 1]
+
+
+def test_capability_validation_allows_composed_actions_for_one_event() -> None:
+    from adaos.services.ui_capabilities import (
+        validate_webui_capabilities as validate_generic_capabilities,
+    )
+
+    webui = _board_webui()
+    board = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]
+    board["actions"] = [
+        {
+            "id": "save",
+            "on": "submit",
+            "type": "updateState",
+            "params": {"saved": True},
+        },
+        {"id": "close", "on": "submit", "type": "closeModal"},
+    ]
+
+    result = validate_generic_capabilities(webui)
+
+    assert not any(
+        item["code"] == "ui.action.conflicting_state_writes"
+        for item in result["findings"]
+    )
+
+
+def test_capability_validation_rejects_unreachable_layout_variant_state() -> None:
+    from adaos.services.ui_capabilities import (
+        validate_webui_capabilities as validate_generic_capabilities,
+    )
+
+    webui = _board_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page["layout"]["variants"] = [
+        {
+            "id": "development",
+            "when": "$state.activeTab === 'development'",
+            "pattern": "document",
+            "density": "comfortable",
+            "regions": [],
+        }
+    ]
+    page["widgets"].insert(
+        0,
+        {
+            "id": "navigation",
+            "type": "navigation.tabs",
+            "inputs": {
+                "selectedStateKey": "$state.activeTab",
+                "buttons": [
+                    {"id": "home", "label": "Home"},
+                    {"id": "dev", "label": "Development"},
+                ],
+            },
+            "actions": [
+                {
+                    "on": "click:home",
+                    "type": "updateState",
+                    "params": {"activeTab": "home"},
+                },
+                {
+                    "on": "click:dev",
+                    "type": "updateState",
+                    "params": {"activeTab": "dev"},
+                },
+            ],
+        },
+    )
+    page["widgets"][1]["visibleIf"] = "$state.activeTab === 'development'"
+
+    result = validate_generic_capabilities(webui)
+
+    finding = next(
+        item
+        for item in result["findings"]
+        if item["code"] == "ui.layout.variant_state_unreachable"
+    )
+    assert finding["expected"] == "development"
+    assert finding["reachable_values"] == ["dev", "home"]
+    assert any(
+        item["code"] == "ui.component.visible_state_unreachable"
+        for item in result["findings"]
+    )
+
+    page["layout"]["variants"][0]["when"] = "$state.activeTab === 'dev'"
+    page["widgets"][1]["visibleIf"] = "$state.activeTab === 'dev'"
+    fixed = validate_generic_capabilities(webui)
+    assert not {
+        "ui.layout.variant_state_unreachable",
+        "ui.component.visible_state_unreachable",
+    } & {item["code"] for item in fixed["findings"]}
 
 
 def test_multilingual_search_selects_kanban_recipe() -> None:

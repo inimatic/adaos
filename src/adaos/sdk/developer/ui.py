@@ -17,6 +17,7 @@ from adaos.services.ui_capabilities import (
     selected_ui_capabilities as _selected_ui_capabilities,
     validate_webui_capabilities as _validate_webui_capabilities,
 )
+from adaos.services.webui_contract import validate_webui_contract as _validate_webui_contract
 
 
 def domain_packs_for_recipes(recipe_ids: Sequence[str]) -> list[str]:
@@ -62,6 +63,17 @@ def validate(webui: Mapping[str, Any]) -> dict[str, Any]:
     return _validate_webui_capabilities(webui)
 
 
+def validate_contract(webui: Mapping[str, Any]) -> dict[str, Any]:
+    findings = [issue.to_dict() for issue in _validate_webui_contract(webui)]
+    errors = [item for item in findings if item.get("level") == "error"]
+    return {
+        "ok": not errors,
+        "error": "webui_contract_invalid" if errors else None,
+        "detail": " | ".join(str(item.get("message") or "") for item in errors),
+        "findings": findings,
+    }
+
+
 def evaluate(
     request: str,
     webui: Mapping[str, Any],
@@ -90,4 +102,5 @@ __all__ = [
     "search",
     "select",
     "validate",
+    "validate_contract",
 ]

@@ -137,7 +137,8 @@ _OPERATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "create",
         re.compile(
-            r"\b(?:add|create|capture|record|добав|созда|запис(?:а|ы)|запиш)\w*\b",
+            r"\b(?:add(?:s|ed|ing)?|creat(?:e|es|ed|ing)|captur(?:e|es|ed|ing)|"
+            r"record(?:s|ed|ing)?|добав\w*|созда\w*|запис(?:а|ы)\w*|запиш\w*)\b",
             re.IGNORECASE,
         ),
     ),
@@ -240,9 +241,7 @@ _EXCLUSION_END_PATTERN = re.compile(
 )
 _EXCLUSION_START_PATTERN = re.compile(
     r"^(?:do\s+not|don't)\s+(?:implement|include)\b|"
-    r"^(?:do\s+not|don't)\s+(?:add|remove|delete|create|reorder|rename|change|modify)\b"
-    r".*\b(?:widgets?|fields?|actions?|bindings?|resources?|locale\s+keys?|layout\s+regions?|"
-    r"component\s+ids?|field\s+identifiers?)\b|"
+    r"^(?:do\s+not|don't)\s+(?:add|remove|delete|create|reorder|rename|change|modify|represent)\b|"
     r"^не\s+(?:реализ\w*|включ\w*)\b", re.IGNORECASE
 )
 
@@ -376,9 +375,54 @@ def _operation_mentions(
     for _start, _end, _priority, kind, match in sorted(
         selected, key=lambda item: item[0]
     ):
+        matched = match.group(0).lower()
+        prefix = clause[: match.start()]
+        if re.search(
+            r"\b(?:do\s+not|don't|never|не)\s+(?:(?:[\w-]+)\s+){0,8}$",
+            prefix,
+            flags=re.IGNORECASE,
+        ):
+            continue
+        # ``records`` is overwhelmingly a collection noun in product briefs.
+        # The verb forms that express capture remain available as ``record``
+        # and ``recorded`` without turning every records/fields description
+        # into an application create operation.
+        if kind == "create" and matched == "records":
+            continue
+        if kind == "create" and matched in {"record", "records"}:
+            suffix = clause[match.end():]
+            if re.match(
+                r"\s+(?:field|fields|id|identifier|metadata|details?)\b",
+                suffix,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            if re.search(
+                r"\b(?:a|an|the|this|that|each|every|selected|current|existing|"
+                r"application|attention|prototype)\s+$",
+                prefix,
+                flags=re.IGNORECASE,
+            ):
+                continue
+        if kind == "update" and matched == "update":
+            suffix = clause[match.end():]
+            if re.search(r"\b(?:a|an|the|with)\s+$", prefix, flags=re.IGNORECASE):
+                continue
+            if re.match(
+                r"\s+(?:available|policy|status|channel|version|settings?)\b",
+                suffix,
+                flags=re.IGNORECASE,
+            ):
+                continue
         if (kind == "create" and match.group(0).lower() in {"record", "records"}
             and mentions and mentions[-1][0] in _READ_OPERATIONS
             and not _JOB_SEPARATOR_PATTERN.search(clause, mentions[-1][1].end(), match.start())):
+            continue
+        if kind == "transition" and matched == "complete" and re.search(
+            r"\b(?:a|an|the|this|that)\s*$",
+            clause[:match.start()],
+            flags=re.IGNORECASE,
+        ):
             continue
         if mentions and mentions[-1][0] == kind:
             previous = mentions[-1][1]

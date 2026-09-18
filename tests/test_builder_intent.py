@@ -248,6 +248,44 @@ def test_source_preservation_directive_does_not_become_crud_obligations() -> Non
     )
 
 
+def test_declarative_static_record_correction_does_not_require_resource_crud() -> None:
+    from adaos.services.ui_capabilities import qualify_ui_request
+
+    statement = (
+        "Give each static attention record an actionMessage field. Replace two "
+        "updateState actions for click:open with one action that writes "
+        "lastSystemAction from $event.actionMessage."
+    )
+
+    qualified = qualify_ui_request(statement)
+
+    assert qualified["requirements"]["prototype_resource"] is False
+
+
+def test_end_user_record_crud_still_requires_prototype_resources() -> None:
+    from adaos.services.ui_capabilities import qualify_ui_request
+
+    qualified = qualify_ui_request(
+        "Allow a coordinator to create, edit, and archive inspection records."
+    )
+
+    assert qualified["requirements"]["prototype_resource"] is True
+
+
+def test_additional_condition_is_not_parsed_as_add_operation() -> None:
+    from adaos.services.ui_capabilities import qualify_ui_request
+
+    statement = (
+        "For each named widget, replace only the activeTab equality value in "
+        "visibleIf. Preserve every additional condition."
+    )
+
+    qualified = qualify_ui_request(statement)
+
+    assert "create" not in qualified["requirements"]["brief_operation_kinds"]
+    assert qualified["requirements"]["prototype_resource"] is False
+
+
 def test_brief_drives_generic_capabilities_without_internal_prompt_terms() -> None:
     selection = selected_ui_capabilities(
         "Team members need to scan work, open one item, add a request, "
@@ -537,3 +575,50 @@ def test_accepted_brief_merge_preserves_project_origin_and_current_jobs() -> Non
         for item in merged["residual_requirements"]
         for evidence in item["evidence"]
     )
+
+
+def test_dashboard_refinement_does_not_invent_create_or_transition_jobs() -> None:
+    brief = compile_prototype_brief(
+        "Refine the dashboard. Do not add another top bar. "
+        "A command may update bounded local prototype state; do not represent it "
+        "as an unused record field. Show the complete Home hierarchy."
+    )
+
+    kinds = {row["kind"] for row in brief["operations"]}
+    assert "create" not in kinds
+    assert "transition" not in kinds
+    assert [row["statement"] for row in brief["exclusions"]] == [
+        "Do not add another top bar",
+        "do not represent it as an unused record field",
+    ]
+
+
+def test_dashboard_fixture_refinement_does_not_treat_record_nouns_as_create() -> None:
+    brief = compile_prototype_brief(
+        "Preserve all working content and synthetic records. "
+        "Do not merge the peer regions and do not add widgets. "
+        "Give every application record separate purpose and lastActivity fields. "
+        "Add an actionLabel field to each attention record."
+    )
+
+    operations = [(row["kind"], row["statement"]) for row in brief["operations"]]
+    assert all("Do not add" not in statement for _kind, statement in operations)
+    assert operations == [
+        ("create", "Add an actionLabel field to each attention record")
+    ]
+
+
+def test_prototype_copy_does_not_turn_update_nouns_or_negative_effects_into_jobs() -> None:
+    brief = compile_prototype_brief(
+        "Seed installed records with an update available and an update policy. "
+        "Selecting a card reveals that record in the detail region. "
+        "Do not imply that prototype actions changed a real installation."
+    )
+
+    operations = [(row["kind"], row["statement"]) for row in brief["operations"]]
+    assert operations == [
+        (
+            "inspect",
+            "Seed installed records with an update available and an update policy",
+        )
+    ]

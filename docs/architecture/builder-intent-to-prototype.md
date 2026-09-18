@@ -744,6 +744,25 @@ default. They remain available through bounded ref retrieval for recovery or
 diagnosis. Retrieval may be deterministic prefetch or an actual read-only
 tool; a textual `drill_down` hint is not retrieval.
 
+An explicit correction of named existing widgets uses a scoped document view,
+not a copied miniature application. The model receives the named widgets,
+state writers on which their visibility depends, relevant layout regions and
+variants, referenced modals, used locale keys, and an identity-only inventory
+of omitted widgets. The complete canonical document and its digest remain on
+the server. Model patches use stable `@id` paths against that canonical
+document; replacing a partially supplied collection is forbidden. The merged
+candidate then passes full-document schema, capability, reachability and
+browser validation. This route is admitted only when the request explicitly
+bounds the correction and names existing widget identities. New sections,
+cross-cutting redesigns and ambiguous requests retain a wider stage-specific
+context rather than pretending to be local edits.
+
+Existing complete locale dictionaries are not retransmitted for a targeted
+non-localization change. Recent history and development context are bounded by
+count and field size, while immutable source references preserve access to the
+complete evidence. These reductions are context-selection decisions, not output
+limits, and require measured candidate-preservation and acceptance evidence.
+
 Every route has independent ceilings for fresh input, cached input, output,
 wall time, model attempts, and repair attempts. Exceeding a ceiling produces a
 typed partial result or clarification. It does not silently widen context or
@@ -784,6 +803,15 @@ calls and permits a repair to expose a defect that already existed in the
 primary candidate. Deterministic normalization is allowed only for
 unambiguous representation aliases and is retained as evidence; semantic
 invention remains a model/user decision.
+
+A retained normalized candidate is replayed locally before another provider
+request. Replay rechecks source/request identity, current revision, the complete
+current contract and request postconditions. It cannot make an invalid historic
+candidate valid, but a candidate that was rejected only by an earlier downstream
+finding can proceed without another paid generation. A syntactically valid
+no-op patch may reach request qualification when the requested postcondition is
+already true; the low-level patch parser still rejects a complete no-op when no
+higher-level qualification owns that decision.
 
 ## Component Contract And Client Growth
 
@@ -851,6 +879,15 @@ constraints together, so a repair does not discover one missing edge per call.
 Literal field identifiers and nested data paths must have consistent resolution
 across compilation, resource queries, display and command payloads; a supported
 identifier cannot render correctly in one widget and disappear in another.
+
+State-bearing UI validation treats action writes and visibility as a graph.
+Conflicting writes to the same key in one action sequence, values unreachable
+from initial state or declared controls, unsupported JavaScript-like expression
+strings, malformed structured expressions, and static detail selections that
+cannot resolve are errors. Browser-facing repeated commands expose stable
+command identities so an implementing agent can bind observations to authored
+actions without private DOM selectors. Exact and mixed `$state.*` values use
+the same declarative resolver in details fields as other Client surfaces.
 
 Record types come from declared semantic fields, not from observed fixture
 values. Empty collections and all-null optional fields retain their schema;

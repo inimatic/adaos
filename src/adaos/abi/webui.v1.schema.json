@@ -1902,6 +1902,10 @@
         "id": { "$ref": "#/$defs/id" },
         "label": { "type": "string" },
         "label_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+        "itemLabelKey": {
+          "$ref": "#/$defs/fieldPath",
+          "description": "For repeated collection commands, resolve visible label text from this item field and fall back to label."
+        },
         "title": {
           "type": "string",
           "description": "Concise native tooltip and accessible name for the command. Falls back to description, label, then id."
@@ -1925,6 +1929,15 @@
           "type": "string",
           "enum": ["solid", "outline", "clear"],
           "description": "Optional presentation emphasis. Prefer kind over raw colors."
+        },
+        "priority": {
+          "type": "number",
+          "description": "Relative visibility priority used by automatically overflowing command surfaces."
+        },
+        "overflow": {
+          "type": "string",
+          "enum": ["auto", "never"],
+          "description": "Keep a required command visible with never; auto lets the renderer move it into overflow."
         },
         "disabled": { "type": "boolean" },
         "visibleIf": {
@@ -3111,7 +3124,10 @@
           "type": "string",
           "enum": ["add", "subtract", "multiply", "divide", "min", "max", "round", "equals", "gt", "gte", "lt", "lte", "and", "or", "not", "if", "count", "formatNumber"]
         },
-        "args": { "type": "array" },
+        "args": {
+          "type": "array",
+          "description": "Ordered operands. Binary operators such as equals/gt/gte/lt/lte consume exactly two args; left/right properties are not evaluated."
+        },
         "condition": {},
         "then": {},
         "else": {},

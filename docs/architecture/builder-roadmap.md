@@ -191,6 +191,16 @@ runtime/browser evidence; BIP-05/BIP-27 own matched benefit and regression evide
 The target is lower total cost/time to a valid accepted change, not fewer commands
 or shorter isolated answers. Do not hide infrastructure failures with more retries.
 
+- [x] `[must]` Route explicit named-widget corrections through a canonical
+  server-side document plus bounded target/dependency/layout/modal/locale context.
+  The retained Web Desktop correction reduced actual GPT-5 input by 75.0% and
+  produced an exact one-value change that passed full validation and wide/compact
+  browser review. Detailed scope and evidence remain in BIP-14.
+- [ ] `[must]` Extend measured context composition to broad additions and
+  cross-cutting changes without treating them as surgical patches. Compare
+  accepted outcome, repair count, cached/fresh tokens and wall time before
+  changing the default route.
+
 ## Phase 8. Product Experience
 
 The existing Builder provides a searchable/sortable project table, exact
