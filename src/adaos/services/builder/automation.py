@@ -41,7 +41,7 @@ from adaos.services.skill_factory_worker import LocalSkillFactoryWorker, context
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
-STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.18.3"
+STANDARD_PROMPT_VERSION = "adaos-skill-realization/0.18.4"
 DESCRIPTOR_DISCOVERY_PROFILE_VERSION = "adaos-descriptor-search/1.1"
 FINALIZATION_HEARTBEAT_SECONDS = 10.0
 TRIAL_PREPARATION_RECOVERY_GRACE_SECONDS = 300.0
@@ -6432,6 +6432,64 @@ class BuilderAutomationService:
             return None
         return self._hydrate_session_compatibility(raw) if isinstance(raw, Mapping) else None
 
+    def diagnostics(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        stream: str = "events",
+        query: str = "",
+        cursor: str | None = None,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        """Read a bounded Automation log through a project-addressed contract.
+
+        The caller never supplies a filesystem path. The current task and its
+        allowlisted stream are resolved from Builder's durable session.
+        """
+
+        from adaos.services.root_mcp.logs import search_text_content
+
+        kind, project_id = self._project_ref(object_type, object_id)
+        stream_token = str(stream or "events").strip().lower()
+        stream_files = {
+            "events": "codex-live.jsonl",
+            "stderr": "codex-live.stderr.log",
+        }
+        if stream_token not in stream_files:
+            raise ValueError("automation_diagnostic_stream_invalid")
+        session = self.get_session(kind, project_id)
+        if not session:
+            raise ValueError("automation_session_not_found")
+        task = session.get("task") if isinstance(session.get("task"), Mapping) else {}
+        task_id = str(session.get("current_task_id") or task.get("task_id") or "").strip()
+        if not task_id or _safe_token(task_id) != task_id:
+            raise ValueError("automation_task_id_invalid")
+
+        runs_root = Path(self.runs_root).resolve()
+        output_root = (runs_root / task_id / "output").resolve()
+        if not output_root.is_relative_to(runs_root):
+            raise ValueError("automation_diagnostic_scope_invalid")
+        source = (output_root / stream_files[stream_token]).resolve()
+        if source.parent != output_root:
+            raise ValueError("automation_diagnostic_scope_invalid")
+        candidates = [source] if source.is_file() else []
+        search = search_text_content(
+            candidates,
+            query=query,
+            cursor=cursor,
+            page_size=page_size,
+            cursor_scope=f"automation:{kind}:{project_id}:{task_id}:{stream_token}",
+        )
+        return {
+            "schema": "adaos.builder.automation_diagnostics.v1",
+            "project": {"type": kind, "id": project_id},
+            "task_id": task_id,
+            "stream": stream_token,
+            "available": bool(candidates),
+            "content_search": search,
+        }
+
     def release_candidate_runtime(
         self,
         *,
@@ -7342,6 +7400,7 @@ class BuilderAutomationService:
                 request_mcp["requested_scope"] = [
                     "requirement_spec",
                     "staging_validation",
+                    "runtime_diagnostics",
                 ]
         else:
             request_mcp = _sanitized_mcp_profile(session.get("mcp")) or {
@@ -7350,6 +7409,7 @@ class BuilderAutomationService:
                     "requirement_spec",
                     "mock_runtime",
                     "staging_validation",
+                    "runtime_diagnostics",
                 ]
             }
         subnet_id = _builder_subnet_id(session)

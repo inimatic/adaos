@@ -4174,6 +4174,12 @@ def test_bound_staging_scope_omits_managed_target_discovery() -> None:
         "list_managed_targets",
         "get_managed_target",
     ]
+    assert task_scope_enabled_tools(["read_runtime_diagnostics"]) == [
+        "get_skill_logs",
+        "get_adaos_logs",
+        "get_events_logs",
+        "get_yjs_logs",
+    ]
 
 
 def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(

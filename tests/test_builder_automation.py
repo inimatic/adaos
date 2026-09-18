@@ -716,10 +716,66 @@ def test_dev_ticket_repair_with_root_mcp_admits_sdk_metadata_and_bound_validatio
 
     assert task["realize_request"]["mcp"] == {
         "enabled": True,
-        "requested_scope": ["requirement_spec", "staging_validation"],
+        "requested_scope": [
+            "requirement_spec",
+            "staging_validation",
+            "runtime_diagnostics",
+        ],
         "subnet_id": "sn_demo",
         "bound_target_id": "hub:sn_demo",
     }
+
+
+def test_automation_diagnostics_are_project_addressed_and_paginated(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.diagnostics",
+        "task": {"task_id": "task.diagnostics"},
+    }
+    service._save_session(session)
+    output = tmp_path / "runs" / "task.diagnostics" / "output"
+    output.mkdir(parents=True)
+    (output / "codex-live.stderr.log").write_text(
+        "noise\nERROR first\ncontext\nerror second\n",
+        encoding="utf-8",
+    )
+
+    first = service.diagnostics(
+        object_type="scenario",
+        object_id="recipes",
+        stream="stderr",
+        query="error",
+        page_size=1,
+    )
+    search = first["content_search"]
+    assert first["available"] is True
+    assert [item["text"] for item in search["matches"]] == ["error second"]
+    assert search["next_cursor"]
+    assert all("path" not in item for item in search["matches"])
+
+    second = service.diagnostics(
+        object_type="scenario",
+        object_id="recipes",
+        stream="stderr",
+        query="error",
+        cursor=search["next_cursor"],
+        page_size=1,
+    )
+    assert [item["text"] for item in second["content_search"]["matches"]] == [
+        "ERROR first"
+    ]
+
+    with pytest.raises(ValueError, match="diagnostic_stream_invalid"):
+        service.diagnostics(
+            object_type="scenario",
+            object_id="recipes",
+            stream="../../private",
+        )
 
 
 def test_builder_adapts_inferred_context_budget_for_required_capsules(

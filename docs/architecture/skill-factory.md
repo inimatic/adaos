@@ -256,6 +256,7 @@ Canonical MVP task-scope capabilities:
 - `read_datasource_schema`
 - `read_mock_data`
 - `run_staging_validation`
+- `read_runtime_diagnostics`
 
 Builder may use authoring aliases such as `capability_snapshot`,
 `requirement_spec`, or `mock_runtime`, but Root normalizes assignments to the
@@ -513,6 +514,7 @@ dev_task_assignment:
       - read_requirements
       - read_mock_data
       - run_staging_validation
+      - read_runtime_diagnostics
 
   codex:
     instruction_file: .adaos/tasks/task_001/task.md

@@ -225,6 +225,7 @@ def _assignment_mcp_scope(raw_scope: Any) -> list[str]:
         "mock_runtime": "read_mock_data",
         "mock_data": "read_mock_data",
         "staging_validation": "run_staging_validation",
+        "runtime_diagnostics": "read_runtime_diagnostics",
     }
     scope: list[str] = []
     for item in _string_list(raw_scope):
@@ -233,7 +234,13 @@ def _assignment_mcp_scope(raw_scope: Any) -> list[str]:
         if normalized and normalized not in scope:
             scope.append(normalized)
     if not scope:
-        scope = ["read_capability_snapshot", "read_requirements", "read_mock_data", "run_staging_validation"]
+        scope = [
+            "read_capability_snapshot",
+            "read_requirements",
+            "read_mock_data",
+            "run_staging_validation",
+            "read_runtime_diagnostics",
+        ]
     return scope
 
 
@@ -925,6 +932,7 @@ class SkillFactoryService:
                 "requirement_spec",
                 "mock_runtime",
                 "staging_validation",
+                "runtime_diagnostics",
             ]
         acceptance = _mapping(raw.get("acceptance"))
         draft_quality = _mapping(draft.get("quality_gates"))

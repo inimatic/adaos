@@ -673,6 +673,9 @@ class _FakeRootMcpClient:
         limit: int = 5,
         lines: int = 200,
         contains: str | None = None,
+        query: str | None = None,
+        cursor: str | None = None,
+        page_size: int = 50,
         file: str | None = None,
         scope: str | None = None,
         include_hub: bool | None = None,
@@ -681,7 +684,7 @@ class _FakeRootMcpClient:
             (
                 "get_yjs_logs",
                 "",
-                {"limit": limit, "lines": lines, "contains": contains, "file": file, "scope": scope, "include_hub": include_hub},
+                {"limit": limit, "lines": lines, "contains": contains, "query": query, "cursor": cursor, "page_size": page_size, "file": file, "scope": scope, "include_hub": include_hub},
             )
         )
         return {"logs": {"category": "yjs", "items": [{"rel": file or "yjs_load_mark.jsonl"}]}}
@@ -693,6 +696,9 @@ class _FakeRootMcpClient:
         lines: int = 200,
         skill: str | None = None,
         contains: str | None = None,
+        query: str | None = None,
+        cursor: str | None = None,
+        page_size: int = 50,
         file: str | None = None,
         scope: str | None = None,
         include_hub: bool | None = None,
@@ -701,7 +707,7 @@ class _FakeRootMcpClient:
             (
                 "get_skill_logs",
                 skill or "",
-                {"limit": limit, "lines": lines, "contains": contains, "file": file, "scope": scope, "include_hub": include_hub},
+                {"limit": limit, "lines": lines, "contains": contains, "query": query, "cursor": cursor, "page_size": page_size, "file": file, "scope": scope, "include_hub": include_hub},
             )
         )
         return {"logs": {"category": "skills", "items": [{"rel": f"service.{skill or 'infra_access_skill'}.log"}]}}
@@ -712,6 +718,9 @@ class _FakeRootMcpClient:
         limit: int = 5,
         lines: int = 200,
         contains: str | None = None,
+        query: str | None = None,
+        cursor: str | None = None,
+        page_size: int = 50,
         file: str | None = None,
         scope: str | None = None,
         include_hub: bool | None = None,
@@ -720,7 +729,7 @@ class _FakeRootMcpClient:
             (
                 "get_adaos_logs",
                 "",
-                {"limit": limit, "lines": lines, "contains": contains, "file": file, "scope": scope, "include_hub": include_hub},
+                {"limit": limit, "lines": lines, "contains": contains, "query": query, "cursor": cursor, "page_size": page_size, "file": file, "scope": scope, "include_hub": include_hub},
             )
         )
         return {"logs": {"category": "adaos", "items": [{"rel": "adaos.log"}]}}
@@ -731,6 +740,9 @@ class _FakeRootMcpClient:
         limit: int = 5,
         lines: int = 200,
         contains: str | None = None,
+        query: str | None = None,
+        cursor: str | None = None,
+        page_size: int = 50,
         file: str | None = None,
         scope: str | None = None,
         include_hub: bool | None = None,
@@ -739,7 +751,7 @@ class _FakeRootMcpClient:
             (
                 "get_events_logs",
                 "",
-                {"limit": limit, "lines": lines, "contains": contains, "file": file, "scope": scope, "include_hub": include_hub},
+                {"limit": limit, "lines": lines, "contains": contains, "query": query, "cursor": cursor, "page_size": page_size, "file": file, "scope": scope, "include_hub": include_hub},
             )
         )
         return {"logs": {"category": "events", "items": [{"rel": file or "events.log"}]}}
@@ -1265,7 +1277,16 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             "method": "tools/call",
             "params": {
                 "name": "get_yjs_logs",
-                "arguments": {"limit": 3, "lines": 120, "contains": "load_mark", "scope": "subnet_active", "include_hub": False},
+                "arguments": {
+                    "limit": 3,
+                    "lines": 120,
+                    "contains": "load_mark",
+                    "query": "timeout",
+                    "cursor": "cursor-1",
+                    "page_size": 25,
+                    "scope": "subnet_active",
+                    "include_hub": False,
+                },
             },
         }
     )
@@ -1474,7 +1495,7 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert (
         "get_yjs_logs",
         "",
-        {"limit": 3, "lines": 120, "contains": "load_mark", "file": None, "scope": "subnet_active", "include_hub": False},
+        {"limit": 3, "lines": 120, "contains": "load_mark", "query": "timeout", "cursor": "cursor-1", "page_size": 25, "file": None, "scope": "subnet_active", "include_hub": False},
     ) in fake_client.calls
     assert ("get_subnet_info", "", {}) in fake_client.calls
 

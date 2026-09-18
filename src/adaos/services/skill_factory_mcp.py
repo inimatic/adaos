@@ -24,6 +24,12 @@ TASK_SCOPE_TOOL_ALLOWLIST: dict[str, tuple[str, ...]] = {
         "list_managed_targets",
         "get_managed_target",
     ),
+    "read_runtime_diagnostics": (
+        "get_skill_logs",
+        "get_adaos_logs",
+        "get_events_logs",
+        "get_yjs_logs",
+    ),
 }
 
 

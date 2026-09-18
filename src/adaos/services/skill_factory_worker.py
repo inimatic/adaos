@@ -6954,8 +6954,20 @@ bookkeeping.
             "`accepted-prototype-identity.json`",
             f"`{(input_dir / 'accepted-prototype-identity.json').resolve().as_posix()}`",
         )
+        prompt_root_mcp = {
+            key: value
+            for key, value in (root_mcp or {}).items()
+            if key
+            not in {
+                "bearer_env_present",
+                "bearer_token_env_var",
+                "expires_at",
+                "lease_id",
+                "token_ref",
+            }
+        }
         root_mcp_context = (
-            json.dumps(root_mcp, ensure_ascii=False, indent=2, sort_keys=True)
+            json.dumps(prompt_root_mcp, ensure_ascii=False, indent=2, sort_keys=True)
             if root_mcp
             else "No task-scoped Root MCP route was admitted."
         )
@@ -6978,22 +6990,19 @@ No MCP server is exposed to this model turn; do not repeat descriptor discovery.
 ```
 
 When `bound_target_id` is present, it is the only authorized Root target for
-this task. Never substitute a skill, scenario, project, or component ID. Omit
-`target_id` when the tool permits it; otherwise pass `bound_target_id` exactly.
-This is the admitted configuration, not proof of successful CLI discovery.
-Use the client's tool search when a declared tool is not initially visible.
+this task. Never substitute a skill, scenario, project, or component ID. Omit `target_id` when allowed,
+otherwise pass `bound_target_id` exactly. Use tool search for a hidden declared tool.
+This configuration is not proof of successful CLI discovery.
 Call MCP only for a missing contract or explicitly required task validation;
 an optional route does not require a ceremonial call when local inputs suffice.
+After an observed failure, search admitted logs narrowly and page only when needed;
+never infer host paths, dump logs, or treat diagnostics as acceptance evidence.
 Do not list MCP resources or resource templates, and do not invoke this route
 through a shell, HTTP client, or bearer-token environment expansion.
-For each independently missing capability, use a narrow `search_descriptors`
-query, then disclose the selected method with `get_descriptor_item`. SDK queries
-can set `descriptor_ids:["sdk_metadata"]` to avoid unrelated catalogs. Reuse
-retrieved contracts; do not repeat identical discovery or dump the full SDK.
-If discovery or a tool call actually fails, report that observed failure and
-whether it blocks this task. Do not infer a Root outage from an initially hidden
-tool or request credentials; complete supported work using admitted local inputs.
-Do not read, print, or inspect bearer-token environment values.
+For a missing capability, call narrow `search_descriptors`, then
+`get_descriptor_item`; use `descriptor_ids:["sdk_metadata"]` for SDK-only search.
+Reuse results. Report observed call failures and blockers; a hidden tool is not a
+Root outage. Never inspect bearer-token environment values.
 """
         else:
             root_mcp_section = ""

@@ -17,6 +17,63 @@ from adaos.services.ui_runtime_diagnostics import ingest_ui_runtime_diagnostics
 import adaos.services.ui_runtime_diagnostics as ui_runtime_diagnostics
 
 
+def test_local_log_content_search_is_bounded_paginated_and_cursor_scoped(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "events.log"
+    log_path.write_text(
+        "unrelated\nNeedle first\nmore context\nneedle second\n",
+        encoding="utf-8",
+    )
+
+    first = list_local_logs(
+        category="events",
+        logs_dir=tmp_path,
+        query="NEEDLE",
+        page_size=1,
+    )
+    search = first["content_search"]
+    assert [item["text"] for item in search["matches"]] == ["needle second"]
+    assert search["has_more"] is True
+    assert search["next_cursor"]
+    assert "tail" not in first["items"][0]
+    assert "path" not in first["items"][0]
+    assert "path" not in search["matches"][0]
+
+    second = list_local_logs(
+        category="events",
+        logs_dir=tmp_path,
+        query="needle",
+        cursor=search["next_cursor"],
+        page_size=1,
+    )
+    assert [item["text"] for item in second["content_search"]["matches"]] == [
+        "Needle first"
+    ]
+    assert second["content_search"]["has_more"] is False
+
+    with pytest.raises(ValueError, match="invalid_log_search_cursor"):
+        list_local_logs(
+            category="adaos",
+            logs_dir=tmp_path,
+            query="needle",
+            cursor=search["next_cursor"],
+            page_size=1,
+        )
+
+
+def test_local_log_read_rejects_paths_outside_managed_directory(tmp_path: Path) -> None:
+    payload = list_local_logs(
+        category="events",
+        logs_dir=tmp_path,
+        file="../events.log",
+    )
+
+    assert payload["available"] is False
+    assert payload["error"] == "path_outside_logs_dir"
+    assert payload["items"] == []
+
+
 @pytest.mark.asyncio
 async def test_ui_runtime_diagnostics_resolves_log_paths_off_event_loop(tmp_path: Path, monkeypatch) -> None:
     main_thread_id = threading.get_ident()

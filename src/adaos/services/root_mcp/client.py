@@ -1388,6 +1388,9 @@ class RootMcpClient:
         limit: int = 5,
         lines: int = 200,
         contains: str | None = None,
+        query: str | None = None,
+        cursor: str | None = None,
+        page_size: int = 50,
         skill: str | None = None,
         file: str | None = None,
         scope: str | None = None,
@@ -1399,6 +1402,11 @@ class RootMcpClient:
         }
         if contains:
             params["contains"] = contains
+        if query:
+            params["query"] = query
+        if cursor:
+            params["cursor"] = cursor
+        params["page_size"] = int(page_size)
         if skill:
             params["skill"] = skill
         if file:
@@ -1415,11 +1423,14 @@ class RootMcpClient:
         limit: int = 5,
         lines: int = 200,
         contains: str | None = None,
+        query: str | None = None,
+        cursor: str | None = None,
+        page_size: int = 50,
         file: str | None = None,
         scope: str | None = None,
         include_hub: bool | None = None,
     ) -> dict[str, Any]:
-        return self.get_logs("yjs", limit=limit, lines=lines, contains=contains, file=file, scope=scope, include_hub=include_hub)
+        return self.get_logs("yjs", limit=limit, lines=lines, contains=contains, query=query, cursor=cursor, page_size=page_size, file=file, scope=scope, include_hub=include_hub)
 
     def get_skill_logs(
         self,
@@ -1428,11 +1439,14 @@ class RootMcpClient:
         lines: int = 200,
         skill: str | None = None,
         contains: str | None = None,
+        query: str | None = None,
+        cursor: str | None = None,
+        page_size: int = 50,
         file: str | None = None,
         scope: str | None = None,
         include_hub: bool | None = None,
     ) -> dict[str, Any]:
-        return self.get_logs("skills", limit=limit, lines=lines, skill=skill, contains=contains, file=file, scope=scope, include_hub=include_hub)
+        return self.get_logs("skills", limit=limit, lines=lines, skill=skill, contains=contains, query=query, cursor=cursor, page_size=page_size, file=file, scope=scope, include_hub=include_hub)
 
     def get_adaos_logs(
         self,
@@ -1440,11 +1454,14 @@ class RootMcpClient:
         limit: int = 5,
         lines: int = 200,
         contains: str | None = None,
+        query: str | None = None,
+        cursor: str | None = None,
+        page_size: int = 50,
         file: str | None = None,
         scope: str | None = None,
         include_hub: bool | None = None,
     ) -> dict[str, Any]:
-        return self.get_logs("adaos", limit=limit, lines=lines, contains=contains, file=file, scope=scope, include_hub=include_hub)
+        return self.get_logs("adaos", limit=limit, lines=lines, contains=contains, query=query, cursor=cursor, page_size=page_size, file=file, scope=scope, include_hub=include_hub)
 
     def get_events_logs(
         self,
@@ -1452,11 +1469,14 @@ class RootMcpClient:
         limit: int = 5,
         lines: int = 200,
         contains: str | None = None,
+        query: str | None = None,
+        cursor: str | None = None,
+        page_size: int = 50,
         file: str | None = None,
         scope: str | None = None,
         include_hub: bool | None = None,
     ) -> dict[str, Any]:
-        return self.get_logs("events", limit=limit, lines=lines, contains=contains, file=file, scope=scope, include_hub=include_hub)
+        return self.get_logs("events", limit=limit, lines=lines, contains=contains, query=query, cursor=cursor, page_size=page_size, file=file, scope=scope, include_hub=include_hub)
 
     def get_subnet_info(
         self,

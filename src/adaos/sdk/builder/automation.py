@@ -275,6 +275,30 @@ def get_state(
     return result
 
 
+def get_diagnostics(
+    *,
+    object_type: str,
+    object_id: str,
+    stream: str = "events",
+    query: str = "",
+    cursor: str | None = None,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """Read one bounded page of the current Automation task diagnostics."""
+
+    return dict(
+        _service().diagnostics(
+            object_type=object_type,
+            object_id=object_id,
+            stream=stream,
+            query=query,
+            cursor=cursor,
+            page_size=page_size,
+        )
+        or {}
+    )
+
+
 def trial_verification_evidence(
     *,
     object_type: str,
@@ -485,6 +509,7 @@ def release_candidate_runtime(
 
 __all__ = [
     "get_clarification",
+    "get_diagnostics",
     "answer_clarification",
     "resume_clarification",
     "get_state",

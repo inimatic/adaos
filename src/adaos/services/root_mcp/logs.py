@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import hashlib
+import json
 import os
 import time
 from pathlib import Path
@@ -11,6 +15,10 @@ import requests
 from adaos.services.agent_context import get_ctx
 
 LOG_CATEGORIES: set[str] = {"adaos", "events", "yjs", "skills"}
+_MAX_SEARCH_QUERY_CHARS = 512
+_MAX_SEARCH_PAGE_SIZE = 200
+_MAX_SEARCH_BYTES = 8 * 1024 * 1024
+_MAX_SEARCH_BYTES_PER_FILE = 2 * 1024 * 1024
 
 
 def normalize_log_category(category: str) -> str:
@@ -165,6 +173,151 @@ def tail_text_lines(path: Path, *, max_lines: int) -> list[str]:
         return []
 
 
+def _search_cursor(*, query: str, cursor_scope: str, offset: int) -> str:
+    payload = {
+        "v": 1,
+        "q": hashlib.sha256(
+            f"{cursor_scope}\0{query.casefold()}".encode("utf-8")
+        ).hexdigest()[:16],
+        "o": max(0, int(offset)),
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    return encoded.rstrip("=")
+
+
+def _search_cursor_offset(
+    cursor: str | None,
+    *,
+    query: str,
+    cursor_scope: str,
+) -> int:
+    token = str(cursor or "").strip()
+    if not token:
+        return 0
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+        expected = hashlib.sha256(
+            f"{cursor_scope}\0{query.casefold()}".encode("utf-8")
+        ).hexdigest()[:16]
+        if payload.get("v") != 1 or payload.get("q") != expected:
+            raise ValueError
+        offset = int(payload.get("o"))
+        if offset < 0:
+            raise ValueError
+        return offset
+    except (ValueError, TypeError, UnicodeError, binascii.Error) as exc:
+        raise ValueError("invalid_log_search_cursor") from exc
+
+
+def _tail_text_window(path: Path, *, max_bytes: int) -> tuple[list[str], int, bool]:
+    """Read a bounded tail without loading an arbitrarily large log into memory."""
+
+    size = max(0, int(path.stat().st_size))
+    read_bytes = min(size, max(1, int(max_bytes)))
+    with path.open("rb") as stream:
+        start = max(0, size - read_bytes)
+        stream.seek(start)
+        raw = stream.read(read_bytes)
+    text = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if start > 0 and lines:
+        # The first line can begin before the bounded tail window.
+        lines = lines[1:]
+    return lines, len(raw), start > 0
+
+
+def search_text_content(
+    candidates: list[Path],
+    *,
+    query: str,
+    cursor: str | None,
+    page_size: int,
+    cursor_scope: str,
+) -> dict[str, Any]:
+    """Search bounded tails of service-resolved text files.
+
+    Callers must resolve and authorize ``candidates`` before calling this
+    helper. The opaque cursor is bound to both the query and the caller's
+    logical scope, so it cannot be replayed against another log source.
+    """
+
+    normalized_query = str(query or "").strip()
+    if len(normalized_query) > _MAX_SEARCH_QUERY_CHARS:
+        raise ValueError("log_search_query_too_long")
+    bounded_page_size = max(1, min(int(page_size), _MAX_SEARCH_PAGE_SIZE))
+    normalized_scope = str(cursor_scope or "").strip()
+    if not normalized_scope:
+        raise ValueError("log_search_cursor_scope_required")
+    offset = _search_cursor_offset(
+        cursor,
+        query=normalized_query,
+        cursor_scope=normalized_scope,
+    )
+    required_matches = offset + bounded_page_size + 1
+    folded_query = normalized_query.casefold()
+    matches: list[dict[str, Any]] = []
+    scanned_bytes = 0
+    scanned_files = 0
+    truncated = False
+
+    for path in candidates:
+        remaining = _MAX_SEARCH_BYTES - scanned_bytes
+        if remaining <= 0 or len(matches) >= required_matches:
+            truncated = truncated or remaining <= 0
+            break
+        lines, read_bytes, file_truncated = _tail_text_window(
+            path,
+            max_bytes=min(remaining, _MAX_SEARCH_BYTES_PER_FILE),
+        )
+        scanned_bytes += read_bytes
+        scanned_files += 1
+        truncated = truncated or file_truncated
+        modified_at = float(path.stat().st_mtime)
+        for line_from_end, line in enumerate(reversed(lines), start=1):
+            if folded_query and folded_query not in line.casefold():
+                continue
+            clipped = line[:4096]
+            matches.append(
+                {
+                    "file": path.name,
+                    "rel": path.name,
+                    "modified_at": modified_at,
+                    "line_from_end": line_from_end,
+                    "text": clipped,
+                    "text_truncated": len(clipped) != len(line),
+                }
+            )
+            if len(matches) >= required_matches:
+                break
+
+    page = matches[offset : offset + bounded_page_size]
+    has_more = len(matches) > offset + bounded_page_size
+    next_offset = offset + len(page)
+    return {
+        "schema": "adaos.logs.content_search.v1",
+        "query": normalized_query,
+        "page_size": bounded_page_size,
+        "cursor": str(cursor or "").strip() or None,
+        "next_cursor": (
+            _search_cursor(
+                query=normalized_query,
+                cursor_scope=normalized_scope,
+                offset=next_offset,
+            )
+            if has_more
+            else None
+        ),
+        "has_more": has_more,
+        "matches": page,
+        "scanned_files": scanned_files,
+        "scanned_bytes": scanned_bytes,
+        "truncated": truncated,
+    }
+
+
 def match_log_category(category: str, name: str, *, contains: str | None = None, skill: str | None = None) -> bool:
     token = str(name or "").strip()
     contains_token = str(contains or "").strip()
@@ -193,6 +346,9 @@ def list_local_logs(
     limit: int = 5,
     lines: int = 200,
     contains: str | None = None,
+    query: str | None = None,
+    cursor: str | None = None,
+    page_size: int = 50,
     skill: str | None = None,
     file: str | None = None,
     logs_dir: Path | None = None,
@@ -204,6 +360,8 @@ def list_local_logs(
     max_lines = max(1, min(int(lines), 2000))
     requested_file = str(file or "").strip().replace("\\", "/")
     items: list[dict[str, Any]] = []
+    content_query = str(query or "").strip()
+    candidates: list[Path] = []
 
     if requested_file:
         path = (target_logs_dir / requested_file).resolve()
@@ -213,55 +371,52 @@ def list_local_logs(
                 "source_mode": source_mode,
                 "available": False,
                 "error": "path_outside_logs_dir",
-                "query": {"limit": max_files, "lines": max_lines, "contains": contains, "skill": skill, "file": requested_file},
+                "query": {"limit": max_files, "lines": max_lines, "contains": contains, "content": content_query or None, "skill": skill, "file": requested_file},
                 "items": [],
             }, scope="root_local")
         if path.exists() and path.is_file() and match_log_category(category_token, path.name, contains=contains, skill=skill):
-            stat = path.stat()
-            items.append(
-                {
-                    "name": path.name,
-                    "path": str(path),
-                    "rel": requested_file,
-                    "size_bytes": int(stat.st_size),
-                    "modified_at": float(stat.st_mtime),
-                    "tail": tail_text_lines(path, max_lines=max_lines),
-                }
-            )
-        return _annotate_log_payload({
-            "category": category_token,
-            "source_mode": source_mode,
-            "available": bool(items),
-            "query": {"limit": max_files, "lines": max_lines, "contains": contains, "skill": skill, "file": requested_file},
-            "items": items,
-        }, scope="root_local")
-
-    candidates: list[Path] = []
-    for entry in target_logs_dir.iterdir():
-        if not entry.is_file():
-            continue
-        if match_log_category(category_token, entry.name, contains=contains, skill=skill):
-            candidates.append(entry)
+            candidates.append(path)
+    else:
+        for entry in target_logs_dir.iterdir():
+            if not entry.is_file():
+                continue
+            if match_log_category(category_token, entry.name, contains=contains, skill=skill):
+                candidates.append(entry)
     candidates.sort(key=lambda item: item.stat().st_mtime if item.exists() else 0.0, reverse=True)
     for path in candidates[:max_files]:
         stat = path.stat()
-        items.append(
-            {
-                "name": path.name,
-                "path": str(path),
-                "rel": path.name,
-                "size_bytes": int(stat.st_size),
-                "modified_at": float(stat.st_mtime),
-                "tail": tail_text_lines(path, max_lines=max_lines),
-            }
-        )
-    return _annotate_log_payload({
+        item = {
+            "name": path.name,
+            "rel": requested_file or path.name,
+            "size_bytes": int(stat.st_size),
+            "modified_at": float(stat.st_mtime),
+        }
+        if not content_query:
+            item["tail"] = tail_text_lines(path, max_lines=max_lines)
+        items.append(item)
+    payload = {
         "category": category_token,
         "source_mode": source_mode,
-        "available": True,
-        "query": {"limit": max_files, "lines": max_lines, "contains": contains, "skill": skill, "file": None},
+        "available": bool(items) if requested_file else True,
+        "query": {"limit": max_files, "lines": max_lines, "contains": contains, "content": content_query or None, "skill": skill, "file": requested_file or None},
         "items": items,
-    }, scope="root_local")
+    }
+    if content_query:
+        payload["content_search"] = search_text_content(
+            candidates[:max_files],
+            query=content_query,
+            cursor=cursor,
+            page_size=page_size,
+            cursor_scope="|".join(
+                (
+                    category_token,
+                    str(skill or ""),
+                    str(contains or ""),
+                    requested_file,
+                )
+            ),
+        )
+    return _annotate_log_payload(payload, scope="root_local")
 
 
 def _member_log_url(base_url: str, category: str) -> str:
@@ -276,6 +431,9 @@ def _request_member_logs(
     limit: int,
     lines: int,
     contains: str | None,
+    query: str | None,
+    cursor: str | None,
+    page_size: int,
     skill: str | None,
     file: str | None,
     timeout: float,
@@ -283,6 +441,11 @@ def _request_member_logs(
     params: dict[str, Any] = {"limit": int(limit), "lines": int(lines)}
     if contains:
         params["contains"] = str(contains)
+    if query:
+        params["query"] = str(query)
+    if cursor:
+        params["cursor"] = str(cursor)
+    params["page_size"] = int(page_size)
     if skill:
         params["skill"] = str(skill)
     if file:
@@ -307,6 +470,9 @@ async def aggregate_subnet_logs(
     limit: int = 5,
     lines: int = 200,
     contains: str | None = None,
+    query: str | None = None,
+    cursor: str | None = None,
+    page_size: int = 50,
     skill: str | None = None,
     file: str | None = None,
     include_hub: bool = True,
@@ -363,6 +529,9 @@ async def aggregate_subnet_logs(
                     limit=limit,
                     lines=lines,
                     contains=contains,
+                    query=query,
+                    cursor=cursor,
+                    page_size=page_size,
                     skill=skill,
                     file=file,
                     source_mode="node_local_logs_dir",
@@ -392,6 +561,9 @@ async def aggregate_subnet_logs(
                 limit=limit,
                 lines=lines,
                 contains=contains,
+                query=query,
+                cursor=cursor,
+                page_size=page_size,
                 skill=skill,
                 file=file,
                 source_mode="node_local_logs_dir",
@@ -414,6 +586,9 @@ async def aggregate_subnet_logs(
                 limit=limit,
                 lines=lines,
                 contains=contains,
+                query=query,
+                cursor=cursor,
+                page_size=page_size,
                 skill=skill,
                 file=file,
                 timeout=timeout,
@@ -440,6 +615,9 @@ async def aggregate_subnet_logs(
             "limit": max(1, min(int(limit), 50)),
             "lines": max(1, min(int(lines), 2000)),
             "contains": contains,
+            "content": str(query or "").strip() or None,
+            "cursor": str(cursor or "").strip() or None,
+            "page_size": max(1, min(int(page_size), _MAX_SEARCH_PAGE_SIZE)),
             "skill": skill,
             "file": file,
             "include_hub": bool(include_hub),

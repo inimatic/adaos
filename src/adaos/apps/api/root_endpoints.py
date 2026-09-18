@@ -215,6 +215,7 @@ _TASK_MCP_SCOPE_CAPABILITIES: dict[str, tuple[str, ...]] = {
         "operations.read.contracts",
         "operations.read.targets",
     ),
+    "read_runtime_diagnostics": ("audit.read",),
 }
 
 
@@ -498,6 +499,9 @@ def _list_root_local_logs(
     limit: int = 5,
     lines: int = 200,
     contains: str | None = None,
+    query: str | None = None,
+    cursor: str | None = None,
+    page_size: int = 50,
     skill: str | None = None,
     file: str | None = None,
 ) -> dict[str, Any]:
@@ -506,6 +510,9 @@ def _list_root_local_logs(
         limit=limit,
         lines=lines,
         contains=contains,
+        query=query,
+        cursor=cursor,
+        page_size=page_size,
         skill=skill,
         file=file,
         logs_dir=_root_logs_dir(),
@@ -2663,6 +2670,9 @@ async def root_mcp_logs(
     limit: int = 5,
     lines: int = 200,
     contains: str | None = None,
+    query: str | None = None,
+    cursor: str | None = None,
+    page_size: int = 50,
     skill: str | None = None,
     file: str | None = None,
     scope: str | None = None,
@@ -2689,6 +2699,9 @@ async def root_mcp_logs(
             limit=limit,
             lines=lines,
             contains=contains,
+            query=query,
+            cursor=cursor,
+            page_size=page_size,
             skill=skill,
             file=file,
             include_hub=include_hub,
@@ -2699,6 +2712,9 @@ async def root_mcp_logs(
             limit=limit,
             lines=lines,
             contains=contains,
+            query=query,
+            cursor=cursor,
+            page_size=page_size,
             skill=skill,
             file=file,
         )

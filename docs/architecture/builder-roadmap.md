@@ -197,8 +197,14 @@ The existing Builder provides a searchable/sortable project table, exact
 preview, project-scoped Conversation, files, specification, issues and process.
 Rich views supplement conversation without replacing canonical work state.
 
-- [ ] `[could]` Add governed open/copy actions for Automation event, stderr and
-  result evidence; share one implementation with SDK operator diagnostics.
+- [x] `[must]` Replace Automation event/stderr path exposure with a managed,
+  project-addressed diagnostic contract. Support bounded UTF-8 content search,
+  opaque source-bound cursors and pagination for both the owner UI and
+  task-scoped Codex; never accept arbitrary host paths.
+- [ ] `[must]` Qualify managed diagnostics end to end across local and relayed
+  subnet execution, including authorization, redaction, stale-task rejection,
+  search continuation and a real Codex repair that uses a narrow runtime-log
+  query. Treat transport failure as unavailable evidence, not an empty log.
 - [ ] `[could]` Add API-driven prototyping from an explicit OpenAPI/docs
   contract with provenance and auth placeholders, never captured credentials.
 - [ ] `[could]` Expose completed work consistently in application, scenario
