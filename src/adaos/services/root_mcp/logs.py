@@ -229,6 +229,26 @@ def _tail_text_window(path: Path, *, max_bytes: int) -> tuple[list[str], int, bo
     return lines, len(raw), start > 0
 
 
+def _search_match_excerpt(
+    line: str,
+    *,
+    folded_query: str,
+    max_chars: int = 1024,
+) -> tuple[str, int, bool]:
+    """Return a bounded excerpt around the first matching term."""
+
+    if len(line) <= max_chars:
+        return line, 0, False
+    match_at = line.casefold().find(folded_query) if folded_query else 0
+    match_at = max(0, match_at)
+    context_before = min(384, max_chars // 2)
+    start = max(0, match_at - context_before)
+    end = min(len(line), start + max_chars)
+    if end == len(line):
+        start = max(0, end - max_chars)
+    return line[start:end], start, start > 0 or end < len(line)
+
+
 def search_text_content(
     candidates: list[Path],
     *,
@@ -279,7 +299,10 @@ def search_text_content(
         for line_from_end, line in enumerate(reversed(lines), start=1):
             if folded_query and folded_query not in line.casefold():
                 continue
-            clipped = line[:4096]
+            clipped, text_start, text_truncated = _search_match_excerpt(
+                line,
+                folded_query=folded_query,
+            )
             matches.append(
                 {
                     "file": path.name,
@@ -287,7 +310,8 @@ def search_text_content(
                     "modified_at": modified_at,
                     "line_from_end": line_from_end,
                     "text": clipped,
-                    "text_truncated": len(clipped) != len(line),
+                    "text_start": text_start,
+                    "text_truncated": text_truncated,
                 }
             )
             if len(matches) >= required_matches:

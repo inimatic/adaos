@@ -62,6 +62,28 @@ def test_local_log_content_search_is_bounded_paginated_and_cursor_scoped(
         )
 
 
+def test_local_log_content_search_returns_context_around_match(tmp_path: Path) -> None:
+    prefix = "p" * 5000
+    suffix = "s" * 5000
+    (tmp_path / "events.log").write_text(
+        f"{prefix}diagnostic-needle{suffix}\n",
+        encoding="utf-8",
+    )
+
+    payload = list_local_logs(
+        category="events",
+        logs_dir=tmp_path,
+        query="diagnostic-needle",
+        page_size=1,
+    )
+
+    match = payload["content_search"]["matches"][0]
+    assert "diagnostic-needle" in match["text"]
+    assert len(match["text"]) == 1024
+    assert match["text_start"] > 0
+    assert match["text_truncated"] is True
+
+
 def test_local_log_read_rejects_paths_outside_managed_directory(tmp_path: Path) -> None:
     payload = list_local_logs(
         category="events",
