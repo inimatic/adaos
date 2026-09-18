@@ -5094,7 +5094,10 @@ class NatsRouteTunnelRuntime:
                             expected_timeout_ms = 15000
                             if http_path in ("/api/node/status", "/api/ping", "/healthz"):
                                 expected_timeout_ms = 6500
-                            elif http_path == "/api/tools/call":
+                            elif http_path in (
+                                "/api/tools/call",
+                                "/api/admin/root_mcp/call",
+                            ):
                                 expected_timeout_ms = 60000
                                 if isinstance(headers, dict):
                                     for header_name, header_value in headers.items():

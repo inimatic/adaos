@@ -842,6 +842,7 @@ def test_build_hub_route_ws_bases_prefers_supervisor_state_over_legacy_env(monke
 
 def test_hub_route_local_http_timeout_allows_tools_call_to_finish() -> None:
     assert _hub_route_proxy._hub_route_local_http_timeout("/api/tools/call") == (1.5, 55.0)
+    assert _hub_route_proxy._hub_route_local_http_timeout("/api/admin/root_mcp/call") == (1.5, 55.0)
     assert _hub_route_proxy._hub_route_local_http_timeout(
         "/api/tools/call",
         {"X-AdaOS-Timeout-Ms": "180000"},
@@ -850,6 +851,10 @@ def test_hub_route_local_http_timeout_allows_tools_call_to_finish() -> None:
         "/api/tools/call",
         {"x-adaos-timeout-ms": "900000"},
     ) == (1.5, 605.0)
+    assert _hub_route_proxy._hub_route_local_http_timeout(
+        "/api/admin/root_mcp/call",
+        {"X-AdaOS-Timeout-Ms": "180000"},
+    ) == (1.5, 185.0)
     assert _hub_route_proxy._hub_route_local_http_timeout("/api/ping") == (0.5, 1.2)
 
 
@@ -872,6 +877,18 @@ def test_hub_route_tools_call_retries_only_transport_safe_or_idempotent_failures
         path="/api/tools/call",
         error_kind="ConnectionError",
     ) is True
+    assert _hub_route_proxy._hub_route_should_retry_http_upstream_error(
+        method="POST",
+        path="/api/admin/root_mcp/call",
+        error_kind="ReadTimeout",
+        body=b'{"tool_id":"applications.plan","arguments":{"idempotency_key":"idem-2"}}',
+    ) is True
+    assert _hub_route_proxy._hub_route_should_retry_http_upstream_error(
+        method="POST",
+        path="/api/admin/root_mcp/call",
+        error_kind="ReadTimeout",
+        body=b'{"tool_id":"applications.plan","arguments":{}}',
+    ) is False
     assert _hub_route_proxy._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",

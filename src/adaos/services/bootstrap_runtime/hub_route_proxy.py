@@ -511,6 +511,14 @@ def _hub_route_requested_timeout_s(headers: Any | None = None) -> float | None:
     return max(1.0, min(parsed_ms / 1000.0, 600.0))
 
 
+_LONG_RUNNING_CONTROL_PATHS = frozenset(
+    {
+        "/api/tools/call",
+        "/api/admin/root_mcp/call",
+    }
+)
+
+
 def _hub_route_local_http_timeout(path: str, headers: Any | None = None) -> tuple[float, float]:
     path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
     if path_norm in ("/api/node/status", "/api/ping", "/healthz"):
@@ -521,7 +529,7 @@ def _hub_route_local_http_timeout(path: str, headers: Any | None = None) -> tupl
         return (3.0, 300.0)
     if path_norm.startswith("/api/media/files/"):
         return (3.0, 300.0)
-    if path_norm == "/api/tools/call":
+    if path_norm in _LONG_RUNNING_CONTROL_PATHS:
         requested_timeout_s = _hub_route_requested_timeout_s(headers)
         if requested_timeout_s is not None:
             return (1.5, min(605.0, max(55.0, requested_timeout_s + 5.0)))
@@ -559,7 +567,7 @@ def _hub_route_should_retry_http_upstream_error(
     path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
     method_norm = str(method or "").strip().upper()
     kind = str(error_kind or "").strip()
-    if path_norm == "/api/tools/call":
+    if path_norm in _LONG_RUNNING_CONTROL_PATHS:
         if kind in {"ConnectionError", "ConnectTimeout", "NewConnectionError"}:
             return True
         if kind == "ReadTimeout" and _hub_route_tools_call_has_idempotency(body):
