@@ -1253,7 +1253,9 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
         "changed_files",
         "provenance",
     }
-    run_root = Path(task["result"]["local_run_dir"])
+    assert task["result"]["local_run_ref"] == f"skill-factory-run:{task['task_id']}"
+    assert task["result"]["tests"]["report"] == result["assignment"]["evidence"]["expected_paths"]["test_report"]
+    run_root = tmp_path / "runs" / task["task_id"]
     assert (run_root / "evidence" / "provenance.json").is_file()
     tracked = subprocess.run(
         ["git", "ls-files"],
@@ -7222,7 +7224,7 @@ def test_worker_isolates_generated_test_side_effects_from_candidate_source(
     dev_skills.mkdir(parents=True)
     _core_created_skill_fixture(repo_root, dev_skills, "boundary_skill")
     factory = SkillFactoryService(state_dir=state_dir)
-    factory.submit_realize_request(
+    submitted = factory.submit_realize_request(
         {
             "target": {"type": "skill", "id": "boundary_skill"},
             "repo": {"sparse_paths": ["skills/boundary_skill/"]},
@@ -7265,10 +7267,10 @@ def test_worker_isolates_generated_test_side_effects_from_candidate_source(
 
     assert result["ok"] is True, result
     assert len(calls) == 1
-    assert not (
-        Path(result["result"]["local_run_dir"]) / "workspace" / "escaped-validation.txt"
-    ).exists()
-    assert not (Path(result["result"]["local_run_dir"]) / "package-validation").exists()
+    run_root = tmp_path / "runs" / submitted["task"]["task_id"]
+    assert result["result"]["local_run_ref"] == f"skill-factory-run:{submitted['task']['task_id']}"
+    assert not (run_root / "workspace" / "escaped-validation.txt").exists()
+    assert not (run_root / "package-validation").exists()
 
 
 def test_worker_reports_progress_to_automation_callback(tmp_path: Path) -> None:

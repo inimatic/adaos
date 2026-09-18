@@ -737,12 +737,25 @@ def _automation_evidence_refs(
     for key, ref_type in (("result_path", "file"), ("events_path", "trace"), ("stderr_path", "trace")):
         path = _text(evidence.get(key))
         if path:
-            refs.append({"type": ref_type, "id": path, "path": path, "source": "builder_automation", "status": status or None})
+            refs.append(
+                {
+                    "type": ref_type,
+                    "id": _portable_local_reference(path),
+                    "source": "builder_automation",
+                    "status": status or None,
+                }
+            )
     result = task.get("result") if isinstance(task.get("result"), Mapping) else session.get("last_result")
     result = dict(result) if isinstance(result, Mapping) else {}
     tests = result.get("tests") if isinstance(result.get("tests"), Mapping) else {}
     if _text(tests.get("report")):
-        refs.append({"type": "test", "id": _text(tests.get("report")), "status": _text(tests.get("status")) or "unknown"})
+        refs.append(
+            {
+                "type": "test",
+                "id": _portable_local_reference(tests.get("report")),
+                "status": _text(tests.get("status")) or "unknown",
+            }
+        )
     readiness = session.get("completion_readiness") if isinstance(session.get("completion_readiness"), Mapping) else {}
     if readiness:
         refs.append(
@@ -1762,6 +1775,77 @@ def _merge_refs(current: Sequence[Mapping[str, Any]], incoming: Sequence[Mapping
         seen.add(key)
         out.append(item)
     return out[-100:]
+
+
+_HOST_ABSOLUTE_PATH_RE = re.compile(r"^(?:[a-zA-Z]:/|/)")
+_STRUCTURED_PATH_KEYS = {
+    "id",
+    "path",
+    "ref",
+    "report",
+    "result_path",
+    "events_path",
+    "stderr_path",
+    "local_run_dir",
+    "validated_run_dir",
+}
+
+
+def _is_host_absolute_reference(value: Any) -> bool:
+    token = _text(value).replace("\\", "/")
+    if token.startswith(("/api/", "/hub/")):
+        return False
+    return bool(_HOST_ABSOLUTE_PATH_RE.match(token))
+
+
+def _portable_local_reference(value: Any) -> str:
+    token = _text(value).replace("\\", "/")
+    if not _is_host_absolute_reference(token):
+        return token
+    marker = "/skill_factory/local_runs/"
+    marker_at = token.lower().find(marker)
+    if marker_at >= 0:
+        tail = token[marker_at + len(marker):].strip("/")
+        parts = tail.split("/") if tail else []
+        task_id = parts[0] if parts else "unknown"
+        filename = parts[-1] if parts else "artifact"
+        if filename in {"result.json", "test_report.json", "changed_files.txt", "provenance.json"}:
+            return f".adaos/tasks/{task_id}/{filename}"
+        if filename == "codex-live.jsonl":
+            return f"builder-diagnostic:{task_id}:events"
+        if filename.endswith(".stderr.log") or filename == "stderr.log":
+            return f"builder-diagnostic:{task_id}:stderr"
+        return f"skill-factory-run:{task_id}/{filename}"
+    filename = token.rstrip("/").rsplit("/", 1)[-1] or "artifact"
+    return f"node-local:{filename}"
+
+
+def _portable_structured_paths(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        portable: dict[str, Any] = {}
+        for raw_key, raw_value in value.items():
+            key = str(raw_key)
+            if isinstance(raw_value, str) and key in _STRUCTURED_PATH_KEYS:
+                normalized = raw_value.replace("\\", "/")
+                if _is_host_absolute_reference(normalized):
+                    logical = _portable_local_reference(raw_value)
+                    if key == "path":
+                        portable.setdefault("logical_path", logical)
+                        continue
+                    replacement_key = {
+                        "result_path": "result_ref",
+                        "events_path": "events_ref",
+                        "stderr_path": "stderr_ref",
+                        "local_run_dir": "local_run_ref",
+                        "validated_run_dir": "validated_run_ref",
+                    }.get(key, key)
+                    portable[replacement_key] = logical
+                    continue
+            portable[key] = _portable_structured_paths(raw_value)
+        return portable
+    if isinstance(value, list):
+        return [_portable_structured_paths(item) for item in value]
+    return value
 
 
 def _merge_ids(current: Sequence[Any], incoming: Sequence[Any]) -> list[str]:
@@ -7506,7 +7590,17 @@ class DevelopmentTicketService:
                 except (TypeError, ValueError):
                     ticket["revision"] = 1
             normalized_tickets[str(ticket_id)] = ticket
-        return {"schema": STATE_SCHEMA, "signals": dict(signals), "tickets": normalized_tickets}
+        return {
+            "schema": STATE_SCHEMA,
+            "signals": {
+                str(signal_id): _portable_structured_paths(signal)
+                for signal_id, signal in signals.items()
+            },
+            "tickets": {
+                ticket_id: _portable_structured_paths(ticket)
+                for ticket_id, ticket in normalized_tickets.items()
+            },
+        }
 
     def _write(self, state: Mapping[str, Any]) -> None:
         previous_tickets: Mapping[str, Any] = {}

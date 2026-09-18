@@ -662,7 +662,7 @@ def test_skill_factory_recovers_validated_result_without_requeue(tmp_path: Path)
             **result,
             "recovery": {
                 "reason": "activate preserved validated result",
-                "validated_run_dir": str(tmp_path / "runs" / task["task_id"]),
+                "validated_run_ref": f"skill-factory-run:{task['task_id']}",
                 "actor": "test",
             },
         }
@@ -672,6 +672,7 @@ def test_skill_factory_recovers_validated_result_without_requeue(tmp_path: Path)
     assert recovered["task"]["status"] == "completed"
     assert recovered["task"]["attempts"] == 1
     assert recovered["task"]["result_recovery_history"][-1]["failure_id"]
+    assert recovered["task"]["result_recovery_history"][-1]["validated_run_ref"] == f"skill-factory-run:{task['task_id']}"
     assert len(recovered["task"]["failure_history"]) == 1
 
 

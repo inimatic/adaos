@@ -521,6 +521,105 @@ def test_development_ticket_api_uploads_screenshot_artifact(tmp_path: Path) -> N
     assert created.json()["detail"]["evidence"]["artifact_refs"] == [ref]
 
 
+def test_development_ticket_api_uploads_document_as_comment_evidence(tmp_path: Path) -> None:
+    client = _client(DevelopmentTicketService(state_dir=tmp_path))
+    content = b"%PDF-1.4\nreview evidence"
+    uploaded = client.post(
+        "/api/development-tickets/artifacts",
+        headers=_headers(),
+        json={
+            "kind": "attachment",
+            "content_type": "application/pdf",
+            "content_base64": base64.b64encode(content).decode("ascii"),
+            "filename": "review.pdf",
+        },
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    ref = uploaded.json()["artifact_ref"]
+    assert ref["type"] == "attachment"
+    assert ref["filename"] == "review.pdf"
+
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "kind": "feedback_note",
+            "summary": "Add evidence later",
+            "target_scope": {"type": "scenario", "id": "applications"},
+        },
+    ).json()["ticket"]
+    commented = client.post(
+        f"/api/development-tickets/{created['ticket_id']}/comment",
+        headers=_headers(),
+        json={"actor": "browser", "body": "Attached file.", "evidence_refs": [ref]},
+    )
+
+    assert commented.status_code == 200, commented.text
+    assert commented.json()["ticket"]["comments"][-1]["evidence_refs"] == [ref]
+
+
+def test_development_ticket_api_projects_direct_resolution_as_development_work(tmp_path: Path) -> None:
+    client = _client(DevelopmentTicketService(state_dir=tmp_path))
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "kind": "feedback_note",
+            "summary": "Direct Codex repair",
+            "target_scope": {"type": "scenario", "id": "applications"},
+        },
+    ).json()["ticket"]
+    resolved = client.post(
+        f"/api/development-tickets/{created['ticket_id']}/resolve",
+        headers=_headers(),
+        json={
+            "actor": "codex",
+            "resolved_by_version": "applications 0.1.13",
+            "evidence_refs": [{"type": "test", "id": "browser:direct-repair", "status": "passed"}],
+        },
+    )
+    assert resolved.status_code == 200, resolved.text
+
+    shown = client.get(f"/api/development-tickets/{created['ticket_id']}", headers=_headers())
+    stream = shown.json()["work_stream"]
+    assert stream["builder_work_count"] == 0
+    assert stream["development_work_count"] == 1
+    assert stream["development_work_items"][0]["kind"] == "direct_resolution"
+    assert stream["development_work_items"][0]["actor"] == "codex"
+    assert shown.json()["development_work_items"] == stream["development_work_items"]
+
+
+def test_development_ticket_api_redacts_legacy_host_absolute_evidence_paths(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    client = _client(service)
+    created = client.post(
+        "/api/development-tickets",
+        headers=_headers(),
+        json={
+            "kind": "runtime_failure",
+            "summary": "Legacy publication report",
+            "target_scope": {"type": "scenario", "id": "applications"},
+        },
+    ).json()["ticket"]
+    state = json.loads(service.state_path.read_text(encoding="utf-8"))
+    absolute = (
+        r"D:\git\inimatic\adaos\.adaos\state\skill_factory\local_runs"
+        r"\task.01M2PFNWR6HCPG1GX2JQG071ED\output\test_report.json"
+    )
+    state["tickets"][created["ticket_id"]]["evidence_refs"] = [
+        {"type": "file", "id": absolute, "path": absolute, "source": "builder.worker"}
+    ]
+    service.state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+    shown = client.get(f"/api/development-tickets/{created['ticket_id']}", headers=_headers())
+    ref = shown.json()["ticket"]["evidence_refs"][0]
+
+    assert ref["id"] == ".adaos/tasks/task.01M2PFNWR6HCPG1GX2JQG071ED/test_report.json"
+    assert ref["logical_path"] == ref["id"]
+    assert "path" not in ref
+    assert "D:" not in json.dumps(shown.json())
+
+
 def test_development_ticket_api_updates_summary_and_keeps_artifact_refs(tmp_path: Path) -> None:
     client = _client(DevelopmentTicketService(state_dir=tmp_path))
 

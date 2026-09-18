@@ -3885,7 +3885,7 @@ class LocalSkillFactoryWorker:
             "branch": str((assignment.get("forge") or {}).get("branch") or ""),
             "changed_paths": recovered_changed_paths,
             "no_source_change": not bool(recovered_changed_paths),
-            "tests": {"status": "passed", "report": str(output_dir / "test_report.json")},
+            "tests": {"status": "passed", "report": str(evidence_paths.get("test_report") or "")},
             "provenance": provenance,
             "evidence": self._evidence_manifest(evidence_root, evidence_paths),
             "summary": str(result_manifest.get("summary") or "").strip(),
@@ -3895,7 +3895,7 @@ class LocalSkillFactoryWorker:
             "development_feedback_refs": list(
                 result_manifest.get("development_feedback_refs") or []
             ),
-            "local_run_dir": str(run_root),
+            "local_run_ref": f"skill-factory-run:{task_id}",
         }
         _write_json(output_dir / "result.json", result)
         completed = self.factory.recover_task_result(
@@ -3903,7 +3903,7 @@ class LocalSkillFactoryWorker:
                 **result,
                 "recovery": {
                     "reason": "activate preserved validated result after retryable post-commit failure",
-                    "validated_run_dir": str(run_root),
+                    "validated_run_ref": f"skill-factory-run:{task_id}",
                     "actor": self.node_id,
                 },
             }
@@ -4661,7 +4661,7 @@ class LocalSkillFactoryWorker:
                 "branch": str((assignment.get("forge") or {}).get("branch") or ""),
                 "changed_paths": final_changed_paths,
                 "no_source_change": not bool(final_changed_paths),
-                "tests": {"status": "passed", "report": str(output_dir / "test_report.json")},
+                "tests": {"status": "passed", "report": str(evidence_paths.get("test_report") or "")},
                 "candidate_checks": candidate_check_summary,
                 "provenance": provenance,
                 "evidence": self._evidence_manifest(evidence_root, evidence_paths),
@@ -4670,7 +4670,7 @@ class LocalSkillFactoryWorker:
                 "development_feedback_refs": [
                     item["feedback_id"] for item in development_feedback
                 ],
-                "local_run_dir": str(run_root),
+                "local_run_ref": f"skill-factory-run:{task_id}",
                 "execution_strategy": provenance["execution_strategy"],
             }
             _write_json(output_dir / "result.json", result)

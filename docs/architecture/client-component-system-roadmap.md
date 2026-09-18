@@ -137,11 +137,14 @@ Cutover evidence, 2026-09-16:
   failure. Adaptive section overflow is a shared semantic-tabs responsibility,
   not product-specific CSS.
 
-- [x] `[must]` Qualify scenario-scoped Dev Tickets defaults, searchable
-  component selection, bounded external image attachment, immediate lifecycle
+- [x] `[must]` Qualify scenario-scoped Dev Tickets defaults, an application
+  selector with search inside its option surface, bounded image/document
+  attachment both at capture time and on later comments, immediate lifecycle
   close, and native Ctrl+C behavior without weakening Ctrl-drag review
-  gestures. The implementation remains generic Client chrome and does not add
-  Builder or product-specific renderer branches.
+  gestures. The shared selector releases and restores an enclosing Ionic focus
+  trap while its Taiga dropdown is active, so the same search works when a
+  skill is opened in a modal. The implementation remains generic Client chrome
+  and does not add Builder or product-specific renderer branches.
 - [x] `[must]` Require browser qualification against the active semantic view,
   not only declarations left in a superseded legacy page schema. The Taiga UI
   Demo workbench now exposes breadcrumbs, tabs, automatic action overflow,

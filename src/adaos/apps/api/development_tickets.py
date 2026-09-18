@@ -351,6 +351,13 @@ ARTIFACT_CONTENT_TYPES = {
     "image/png": "png",
     "image/jpeg": "jpg",
     "image/webp": "webp",
+    "application/pdf": "pdf",
+    "application/json": "json",
+    "application/zip": "zip",
+    "application/octet-stream": "bin",
+    "text/plain": "txt",
+    "text/markdown": "md",
+    "text/csv": "csv",
 }
 MAX_ARTIFACT_BYTES = 6 * 1024 * 1024
 
@@ -427,6 +434,7 @@ def _ticket_detail(service: DevelopmentTicketService, ticket: dict[str, Any]) ->
         "evidence": _evidence_view(ticket, signals),
         "work_stream": work_stream,
         "builder_work_items": work_stream["builder_work_items"],
+        "development_work_items": work_stream["development_work_items"],
     }
 
 
@@ -743,6 +751,9 @@ def _builder_stream_entry(item: Mapping[str, Any]) -> dict[str, Any]:
             "automation_status",
             "prototype_status",
             "prototype_revision",
+            "actor",
+            "resolved_by_version",
+            "evidence_ref_count",
             "current_attempt",
             "repair_current_attempt",
             "human_manageable",
@@ -751,6 +762,43 @@ def _builder_stream_entry(item: Mapping[str, Any]) -> dict[str, Any]:
             "updated_at",
         )
         if item.get(key) not in (None, "")
+    }
+
+
+def _direct_resolution_work_item(ticket: Mapping[str, Any]) -> dict[str, Any]:
+    if _mapping_list(ticket.get("builder_refs")):
+        return {}
+    status = str(ticket.get("status") or "").strip()
+    closure = dict(ticket.get("closure")) if isinstance(ticket.get("closure"), Mapping) else {}
+    evidence_refs = _mapping_list(closure.get("evidence_refs"))
+    if status not in {"resolved", "verified", "closed"} or not closure:
+        return {}
+    actor = str(closure.get("actor") or "").strip()
+    if not actor:
+        for event in reversed(_mapping_list(ticket.get("history"))):
+            if str(event.get("kind") or "").strip() in {"resolved", "verified", "closed"}:
+                actor = str(event.get("actor") or "").strip()
+                if actor:
+                    break
+    ticket_id = str(ticket.get("ticket_id") or "").strip()
+    version = str(closure.get("resolved_by_version") or ticket.get("resolved_by_version") or "").strip()
+    return {
+        "entry_id": f"{ticket_id}:direct-resolution",
+        "kind": "direct_resolution",
+        "authority": "adaos.dev.ticket.closure",
+        "work_id": f"{ticket_id}:direct-resolution",
+        "work_type": "direct_resolution",
+        "mode": "direct",
+        "status": status,
+        "summary": "Direct resolution",
+        "actor": actor or None,
+        "resolved_by_version": version or None,
+        "evidence_refs": evidence_refs,
+        "evidence_ref_count": len(evidence_refs),
+        "human_manageable": False,
+        "read_only": True,
+        "created_at": closure.get("recorded_at") or ticket.get("updated_at"),
+        "updated_at": closure.get("recorded_at") or ticket.get("updated_at"),
     }
 
 
@@ -900,6 +948,10 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         }
         builder_items.append(item)
         entries.append(_builder_stream_entry(item))
+    direct_item = _direct_resolution_work_item(ticket)
+    direct_items = [direct_item] if direct_item else []
+    if direct_item:
+        entries.append(_builder_stream_entry(direct_item))
     entries = sorted(entries, key=lambda item: (str(item.get("created_at") or item.get("updated_at") or ""), str(item.get("entry_id") or "")))
     current_trial = max(trial_candidates, key=lambda item: item[0])[1] if trial_candidates else {}
     if current_trial:
@@ -920,6 +972,9 @@ def _builder_work_stream(service: DevelopmentTicketService, ticket: dict[str, An
         },
         "builder_work_count": len(builder_items),
         "builder_work_items": builder_items,
+        "direct_work_items": direct_items,
+        "development_work_count": len(builder_items) + len(direct_items),
+        "development_work_items": [*builder_items, *direct_items],
         "trial": current_trial,
         "entries": entries,
     }

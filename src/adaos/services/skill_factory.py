@@ -179,6 +179,34 @@ def _task_internal_path(task_id: str) -> str:
     return _normalize_repo_path(f".adaos/tasks/{_safe_branch_fragment(task_id)}", directory=True)
 
 
+def _task_run_ref(task_id: str) -> str:
+    return f"skill-factory-run:{_safe_branch_fragment(task_id)}"
+
+
+def _is_host_absolute_path(value: Any) -> bool:
+    token = _text(value).replace("\\", "/")
+    return bool(token and (token.startswith("/") or _ABS_WIN_PATH_RE.match(token)))
+
+
+def _portable_task_result(raw: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove node-local filesystem locations from persisted task results."""
+
+    result = dict(raw)
+    task_id = _text(result.get("task_id") or task.get("task_id"))
+    expected = (
+        _mapping(_mapping(task.get("evidence")).get("expected_paths"))
+        or _expected_evidence_paths(task_id)
+    )
+    tests = _mapping(result.get("tests"))
+    if _is_host_absolute_path(tests.get("report")):
+        tests["report"] = _text(expected.get("test_report"))
+    result["tests"] = tests
+    local_run_dir = _text(result.pop("local_run_dir", None))
+    if local_run_dir or _text(result.get("local_run_ref")):
+        result["local_run_ref"] = _text(result.get("local_run_ref")) or _task_run_ref(task_id)
+    return result
+
+
 def _target_from_payload(payload: Mapping[str, Any], draft: Mapping[str, Any] | None = None) -> dict[str, Any]:
     raw_target = _mapping(payload.get("target"))
     draft_artifact = _mapping((draft or {}).get("artifact")) if isinstance(draft, Mapping) else {}
@@ -1357,8 +1385,11 @@ class SkillFactoryService:
         task_id = _text(raw.get("task_id"))
         if not task_id:
             raise ValueError("task_id is required")
-        if not _text(recovery.get("reason")) or not _text(recovery.get("validated_run_dir")):
-            raise ValueError("result recovery requires reason and validated_run_dir evidence")
+        validated_run_ref = _text(
+            recovery.get("validated_run_ref") or recovery.get("validated_run_dir")
+        )
+        if not _text(recovery.get("reason")) or not validated_run_ref:
+            raise ValueError("result recovery requires reason and validated_run_ref evidence")
         with self._state_lock():
             state = self._read_state()
             task = self._require_task(state, task_id)
@@ -1381,7 +1412,11 @@ class SkillFactoryService:
             self._persist_task_result(task, result)
             recovery_entry = {
                 "reason": _text(recovery.get("reason")),
-                "validated_run_dir": _text(recovery.get("validated_run_dir")),
+                "validated_run_ref": (
+                    _task_run_ref(task_id)
+                    if _is_host_absolute_path(validated_run_ref)
+                    else validated_run_ref
+                ),
                 "failure_id": _text(latest_failure.get("failure_id")) or None,
                 "actor": _text(recovery.get("actor")) or "local_worker",
                 "recovered_at": now,
@@ -1937,28 +1972,29 @@ class SkillFactoryService:
         return token
 
     def _normalize_result(self, raw: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
-        changed_paths = [_normalize_repo_path(item, directory=False) for item in _string_list(raw.get("changed_paths"))]
+        portable_raw = _portable_task_result(raw, task)
+        changed_paths = [_normalize_repo_path(item, directory=False) for item in _string_list(portable_raw.get("changed_paths"))]
         provenance = _result_provenance(
-            raw,
+            portable_raw,
             {**dict(task), "realize_request": self._realize_request(task)},
         )
-        dependency_delta = _dependency_delta(raw, changed_paths)
+        dependency_delta = _dependency_delta(portable_raw, changed_paths)
         return {
-            **dict(raw),
+            **portable_raw,
             "schema": DEV_RESULT_SCHEMA,
-            "task_id": _text(raw.get("task_id")),
-            "node_id": _text(raw.get("node_id")) or None,
+            "task_id": _text(portable_raw.get("task_id")),
+            "node_id": _text(portable_raw.get("node_id")) or None,
             "status": "completed",
-            "commit_hash": _text(raw.get("commit_hash")),
-            "branch": _text(raw.get("branch")),
+            "commit_hash": _text(portable_raw.get("commit_hash")),
+            "branch": _text(portable_raw.get("branch")),
             "changed_paths": changed_paths,
-            "tests": _mapping(raw.get("tests")),
-            "validation": _mapping(raw.get("validation")),
+            "tests": _mapping(portable_raw.get("tests")),
+            "validation": _mapping(portable_raw.get("validation")),
             "provenance": provenance,
             "dependency_delta": dependency_delta,
-            "notes": _string_list(raw.get("notes")),
-            "open_questions": _string_list(raw.get("open_questions")),
-            "reported_at": _text(raw.get("reported_at")) or _now_iso(),
+            "notes": _string_list(portable_raw.get("notes")),
+            "open_questions": _string_list(portable_raw.get("open_questions")),
+            "reported_at": _text(portable_raw.get("reported_at")) or _now_iso(),
         }
 
     def _normalize_failure(self, raw: Mapping[str, Any]) -> dict[str, Any]:

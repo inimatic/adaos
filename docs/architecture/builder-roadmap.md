@@ -201,6 +201,11 @@ Rich views supplement conversation without replacing canonical work state.
   project-addressed diagnostic contract. Support bounded UTF-8 content search,
   opaque source-bound cursors and pagination for both the owner UI and
   task-scoped Codex; never accept arbitrary host paths.
+- [x] `[must]` Keep persisted Skill Factory results and Dev Ticket evidence
+  node-portable. Worker results use task-owned logical evidence paths and
+  `skill-factory-run:` references; legacy host-absolute evidence is projected
+  into the same namespace. Direct resolutions are represented explicitly in
+  Development work and are not presented as nonexistent Builder sessions.
 - [ ] `[must]` Qualify managed diagnostics end to end across local and relayed
   subnet execution, including authorization, redaction, stale-task rejection,
   search continuation and a real Codex repair that uses a narrow runtime-log
