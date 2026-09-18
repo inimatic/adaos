@@ -57,6 +57,43 @@ def call(on, name, **params):
             "params": {**IDENTITY, **params}, "invalidates": [*TAGS, "builder.project.files", "builder.project.llm"]}
 
 
+def configure_workbench_page(page):
+    """Forward-port accepted Builder content into the current layout ABI."""
+    page["surfaceClass"] = "operations"
+    page["layout"] = {
+        "version": 2,
+        "pattern": "workbench",
+        "density": "compact",
+        "contentWidth": "bounded",
+        "maxContentWidthPx": 1600,
+        "scroll": "regions",
+        "regions": [
+            {"id": "main", "role": "main", "priority": 100, "scroll": "region",
+             "presentation": {"wide": "pane", "compact": "stack"}},
+            {"id": "conversation", "role": "detail", "priority": 70, "scroll": "region",
+             "size": {"minPx": 300, "preferredPx": 400, "maxPx": 520},
+             "presentation": {"wide": "pane", "compact": "sheet"}},
+        ],
+        "interaction": {"detail": "inline", "actions": "adaptive"},
+        "variants": [{
+            "id": "conversation-focus",
+            "when": "$state.workbenchView === 'conversation'",
+            "pattern": "document",
+            "density": "compact",
+            "contentWidth": "bounded",
+            "maxContentWidthPx": 1600,
+            "scroll": "page",
+            "regions": [{"id": "main", "role": "main", "priority": 100, "scroll": "page",
+                         "presentation": {"wide": "pane", "compact": "stack"}}],
+        }],
+    }
+    page["presentation"] = {
+        "defaultProfile": "desktop",
+        "profiles": {"desktop": {"density": "compact", "maxContentWidthPx": 1600}},
+    }
+    return page
+
+
 def table(identifier, title, title_en, value, columns, *, view, detailed=False):
     visible = f"$state.workbenchView === '{view}'"
     if detailed:
@@ -81,6 +118,7 @@ def build():
     application = live["ui"]["application"]
     application["resources"] = copy.deepcopy(live["resources"])
     page = application["desktop"]["pageSchema"]
+    configure_workbench_page(page)
     old_app = old["ui"]["application"]
     old_page = old_app["desktop"]["pageSchema"]
     old_widgets = {node["id"]: node for node in old_page["widgets"]}
@@ -104,10 +142,11 @@ def build():
                                 "accepted_design_revision": "071", "live_commands": True,
                                 "qualification": "pending"}
     header = copy.deepcopy(specimens["design-workbench-header"])
+    header["inputs"]["appearance"] = "quiet"
     header["inputs"]["statusDataSource"] = design.source({
         "title": "$state.applicationTitle", "state": "$state.current.summary",
         "state_i18n": "$state.current.summary_i18n",
-        "target_label": "$state.workbench.revision_label"})
+        "target_label": "$state.workbench.revision_label", "phase": "$state.current.phase"})
     for button in header["inputs"]["buttons"]:
         if button["id"] == "specimens":
             button.pop("options", None)
@@ -134,6 +173,7 @@ def build():
     current["inputs"]["fields"] = [
         design.field("current.phase", "Этап", "Stage", valueI18nPrefix="builder.workbench.phase."),
         design.field("current.summary", "Сейчас", "Current state", valueI18nPrefix="builder.workbench.state.")]
+    current["inputs"]["presentation"] = "header"
     current["inputs"]["stateBindings"] = {"workbench": "view", "current": "current", "commands": "commands",
         "applicationTitle": "title", "selectedProjectTitle": "title", "workflowGeneration": "workflow_generation",
         "project.title": "title", "project.description": "description", "project.type": "object_type",
@@ -156,6 +196,7 @@ def build():
         design.modal_action("click:accept", "prototype-review"), design.modal_action("click:implement", "automation"),
         design.modal_action("click:checkpoint", "design-checkpoint"), design.modal_action("click:publication", "publication"),
         design.modal_action("click:return", "design-return")])
+    primary["inputs"]["variant"] = "toolbar"
     tabs = copy.deepcopy(specimens["design-workbench-views"])
     widgets = [header, current, primary, tabs]
     preview = design.details("design-revision-identity", "Результат", "Result", {}, [
@@ -168,7 +209,8 @@ def build():
         design.button("qr", "QR", "QR", "qr-code-outline"),
         design.button("history", "Редакции", "Revisions", "git-branch-outline")],
         [call("click:open", "open_preview"), design.modal_action("click:qr", "preview-qr"),
-         design.modal_action("click:history", "design-revisions")], visible="$state.workbenchView === 'result'")]
+         design.modal_action("click:history", "design-revisions")], visible="$state.workbenchView === 'result'",
+        variant="toolbar")]
     widgets[-1]["actions"][0].update(openResultUrl=True, resultUrlPath="preview_url", resultPreferCurrentOrigin=True)
     automation_status = copy.deepcopy(next(w for w in modals["automation"]["schema"]["widgets"] if w["id"] == "automation-state"))
     automation_status.update(id="design-result-automation", visibleIf="$state.workbenchView === 'result' && $state.workflowActivePhase === 'automation'")
@@ -235,6 +277,7 @@ def build():
                                       [design.modal_action("click:edit", "design-readme-editor")], visible="$state.workbenchView === 'readme'")]
     for position, area, visible in [("side", "conversation", "$state.workbenchView !== 'conversation'"), ("full", "main", "$state.workbenchView === 'conversation'")]:
         controls = copy.deepcopy(specimens[f"design-conversation-controls-{position}"])
+        controls["inputs"]["appearance"] = "quiet"
         options = controls["inputs"]["buttons"][0]["options"]
         options[0].update(design.text_field("label", "Задание", "Task"))
         controls["actions"] = [action for action in controls["actions"] if action["on"] != "click:trace-messages"]
@@ -245,6 +288,8 @@ def build():
                     visibleIf=visible + " && $state.conversationMode === 'task'")
         chat["inputs"].pop("hint", None)
         chat["inputs"]["invalidateOnMessages"] = TAGS
+        if position == "side":
+            chat["inputs"]["fillHeight"] = True
         widgets.append(chat)
         informal = {"id": f"design-conversation-{position}-informal", "type": "ui.chat", "area": area,
                     "visibleIf": visible + " && $state.conversationMode === 'informal'",

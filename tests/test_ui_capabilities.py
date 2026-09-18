@@ -75,7 +75,7 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     catalog = ui_capability_catalog()
     component_ids = {item["id"] for item in catalog["components"]}
 
-    assert catalog["catalog_version"] == "3.3.7"
+    assert catalog["catalog_version"] == "3.3.9"
     assert {
         "navigation.tabs",
         "navigation.breadcrumbs",
@@ -106,6 +106,21 @@ def test_natural_typed_form_request_selects_form_capability() -> None:
     )
 
     assert "ui.form" in selected["root_item_ids"]
+
+
+def test_dashboard_status_informers_select_metric_tile_and_dashboard() -> None:
+    from adaos.services.ui_capabilities import (
+        selected_ui_capabilities as select_generic_capabilities,
+    )
+
+    selected = select_generic_capabilities(
+        "Replace the tall summary with four compact status informers in separate dashboard regions."
+    )
+
+    assert "visual.metricTile" in selected["root_item_ids"]
+    assert "layout.dashboard" in selected["root_item_ids"]
+    metric_tile = get_ui_capability("visual.metricTile")
+    assert "without relying on color" in metric_tile["manifest"]["static_data"]
 
 
 def test_ui_revision_correction_does_not_require_domain_persistence() -> None:

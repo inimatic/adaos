@@ -94,6 +94,23 @@ On cancellation, timeout, invalid sequence, base mismatch, parser failure, or
 validation failure, Builder discards the shadow state. The current revision
 does not change.
 
+## Live Prototype Projection
+
+The current Root progress stream exposes phase and patch metadata; it does not
+carry an authenticated renderer value stream and therefore cannot drive a
+truthful visual Live Prototype. A future live projection must apply complete
+typed values to the same private shadow transaction described above and publish
+only validated shadow snapshots to an explicitly marked draft surface.
+
+That surface has a separate identity from the canonical Preview, cannot execute
+stateful or external-effect commands, and disappears on failure or cancellation.
+Per-patch structural checks may make progressive rendering responsive, but only
+terminal full-document validation and atomic promotion create a revision. Raw
+provider deltas must never enter canonical Yjs state. Evaluation must compare
+time to first useful frame, invalid-frame count, final equivalence, added token/
+transport cost, and user comprehension against the existing phase projection
+before Live Prototype becomes a default route.
+
 ## Compatibility
 
 Streaming capability is selected by the Root development model profile and by

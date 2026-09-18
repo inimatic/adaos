@@ -112,6 +112,59 @@ def test_static_details_selected_key_must_resolve_directly() -> None:
     assert validate_webui_capabilities(webui)["ok"] is True
 
 
+def test_static_details_cover_ids_emitted_by_static_collection_selection() -> None:
+    webui = _empty_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page["initialState"] = {"selectedItemId": ""}
+    page["widgets"] = [
+        {
+            "id": "items",
+            "type": "ui.list",
+            "area": "main",
+            "dataSource": {
+                "kind": "static",
+                "value": [
+                    {"id": "item-1", "title": "One"},
+                    {"id": "item-2", "title": "Two"},
+                ],
+            },
+            "inputs": {"titleKey": "title"},
+            "actions": [
+                {
+                    "on": "select",
+                    "type": "updateState",
+                    "params": {"selectedItemId": "$event.id"},
+                }
+            ],
+        },
+        {
+            "id": "details",
+            "type": "item.details",
+            "area": "main",
+            "dataSource": {
+                "kind": "static",
+                "value": {"item-1": {"title": "One"}},
+            },
+            "inputs": {
+                "selectedStateKey": "selectedItemId",
+                "fields": [{"id": "title", "label": "Title", "value": "{title}"}],
+            },
+        },
+    ]
+
+    result = validate_webui_capabilities(webui)
+
+    assert result["ok"] is False
+    finding = next(
+        item
+        for item in result["findings"]
+        if item["code"] == "ui.details.static_selection_keys_missing"
+    )
+    assert finding["missing_keys"] == ["item-2"]
+    page["widgets"][1]["dataSource"]["value"]["item-2"] = {"title": "Two"}
+    assert validate_webui_capabilities(webui)["ok"] is True
+
+
 def test_details_title_belongs_on_widget_and_action_params_reject_js_expression_strings() -> None:
     webui = _empty_webui()
     page = webui["ui"]["application"]["desktop"]["pageSchema"]

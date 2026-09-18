@@ -4,7 +4,7 @@ Status: active corrective roadmap. Small generic Prototype and DEV Automation
 slices work; target ownership, repeatable reliability and installed lifecycle
 acceptance remain incomplete.
 
-Last reviewed: 2026-09-17.
+Last reviewed: 2026-09-19.
 
 Architecture: [Intent-to-Prototype](builder-intent-to-prototype.md).
 Cross-document owner: [Builder Roadmap](builder-roadmap.md).
@@ -32,7 +32,7 @@ unconditional feature commitment. A blocked task is not deferred. A task is
 not done because a schema exists, an import guard passes, or one model/browser
 run succeeds. Historical missing evidence cannot be recreated retrospectively.
 
-This register contains 37 non-deferred packages (27 must, four should, six
+This register contains 38 non-deferred packages (27 must, four should, seven
 could) and eight deferred packages. Three narrow packages are verified.
 These are ownership/acceptance units, not effort estimates or a percentage.
 The parent roadmap and SDK migration retain their distinct obligations.
@@ -436,7 +436,7 @@ Exit/remaining work: Move interpretation/execution, provider lifecycle and trans
 
 Owner/dependencies: Client component roadmap C2/C3 + Core ABI.
 
-Implementation boundary: The AST-generated capability inventory detects drift, but reads handwritten registries/models; it does not generate them from one component contract.
+Implementation boundary: The AST-generated capability inventory detects drift, but reads handwritten registries/models; it does not generate them from one component contract. Adding `visual.metricTile` semantics and icon rendering required coordinated handwritten catalog and Client edits, which is useful coverage but direct evidence that single-source generation is still missing.
 
 Exit/remaining work: Publish the authoritative contract and derive Client registration/types, compiler/validator indexes, retrieval and docs. Require ABI impact reports, conformance fixtures and matched browser evidence for admitted components, not every future widget.
 
@@ -477,6 +477,11 @@ Exit/remaining work: Admit contracts by shape/operation/authority before optiona
 
 - [x] `[must]` Preserve reference punctuation and original source offsets during
   deterministic clause extraction; do not infer UI operations from URL path words.
+- [x] `[must]` Stop promoting ambiguous authoring verbs into mandatory resource
+  CRUD. Deterministic qualification now emits a conservative confirmed/
+  excluded/unknown resource-scope signal; unknown remains model Brief work and
+  cannot create a persistence acceptance gate by itself. Retain explicit
+  end-user record mutation coverage and negative UI-authoring regressions.
 - [ ] `[must]` Qualify accumulated multi-turn context capacity on a released
   application: distinguish lexical hints from admitted behavior and execution
   constraints; retain every source without requiring invented UI for metadata.
@@ -571,6 +576,11 @@ Implementation boundary: Semantic requests use typed output and stable/dynamic c
   retained Web Desktop correction, actual input fell from 34,948 to 8,722 tokens
   (75.0%) and the accepted revision changed only the requested static value plus
   Builder revision metadata; no output cap was reduced.
+- [x] `[must]` Make the active turn the final execution authority and history a
+  bounded reference. Recap every explicit active acceptance condition, and
+  force structural additions/removals, layout-role/cardinality changes, and
+  cross-surface redesigns onto the wider stage context even when one existing
+  widget is named. Focused prompt regressions cover these routing boundaries.
 - [ ] `[must]` Extend measured stage-specific composition to section additions,
   cross-cutting redesigns, semantic planning and repair without misclassifying
   broad work as a local correction. Compare accepted outcomes, repairs, cached
@@ -934,6 +944,23 @@ Owner/dependencies: Core Prototype context + compiler.
 Implementation boundary: Model context supplies exact requirement refs and object-aware operations, with provider constraints and omission/unrelated-binding regressions.
 
 Exit/remaining work: This does not establish residual intent understanding or eliminate every first-call invariant gap (BIP-10/BIP-13).
+
+### BIP-32
+
+- [ ] `[could]` **Live Prototype Shadow Projection**. Status: `conditional`.
+
+Owner/dependencies: Root progress + Builder transaction + Client draft renderer.
+
+Implementation boundary: Root currently exposes bounded phase/patch metadata,
+while canonical Preview changes only after full validation. This is sufficient
+for progress visibility but cannot render actual model changes as they arrive.
+
+Exit/remaining work: Compare an authenticated, non-executable private-shadow
+projection with the existing phase UI. Require complete typed patch values,
+per-patch structural checks, explicit draft identity, terminal full validation,
+atomic promotion and rollback. Measure first useful frame, invalid frames, final
+equivalence and transport/token cost. Never stream raw provider deltas into
+canonical Yjs or make this route a prerequisite without measured benefit.
 
 ### BIP-33
 

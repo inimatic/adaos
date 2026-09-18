@@ -260,6 +260,36 @@ def test_declarative_static_record_correction_does_not_require_resource_crud() -
     qualified = qualify_ui_request(statement)
 
     assert qualified["requirements"]["prototype_resource"] is False
+    assert qualified["requirements"]["resource_mutations"] is False
+    assert qualified["requirements"]["resource_scope_needs_interpretation"] is False
+
+
+def test_declarative_ui_additions_do_not_require_resource_crud() -> None:
+    from adaos.services.ui_capabilities import qualify_ui_request
+
+    qualified = qualify_ui_request(
+        "Redesign the current WebUI prototype. Add category filtering for the "
+        "Marketplace and add a separate apps-marketplace ui.list with an iconKey. "
+        "Declare a compact sheet with an explicit close/back path. Show installed "
+        "applications as one collection and Marketplace as a second catalog."
+    )
+
+    assert qualified["requirements"]["prototype_resource"] is False
+    assert qualified["requirements"]["resource_scope_needs_interpretation"] is False
+
+
+def test_explicit_no_persistence_boundary_wins_over_ambiguous_ui_verbs() -> None:
+    from adaos.services.ui_capabilities import qualify_ui_request
+
+    qualified = qualify_ui_request(
+        "Complete these remaining prototype UI items. Mark the current endpoint "
+        "online and replace the navigation. Do not create domain persistence or "
+        "Prototype resources."
+    )
+
+    assert qualified["requirements"]["resource_mutations"] is False
+    assert qualified["requirements"]["prototype_resource"] is False
+    assert qualified["requirements"]["resource_scope_needs_interpretation"] is False
 
 
 def test_end_user_record_crud_still_requires_prototype_resources() -> None:
@@ -270,6 +300,18 @@ def test_end_user_record_crud_still_requires_prototype_resources() -> None:
     )
 
     assert qualified["requirements"]["prototype_resource"] is True
+    assert qualified["requirements"]["resource_mutations"] is True
+    assert qualified["requirements"]["resource_scope_needs_interpretation"] is False
+
+
+def test_ambiguous_mutation_is_left_for_brief_interpretation() -> None:
+    from adaos.services.ui_capabilities import qualify_ui_request
+
+    qualified = qualify_ui_request("Add a priority and change it later.")
+
+    assert qualified["requirements"]["resource_mutations"] is False
+    assert qualified["requirements"]["prototype_resource"] is False
+    assert qualified["requirements"]["resource_scope_needs_interpretation"] is True
 
 
 def test_additional_condition_is_not_parsed_as_add_operation() -> None:

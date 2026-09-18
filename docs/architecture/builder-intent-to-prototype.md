@@ -331,6 +331,17 @@ must not silently become a destructive default. Clarification is required only
 when an unresolved field changes safety, architecture, or the primary user
 experience.
 
+Deterministic extraction owns only stable syntax, explicit exclusions,
+provenance, authority boundaries, and facts that can be proved without domain
+interpretation. It must not infer persistent CRUD from generic authoring verbs
+such as add, change, mark, or move. An explicit end-user data operation may be
+classified deterministically; otherwise resource scope stays `unknown` and the
+model resolves it in the typed Brief. The model may use bounded read-only MCP
+retrieval for named capability, SDK, and project references, but retrieved text
+is evidence, not new user authority. Schema, reference, permission,
+preservation, and postcondition checks remain deterministic and cannot be
+waived by the model.
+
 ### 3. Request Routing And Deferred Large-Prototype Plan
 
 The active milestone is the complete Builder lifecycle for small applications,
@@ -731,6 +742,14 @@ candidate plus all independent typed findings, and evaluation receives the
 immutable artifact plus a post-generation rubric. A stage must not inherit a
 large shared packet merely because another stage needs it.
 
+For an iterative Change, the active user turn is the final execution authority.
+Accepted earlier requirements remain referenced constraints, while conversation
+history is explanatory evidence only. A final active-turn recap enumerates every
+explicit acceptance condition; completing one coherent subset is not permission
+to stop when other active conditions remain. Contradictions are surfaced as a
+clarification instead of being resolved by whichever duplicate instruction is
+nearest in the prompt.
+
 The context plan is content addressed. Stable policy, schema, and capability
 units precede dynamic task content so provider prompt caching can reuse them.
 Cached-token price is tracked separately, but caching does not make irrelevant
@@ -755,7 +774,10 @@ candidate then passes full-document schema, capability, reachability and
 browser validation. This route is admitted only when the request explicitly
 bounds the correction and names existing widget identities. New sections,
 cross-cutting redesigns and ambiguous requests retain a wider stage-specific
-context rather than pretending to be local edits.
+context rather than pretending to be local edits. A request that adds or removes
+regions/widgets/modals, changes layout roles or cardinality, or redesigns a
+surface is structural even when it names one existing widget; it cannot use the
+scoped correction route.
 
 Existing complete locale dictionaries are not retransmitted for a targeted
 non-localization change. Recent history and development context are bounded by
@@ -868,7 +890,9 @@ offline preview data, with attribution and no domain-specific application logic.
 
 Lexical interpretation is fallible: actor names and display-state nouns must
 not become mandatory mutation or attachment-capture operations. The original
-user statement remains available alongside derived references. Qualifying a
+user statement remains available alongside derived references. The
+deterministic classifier records ambiguous mutation scope for model Brief
+interpretation instead of forcing a Prototype resource. Qualifying a
 relationship assignment must allow creation of a link as well as updating a
 foreign key; a fixed CRUD verb mapping is not an outcome model.
 

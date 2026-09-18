@@ -2,7 +2,7 @@
 
 Status: active prerequisite and growth roadmap for the universal AdaOS Client.
 
-Last reviewed: 2026-09-16.
+Last reviewed: 2026-09-19.
 
 Architecture owner: [Web UI Architecture](web-ui-architecture.md).
 Builder dependency: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
@@ -470,6 +470,16 @@ machine-checked impact set.
   locale formatting, and long-content layout for all admitted components.
 - [ ] `[must]` Enforce stable dimensions and no incoherent overlap in declared
   representative states.
+- [x] `[should]` Add semantic icon rendering to the generic metric/status tile
+  and document dashboard peer composition through separate `role=status`
+  regions. The retained Web Desktop candidate renders four independent tiles in
+  one wide row and stable compact order without relying on color for meaning.
+- [x] `[must]` Reject a keyed static details projection when a selecting static
+  collection can emit IDs absent from that projection. This closes the observed
+  selected-row/stale-detail mismatch without introducing product knowledge.
+- [ ] `[must]` Validate authored icon tokens against the admitted Client icon
+  inventory during conformance. A browser-found invalid Ionicon was repairable,
+  but manual observation is not an acceptable general contract.
 - [ ] `[must]` Exercise every layout pattern through the same conformance
   harness with at least one multi-region and one compact-disclosure fixture;
   assert region order, scroll owner, focus return, action reachability, and

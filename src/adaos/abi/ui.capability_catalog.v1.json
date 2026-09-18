@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.3.7",
+  "catalog_version": "3.3.9",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -148,7 +148,7 @@
       "manifest": {
         "pattern": "dashboard",
         "primary_role": "main",
-        "composition": "Declare shell-wide controls in a toolbar or navigation region; both span the dashboard width. Declare independent peer dashboard blocks as separate layout.regions and place each widget in its owning area. Multiple widgets in one region remain one vertical region; a single region cannot produce a peer dashboard grid.",
+        "composition": "Declare shell-wide controls in a toolbar or navigation region; both span the dashboard width. Declare independent peer dashboard blocks as separate layout.regions with role=status or role=utility and place each widget in its owning area. role=main spans the dashboard width. Multiple widgets in one region remain one vertical region; a single region cannot produce a peer dashboard grid.",
         "supporting_roles": [
           "toolbar",
           "navigation",
@@ -817,6 +817,8 @@
           "never"
         ],
         "button_priority": "number; higher values remain visible longer",
+        "appearance": "appearance=quiet removes the enclosing toolbar fill while retaining command boundaries and focus feedback.",
+        "activity_status": "statusActivityPath and statusActivityValues may mark a status projection as actively generating or validating; this is presentation only and does not establish completion.",
         "scope": "commands only; use a details or list component for passive status text. A standalone ui.actions widget has page state and click-event context, not an implicit selected $record; selection-dependent commands must use explicit $state keys populated by the selecting collection."
       },
       "data_shape": {
@@ -1019,6 +1021,97 @@
       "postconditions": [
         "Each trigger exposes aria-expanded and owns one labelled region.",
         "Single-open is the default; multiple=true explicitly enables multiple open sections."
+      ]
+    },
+    {
+      "id": "ui.chat",
+      "kind": "component",
+      "title": "Conversation surface",
+      "summary": "A message history and optional composer that can fill a dedicated conversation region.",
+      "aliases": {
+        "en": ["chat", "conversation", "message history", "message composer"],
+        "ru": ["чат", "диалог", "история сообщений", "поле сообщения"]
+      },
+      "manifest": {
+        "widget_type": "ui.chat",
+        "inputs": {
+          "fillHeight": "true for a first-class full-height conversation destination",
+          "multiline": "true for a growing multiline composer",
+          "composerRows": "initial row count from 1 to 12",
+          "placeholder": "localized composer hint",
+          "historyButtonLabel": "localized history command",
+          "sendCommand": "voice.chat.user for the platform conversation channel",
+          "openCommand": "optional voice.chat.open initialization command",
+          "meta": "optional conversation_id, conversation_topic_id, dialog_channel_id and thread_id routing metadata"
+        },
+        "live_data_source": {
+          "kind": "stream",
+          "receiver": "voice_chat.messages",
+          "scope": "shared",
+          "transport": "hub",
+          "params": "optional routing state references matching inputs.meta"
+        },
+        "prototype_data_source": "Use kind=static with a bounded message array when a live conversation is explicitly out of scope. Omit sendCommand when the composer must be read-only."
+      },
+      "data_shape": {
+        "kind": "messages",
+        "record": "{id,from,text,ts}; assistant messages may include agent metadata and actions"
+      },
+      "events": ["send via declared sendCommand"],
+      "responsive": {
+        "desktop": "fills its dedicated region when fillHeight=true",
+        "compact": "one bounded conversation column with history and composer"
+      },
+      "postconditions": [
+        "A first-class conversation destination uses a dedicated region and fillHeight=true.",
+        "A visible composer has an explicit sendCommand; a static read-only transcript has no decorative composer.",
+        "Conversation routing metadata is explicit when the stream is scoped to a channel or thread."
+      ]
+    },
+    {
+      "id": "visual.metricTile",
+      "kind": "component",
+      "title": "Metric or status tile",
+      "summary": "A compact independent metric, health or status informer for dashboard composition.",
+      "aliases": {
+        "en": [
+          "metric tile",
+          "status tile",
+          "status informer",
+          "health informer",
+          "health tile"
+        ],
+        "ru": [
+          "плитка метрики",
+          "информер статуса",
+          "информер состояния",
+          "информер здоровья"
+        ]
+      },
+      "manifest": {
+        "widget_type": "visual.metricTile",
+        "static_data": "Use widget.dataSource={kind:'static',value:{value,label,description,color,icon}} for a prototype tile. Text must communicate state without relying on color.",
+        "inputs": {
+          "valuePath": "optional payload path for the primary status or metric",
+          "labelPath": "optional payload path for the short supporting label",
+          "descriptionPath": "optional payload path for concise explanatory text",
+          "colorPath": "optional payload path for success, warning, danger, or primary tone",
+          "iconPath": "optional payload path for an Ionicon name; inputs.icon is the static fallback"
+        },
+        "composition": "For peer dashboard tiles, declare one layout region with role=status per tile and put one visual.metricTile in each region. role=main spans the dashboard width. Several tiles in one region remain one vertical block."
+      },
+      "data_shape": {
+        "kind": "single_metric_or_status",
+        "record": "{value,label?,description?,color?,icon?}"
+      },
+      "events": ["click", "click:<actionId>"],
+      "responsive": {
+        "desktop": "compact peer tile in a responsive dashboard grid",
+        "compact": "full-width tile in stable semantic order"
+      },
+      "postconditions": [
+        "The primary status is understandable from text and icon without color.",
+        "Peer tiles use separate layout regions so wide and compact ordering is deterministic."
       ]
     },
     {
@@ -1423,7 +1516,7 @@
           "layout.dashboard"
         ],
         "components": [
-          "visual.metricChart"
+          "visual.metricTile"
         ]
       },
       "composition": {

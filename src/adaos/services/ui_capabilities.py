@@ -372,7 +372,14 @@ def _contains_any_term(text: str, values: Iterable[str]) -> bool:
     )
 
 
-def _requires_prototype_resource(operation: Mapping[str, Any]) -> bool:
+def _prototype_resource_signal(operation: Mapping[str, Any]) -> bool | None:
+    """Return a conservative persistence signal for a deterministic Brief row.
+
+    ``True`` is reserved for explicit end-user data mutation. ``False`` means
+    the row is clearly UI authoring/local state. ``None`` keeps ambiguous
+    wording for model interpretation instead of inventing a CRUD obligation.
+    """
+
     kind = str(operation.get("kind") or "").strip()
     if kind not in {"create", "update", "assign", "transition", "delete", "archive"}:
         return False
@@ -389,28 +396,53 @@ def _requires_prototype_resource(operation: Mapping[str, Any]) -> bool:
         return False
     if statement in {"update", "change", "edit", "add", "create"}:
         return False
-    # A Builder refinement commonly edits the declarative UI, fixture shape,
-    # or projection metadata. Those authoring mutations must not be promoted
-    # into end-user persistence requirements merely because the instruction
-    # contains verbs such as add/change and nouns such as record/field.
     authoring_text = f"{statement} {source_clause}".strip()
     if re.search(
-        r"\b(?:prototype|revision|webui|dashboard|layout|region|widget|"
-        r"viewport|presentation|semantic|toolbar|navigation|card|button|"
-        r"icon|badge|locale|datasource|actionlabel|itemlabelkey|command|surface|"
-        r"page|initialstate|statekey|modal|form|manifest|schema|submit|reset|"
-        r"updatestate|actionmessage|last[a-z0-9_]*action|static\s+(?:fixture|record)|"
-        r"click:[a-z0-9_.-]+|\$event(?:\.[a-z0-9_.-]+)?)\w*\b",
-        authoring_text,
-        flags=re.IGNORECASE,
-    ) and re.search(
-        r"\b(?:field|label|key|role|width|sizing|projection|metadata|"
-        r"structure|content|purpose|lastactivity|inputs?|variant|state|action)\w*\b",
+        r"\b(?:prototype|revision|webui|layout|region|widget|viewport|"
+        r"presentation|toolbar|navigation|ui|interface|screen|responsive|"
+        r"compact|modal|dialog|sheet|tabs?|cards?|grid|table)\b|"
+        r"\b(?:ui|visual|navigation|layout)\.[a-z0-9_.-]+\b|"
+        r"\$event(?:\.[a-z0-9_.-]+)?\b",
         authoring_text,
         flags=re.IGNORECASE,
     ):
         return False
-    return True
+    if re.search(
+        r"\b(?:field|label|key|metadata|wording|icon|badge|action|command|"
+        r"filter(?:ing)?|details?|section|catalog|readme|about|rating)\b",
+        authoring_text,
+        flags=re.IGNORECASE,
+    ):
+        return False
+
+    # These are deliberately narrow positive signals. Broader domain meaning
+    # belongs to the model-produced Prototype Brief, not to lexical expansion.
+    if re.search(
+        r"\b(?:crud|resourceoperation|persistent\s+(?:data|records?)|"
+        r"persist(?:ed|ing)?\s+(?:data|records?))\b",
+        authoring_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"\b(?:allow|let)\s+(?:an?\s+|the\s+)?[a-z][\w-]*\s+to\s+"
+        r"(?:create|add|edit|update|assign|move|close|complete|archive|delete)\b|"
+        r"\b(?:users?|members?|operators?|coordinators?|managers?|admins?|staff)\s+"
+        r"(?:(?:can|may|must|need\s+to|should\s+be\s+able\s+to)\s+.{0,120}?)?"
+        r"(?:create|add|edit|update|assign|move|close|complete|archive|delete)\b",
+        authoring_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"\b(?:create|add|edit|update|assign|move|close|complete|archive|delete)\w*"
+        r"(?:\s+[a-z][\w-]*){0,8}\s+"
+        r"(?:records?|entries|tasks?|appointments?|inspections?|tickets?)\b",
+        authoring_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return None
 
 
 def _number(value: str) -> int | None:
@@ -674,11 +706,25 @@ def qualify_ui_request(
             or re.search(r"\bprototype\b", scope_text, flags=re.IGNORECASE)
         )
     )
-    resource_mutations = not explicit_local_prototype_scope and any(
-        _requires_prototype_resource(item)
+    resource_persistence_excluded = bool(
+        re.search(
+            r"\b(?:do\s+not|don't|without|no)\s+(?:create\s+)?(?:domain\s+"
+            r"persistence|prototype\s+resources?)\b",
+            scope_text,
+            flags=re.IGNORECASE,
+        )
+    )
+    resource_signals = [
+        _prototype_resource_signal(item)
         for item in prototype_brief.get("operations") or []
         if isinstance(item, Mapping)
-    )
+    ]
+    resource_mutations = not (
+        explicit_local_prototype_scope or resource_persistence_excluded
+    ) and any(signal is True for signal in resource_signals)
+    resource_scope_needs_interpretation = not (
+        explicit_local_prototype_scope or resource_persistence_excluded
+    ) and any(signal is None for signal in resource_signals)
     prototype_resource_required = bool(
         resource_mutations
         and brief_operations & {"inspect", "list", "search", "filter"}
@@ -751,6 +797,10 @@ def qualify_ui_request(
     requirements["brief_operation_kinds"] = brief_operation_kinds
     requirements["brief_information_kinds"] = brief_information_kinds
     requirements["brief_collection_requirements"] = brief_collection_requirements
+    requirements["resource_mutations"] = resource_mutations
+    requirements["resource_scope_needs_interpretation"] = (
+        resource_scope_needs_interpretation
+    )
     requirements["prototype_resource"] = prototype_resource_required
     gaps: list[dict[str, Any]] = []
     return {
@@ -855,6 +905,20 @@ def selected_ui_capabilities(
     for layout_id, pattern in explicit_layouts:
         if re.search(pattern, str(request or ""), flags=re.IGNORECASE) and layout_id not in selected_ids:
             selected_ids.append(layout_id)
+    if re.search(
+        r"\b(?:chat|conversation|conversation\s+history|message\s+composer)\w*\b",
+        str(request or ""),
+        flags=re.IGNORECASE,
+    ) and "ui.chat" not in selected_ids:
+        selected_ids.append("ui.chat")
+    if re.search(
+        r"\b(?:metric|status|health)[- ]?(?:tile|informer|summary)\w*\b|"
+        r"\b(?:tile|informer)\w*\s+(?:for\s+)?(?:metric|status|health)\w*\b|"
+        r"\b(?:информер|плитк)\w*\s+(?:метрик|статус|состояни|здоров)\w*\b",
+        str(request or ""),
+        flags=re.IGNORECASE,
+    ) and "visual.metricTile" not in selected_ids:
+        selected_ids.append("visual.metricTile")
     if brief_operation_kinds & {"search", "filter"}:
         for component_id in ("input.text", "input.selector"):
             if component_id not in selected_ids:
@@ -1066,6 +1130,7 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
             else {}
         )
         controlled_state_values: dict[str, set[str]] = {}
+        static_event_state_values: dict[str, set[str]] = {}
         for candidate in widgets:
             if not isinstance(candidate, Mapping):
                 continue
@@ -1098,6 +1163,17 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 if isinstance(candidate.get("actions"), list)
                 else []
             )
+            candidate_data_source = (
+                candidate.get("dataSource")
+                if isinstance(candidate.get("dataSource"), Mapping)
+                else {}
+            )
+            candidate_rows = (
+                candidate_data_source.get("value")
+                if str(candidate_data_source.get("kind") or "") == "static"
+                and isinstance(candidate_data_source.get("value"), list)
+                else []
+            )
             for action in candidate_actions:
                 if (
                     not isinstance(action, Mapping)
@@ -1106,6 +1182,22 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 ):
                     continue
                 for state_key, value in action["params"].items():
+                    event_field = (
+                        str(value)[7:]
+                        if isinstance(value, str) and str(value).startswith("$event.")
+                        else ""
+                    )
+                    if event_field and candidate_rows:
+                        values = {
+                            str(_read_path(row, event_field))
+                            for row in candidate_rows
+                            if isinstance(row, Mapping)
+                            and _read_path(row, event_field) not in {None, ""}
+                        }
+                        if values:
+                            static_event_state_values.setdefault(
+                                str(state_key), set()
+                            ).update(values)
                     if isinstance(value, (str, int, float, bool)) and not str(
                         value
                     ).startswith("$"):
@@ -1440,6 +1532,28 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                             ),
                         }
                     )
+                expected_static_keys = static_event_state_values.get(
+                    selected_state_key, set()
+                )
+                if expected_static_keys and isinstance(static_value, Mapping):
+                    missing_static_keys = sorted(
+                        expected_static_keys - {str(key) for key in static_value}
+                    )
+                    if missing_static_keys:
+                        findings.append(
+                            {
+                                "code": "ui.details.static_selection_keys_missing",
+                                "severity": "error",
+                                "path": f"{widget_path}.dataSource.value",
+                                "message": (
+                                    f"item.details selectedStateKey {selected_state_key!r} is "
+                                    "written from static collection rows, but the keyed detail "
+                                    "source is missing selectable values: "
+                                    + ", ".join(missing_static_keys)
+                                ),
+                                "missing_keys": missing_static_keys,
+                            }
+                        )
             for action_index, action in enumerate(actions):
                 params = (
                     action.get("params")
