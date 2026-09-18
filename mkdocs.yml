@@ -154,6 +154,8 @@ nav:
       - NLU Roadmap: architecture/nlu-roadmap.md
       - Artifact Source Package Activation: architecture/artifact-source-package-activation.md
       - Artifact Source Package Activation Roadmap: architecture/artifact-source-package-activation-roadmap.md
+      - Capability Binding And State Separation: architecture/capability-binding-state-separation.md
+      - Capability Binding And State Separation Roadmap: architecture/capability-binding-state-separation-roadmap.md
       - Application Lifecycle Distribution And Feedback: architecture/application-lifecycle-and-distribution.md
       - Application Lifecycle Distribution Roadmap: architecture/application-lifecycle-and-distribution-roadmap.md
       - Application Access Permissions And Roles: architecture/application-access-permissions.md
