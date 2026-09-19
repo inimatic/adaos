@@ -7610,6 +7610,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             changed_paths=changed_paths,
         )
         self._validate_skill_manifests(workspace, checks, errors)
+        self._validate_owned_skill_data_lifecycle(workspace, checks, errors)
         self._validate_changed_skill_tool_effects(
             workspace,
             checks,
@@ -8413,6 +8414,72 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 continue
             errors.extend(f"{relative}: {issue.code}: {issue.message} ({issue.where})" for issue in issues)
             checks.append({"kind": "skill.manifest.schema", "path": relative, "ok": not issues})
+
+    @staticmethod
+    def _validate_owned_skill_data_lifecycle(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Fail Automation before an owned skill reaches Trial without a data contract."""
+
+        from adaos.services.applications.data_lifecycle import (
+            declared_databases,
+            require_native_tools,
+        )
+
+        for project_path in sorted(workspace.glob("projects/*/project.yaml")):
+            project_relative = project_path.relative_to(workspace).as_posix()
+            try:
+                project = yaml.safe_load(project_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                # The general YAML and project composition validators report parsing errors.
+                continue
+            components = project.get("components") if isinstance(project, Mapping) else None
+            owned = components.get("owned") if isinstance(components, Mapping) else None
+            if not isinstance(owned, list):
+                continue
+            for component in owned:
+                ref = (
+                    str(component.get("ref") or "").strip()
+                    if isinstance(component, Mapping)
+                    else ""
+                )
+                if not ref.startswith("skill:"):
+                    continue
+                skill_id = ref.split(":", 1)[1].strip()
+                manifest_path = workspace / "skills" / skill_id / "skill.yaml"
+                manifest_relative = manifest_path.relative_to(workspace).as_posix()
+                check = {
+                    "kind": "application.owned_skill_data_lifecycle.strict",
+                    "path": manifest_relative,
+                    "project": project_relative,
+                    "component_ref": ref,
+                    "ok": False,
+                }
+                if not manifest_path.is_file():
+                    errors.append(
+                        f"{project_relative}: owned component {ref} has no skill manifest in the Automation snapshot"
+                    )
+                    checks.append(check)
+                    continue
+                try:
+                    manifest = yaml.safe_load(
+                        manifest_path.read_text(encoding="utf-8")
+                    ) or {}
+                    if not isinstance(manifest, Mapping):
+                        raise ValueError("skill manifest must be an object")
+                    require_native_tools(manifest)
+                    databases = declared_databases(manifest)
+                except Exception as exc:
+                    errors.append(
+                        f"{manifest_relative}: owned Application skill data lifecycle: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    checks.append(check)
+                    continue
+                check.update(ok=True, databases=sorted(databases))
+                checks.append(check)
 
     @staticmethod
     def _validate_changed_skill_tool_effects(

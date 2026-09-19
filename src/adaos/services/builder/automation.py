@@ -5709,6 +5709,12 @@ class BuilderAutomationService:
         error = str(failure.get("error") or failure.get("message") or task.get("error") or "").strip() or None
         clarification = session.get("clarification") if failure.get("failure_class") == "user_input_required" else None
         awaiting_input = bool(clarification) and clarification.get("status") != "completed"
+        current_task_id = str(
+            session.get("current_task_id") or task.get("task_id") or ""
+        ).strip()
+        local_run_ref = str(result.get("local_run_ref") or "").strip()
+        if not local_run_ref and current_task_id and Path(current_task_id).name == current_task_id:
+            local_run_ref = f"skill-factory-run:{current_task_id}"
         return {
             "schema": AUTOMATION_PROJECTION_SCHEMA,
             "stage": "automation",
@@ -5734,7 +5740,7 @@ class BuilderAutomationService:
                 dict(session.get("prototype_handoff") or {}).get("digest") or ""
             ) or None,
             "iteration": int(session.get("iteration") or 0),
-            "task_id": str(session.get("current_task_id") or task.get("task_id") or "") or None,
+            "task_id": current_task_id or None,
             "change_set_id": str(session.get("change_set_id") or "").strip() or None,
             "change_id": str(session.get("change_id") or "").strip() or None,
             "result_branch": str(result.get("branch") or forge.get("branch") or "").strip() or None,
@@ -5762,9 +5768,8 @@ class BuilderAutomationService:
                 else None
             ),
             "evidence": {
-                "events_path": str(local_run.get("events_path") or "").strip() or None,
-                "stderr_path": str(local_run.get("stderr_path") or "").strip() or None,
-                "result_path": str(local_run.get("result_path") or "").strip() or None,
+                "local_run_ref": local_run_ref or None,
+                "diagnostics_available": bool(current_task_id),
             }
             if local_run
             else None,
@@ -7099,6 +7104,32 @@ class BuilderAutomationService:
         expected_digest = str(acceptance.get("webui_digest") or "").strip()
         if not expected_revision or not expected_digest:
             return None
+        snapshot_task_id = ""
+        kind = str(session.get("object_type") or "").strip().lower().rstrip("s")
+        object_id = str(session.get("object_id") or "").strip()
+        if kind in {"scenario", "skill"} and object_id:
+            snapshot_path = (
+                self.state_dir
+                / "builder"
+                / "workflow_snapshots"
+                / kind
+                / _safe_token(object_id)
+                / "automation"
+                / "snapshot.json"
+            )
+            try:
+                snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                snapshot = {}
+            if (
+                isinstance(snapshot, Mapping)
+                and snapshot.get("schema") == "adaos.builder.automation_snapshot.v2"
+                and str(snapshot.get("object_type") or "").strip() == kind
+                and str(snapshot.get("object_id") or "").strip() == object_id
+            ):
+                candidate_task_id = str(snapshot.get("task_id") or "").strip()
+                if candidate_task_id and Path(candidate_task_id).name == candidate_task_id:
+                    snapshot_task_id = candidate_task_id
         task_ids = list(
             dict.fromkeys(
                 [
@@ -7110,6 +7141,7 @@ class BuilderAutomationService:
                             if str(item).strip()
                         ]
                     ),
+                    snapshot_task_id,
                 ]
             )
         )
@@ -7429,7 +7461,11 @@ class BuilderAutomationService:
         acceptance_checks.extend(
             automation_acceptance_checks(dict(session.get("prototype_acceptance") or {}))
         )
-        is_dev_ticket_repair = bool(str(dict(session.get("links") or {}).get("development_ticket_id") or "").strip())
+        is_dev_ticket_repair = bool(
+            str(
+                dict(session.get("links") or {}).get("development_ticket_id") or ""
+            ).strip()
+        ) or _brief_is_bounded_dev_ticket_repair(session.get("implementation_brief"))
         repair_brief = self._session_repair_brief(session) if is_dev_ticket_repair else {}
         repair_hints = (
             dict(repair_brief.get("repair_hints"))

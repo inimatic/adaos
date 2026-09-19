@@ -944,6 +944,53 @@ def test_dev_ticket_repair_canonicalizes_component_relative_structured_paths(
     ] == expected_path
 
 
+def test_structured_edit_brief_does_not_require_external_ticket_link(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=json.dumps(
+            {
+                "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                "ticket_id": "builder.internal.manifest-repair",
+                "repair_hints": {
+                    "profile": "surgical_data",
+                    "target_files": ["scenario.yaml"],
+                    "structured_edits": {
+                        "schema": "adaos.builder.structured_edit_set.v1",
+                        "operations": [
+                            {
+                                "op": "replace_text",
+                                "path": "scenario.yaml",
+                                "old": "version: 0.1.0",
+                                "new": "version: 0.1.1",
+                                "expected_count": 1,
+                            }
+                        ],
+                    },
+                },
+            }
+        ),
+        execution_budget={"max_wall_seconds": 300, "max_model_tokens": 4_000},
+    )
+
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == started["session"]["current_task_id"]
+    )
+    assert task["realize_request"]["constraints"]["mode"] == "dev_ticket_repair"
+    assert task["realize_request"]["constraints"]["exact_changed_paths"] == [
+        "scenarios/recipes/scenario.yaml"
+    ]
+    assert task["realize_request"]["artifacts"]["repair_hints"][
+        "structured_edits"
+    ]["operations"][0]["path"] == "scenarios/recipes/scenario.yaml"
+
+
 def test_large_dev_ticket_brief_uses_bounded_workflow_projection(tmp_path: Path) -> None:
     service = _service(tmp_path)
     brief_payload = {
@@ -2529,6 +2576,64 @@ def test_followup_retains_trusted_prototype_identity(
         {
             "current_task_id": "task.current",
             "task_history": [task_id],
+            "prototype_acceptance": {
+                "revision": "036",
+                "webui_digest": "sha256:accepted",
+            },
+        }
+    )
+
+    assert retained == identity
+
+
+def test_new_automation_after_trial_rejection_retains_snapshot_prototype_identity(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.completed-automation"
+    identity = {
+        "schema": "adaos.builder.accepted_prototype_identity.v1",
+        "revision": "036",
+        "canonical_path": "scenarios/web_desktop/webui.json",
+        "canonical_digest_algorithm": "prototype_webui_digest.v1",
+        "expected_canonical_digest": "sha256:accepted",
+        "actual_canonical_digest": "sha256:accepted",
+        "raw_sha256": "sha256:raw",
+        "matches_acceptance": True,
+        "verification_owner": "trusted_worker",
+    }
+    identity_path = service.runs_root / task_id / "input"
+    identity_path.mkdir(parents=True)
+    (identity_path / "accepted-prototype-identity.json").write_text(
+        json.dumps(identity), encoding="utf-8"
+    )
+    snapshot_path = (
+        service.state_dir
+        / "builder"
+        / "workflow_snapshots"
+        / "scenario"
+        / "web_desktop"
+        / "automation"
+    )
+    snapshot_path.mkdir(parents=True)
+    (snapshot_path / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.builder.automation_snapshot.v2",
+                "object_type": "scenario",
+                "object_id": "web_desktop",
+                "task_id": task_id,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    retained = service._retained_accepted_prototype_identity(
+        {
+            "object_type": "scenario",
+            "object_id": "web_desktop",
+            "current_task_id": "task.new-failed-start",
+            "task_history": ["task.new-failed-start"],
             "prototype_acceptance": {
                 "revision": "036",
                 "webui_digest": "sha256:accepted",
@@ -4888,7 +4993,11 @@ def test_failed_projection_exposes_actionable_diagnostics_and_retry(tmp_path: Pa
     assert projection["error"] == "codex_executable_not_found"
     assert projection["failure_id"] == "failure.task.1.cli"
     assert projection["retryable"] is True
-    assert projection["evidence"]["stderr_path"] == "run/codex-live.stderr.log"
+    assert projection["evidence"] == {
+        "local_run_ref": "skill-factory-run:task.1",
+        "diagnostics_available": True,
+    }
+    assert all("_path" not in key for key in projection["evidence"])
 
 
 def test_projection_event_is_not_reemitted_for_unchanged_status_reads(tmp_path: Path) -> None:

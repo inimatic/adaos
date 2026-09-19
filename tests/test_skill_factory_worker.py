@@ -5316,6 +5316,78 @@ def test_worker_rejects_manifest_schema_errors_before_checkpoint(tmp_path):
     assert checks[0]["ok"] is True
 
 
+def test_worker_requires_data_lifecycle_for_project_owned_skills(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    project_root = workspace / "projects" / "demo"
+    skill_root = workspace / "skills" / "demo_runtime"
+    project_root.mkdir(parents=True)
+    skill_root.mkdir(parents=True)
+    (project_root / "project.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema": "adaos.project.v1",
+                "kind": "project",
+                "id": "demo",
+                "components": {
+                    "owned": [{"ref": "skill:demo_runtime"}],
+                    "dependencies": [{"ref": "skill:shared_runtime"}],
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = skill_root / "skill.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump({"name": "demo_runtime", "version": "0.1.0"}),
+        encoding="utf-8",
+    )
+    checks: list[dict[str, object]] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_owned_skill_data_lifecycle(
+        workspace, checks, errors
+    )
+
+    assert errors and "pinned data_lifecycle declaration" in errors[0]
+    assert checks == [
+        {
+            "kind": "application.owned_skill_data_lifecycle.strict",
+            "path": "skills/demo_runtime/skill.yaml",
+            "project": "projects/demo/project.yaml",
+            "component_ref": "skill:demo_runtime",
+            "ok": False,
+        }
+    ]
+
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["data_lifecycle"] = {
+        "schema": "adaos.skill.data_lifecycle.v1",
+        "execution": "native_tools",
+        "databases": [],
+    }
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
+    checks, errors = [], []
+
+    LocalSkillFactoryWorker._validate_owned_skill_data_lifecycle(
+        workspace, checks, errors
+    )
+
+    assert errors == []
+    assert checks == [
+        {
+            "kind": "application.owned_skill_data_lifecycle.strict",
+            "path": "skills/demo_runtime/skill.yaml",
+            "project": "projects/demo/project.yaml",
+            "component_ref": "skill:demo_runtime",
+            "ok": True,
+            "databases": [],
+        }
+    ]
+
+
 def test_worker_requires_tool_effects_on_changed_skill_manifests(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     skill_root = workspace / "skills" / "demo"
