@@ -463,7 +463,41 @@ def _descriptor_working_set_query(assignment: Mapping[str, Any]) -> str:
     hints = dict(hints) if isinstance(hints, Mapping) else {}
     checks = hints.get("acceptance_checks")
     checks = checks if isinstance(checks, Sequence) and not isinstance(checks, str) else []
-    values = [hints.get("change_summary"), *checks]
+    target = assignment.get("target")
+    target = dict(target) if isinstance(target, Mapping) else {}
+    values: list[Any] = [
+        (
+            f"target {str(target.get('type') or '').strip()}:"
+            f"{str(target.get('id') or '').strip()}"
+            if target
+            else None
+        ),
+        hints.get("change_summary"),
+        *checks,
+    ]
+
+    # Full Automation runs do not normally carry Dev Ticket repair hints. Give
+    # descriptor search the capability-bearing clauses from the accepted brief
+    # instead of withholding the prefetch and forcing Codex to inspect Core.
+    # Numbered/bulleted lines preserve authored priorities while avoiding the
+    # introductory process prose that commonly leads a semantic search astray.
+    brief = str(artifacts.get("implementation_brief") or "").strip()
+    if brief:
+        brief_lines = [
+            " ".join(line.strip().split())
+            for line in brief.splitlines()
+            if line.strip()
+            and (
+                line.lstrip().startswith(("-", "*"))
+                or line.lstrip()[:1].isdigit()
+                or "sdk" in line.lower()
+                or "contract" in line.lower()
+            )
+        ]
+        values.extend(brief_lines[:12] or [" ".join(brief.split())])
+    iteration = str(artifacts.get("iteration_instruction") or "").strip()
+    if iteration:
+        values.append(iteration)
     query = "\n".join(str(item).strip() for item in values if str(item or "").strip())
     return query[:DESCRIPTOR_WORKING_SET_QUERY_CHARS]
 
@@ -475,9 +509,9 @@ def _task_mcp_descriptor_working_set(
 ) -> dict[str, Any] | None:
     """Prefetch a bounded descriptor slice before starting the expensive Codex turn."""
 
-    if not _root_mcp_required(assignment):
-        return None
     profile = dict(root_mcp or {})
+    if not profile or profile.get("enabled") is False:
+        return None
     enabled = {
         str(item).strip()
         for item in profile.get("enabled_tools") or []
@@ -4149,7 +4183,6 @@ class LocalSkillFactoryWorker:
             descriptor_working_set: dict[str, Any] | None = None
             if (
                 root_mcp is not None
-                and _root_mcp_required(assignment)
                 and not continuation
                 and not structured_edits
                 and not validation_only

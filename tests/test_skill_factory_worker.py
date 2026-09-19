@@ -635,6 +635,79 @@ def test_task_mcp_descriptor_working_set_prefetches_search_and_exact_items(
     assert calls[0]["params"]["arguments"]["limit"] == 4
 
 
+def test_task_mcp_descriptor_working_set_uses_automation_brief_without_required_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "jsonrpc": "2.0",
+                "id": "builder-descriptor-search-task-automation",
+                "result": {
+                    "content": [{"type": "text", "text": "compact"}],
+                    "structuredContent": {
+                        "ok": True,
+                        "response": {
+                            "ok": True,
+                            "result": {
+                                "search": {
+                                    "schema": "adaos.descriptor.search.v1",
+                                    "query_digest": "sha256:automation",
+                                    "items": [],
+                                }
+                            },
+                        },
+                    },
+                },
+            }
+
+    def _post(url: str, **kwargs: Any) -> _Response:
+        observed.update(dict(kwargs["json"]["params"]["arguments"]))
+        return _Response()
+
+    monkeypatch.setattr(worker_module.httpx, "post", _post)
+    result = _task_mcp_descriptor_working_set(
+        assignment={
+            "task_id": "task.automation",
+            "target": {"type": "scenario", "id": "web_desktop"},
+            "realize_request": {
+                "artifacts": {
+                    "implementation_brief": """
+# Desktop Automation
+
+Preserve the accepted design and implement it.
+
+1. Bind application launch through declared navigation commands.
+2. Use admitted SDK access and configuration contracts for settings.
+3. Keep device pairing behind an approval-aware tool contract.
+""",
+                }
+            },
+        },
+        root_mcp={
+            "enabled": True,
+            "server_name": "adaos_task_root",
+            "url": "http://127.0.0.1:8777/v1/root/mcp/task/task.automation",
+            "lease_id": "lease.automation",
+            "bound_target_id": "hub:sn_demo",
+            "enabled_tools": ["search_descriptors", "get_descriptor_item"],
+            "_bearer_token_value": "secret-not-evidence",
+        },
+    )
+
+    assert result is not None
+    assert result["headers"] == []
+    assert "target scenario:web_desktop" in observed["query"]
+    assert "navigation commands" in observed["query"]
+    assert "configuration contracts" in observed["query"]
+    assert "Preserve the accepted design" not in observed["query"]
+
+
 def test_persisted_descriptor_working_set_evidence_is_reusable(
     tmp_path: Path,
 ) -> None:
