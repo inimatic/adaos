@@ -4003,6 +4003,21 @@ class BuilderAutomationService:
                     if isinstance(artifacts.get("continuation_checkpoint"), Mapping)
                     else {}
                 )
+                source = (
+                    dict(request.get("source") or {})
+                    if isinstance(request.get("source"), Mapping)
+                    else {}
+                )
+                if (
+                    retry_reason == "continuation_identity_verification_retry"
+                    and checkpoint.get("mode") != "validate_preserved_candidate"
+                    and str(source.get("type") or "").strip()
+                    == "builder_automation_chat"
+                ):
+                    # The first run of a governed follow-up may predate the
+                    # retained Prototype identity receipt. Retry its current
+                    # source snapshot instead of reviving an older candidate.
+                    return None
                 if checkpoint.get("mode") != "validate_preserved_candidate":
                     for prior_task_id in reversed(
                         [

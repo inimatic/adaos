@@ -2441,6 +2441,67 @@ def test_identity_retry_preserves_underlying_validation_candidate(
     assert checkpoint["reason"] == "deterministic_validation_failure"
 
 
+def test_identity_retry_for_fresh_followup_does_not_restore_older_candidate(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    current_task_id = "task.followup-without-receipt"
+    prior_task_id = "task.old-continuation"
+    current_input = service.runs_root / current_task_id / "input"
+    current_input.mkdir(parents=True)
+    (current_input / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "source": {"type": "builder_automation_chat"},
+                    "artifacts": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    prior_input = service.runs_root / prior_task_id / "input"
+    prior_input.mkdir(parents=True)
+    (prior_input / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_checkpoint": {
+                            "mode": "validate_preserved_candidate",
+                            "source_task_id": "task.stale-candidate",
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    tasks = {
+        current_task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "message": (
+                        "accepted Prototype canonical webui.json does not match "
+                        "its acceptance digest"
+                    )
+                }
+            ],
+        }
+    }
+    service.factory = SimpleNamespace(read_task=lambda task_id: tasks[task_id])
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {
+            "current_task_id": current_task_id,
+            "task_history": [prior_task_id, current_task_id],
+        }
+    )
+
+    assert checkpoint is None
+
+
 def test_followup_retains_trusted_prototype_identity(
     tmp_path: Path,
 ) -> None:
