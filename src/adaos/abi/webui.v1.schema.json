@@ -1739,6 +1739,7 @@
         "previewKey": { "$ref": "#/$defs/fieldPath" },
         "imageKey": { "$ref": "#/$defs/fieldPath" },
         "imageAltKey": { "$ref": "#/$defs/fieldPath" },
+        "imageShape": { "type": "string", "enum": ["thumbnail", "avatar"] },
         "badgeKey": { "$ref": "#/$defs/fieldPath" },
         "groupBy": { "$ref": "#/$defs/fieldPath" },
         "groupTitleKey": { "$ref": "#/$defs/fieldPath" },
@@ -1761,6 +1762,12 @@
         "cardMinWidth": { "type": "number", "minimum": 120, "maximum": 480 },
         "cardImageRatio": { "type": "string", "minLength": 1 },
         "emptyText": { "type": "string" },
+        "headerActions": {
+          "type": "array",
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/actionButton" },
+          "description": "At most a few compact contextual or presentation commands rendered beside the collection heading. Domain collection mutations belong in a sibling ui.actions toolbar."
+        },
         "meta": {
           "type": "array",
           "items": {
@@ -2122,6 +2129,7 @@
         "fields": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
         "imageKey": { "$ref": "#/$defs/fieldPath" },
         "imageAltKey": { "$ref": "#/$defs/fieldPath" },
+        "imageShape": { "type": "string", "enum": ["default", "avatar"] },
         "imageRatio": {
           "type": "string",
           "pattern": "^[0-9]+(?:\\.[0-9]+)?\\s*\\/\\s*[0-9]+(?:\\.[0-9]+)?$"

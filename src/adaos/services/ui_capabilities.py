@@ -1428,7 +1428,15 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                     if isinstance(inputs.get("buttons"), list)
                     else []
                 )
-                for button_index, button in enumerate(buttons):
+                header_actions = (
+                    inputs.get("headerActions")
+                    if isinstance(inputs.get("headerActions"), list)
+                    else []
+                )
+                for button_group, button_index, button in (
+                    *(("buttons", index, item) for index, item in enumerate(buttons)),
+                    *(("headerActions", index, item) for index, item in enumerate(header_actions)),
+                ):
                     button_id = (
                         str(button.get("id") or "").strip()
                         if isinstance(button, Mapping)
@@ -1439,9 +1447,9 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                             {
                                 "code": "ui.list.button_action_missing",
                                 "severity": "error",
-                                "path": f"{widget_path}.inputs.buttons[{button_index}]",
+                                "path": f"{widget_path}.inputs.{button_group}[{button_index}]",
                                 "message": (
-                                    f"ui.list button {button_id!r} requires a top-level "
+                                    f"ui.list {button_group} command {button_id!r} requires a top-level "
                                     f"widget.actions entry with on='click:{button_id}'."
                                 ),
                             }

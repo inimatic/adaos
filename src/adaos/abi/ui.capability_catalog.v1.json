@@ -478,9 +478,11 @@
           "previewKey",
           "imageKey",
           "imageAltKey",
+          "imageShape",
           "badgeKey",
           "meta",
           "buttons",
+          "headerActions",
           "cardMinWidth",
           "cardImageRatio",
           "groupBy",
@@ -492,9 +494,9 @@
           "pageSize",
           "pageSizeOptions"
         ],
-        "projection": "Rows default to id/title/subtitle/icon. Cards additionally render previewKey, imageKey with imageAltKey, badgeKey and inputs.meta. Configure these input keys when source fields use different names; arbitrary source fields are not visible unless projected or consumed by an action.",
+        "projection": "Rows default to id/title/subtitle/icon and may render imageKey as a thumbnail or imageShape=avatar. Cards additionally render previewKey, imageKey with imageAltKey, badgeKey and inputs.meta. Configure these input keys when source fields use different names; arbitrary source fields are not visible unless projected or consumed by an action.",
         "meta_shape": "inputs.meta entries require key and may declare label, kind=text|badge|boolean, overflow=wrap|truncate and align=start|center|end.",
-        "button_shape": "inputs.buttons entries require id and may declare label, itemLabelKey, icon, whenKey and whenEquals. Every such button is repeated for each visible row or card. A collection-level command such as Add, Invite, Import, or Refresh belongs in a separate sibling ui.actions widget, never in ui.list inputs.buttons. itemLabelKey reads a per-record visible label and falls back to label. Buttons are presentation only; bind each visible row command with a top-level widget.actions entry on=click:<buttonId>. A row field such as primaryAction does not create a button.",
+        "button_shape": "inputs.buttons entries require id and may declare label, itemLabelKey, icon, whenKey and whenEquals. Every such button is repeated for each visible row or card. inputs.headerActions is reserved for one or two compact contextual/presentation commands beside the list heading, such as Customize view; use an icon plus an accessible label. Collection mutations such as Add, Invite, Import, or Refresh belong in a separate sibling ui.actions widget. Bind every visible row or header command with a top-level widget.actions entry on=click:<buttonId>. itemLabelKey reads a per-record visible label and falls back to label. A row field such as primaryAction does not create a button.",
         "query_binding": "inputs.search is boolean, never an object. To share a ui.queryToolbar value with this static collection, use inputs.filters entries shaped {key,stateKey,operator}; stateKey is the bare page-state key without a $state. prefix. Use operator=contains for text search and equals for exact filters. For equals, each non-All select option value must equal the corresponding record field value; keep user-facing meaning in the option label. Filter definitions do not contain options or equalsField; options belong to ui.queryToolbar controls.",
         "row_state": "For flat list rows, inputs.disabledKey names a boolean field that disables activation; inputs.currentKey names a separate boolean field that bolds the title and marks aria-current=step. Current work is independent of selected detail. Selection and row-button events expose row fields directly as $event.<field>, not $event.item.<field>. updateState params accept direct references or structured expressions such as {kind:'expression',op:'equals',args:['$event.status','ready']}; binary expressions use args and never left/right. A string such as $event.status === 'ready' is not evaluated. Prefer exposing the required boolean on the row and binding $event.<booleanField>.",
         "canonical_value_i18n": [
@@ -718,7 +720,7 @@
         "static_data": "For one synthetic record use widget.dataSource={kind:'static',value:{...}}. With inputs.selectedStateKey, put keyed records directly in value, for example value:{'item-1':{...},'item-2':{...}}; do not wrap them in records or put selectedId in the value. Field path/key/id reads from the selected record; inputs.fields[*].value may be a selected-record {path} template or a direct $state.path reference/display template, but is not itself a data source. The visible widget heading belongs in top-level widget.title, including a dynamic value such as $state.selectedItemTitle; inputs.title is ignored. Remove title_i18n when title is dynamic because localization is applied before state or selected-record interpolation and would replace the dynamic template.",
         "canonical_value_i18n": "inputs.fields[*].valueI18nPrefix",
         "value_labels": "Field entries support valueLabels as authored choice fallbacks, or optionsDataSource.kind=resourceQuery with optionValuePath and optionLabelPaths for live related-record captions. Unknown identities remain visible; labels do not mutate records.",
-        "media": "inputs.mediaKey binds an image/video/audio source on the selected record. Optional mediaKindKey selects image, video or audio; mediaPosterKey binds a poster. Native controls, loading, unavailable and empty states are provided. A filename field without mediaKey is not a viewer.",
+        "media": "inputs.mediaKey binds an image/video/audio source on the selected record. Optional mediaKindKey selects image, video or audio; mediaPosterKey binds a poster. inputs.imageKey binds a still image; imageShape=avatar presents compact profile imagery. Native controls, loading, unavailable and empty states are provided. A filename field without mediaKey or imageKey is not a viewer.",
         "commands": "Actions sharing named on=click:<command> execute in declaration order; awaited false/throw stops the sequence. Every visible item.details command requires label on one action step. Generic on=click actions remain independent. enabledIf guards the command; repeated clicks are blocked while it is pending. For keyed static details, command params should use $state.selectedId (or another page-state key); there is no implicit $record command context."
       },
       "data_shape": {

@@ -471,6 +471,7 @@ def test_list_capability_exposes_renderer_projection_and_command_contract() -> N
         manifest["optional_inputs"]
     )
     assert "primaryAction" in manifest["button_shape"]
+    assert "headerActions" in manifest["button_shape"]
     assert "click:<buttonId>" in manifest["button_shape"]
     assert "bare page-state key" in manifest["query_binding"]
 
@@ -523,6 +524,45 @@ def test_generic_validation_requires_list_buttons_to_bind_executable_actions() -
     assert "ui.list.button_action_missing" in {
         item["code"] for item in missing["findings"]
     }
+    assert present["ok"] is True
+
+
+def test_generic_validation_requires_list_header_actions_to_bind_executable_actions() -> None:
+    webui = _empty_webui()
+    widget = {
+        "id": "pinned-applications",
+        "type": "ui.list",
+        "area": "main",
+        "inputs": {
+            "variant": "cards",
+            "headerActions": [
+                {"id": "customize", "label": "Customize layout", "icon": "settings-outline"}
+            ],
+        },
+        "actions": [],
+        "dataSource": {
+            "kind": "static",
+            "value": [{"id": "builder", "title": "Builder"}],
+        },
+    }
+    webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"] = [widget]
+
+    missing = validate_webui_capabilities(webui)
+    widget["actions"] = [
+        {
+            "id": "customize-layout",
+            "on": "click:customize",
+            "type": "updateState",
+            "params": {"layoutCustomizing": True},
+        }
+    ]
+    present = validate_webui_capabilities(webui)
+
+    assert any(
+        item["code"] == "ui.list.button_action_missing"
+        and ".inputs.headerActions[0]" in item["path"]
+        for item in missing["findings"]
+    )
     assert present["ok"] is True
 
 
