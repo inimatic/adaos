@@ -4159,6 +4159,20 @@ class LocalSkillFactoryWorker:
                 workspace,
                 str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"),
             )
+            target = dict(assignment.get("target") or {})
+            target_type = str(target.get("type") or "skill").strip().lower()
+            target_id = _safe_token(target.get("id"), fallback="generated_skill")
+            # Verify accepted design identity against the pristine submitted
+            # source. A restored Automation candidate is expected to differ.
+            accepted_prototype_identity = (
+                self._accepted_prototype_identity(
+                    assignment,
+                    workspace,
+                    target_id=target_id,
+                )
+                if target_type == "scenario"
+                else None
+            )
             prototype_resource_handoff = self._prototype_resource_handoff_from_assignment(
                 assignment,
                 workspace,
@@ -4209,6 +4223,7 @@ class LocalSkillFactoryWorker:
                 input_dir,
                 descriptor_working_set=descriptor_working_set,
                 prototype_resource_handoff=prototype_resource_handoff,
+                accepted_prototype_identity=accepted_prototype_identity,
             )
             prompt = (input_dir / "task.md").read_text(encoding="utf-8")
             packet_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
@@ -6435,6 +6450,7 @@ class LocalSkillFactoryWorker:
         *,
         descriptor_working_set: Mapping[str, Any] | None = None,
         prototype_resource_handoff: Mapping[str, Any] | None = None,
+        accepted_prototype_identity: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         request = dict(assignment.get("realize_request") or {})
         target = dict(assignment.get("target") or {})
@@ -6636,7 +6652,9 @@ class LocalSkillFactoryWorker:
                 input_dir / "external-mcp-contracts.json"
             ).resolve().as_posix()
         accepted_prototype_identity = (
-            self._accepted_prototype_identity(
+            dict(accepted_prototype_identity)
+            if isinstance(accepted_prototype_identity, Mapping)
+            else self._accepted_prototype_identity(
                 assignment,
                 workspace,
                 target_id=target_id,

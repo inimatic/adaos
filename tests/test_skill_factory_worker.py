@@ -7649,6 +7649,74 @@ def test_worker_binds_exact_external_mcp_contracts_and_prototype_identity(
     assert "do not try to recreate its canonicalization" in prompt
 
 
+def test_worker_reuses_pristine_prototype_identity_for_automation_continuation(
+    tmp_path: Path,
+) -> None:
+    from adaos.services.resources.prototype import prototype_webui_digest
+
+    repo_root = Path(__file__).resolve().parents[1]
+    scenario_id = "continued_app"
+    workspace = tmp_path / "workspace"
+    scenario_root = workspace / "scenarios" / scenario_id
+    scenario_root.mkdir(parents=True)
+    prototype = {
+        "schema": "adaos.webui.v1",
+        "ui": {"application": {"desktop": {"pageSchema": {"id": scenario_id}}}},
+    }
+    webui_path = scenario_root / "webui.json"
+    webui_path.write_text(json.dumps(prototype), encoding="utf-8")
+    assignment = {
+        "task_id": "task.continued-app",
+        "target": {"type": "scenario", "id": scenario_id},
+        "forge": {"sparse_paths": [f"scenarios/{scenario_id}/"]},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "Automate the accepted UI.",
+                "prototype_acceptance": {
+                    "decision": "accepted",
+                    "revision": "004",
+                    "webui_digest": prototype_webui_digest(prototype),
+                },
+            }
+        },
+    }
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    identity = worker._accepted_prototype_identity(
+        assignment,
+        workspace,
+        target_id=scenario_id,
+    )
+    assert identity is not None and identity["matches_acceptance"] is True
+
+    automated = copy.deepcopy(prototype)
+    automated["ui"]["application"]["desktop"]["pageSchema"]["widgets"] = [
+        {"id": "live-data", "type": "ui.text", "inputs": {"text": "Automated"}}
+    ]
+    webui_path.write_text(json.dumps(automated), encoding="utf-8")
+
+    packet = worker._build_packet(
+        assignment,
+        workspace,
+        tmp_path / "input",
+        accepted_prototype_identity=identity,
+    )
+
+    stored = json.loads(
+        (tmp_path / "input/accepted-prototype-identity.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stored == identity
+    assert packet["accepted_prototype_identity_ref"].endswith(
+        "accepted-prototype-identity.json"
+    )
+
+
 @pytest.mark.parametrize("aggregate_owner", [False, True])
 def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     tmp_path: Path,
