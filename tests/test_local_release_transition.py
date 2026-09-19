@@ -25,6 +25,118 @@ def rows(path):
         return connection.execute("SELECT id, label FROM entries ORDER BY id").fetchall()
 
 
+def test_unmanaged_project_source_is_not_an_installed_migration_base(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.services.applications import local_release_transition
+
+    state = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    (workspace / "projects/sample").mkdir(parents=True)
+    (workspace / "projects/sample/project.yaml").write_text(
+        "schema: adaos.project.v1\nid: sample\n", encoding="utf-8"
+    )
+    lock = WorkspaceLock(
+        lock_revision=1,
+        updated_at="2026-09-19T00:00:00Z",
+        components=(),
+        slots=(),
+    )
+    atomic_write_json(workspace / ".adaos/workspace.lock.json", lock.to_dict())
+    owner = SimpleNamespace(
+        paths=SimpleNamespace(
+            state_dir=lambda: state,
+            workspace_dir=lambda: workspace,
+        )
+    )
+    runtime = SimpleNamespace(
+        root=tmp_path / "trial",
+        candidate_id="candidate-sample",
+        release_digest="sha256:" + "a" * 64,
+    )
+    runtime.root.mkdir()
+    release = SimpleNamespace(
+        project_id="sample",
+        release_digest=runtime.release_digest,
+        composition_lock=SimpleNamespace(members=()),
+        components=(),
+    )
+
+    class Store:
+        def get_installation(self, _application_id):
+            raise FileNotFoundError
+
+        def list_installations(self):
+            return []
+
+        def list_runtime_selections(self):
+            return []
+
+    monkeypatch.setattr(local_release_transition, "ApplicationStore", lambda _state: Store())
+    monkeypatch.setattr(
+        local_release_transition,
+        "ApplicationRuntimeChannel",
+        lambda *_args: SimpleNamespace(read=lambda: {"source": "legacy"}),
+    )
+
+    lifecycle = bind_local_data_lifecycle(owner, runtime, release)
+
+    assert lifecycle.stable_digest is None
+    binding = json.loads(
+        (runtime.root / ".adaos/data-transition.json").read_text(encoding="utf-8")
+    )
+    assert binding["stable_release_digest"] is None
+
+
+def test_workspace_slot_without_installation_requires_reconciliation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.services.applications import local_release_transition
+
+    state = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    slot = WorkspaceSlot(
+        slot_id="sample",
+        project_id="sample",
+        release="sample@0.1.0",
+        release_digest="sha256:" + "b" * 64,
+    )
+    atomic_write_json(
+        workspace / ".adaos/workspace.lock.json",
+        WorkspaceLock(
+            lock_revision=1,
+            updated_at="2026-09-19T00:00:00Z",
+            components=(),
+            slots=(slot,),
+        ).to_dict(),
+    )
+    owner = SimpleNamespace(
+        paths=SimpleNamespace(
+            state_dir=lambda: state,
+            workspace_dir=lambda: workspace,
+        )
+    )
+    runtime = SimpleNamespace(
+        root=tmp_path / "trial",
+        candidate_id="candidate-sample",
+        release_digest="sha256:" + "a" * 64,
+    )
+    runtime.root.mkdir()
+    release = SimpleNamespace(
+        project_id="sample",
+        release_digest=runtime.release_digest,
+    )
+
+    class Store:
+        def get_installation(self, _application_id):
+            raise FileNotFoundError
+
+    monkeypatch.setattr(local_release_transition, "ApplicationStore", lambda _state: Store())
+
+    with pytest.raises(ValueError, match="Reconcile the existing Workspace installation"):
+        bind_local_data_lifecycle(owner, runtime, release)
+
+
 @pytest.fixture
 def setup(tmp_path):
     state, workspace = tmp_path / "state", tmp_path / "workspace"

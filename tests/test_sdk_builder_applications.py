@@ -69,6 +69,74 @@ def test_builder_application_create_uses_bounded_composition_and_core(monkeypatc
     assert created[0][1]["entrypoints"][0]["presentation"] == "scenario:applications"
 
 
+def test_candidate_verification_adopts_project_before_release_gate(monkeypatch) -> None:
+    application = Application(
+        application_id="desktop",
+        legacy_project_id="desktop",
+        publisher_ref="subnet:home",
+        slug="desktop",
+        display={"title": "Desktop", "summary": None},
+        visibility="private",
+        entrypoints=(
+            {"entrypoint_id": "main", "presentation_ref": "scenario:desktop"},
+        ),
+        publisher={
+            "publisher_ref": "subnet:home",
+            "display_name": "Home",
+            "subnet_short_ref": "home",
+            "release_key_ref": "artifact-signing:home:key",
+            "release_key_fingerprint": "sha256:" + "f" * 64,
+            "home_zone": "local",
+            "trust_relation": "local",
+        },
+    )
+    observed = {"application": None}
+    calls = []
+    monkeypatch.setattr(
+        applications,
+        "_application_for_project",
+        lambda _project_id: observed["application"],
+    )
+    monkeypatch.setattr(
+        applications,
+        "publisher_context",
+        lambda: {"publisher_ref": "subnet:home"},
+    )
+    monkeypatch.setattr(
+        compositions,
+        "get",
+        lambda _project_id: {
+            "catalog": {"title": "Desktop", "description": "Home desktop"}
+        },
+    )
+
+    def create(project_id, **kwargs):
+        calls.append((project_id, kwargs))
+        observed["application"] = application
+        return {"ok": True, "application": application.to_dict()}
+
+    monkeypatch.setattr(applications, "create_application", create)
+
+    assert applications._ensure_application_for_project(
+        "desktop", actor_ref="builder.user"
+    ) is application
+    assert calls == [
+        (
+            "desktop",
+            {
+                "title": "Desktop",
+                "summary": "Home desktop",
+                "visibility": "private",
+                "actor_ref": "builder.user",
+                "subnet_ref": "subnet:home",
+                "capability": "applications.develop",
+                "expected_revision": 0,
+                "idempotency_key": "trial-adopt:desktop",
+            },
+        )
+    ]
+
+
 def test_builder_application_sdk_has_no_raw_authority_parameters() -> None:
     forbidden = {
         "path", "filesystem_path", "command", "process", "git_credentials",

@@ -73,6 +73,34 @@ def _application_for_project(project_id: str) -> Application | None:
     return matches[0] if matches else None
 
 
+def _ensure_application_for_project(project_id: str, *, actor_ref: str) -> Application:
+    """Adopt an existing DEV Project before release-bound verification."""
+
+    application = _application_for_project(project_id)
+    if application is not None:
+        return application
+    from adaos.sdk.developer import compositions
+
+    project = compositions.get(project_id)
+    catalog = project.get("catalog") or {}
+    publisher = publisher_context()
+    create_application(
+        project_id,
+        title=str(catalog.get("title") or project_id),
+        summary=str(catalog.get("description") or ""),
+        visibility="private",
+        actor_ref=actor_ref,
+        subnet_ref=publisher["publisher_ref"],
+        capability="applications.develop",
+        expected_revision=0,
+        idempotency_key=f"trial-adopt:{project_id}",
+    )
+    application = _application_for_project(project_id)
+    if application is None:
+        raise ValueError("Created Project has no Application aggregate")
+    return application
+
+
 def _publisher_owner_role_ids(release) -> tuple[tuple[str, ...], str]:
     """Resolve the local publisher's Application role without guessing broadly."""
 
@@ -234,13 +262,7 @@ def verify_candidate_access(
 ) -> dict[str, Any]:
     """Run access-aware Builder verification before a Candidate becomes Trial."""
 
-    application = _application_for_project(project_id)
-    if application is None:
-        return {
-            "required": False,
-            "status": "not_applicable",
-            "reason": "project_has_no_application_aggregate",
-        }
+    application = _ensure_application_for_project(project_id, actor_ref=actor_ref)
     distribution = _distribution_service()
     release = distribution.candidate_release_projection(
         application.application_id,
@@ -483,21 +505,7 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
         raise ValueError("Candidate release digest mismatch")
     service = _application_service()
     project_id = release.project_id
-    application = _application_for_project(project_id)
-    if application is None:
-        # Adopt existing composition metadata; this never creates application source.
-        from adaos.sdk.developer import compositions
-
-        project = compositions.get(project_id)
-        catalog = project.get("catalog") or {}
-        create_application(project_id, title=str(catalog.get("title") or project_id),
-                                    summary=str(catalog.get("description") or ""), visibility="private",
-                                    actor_ref=actor_ref, subnet_ref=publisher["publisher_ref"],
-                                    capability="applications.develop", expected_revision=0,
-                                    idempotency_key=f"trial-adopt:{project_id}")
-        application = _application_for_project(project_id)
-        if application is None:
-            raise ValueError("Created Project has no Application aggregate")
+    application = _ensure_application_for_project(project_id, actor_ref=actor_ref)
     _admit_builder_mutation("create_trial", application.application_id, subnet_ref=publisher["publisher_ref"],
                             capability="applications.develop")
     envelope = ApplicationRelease(application_id=application.application_id,

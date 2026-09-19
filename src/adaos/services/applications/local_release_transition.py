@@ -9,6 +9,7 @@ import yaml
 
 from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.trial_activation import load_workspace_lock
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 from .data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent
 from .runtime_channel import ApplicationRuntimeChannel
@@ -45,8 +46,23 @@ def bind_local_data_lifecycle(owner, runtime, release):
             if installed and installed.status != "active":
                 raise ValueError("Resolve the in-progress Application installation before data cutover")
             stable_digest = installed.installed_release_digest if installed else None
-            if not installed and (workspace / "projects" / application_id / "project.yaml").exists():
-                raise ValueError("Reconcile the existing Workspace installation before preparing migrated Beta")
+            workspace_lock_path = workspace / ".adaos/workspace.lock.json"
+            workspace_lock = (
+                load_workspace_lock(workspace_lock_path)
+                if workspace_lock_path.is_file()
+                else None
+            )
+            has_installed_slot = bool(
+                workspace_lock
+                and any(
+                    slot.project_id == application_id
+                    for slot in workspace_lock.slots
+                )
+            )
+            if not installed and has_installed_slot:
+                raise ValueError(
+                    "Reconcile the existing Workspace installation before preparing migrated Beta"
+                )
             if stable_digest == runtime.release_digest:
                 raise ValueError("Published Candidate has no retained migration binding; explicit recovery required")
             binding = {**identity, "stable_release_digest": stable_digest}
