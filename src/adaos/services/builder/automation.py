@@ -3961,6 +3961,11 @@ class BuilderAutomationService:
                 retry_reason = "development_feedback_requalified"
             elif "changed paths outside the exact repair files:" in failure_message:
                 retry_reason = "repair_envelope_requalified_after_path_guard"
+            elif (
+                "accepted Prototype canonical webui.json does not match its acceptance digest"
+                in failure_message
+            ):
+                retry_reason = "continuation_identity_verification_retry"
             elif any(
                 marker in failure_message
                 for marker in (
