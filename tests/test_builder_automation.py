@@ -2441,6 +2441,43 @@ def test_identity_retry_preserves_underlying_validation_candidate(
     assert checkpoint["reason"] == "deterministic_validation_failure"
 
 
+def test_followup_retains_trusted_prototype_identity(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.accepted-prototype"
+    identity = {
+        "schema": "adaos.builder.accepted_prototype_identity.v1",
+        "revision": "036",
+        "canonical_path": "scenarios/web_desktop/webui.json",
+        "canonical_digest_algorithm": "prototype_webui_digest.v1",
+        "expected_canonical_digest": "sha256:accepted",
+        "actual_canonical_digest": "sha256:accepted",
+        "raw_sha256": "sha256:raw",
+        "matches_acceptance": True,
+        "verification_owner": "trusted_worker",
+    }
+    path = service.runs_root / task_id / "input"
+    path.mkdir(parents=True)
+    (path / "accepted-prototype-identity.json").write_text(
+        json.dumps(identity),
+        encoding="utf-8",
+    )
+
+    retained = service._retained_accepted_prototype_identity(
+        {
+            "current_task_id": "task.current",
+            "task_history": [task_id],
+            "prototype_acceptance": {
+                "revision": "036",
+                "webui_digest": "sha256:accepted",
+            },
+        }
+    )
+
+    assert retained == identity
+
+
 def test_structured_mcp_retry_recovers_checkpoint_from_task_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

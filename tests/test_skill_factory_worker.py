@@ -7717,6 +7717,46 @@ def test_worker_reuses_pristine_prototype_identity_for_automation_continuation(
     )
 
 
+def test_worker_admits_retained_identity_for_followup_implementation_source(
+    tmp_path: Path,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    identity = {
+        "schema": "adaos.builder.accepted_prototype_identity.v1",
+        "revision": "036",
+        "canonical_path": "scenarios/web_desktop/webui.json",
+        "canonical_digest_algorithm": "prototype_webui_digest.v1",
+        "expected_canonical_digest": "sha256:accepted",
+        "actual_canonical_digest": "sha256:accepted",
+        "raw_sha256": "sha256:raw",
+        "matches_acceptance": True,
+        "verification_owner": "trusted_worker",
+    }
+    assignment = {
+        "realize_request": {
+            "artifacts": {
+                "prototype_acceptance": {
+                    "revision": "036",
+                    "webui_digest": "sha256:accepted",
+                },
+                "accepted_prototype_identity": identity,
+            }
+        }
+    }
+
+    retained = worker._retained_accepted_prototype_identity(
+        assignment,
+        target_id="web_desktop",
+    )
+
+    assert retained == identity
+
+
 @pytest.mark.parametrize("aggregate_owner", [False, True])
 def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     tmp_path: Path,

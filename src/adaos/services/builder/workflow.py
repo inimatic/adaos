@@ -2321,6 +2321,28 @@ class BuilderWorkflowService:
             raise BuilderWorkflowError("Prototype acceptance evidence is required")
         if not bool(prototype.get("stable")):
             raise BuilderWorkflowError("Prototype must be accepted before Automation starts")
+        active_phase = str(current.get("active_phase") or "").strip().lower()
+        automation = _mapping(current.get("automation"))
+        if active_phase == "automation" and str(
+            automation.get("status") or ""
+        ).strip().lower() not in {"", "not_started"}:
+            # Automation source is expected to differ from the accepted
+            # Prototype. Re-admit its immutable receipt; the trusted worker
+            # carries the original canonical UI identity into follow-up tasks.
+            from adaos.services.builder.prototype_acceptance import (
+                admit_prototype_acceptance,
+            )
+
+            change = _normalize_change(current.get("change") or current.get("change_set"))
+            if change is None:
+                raise BuilderWorkflowError("prototype acceptance requires an active Change")
+            return admit_prototype_acceptance(
+                acceptance,
+                expected_project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
+                expected_change_id=str(change.get("change_id") or ""),
+                expected_revision=str(acceptance.get("revision") or ""),
+                expected_webui_digest=str(acceptance.get("webui_digest") or ""),
+            )
         return self._admit_current_prototype_acceptance(
             object_type,
             object_id,

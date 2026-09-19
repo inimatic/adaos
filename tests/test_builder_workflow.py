@@ -1245,6 +1245,47 @@ def test_optional_prototype_acceptance_is_preserved_for_automation(
     assert admitted["digest"] == accepted["acceptance"]["digest"]
 
 
+def test_automation_followup_reuses_immutable_acceptance_after_source_changes(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _root = workflow_project
+    acceptance = {
+        "acceptance_id": "acceptance:recipes:004",
+        "project_ref": "scenario:recipes",
+        "change_id": "CH-recipes-followup",
+        "revision": "004",
+        "webui_digest": "sha256:" + "1" * 64,
+        "decision": "accepted",
+        "digest": "sha256:" + "2" * 64,
+    }
+    monkeypatch.setattr(
+        "adaos.services.builder.prototype_acceptance.admit_prototype_acceptance",
+        lambda value, **_kwargs: dict(value),
+    )
+    workflow = {
+        "active_phase": "automation",
+        "prototype": {
+            "head_revision": "004",
+            "stable": True,
+            "acceptance_required": False,
+            "acceptance": acceptance,
+        },
+        "automation": {"status": "completed"},
+        "change": {
+            "change_id": "CH-recipes-followup",
+            "change_set_id": "CH-recipes-followup",
+            "request": "Continue the accepted implementation.",
+        },
+    }
+    monkeypatch.setattr(BuilderWorkflowService, "describe", lambda *_args: workflow)
+
+    admitted = service.require_current_prototype_acceptance("scenario", "recipes")
+
+    assert admitted is not None
+    assert admitted["digest"] == acceptance["digest"]
+
+
 def test_change_set_projects_one_canonical_change_and_transition_runs(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

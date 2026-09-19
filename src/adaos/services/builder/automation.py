@@ -7071,6 +7071,64 @@ class BuilderAutomationService:
         finally:
             _WORKER_LOCK.release()
 
+    def _retained_accepted_prototype_identity(
+        self,
+        session: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        acceptance = (
+            dict(session.get("prototype_acceptance"))
+            if isinstance(session.get("prototype_acceptance"), Mapping)
+            else {}
+        )
+        expected_revision = str(acceptance.get("revision") or "").strip()
+        expected_digest = str(acceptance.get("webui_digest") or "").strip()
+        if not expected_revision or not expected_digest:
+            return None
+        task_ids = list(
+            dict.fromkeys(
+                [
+                    str(session.get("current_task_id") or "").strip(),
+                    *reversed(
+                        [
+                            str(item).strip()
+                            for item in session.get("task_history") or []
+                            if str(item).strip()
+                        ]
+                    ),
+                ]
+            )
+        )
+        for task_id in task_ids:
+            if not task_id:
+                continue
+            path = (
+                Path(self.runs_root)
+                / _safe_token(task_id)
+                / "input"
+                / "accepted-prototype-identity.json"
+            )
+            try:
+                identity = json.loads(path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(identity, Mapping):
+                continue
+            candidate = dict(identity)
+            if (
+                candidate.get("schema")
+                == "adaos.builder.accepted_prototype_identity.v1"
+                and candidate.get("verification_owner") == "trusted_worker"
+                and candidate.get("matches_acceptance") is True
+                and str(candidate.get("revision") or "").strip()
+                == expected_revision
+                and str(candidate.get("expected_canonical_digest") or "").strip()
+                == expected_digest
+                and str(candidate.get("actual_canonical_digest") or "").strip()
+                == expected_digest
+            ):
+                return candidate
+        return None
+
     def _submit(self, session: Mapping[str, Any], *, iteration_instruction: str) -> dict[str, Any]:
         clarification_receipt = session.get("clarification_continuation") or {}
         clarification_task_id = None
@@ -7495,6 +7553,9 @@ class BuilderAutomationService:
                 "prototype_handoff": copy.deepcopy(session.get("prototype_handoff")),
                 "prototype_acceptance": copy.deepcopy(
                     session.get("prototype_acceptance")
+                ),
+                "accepted_prototype_identity": self._retained_accepted_prototype_identity(
+                    session
                 ),
                 "continuation_checkpoint": copy.deepcopy(
                     session.get("pending_continuation_checkpoint")

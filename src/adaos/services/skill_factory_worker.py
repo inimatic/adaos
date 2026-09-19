@@ -4164,15 +4164,16 @@ class LocalSkillFactoryWorker:
             target_id = _safe_token(target.get("id"), fallback="generated_skill")
             # Verify accepted design identity against the pristine submitted
             # source. A restored Automation candidate is expected to differ.
-            accepted_prototype_identity = (
-                self._accepted_prototype_identity(
+            accepted_prototype_identity = None
+            if target_type == "scenario":
+                accepted_prototype_identity = self._retained_accepted_prototype_identity(
+                    assignment,
+                    target_id=target_id,
+                ) or self._accepted_prototype_identity(
                     assignment,
                     workspace,
                     target_id=target_id,
                 )
-                if target_type == "scenario"
-                else None
-            )
             prototype_resource_handoff = self._prototype_resource_handoff_from_assignment(
                 assignment,
                 workspace,
@@ -5995,6 +5996,41 @@ class LocalSkillFactoryWorker:
             raise ValueError(
                 "accepted Prototype canonical webui.json does not match its "
                 "acceptance digest"
+            )
+        return identity
+
+    @staticmethod
+    def _retained_accepted_prototype_identity(
+        assignment: Mapping[str, Any],
+        *,
+        target_id: str,
+    ) -> dict[str, Any] | None:
+        request = dict(assignment.get("realize_request") or {})
+        artifacts = dict(request.get("artifacts") or {})
+        retained = artifacts.get("accepted_prototype_identity")
+        if not isinstance(retained, Mapping):
+            return None
+        acceptance = artifacts.get("prototype_acceptance")
+        if not isinstance(acceptance, Mapping):
+            raise ValueError("retained Prototype identity requires acceptance evidence")
+        identity = dict(retained)
+        expected_digest = str(acceptance.get("webui_digest") or "").strip()
+        expected_revision = str(acceptance.get("revision") or "").strip()
+        expected_path = f"scenarios/{target_id}/webui.json"
+        if (
+            identity.get("schema")
+            != "adaos.builder.accepted_prototype_identity.v1"
+            or identity.get("verification_owner") != "trusted_worker"
+            or identity.get("matches_acceptance") is not True
+            or str(identity.get("revision") or "").strip() != expected_revision
+            or str(identity.get("canonical_path") or "").strip() != expected_path
+            or str(identity.get("expected_canonical_digest") or "").strip()
+            != expected_digest
+            or str(identity.get("actual_canonical_digest") or "").strip()
+            != expected_digest
+        ):
+            raise ValueError(
+                "retained Prototype identity does not match acceptance lineage"
             )
         return identity
 
