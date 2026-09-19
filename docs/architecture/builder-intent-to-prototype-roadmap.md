@@ -851,6 +851,14 @@ Implementation boundary: Two native local Reading List increments complete at St
   without reseeding data. Reading List `cycle-2/beta-replay-01` retains the
   `0.1.8` Candidate and all six Beta records. All-room/background authority stays
   under the preceding open gate.
+- [x] `[must]` Qualify one first-release Web Desktop foreground delivery from an
+  exact accepted Prototype through Automation, complete DEV checkpoint,
+  immutable Candidate and automatic local Beta placement. Revision `036`, task
+  `task.01M2WKK6FF7QNH9TVP3CJ3N8YE` and Candidate
+  `web_desktop-0-3-28-ffba58b12ff6` resolve `desktop` through
+  `application_trial`; live Yjs plus wide/390px browser checks observe the
+  accepted 45-widget schema without errors or a legacy fallback. This does not
+  close installed-Stable upgrade, all-room/background or public delivery.
 - [ ] `[must]` Include versioned data schemas, semantics and invariants in
   Automation context without real user records. Require algorithmic forward
   migrations tested on synthetic data and clarification of ambiguous mappings;

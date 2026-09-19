@@ -3,7 +3,7 @@
 Status: active target delivery roadmap; implemented mechanisms do not imply
 complete user, lifecycle or production acceptance.
 
-Last reviewed: 2026-09-16.
+Last reviewed: 2026-09-19.
 
 ## Document Ownership Audit
 
@@ -254,6 +254,16 @@ FIFO queue. A second project's request waits with its own immutable identity;
 same-project conflicting work is refused. BIP-26 owns busy/reconnect/cancellation
 and finalization/preview contention qualification. Advanced scheduling remains
 outside this correction; a process-local lock is not an interprocess delivery lock.
+
+The first Web Desktop delivery iteration preserves accepted Prototype revision
+`036` through Automation task `task.01M2WKK6FF7QNH9TVP3CJ3N8YE`, exact DEV
+checkpointing and immutable local Candidate
+`web_desktop-0-3-28-ffba58b12ff6`. Trial placement resolves the production
+`desktop` Webspace from `application_trial`; live Yjs inspection and wide/390px
+browser checks observe the 45-widget accepted schema with no Client, network or
+horizontal-overflow failures. This qualifies the exact first-release foreground
+Beta path only. It does not accept Stable, public distribution, all-room or
+background cutover.
 
 - [ ] `[could]` Add multi-node pools, placement and parallel tasks after
   one-task-per-node isolation and the separately deferred queue/topology

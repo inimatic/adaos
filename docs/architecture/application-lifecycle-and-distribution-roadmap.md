@@ -2,7 +2,7 @@
 
 Status: target implementation roadmap.
 
-Last reviewed: 2026-09-17.
+Last reviewed: 2026-09-19.
 
 Target architecture:
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
@@ -207,6 +207,11 @@ Project/Application identity collapse.
   Reading List increments qualify automatic local selection, one desktop tile,
   unchanged external subscription and Stable acceptance. Scoped release notices
   are reconciled before room refresh, including idempotent candidate replay.
+  Web Desktop `0.3.28` additionally qualifies a first-release foreground Beta:
+  the production `desktop` Webspace resolves the exact local Trial and renders
+  its accepted 45-widget schema on wide and compact viewports without a second
+  Applications approval. This is not an installed-Stable upgrade or all-room
+  background-execution proof.
   Background execution and all-room qualification remain open.
 - [ ] `[must]` `APP1-15` Inherit declared Workspace configuration and scoped
   credential bindings in Beta without copying plaintext into packages or model
