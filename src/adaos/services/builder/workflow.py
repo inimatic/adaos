@@ -1533,8 +1533,44 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(
                     f"Builder portfolio record identity differs from its index: {change_id}"
                 )
-            records[change_id] = dict(value)
+            record = dict(value)
+            external_context = self._load_external_context_packet(
+                object_type,
+                object_id,
+                record,
+            )
+            if external_context is not None:
+                record["context_packet"] = external_context
+            records[change_id] = record
         return records
+
+    def _externalize_portfolio_context_packet(
+        self,
+        object_type: str,
+        object_id: str,
+        record: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Keep complete Change context without duplicating it in the portfolio record."""
+
+        projected = copy.deepcopy(dict(record))
+        context_packet = _mapping(projected.get("context_packet"))
+        if not context_packet:
+            return projected
+        digest = str(context_packet.get("digest") or "").strip().lower()
+        path = self._context_packet_path(object_type, object_id, digest)
+        raw = (json.dumps(context_packet, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        if len(raw) > _MAX_CONTEXT_PACKET_BYTES:
+            raise BuilderWorkflowError("Builder context packet exceeds the bounded size")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.tmp")
+        temporary.write_bytes(raw)
+        _replace_path(temporary, path)
+        projected["context_packet"] = None
+        projected["context_packet_external"] = {
+            "schema": "adaos.builder.context_packet_external.v1",
+            "digest": digest,
+        }
+        return projected
 
     def _externalize_portfolio(
         self,
@@ -1547,7 +1583,14 @@ class BuilderWorkflowService:
         portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
         change_ids: list[str] = []
         for change_id, record in portfolio.items():
-            raw = (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            persisted_record = self._externalize_portfolio_context_packet(
+                object_type,
+                object_id,
+                record,
+            )
+            raw = (
+                json.dumps(persisted_record, ensure_ascii=False, indent=2) + "\n"
+            ).encode("utf-8")
             if len(raw) > _MAX_PORTFOLIO_RECORD_BYTES:
                 raise BuilderWorkflowError(
                     f"Builder portfolio record exceeds the bounded size: {change_id}"

@@ -19,10 +19,31 @@ _IGNORED_DIRS = {
     ".builder_current_publication",
     ".builder_previous_automation",
     ".git",
+    ".mypy_cache",
     ".pytest_cache",
+    ".ruff_cache",
+    ".runtime",
+    ".tox",
+    ".venv",
     "__pycache__",
+    "build",
+    "dist",
+    "llm_jobs",
+    "node_modules",
+    "prep",
+    "tz",
+    "ui_revisions",
 }
-_IGNORED_FILES = {"prompt_state.json"}
+_IGNORED_FILES = {
+    "builder.draft.json",
+    "builder_memory.md",
+    "builder_system_prompt.md",
+    "prep_prompt.md",
+    "prep_result.json",
+    "prep_result_prompt.md",
+    "prompt_state.json",
+    "skill_prompt.md",
+}
 _IGNORED_SUFFIXES = {".pyc", ".pyo"}
 _RESERVED_PROJECT_INPUT_DIRS = {"artifacts"}
 _SNAPSHOT_ARCHIVE = "payload.zip"

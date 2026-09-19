@@ -927,6 +927,48 @@ def test_source_snapshot_keeps_reserved_artifacts_out_of_codex_workspace(
     ).is_file()
 
 
+def test_source_snapshot_excludes_generated_authoring_history(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    scenario = tmp_path / "dashboard"
+    (scenario / "llm_jobs").mkdir(parents=True)
+    (scenario / "ui_revisions").mkdir()
+    (scenario / "tests").mkdir()
+    (scenario / "scenario.yaml").write_text(
+        "id: dashboard\nversion: 0.1.0\n", encoding="utf-8"
+    )
+    (scenario / "webui.json").write_text("{}\n", encoding="utf-8")
+    (scenario / "llm_jobs" / "historical-response.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    (scenario / "ui_revisions" / "001.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    (scenario / "builder_memory.md").write_text("history\n", encoding="utf-8")
+    (scenario / "tests" / "test_dashboard.py").write_text(
+        "def test_dashboard():\n    assert True\n", encoding="utf-8"
+    )
+
+    snapshot = capture_source_snapshot(
+        state_dir=state_dir,
+        artifacts=(("scenario", "dashboard", scenario),),
+        created_at="2026-09-19T00:00:00Z",
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    materialize_source_snapshot(
+        state_dir=state_dir,
+        reference=snapshot,
+        workspace=workspace,
+    )
+    projected = workspace / "scenarios" / "dashboard"
+    assert (projected / "scenario.yaml").is_file()
+    assert (projected / "webui.json").is_file()
+    assert (projected / "tests" / "test_dashboard.py").is_file()
+    assert not (projected / "llm_jobs").exists()
+    assert not (projected / "ui_revisions").exists()
+    assert not (projected / "builder_memory.md").exists()
+
+
 def test_source_snapshot_archive_fails_closed_after_byte_mutation(
     tmp_path: Path,
 ) -> None:

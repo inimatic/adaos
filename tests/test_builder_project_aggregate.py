@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+from adaos.services.builder import workflow as workflow_module
 from adaos.services.builder.project_aggregate import (
     BuilderProjectError,
     begin_mutation,
@@ -149,6 +150,43 @@ def test_change_portfolio_is_externalized_from_bounded_prompt_state(
     restored = restarted.describe("scenario", "recipes")
     assert set(restored["change_portfolio"]) == {"CH-favorites", "CH-search"}
     assert restored["change"]["change_id"] == "CH-search"
+
+
+def test_change_portfolio_externalizes_and_hydrates_its_context_packet(
+    service: BuilderWorkflowService,
+) -> None:
+    _plan(service, "CH-context", "widget:search")
+    state = service._read_state("scenario", "recipes")
+    packet_body = {
+        "schema": "adaos.builder.context_packet.v1",
+        "payload": "x" * (180 * 1024),
+    }
+    packet = {
+        **packet_body,
+        "digest": workflow_module._stable_digest(packet_body),
+        "built_at": "2026-09-19T00:00:00+00:00",
+    }
+    state["workflow"]["context_packet"] = packet
+    service._write_state("scenario", "recipes", state)
+
+    record_path = service._portfolio_record_path(
+        "scenario", "recipes", "CH-context"
+    )
+    persisted_record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert persisted_record["context_packet"] is None
+    assert persisted_record["context_packet_external"] == {
+        "schema": "adaos.builder.context_packet_external.v1",
+        "digest": packet["digest"],
+    }
+    assert record_path.stat().st_size < 64 * 1024
+
+    restarted = BuilderWorkflowService(
+        service.dev_skills_root,
+        service.dev_scenarios_root,
+        service.state_dir,
+    )
+    restored = restarted.describe("scenario", "recipes")
+    assert restored["change_portfolio"]["CH-context"]["context_packet"] == packet
 
 
 def test_conflict_index_and_mutation_admission_fail_closed(service: BuilderWorkflowService) -> None:

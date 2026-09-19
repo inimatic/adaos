@@ -4578,6 +4578,10 @@ def test_duplicate_queued_start_relaunches_orphaned_worker(tmp_path: Path, monke
     assert result["worker_relaunched"] is True
     assert launched == ["automation.scenario.recipes"]
     assert result["session"]["conversation_id"] == "conv.builder.recipes"
+    assert result["session"]["workflow_start_reconciled_at"]
+    assert service._workflow().describe("scenario", "recipes")["governed"][
+        "state"
+    ] == "automation_waiting"
 
 
 def test_followup_backfills_conversation_before_terminal_notification(tmp_path: Path, monkeypatch) -> None:

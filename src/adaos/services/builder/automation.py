@@ -2293,6 +2293,40 @@ class BuilderAutomationService:
                 ):
                     raise ValueError("another Development Session already owns the active Automation session")
                 refreshed = self.refresh_session(current)
+                current_workflow = self._workflow().describe(kind, project_id)
+                current_governed = (
+                    current_workflow.get("governed")
+                    if isinstance(current_workflow.get("governed"), Mapping)
+                    else {}
+                )
+                if str(current_governed.get("state") or "").strip() == "automation_ready":
+                    # Session/task persistence precedes the canonical workflow
+                    # transition. If that last write was interrupted, a
+                    # duplicate start must reconcile the same Run before its
+                    # durable worker continues; submitting another task would
+                    # lose execution identity and spend the model twice.
+                    self._workflow().transition(
+                        kind,
+                        project_id,
+                        "automation_started",
+                        actor="builder.automation",
+                        reason="reconcile persisted Automation session with its approved Change",
+                        metadata={
+                            "confirmed": True,
+                            "source_prototype_revision": (
+                                current_workflow.get("prototype", {}).get("head_revision")
+                                if isinstance(current_workflow.get("prototype"), Mapping)
+                                else refreshed.get("source_prototype_version")
+                            ),
+                            "task_id": refreshed.get("current_task_id"),
+                            "change_id": refreshed.get("change_id"),
+                            "run_id": refreshed.get("current_task_id"),
+                            "context_packet_digest": refreshed.get("context_packet_digest"),
+                        },
+                    )
+                    refreshed["workflow_start_reconciled_at"] = _now_iso()
+                    refreshed["updated_at"] = refreshed["workflow_start_reconciled_at"]
+                    self._save_session(refreshed)
                 result = {
                     "ok": True,
                     "duplicate": True,
