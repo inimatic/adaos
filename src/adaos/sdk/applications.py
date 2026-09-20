@@ -962,13 +962,39 @@ def set_home_pinned(
     if not bool(model.get("installed")):
         raise ValueError("Only installed Applications can be pinned to Home")
     aliases = _application_home_aliases(model)
+    if not aliases:
+        raise ValueError("Application has no Home presentation entrypoint")
     service = WebDesktopService()
     snapshot = service.get_snapshot(webspace)
     installed = set(snapshot.installed.apps)
+    pinned_refs = set(snapshot.pinned_applications)
     application_ref = next((item for item in aliases if item in installed), None)
-    if not application_ref:
-        raise ValueError("Application is not installed on the selected desktop")
+    if application_ref is None:
+        application_ref = next((item for item in aliases if item in pinned_refs), None)
+    application_ref = application_ref or aliases[0]
     alias_set = set(aliases)
+    projection_reconciled = False
+    if pinned and not installed.intersection(alias_set):
+        # Installation is subnet-scoped.  The legacy desktop-installed list is
+        # only a presentation projection, so materialize it on first pin
+        # instead of requiring a second, contradictory installation record.
+        service.set_installed_with_live_room(
+            WebDesktopInstalled(
+                apps=[
+                    *[item for item in snapshot.installed.apps if item not in alias_set],
+                    application_ref,
+                ],
+                widgets=list(snapshot.installed.widgets),
+                removed_apps=[
+                    item
+                    for item in snapshot.installed.removed_apps
+                    if item not in alias_set
+                ],
+                removed_widgets=list(snapshot.installed.removed_widgets),
+            ),
+            webspace,
+        )
+        projection_reconciled = True
     next_pinned = [
         item for item in snapshot.pinned_applications if item not in alias_set
     ]
@@ -983,6 +1009,7 @@ def set_home_pinned(
         "installed": True,
         "pinnable": True,
         "pinned": bool(pinned),
+        "projection_reconciled": projection_reconciled,
         "status": "ready",
     }
 

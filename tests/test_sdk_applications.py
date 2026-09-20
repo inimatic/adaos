@@ -302,7 +302,69 @@ def test_home_pin_changes_only_presentation_overlay(monkeypatch) -> None:
     )
 
     assert result["pinned"] is False
+    assert result["projection_reconciled"] is False
     assert writes == [(["scenario:notes"], "family")]
+
+
+def test_home_pin_materializes_missing_desktop_projection_for_subnet_install(
+    monkeypatch,
+) -> None:
+    snapshot = SimpleNamespace(
+        installed=SimpleNamespace(
+            apps=["scenario:notes"],
+            widgets=["notes-summary"],
+            removed_apps=["scenario:reading_list"],
+            removed_widgets=["retired-widget"],
+        ),
+        pinned_applications=["scenario:notes"],
+    )
+    installed_writes = []
+    pinned_writes = []
+
+    class Desktop:
+        def get_snapshot(self, webspace_id):
+            assert webspace_id == "family"
+            return snapshot
+
+        def set_installed_with_live_room(self, value, webspace_id):
+            installed_writes.append((value, webspace_id))
+
+        def set_pinned_applications_with_live_room(self, values, webspace_id):
+            pinned_writes.append((values, webspace_id))
+
+    monkeypatch.setattr(
+        applications,
+        "get_application",
+        lambda application_id, **_kwargs: {
+            "application": {
+                "application_id": application_id,
+                "entrypoints": [
+                    {
+                        "entrypoint_id": "main",
+                        "presentation_ref": "scenario:reading_list",
+                    }
+                ],
+            },
+            "installed": True,
+        },
+    )
+    monkeypatch.setattr(applications, "WebDesktopService", Desktop)
+
+    result = applications.set_home_pinned(
+        "reading_list", pinned=True, webspace_id="family"
+    )
+
+    assert result["pinned"] is True
+    assert result["projection_reconciled"] is True
+    assert pinned_writes == [
+        (["scenario:notes", "scenario:reading_list"], "family")
+    ]
+    installed, webspace_id = installed_writes[0]
+    assert webspace_id == "family"
+    assert installed.apps == ["scenario:notes", "scenario:reading_list"]
+    assert installed.widgets == ["notes-summary"]
+    assert installed.removed_apps == []
+    assert installed.removed_widgets == ["retired-widget"]
 
 
 def test_application_list_reads_home_and_placement_inventory_once(monkeypatch) -> None:
