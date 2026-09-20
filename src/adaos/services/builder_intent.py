@@ -387,11 +387,21 @@ def _operation_mentions(
         matched = match.group(0).lower()
         prefix = clause[: match.start()]
         if re.search(
+            r"\b(?:must\s+not|should\s+not)\s+(?:(?:[\w-]+)\s+){0,8}$",
+            prefix,
+            flags=re.IGNORECASE,
+        ):
+            continue
+        if re.search(
             r"\b(?:do\s+not|don't|never|не)\s+(?:(?:[\w-]+)\s+){0,8}$",
             prefix,
             flags=re.IGNORECASE,
         ):
             continue
+        if kind in {"create", "update", "assign", "transition", "delete", "archive"}:
+            suffix = clause[match.end():]
+            if re.match(r"\s+no\b", suffix, flags=re.IGNORECASE):
+                continue
         # ``records`` is overwhelmingly a collection noun in product briefs.
         # The verb forms that express capture remain available as ``record``
         # and ``recorded`` without turning every records/fields description

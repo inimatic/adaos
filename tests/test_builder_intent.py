@@ -348,6 +348,21 @@ def test_additional_condition_is_not_parsed_as_add_operation() -> None:
     assert qualified["requirements"]["prototype_resource"] is False
 
 
+def test_ui_schema_maintenance_does_not_become_resource_crud() -> None:
+    from adaos.services.ui_capabilities import qualify_ui_request
+
+    qualified = qualify_ui_request(
+        "The tile itself is the launch action; add no Open button and no static "
+        "records. Remove the Applications button from primary-nav and remove "
+        "the apps-variant layout. It must not change activeTab or navigate away."
+    )
+
+    assert qualified["requirements"]["resource_mutations"] is False
+    assert qualified["requirements"]["prototype_resource"] is False
+    assert "create" not in qualified["requirements"]["brief_operation_kinds"]
+    assert "update" not in qualified["requirements"]["brief_operation_kinds"]
+
+
 def test_brief_drives_generic_capabilities_without_internal_prompt_terms() -> None:
     selection = selected_ui_capabilities(
         "Team members need to scan work, open one item, add a request, "

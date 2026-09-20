@@ -408,7 +408,7 @@ def _prototype_resource_signal(operation: Mapping[str, Any]) -> bool | None:
     ):
         return False
     if re.search(
-        r"\b(?:field|label|key|metadata|wording|icon|badge|action|command|"
+        r"\b(?:field|label|key|metadata|wording|icon|badge|button|action|command|"
         r"filter(?:ing)?|details?|section|catalog|readme|about|rating)\b",
         authoring_text,
         flags=re.IGNORECASE,
