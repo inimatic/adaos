@@ -4099,6 +4099,59 @@ def test_retry_replays_its_queued_task_without_creating_a_duplicate(
     assert launched == ["automation.scenario.recipes"]
 
 
+def test_retry_replays_queued_browser_feedback_repair_after_worker_restart(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    instruction = "Repair only the independently observed browser failures below."
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "status": "queued",
+        "iteration": 3,
+        "change_id": "automation.browser-repair",
+        "current_task_id": "task.browser-repair",
+        "last_execution_brief": instruction,
+        "pending_browser_feedback": {"status": "failed"},
+        "turns": [{"iteration": 3, "text": instruction}],
+        "updated_at": "2026-09-04T00:00:00+00:00",
+    }
+    service._save_session(session)
+    workflow = SimpleNamespace(
+        describe=lambda *_args: {
+            "active_phase": "automation",
+            "governed": {"state": "automation_waiting"},
+            "automation": {
+                "status": "in_progress",
+                "head_task_id": "task.browser-repair",
+            },
+        }
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: workflow)
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda task_id: {"task_id": task_id, "status": "queued"}
+    )
+    launched: list[str] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_launch_worker",
+        lambda self, session_id: launched.append(session_id),
+    )
+
+    result = service.retry_failed(object_type="scenario", object_id="recipes")
+
+    assert result["recovered_queued_retry"] is True
+    assert result["recovered_browser_feedback_repair"] is True
+    assert result["task"]["task_id"] == "task.browser-repair"
+    assert launched == ["automation.scenario.recipes"]
+
+
 def test_retry_recovers_queued_followup_created_before_workflow_transition(
     tmp_path: Path,
     monkeypatch,

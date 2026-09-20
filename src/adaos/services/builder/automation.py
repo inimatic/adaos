@@ -4399,6 +4399,15 @@ class BuilderAutomationService:
                     and str(turns[-1].get("text") or "").strip()
                     == _UNCHANGED_RETRY_INSTRUCTION
                 )
+                queued_browser_repair = bool(
+                    active_phase == "automation"
+                    and isinstance(session.get("pending_browser_feedback"), Mapping)
+                    and turns
+                    and str(turns[-1].get("text") or "").strip()
+                    == str(session.get("last_execution_brief") or "").strip()
+                    and str(automation_state.get("head_task_id") or "").strip()
+                    == task_id
+                )
                 orphaned_before_transition = bool(
                     active_phase == "automation"
                     and str(automation_state.get("status") or "").strip()
@@ -4406,7 +4415,11 @@ class BuilderAutomationService:
                     and str(automation_state.get("head_task_id") or "").strip()
                     != task_id
                 )
-                if not unchanged_retry and not orphaned_before_transition:
+                if (
+                    not unchanged_retry
+                    and not queued_browser_repair
+                    and not orphaned_before_transition
+                ):
                     raise ValueError("only a failed Automation session can be retried")
                 if active_phase == "prototype" and str(governed.get("state") or "") == (
                     "automation_ready"
@@ -4473,6 +4486,7 @@ class BuilderAutomationService:
                     "automation": self.project_session(session),
                     "retried_unchanged_request": True,
                     "recovered_queued_retry": True,
+                    "recovered_browser_feedback_repair": queued_browser_repair,
                     "recovered_queued_submission": orphaned_before_transition,
                 }
             if status != "failed":
