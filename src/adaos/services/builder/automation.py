@@ -56,7 +56,11 @@ COMPONENT_UPDATE_PROJECTION_MAX_ATTEMPTS = 3
 COMPONENT_UPDATE_PROJECTION_RETRY_SECONDS = 1.0
 AUTOMATION_PROJECTION_SCHEMA = "adaos.builder.automation_projection.v1"
 _LOCK = threading.RLock()
-_WORKER_LOCK = threading.Lock()
+# Browser feedback can queue a bounded repair while the same durable worker is
+# still finalizing its candidate. The nested synchronous launch is intentional;
+# cross-thread exclusion remains global, while same-thread re-entry must not
+# deadlock before the durable worker can claim the queued repair.
+_WORKER_LOCK = threading.RLock()
 _log = logging.getLogger("adaos.builder.automation")
 
 _ACTIVE_STATUSES = {

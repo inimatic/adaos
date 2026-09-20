@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import json
 
+from adaos.services.builder import automation as automation_module
 from adaos.services.builder.automation_worker import (
     _run_until_settled,
     _worker_root_from_environment,
     _write_worker_handshake,
 )
+
+
+def test_worker_lock_allows_same_thread_browser_repair_reentry() -> None:
+    assert automation_module._WORKER_LOCK.acquire(blocking=False)
+    try:
+        assert automation_module._WORKER_LOCK.acquire(blocking=False)
+        automation_module._WORKER_LOCK.release()
+    finally:
+        automation_module._WORKER_LOCK.release()
 
 
 class _QueuedService:
