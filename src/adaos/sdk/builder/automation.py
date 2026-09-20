@@ -235,6 +235,7 @@ def retry_failed(
     webspace_id: str = "desktop",
     conversation_id: str | None = None,
     execution_budget: Mapping[str, Any] | None = None,
+    agent_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Retry a failed run without accepting a replacement user instruction."""
 
@@ -246,6 +247,7 @@ def retry_failed(
             webspace_id=webspace_id,
             conversation_id=conversation_id,
             execution_budget=execution_budget,
+            agent_profile=agent_profile,
         )
         or {}
     )

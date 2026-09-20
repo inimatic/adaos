@@ -3648,6 +3648,11 @@ def test_retry_failed_reuses_governed_request_and_refreshes_prototype_acceptance
         object_type="scenario",
         object_id="recipes",
         webspace_id="desktop-dev",
+        agent_profile={
+            "provider": "openai-codex-cli",
+            "model": "gpt-5.5",
+            "reasoning_effort": "high",
+        },
     )
 
     assert result["retried_unchanged_request"] is True
@@ -3655,6 +3660,11 @@ def test_retry_failed_reuses_governed_request_and_refreshes_prototype_acceptance
         "Retry the unchanged accepted implementation after the previous "
         "executor failure. Do not reinterpret or expand the user request."
     )
+    assert submitted[0]["agent_profile"] == {
+        "provider": "openai-codex-cli",
+        "model": "gpt-5.5",
+        "reasoning_effort": "high",
+    }
     assert service.get_session("scenario", "recipes")["prototype_acceptance"] == (
         refreshed_acceptance
     )
