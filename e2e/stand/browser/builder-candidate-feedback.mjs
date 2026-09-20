@@ -308,7 +308,10 @@ try {
             } catch {
               // Empty collections are valid and remain visible for diagnostics.
             }
-            const candidates = reopened.locator(selectableSelector)
+            const isCollectionRegion = (await reopened.getAttribute('data-region-role')) === 'collection'
+            const candidates = isCollectionRegion
+              ? reopened.locator(selectableSelector)
+              : reopened.locator('__adaos_no_primary_selection__')
             const candidateCount = await candidates.count()
             let hasVisibleCandidate = false
             for (let index = 0; index < candidateCount; index += 1) {
@@ -331,16 +334,11 @@ try {
         }
       }
 
-      let selectableItems = interactionRoot.locator(selectableSelector)
+      const collectionRegions = interactionRoot.locator(
+        'ada-layout-region[data-region-role="collection"]',
+      ).filter({ visible: true })
+      let selectableItems = collectionRegions.locator(selectableSelector)
       if (compactSelectionRegion) selectableItems = compactSelectionRegion.locator(selectableSelector)
-      try {
-        await page.waitForFunction(selector => [...document.querySelectorAll(selector)]
-          .some(element => element.getClientRects().length > 0), selectableSelector, {
-          timeout: Math.min(timeoutMs, 5_000),
-        })
-      } catch {
-        // An empty collection is valid. The result is recorded by the widget diagnostics below.
-      }
       const selectableCount = await selectableItems.count()
       for (let index = 0; index < selectableCount; index += 1) {
         const item = selectableItems.nth(index)
@@ -423,11 +421,13 @@ try {
           const style = getComputedStyle(element)
           return element.getClientRects().length > 0 && style.visibility !== 'hidden' && style.display !== 'none'
         }
-        const widgetIds = [...document.querySelectorAll('[data-webui-widget-id]')]
+        const activeModal = [...document.querySelectorAll('ion-modal.show-modal')].filter(visible).at(-1)
+        const diagnosticRoot = activeModal || document
+        const widgetIds = [...diagnosticRoot.querySelectorAll('[data-webui-widget-id]')]
           .filter(visible)
           .map(element => element.getAttribute('data-webui-widget-id'))
           .filter(Boolean)
-        const unlabeled = [...document.querySelectorAll('button, a[href], input, select, textarea, [role="button"]')]
+        const unlabeled = [...diagnosticRoot.querySelectorAll('button, a[href], input, select, textarea, [role="button"]')]
           .filter(visible)
           .filter(element => {
             const text = String(element.innerText || element.value || '').trim()
@@ -445,7 +445,7 @@ try {
             role: element.getAttribute('role'),
             widget: element.closest('[data-webui-widget-id]')?.getAttribute('data-webui-widget-id') || null,
           }))
-        const rendererFailures = [...document.querySelectorAll(
+        const rendererFailures = [...diagnosticRoot.querySelectorAll(
           '[data-webui-render-state="error"], [data-webui-render-state="unsupported"]',
         )].map(element => ({
           id: element.getAttribute('data-webui-widget-id'),
@@ -453,9 +453,10 @@ try {
           state: element.getAttribute('data-webui-render-state'),
           text: String(element.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 500),
         }))
-        const visibleRegions = [...document.querySelectorAll('ada-layout-region[data-region-role]')]
-          .filter(visible)
-          .map(element => {
+        const visibleRegionElements = [...diagnosticRoot.querySelectorAll(
+          'ada-layout-region[data-region-role]',
+        )].filter(visible)
+        const visibleRegions = visibleRegionElements.map(element => {
             const box = element.getBoundingClientRect()
             const gridBox = element.closest('.desktop-grid')?.getBoundingClientRect()
             return {
@@ -468,21 +469,30 @@ try {
               grid_width: gridBox?.width || null,
             }
           })
-        const toolbar = visibleRegions.find(region => region.role === 'toolbar')
-        const bodyRegions = visibleRegions.filter(region => ['collection', 'main', 'detail', 'inspector'].includes(region.role))
-        const toolbarAfterBody = toolbar && bodyRegions.some(region => toolbar.top > region.top + 2)
-        const bodyText = String(document.body?.innerText || '')
+        const bodyRoles = new Set(['collection', 'main', 'detail', 'inspector'])
+        const toolbarAfterBody = visibleRegionElements.some(toolbar => {
+          if (toolbar.getAttribute('data-region-role') !== 'toolbar') return false
+          const grid = toolbar.closest('.desktop-grid')
+          if (!grid) return false
+          const toolbarTop = toolbar.getBoundingClientRect().top
+          return visibleRegionElements.some(region => (
+            region.closest('.desktop-grid') === grid
+            && bodyRoles.has(region.getAttribute('data-region-role'))
+            && toolbarTop > region.getBoundingClientRect().top + 2
+          ))
+        })
+        const bodyText = String(diagnosticRoot.textContent || '')
         const blockingText = patternSources
           .map(source => new RegExp(source, 'i'))
           .filter(pattern => pattern.test(bodyText))
           .map(pattern => pattern.source)
-        const currentItems = [...document.querySelectorAll('.collection-item-current')]
+        const currentItems = [...diagnosticRoot.querySelectorAll('.collection-item-current')]
           .filter(visible)
           .map(element => ({
             ariaCurrent: element.getAttribute('aria-current'),
             weight: getComputedStyle(element.querySelector('.title, .note-card-title') || element).fontWeight,
           }))
-        const disabledItems = [...document.querySelectorAll(
+        const disabledItems = [...diagnosticRoot.querySelectorAll(
           '.collection-focus-item[disabled], .collection-focus-item[aria-disabled="true"], .collection-focus-item.item-disabled',
         )]
           .filter(visible)

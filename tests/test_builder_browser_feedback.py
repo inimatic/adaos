@@ -12,6 +12,20 @@ from adaos.services.builder.browser_feedback import (
 from adaos.services.skill_factory_worker import _browser_feedback_prompt_projection
 
 
+def test_browser_feedback_scopes_primary_selection_and_layout_diagnostics() -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "e2e"
+        / "stand"
+        / "browser"
+        / "builder-candidate-feedback.mjs"
+    ).read_text(encoding="utf-8")
+
+    assert 'ada-layout-region[data-region-role="collection"]' in script
+    assert "region.closest('.desktop-grid') === grid" in script
+    assert "const diagnosticRoot = activeModal || document" in script
+
+
 def test_browser_feedback_binds_runtime_source_and_evidence(
     tmp_path: Path,
     monkeypatch,

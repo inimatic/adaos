@@ -5014,6 +5014,7 @@ class BuilderAutomationService:
             if not session:
                 raise ValueError("automation_session_not_found")
             current = self.refresh_session(session)
+            current = self._restore_cancelled_browser_feedback_source(current)
             task = (
                 current.get("task") if isinstance(current.get("task"), Mapping) else {}
             )
@@ -5250,6 +5251,89 @@ class BuilderAutomationService:
             "session": reconciled,
             "automation": self.project_session(reconciled),
         }
+
+    def _restore_cancelled_browser_feedback_source(
+        self,
+        session: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Rewind an unstarted automatic browser repair to its validated source."""
+
+        current = copy.deepcopy(dict(session))
+        task = current.get("task") if isinstance(current.get("task"), Mapping) else {}
+        if (
+            str(current.get("status") or "") != "cancelled"
+            or str(task.get("status") or "") != "cancelled"
+            or int(task.get("attempts") or 0) != 0
+            or not isinstance(current.get("pending_browser_feedback"), Mapping)
+            or int(current.get("browser_feedback_repair_count") or 0) <= 0
+        ):
+            return current
+
+        current_task_id = str(current.get("current_task_id") or "").strip()
+        task_history = [
+            str(item).strip()
+            for item in current.get("task_history") or []
+            if str(item).strip()
+        ]
+        if not current_task_id or current_task_id not in task_history:
+            return current
+        current_index = len(task_history) - 1 - task_history[::-1].index(current_task_id)
+        if current_index <= 0:
+            return current
+        source_task_id = task_history[current_index - 1]
+        completion = next(
+            (
+                dict(item)
+                for item in reversed(current.get("completion_history") or [])
+                if isinstance(item, Mapping)
+                and str(item.get("task_id") or "").strip() == source_task_id
+                and isinstance(item.get("browser_feedback_repair"), Mapping)
+                and str(item["browser_feedback_repair"].get("status") or "").strip()
+                == "queued"
+            ),
+            None,
+        )
+        if completion is None:
+            return current
+
+        restored = self._session_for_linked_task(current, source_task_id)
+        restored_task = (
+            restored.get("task")
+            if isinstance(restored, Mapping)
+            and isinstance(restored.get("task"), Mapping)
+            else {}
+        )
+        if (
+            not isinstance(restored, Mapping)
+            or str(restored_task.get("status") or "") != "completed"
+            or not isinstance(restored.get("last_result"), Mapping)
+        ):
+            return current
+
+        restored = dict(restored)
+        restored["iteration"] = max(0, int(completion.get("iteration") or 0))
+        restored["task_history"] = task_history
+        restored["completion_history"] = copy.deepcopy(
+            list(current.get("completion_history") or [])
+        )
+        recovery_history = [
+            dict(item)
+            for item in current.get("cancelled_repair_recovery_history") or []
+            if isinstance(item, Mapping)
+        ]
+        recovery_history.append(
+            {
+                "schema": "adaos.builder.cancelled_repair_recovery.v1",
+                "cancelled_task_id": current_task_id,
+                "source_task_id": source_task_id,
+                "reason": "unstarted_browser_feedback_repair_cancelled",
+                "recovered_at": _now_iso(),
+            }
+        )
+        restored["cancelled_repair_recovery_history"] = recovery_history[-20:]
+        restored["updated_at"] = recovery_history[-1]["recovered_at"]
+        self._save_session(restored)
+        return restored
 
     def status(
         self,

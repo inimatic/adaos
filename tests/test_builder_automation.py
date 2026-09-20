@@ -10183,6 +10183,135 @@ def test_validated_result_recovery_finalizes_externally_repaired_task(
     assert "reuse_confirmed_checkpoints" not in finalized[0]
 
 
+def test_validated_result_recovery_rewinds_unstarted_browser_feedback_repair(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    source_task = {
+        "task_id": "task.validated",
+        "status": "completed",
+        "updated_at": "2026-09-20T17:10:00+00:00",
+        "result": {"summary": "Validated candidate."},
+    }
+    cancelled_task = {
+        "task_id": "task.false-repair",
+        "status": "cancelled",
+        "attempts": 0,
+        "updated_at": "2026-09-20T17:20:00+00:00",
+    }
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.false-repair",
+        "status": "cancelled",
+        "iteration": 5,
+        "task": cancelled_task,
+        "task_history": ["task.validated", "task.false-repair"],
+        "browser_feedback_repair_count": 1,
+        "pending_browser_feedback": {"ok": False, "receipt_digest": "sha256:1"},
+        "completion_history": [
+            {
+                "task_id": "task.validated",
+                "iteration": 4,
+                "browser_feedback_repair": {"status": "queued", "attempt": 1},
+            }
+        ],
+    }
+    service._save_session(session)
+    finalized: list[dict] = []
+
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    monkeypatch.setattr(
+        type(service.factory),
+        "read_task",
+        lambda _self, task_id: (
+            source_task if task_id == "task.validated" else cancelled_task
+        ),
+    )
+
+    def finalize(_service, value):
+        finalized.append(dict(value))
+        completed = dict(value)
+        completed["status"] = "completed"
+        _service._save_session(completed)
+
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not rerun")
+    )
+
+    result = service.recover_validated_result(
+        object_type="scenario", object_id="recipes"
+    )
+
+    assert result["ok"] is True
+    assert result["worker"]["recovery_stage"] == "validated_activation"
+    assert finalized[0]["current_task_id"] == "task.validated"
+    assert finalized[0]["iteration"] == 4
+    assert finalized[0]["task_history"] == [
+        "task.validated",
+        "task.false-repair",
+    ]
+    assert finalized[0]["cancelled_repair_recovery_history"][-1] == {
+        "schema": "adaos.builder.cancelled_repair_recovery.v1",
+        "cancelled_task_id": "task.false-repair",
+        "source_task_id": "task.validated",
+        "reason": "unstarted_browser_feedback_repair_cancelled",
+        "recovered_at": finalized[0]["cancelled_repair_recovery_history"][-1][
+            "recovered_at"
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "attempts,pending",
+    [(1, {"ok": False}), (0, None)],
+)
+def test_validated_result_recovery_does_not_rewind_ambiguous_cancelled_task(
+    tmp_path: Path,
+    monkeypatch,
+    attempts: int,
+    pending: dict | None,
+) -> None:
+    service = _service(tmp_path)
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.cancelled",
+        "status": "cancelled",
+        "task": {
+            "task_id": "task.cancelled",
+            "status": "cancelled",
+            "attempts": attempts,
+        },
+        "task_history": ["task.validated", "task.cancelled"],
+        "browser_feedback_repair_count": 1,
+        "pending_browser_feedback": pending,
+        "completion_history": [
+            {
+                "task_id": "task.validated",
+                "iteration": 1,
+                "browser_feedback_repair": {"status": "queued"},
+            }
+        ],
+    }
+    service._save_session(session)
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="validated result recovery requires a failed Automation task",
+    ):
+        service.recover_validated_result(object_type="scenario", object_id="recipes")
+
+
 def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary(
     tmp_path: Path, monkeypatch
 ) -> None:
