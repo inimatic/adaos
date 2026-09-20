@@ -146,6 +146,9 @@ def governed_instance(
 
 def canonical_command(action: str, workflow: Mapping[str, Any], metadata: Mapping[str, Any]) -> str | None:
     action = str(action or "").strip().lower()
+    if action in {"cancel_change", "supersede_change"}:
+        prefix = "cancel" if action == "cancel_change" else "supersede"
+        return f"{prefix}_from_{legacy_state(workflow)}"
     if action == "plan_change_set":
         issues = [item for item in metadata.get("issues") or [] if isinstance(item, Mapping)]
         return "plan_prototype_change" if any(str(item.get("lane") or "") == "prototype" for item in issues) else "plan_automation_change"
@@ -201,6 +204,11 @@ def canonical_command(action: str, workflow: Mapping[str, Any], metadata: Mappin
 def legacy_action_for_command(command: str) -> str | None:
     """Return the bounded compatibility adapter for a canonical Builder command."""
 
+    command = str(command or "").strip()
+    if command.startswith("cancel_from_"):
+        return "cancel_change"
+    if command.startswith("supersede_from_"):
+        return "supersede_change"
     mapping = {
         "record_prototype_revision": "prototype_revision_recorded",
         "record_prototype_experiment": "prototype_experiment_recorded",
@@ -230,7 +238,7 @@ def legacy_action_for_command(command: str) -> str | None:
         "reconcile_verification": "reconcile_verification",
         "reconcile_publication": "reconcile_publication",
     }
-    return mapping.get(str(command or "").strip())
+    return mapping.get(command)
 
 
 def admit_legacy_transition(

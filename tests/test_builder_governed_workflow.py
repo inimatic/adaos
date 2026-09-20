@@ -154,10 +154,12 @@ def test_builder_projection_exposes_process_and_project_workflow_inspection(
 def test_legacy_builder_instance_gets_digest_binding_without_losing_history(tmp_path: Path) -> None:
     service = _service(tmp_path)
     _plan(service)
+    original_history = list(
+        service.describe("scenario", "recipes")["governed"]["history"]
+    )
     state_path = service.dev_scenarios_root / "recipes" / "prompt_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     governed = state["workflow"]["governed"]
-    original_history = list(governed["history"])
     governed.pop("definition_digest")
     state_path.write_text(json.dumps(state), encoding="utf-8")
 
@@ -168,6 +170,38 @@ def test_legacy_builder_instance_gets_digest_binding_without_losing_history(tmp_
         compiled_builder_change_definition()
     )
     assert described["governed"]["context"]["legacy_definition_binding"]["status"] == "adopted"
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_state", "expected_status"),
+    [
+        ("cancel_from_prototype_editing", "cancelled", "rejected"),
+        ("supersede_from_prototype_editing", "superseded", "superseded"),
+    ],
+)
+def test_terminal_change_commands_update_canonical_and_compatibility_state(
+    tmp_path: Path,
+    command: str,
+    expected_state: str,
+    expected_status: str,
+) -> None:
+    service = _service(tmp_path)
+    _plan(service)
+
+    result = service.invoke_command(
+        "scenario",
+        "recipes",
+        command,
+        actor="user:owner",
+        idempotency_key=f"test:{command}",
+        input_value={"confirmed": True},
+    )
+
+    workflow = result["workflow"]
+    assert workflow["governed"]["state"] == expected_state
+    assert workflow["change"]["status"] == expected_status
+    assert workflow["change_set"]["status"] == expected_status
+    assert workflow["change"]["gate"] == "complete"
 
 
 def test_dev_builder_skill_workflow_is_runtime_authority(tmp_path: Path) -> None:

@@ -6750,6 +6750,19 @@ class BuilderWorkflowService:
                     }
                 )
 
+        if action in {"cancel_change", "supersede_change"}:
+            current = canonical_change()
+            current["status"] = (
+                "rejected" if action == "cancel_change" else "superseded"
+            )
+            current["gate"] = "complete"
+            current["updated_at"] = changed_at
+            workflow["change"] = _normalize_change(current)
+            workflow["change_set"] = _change_set_compatibility(workflow["change"])
+            workflow["context_packet"] = None
+            workflow["pending_transition"] = None
+            return
+
         if action == "plan_change_set":
             change_set_id = str(metadata.get("change_set_id") or "").strip()
             if not change_set_id:
