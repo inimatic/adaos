@@ -409,28 +409,26 @@
               "emptyText": "Not installed.",
               "fields": [
                 {
-                  "label": "Installed version",
-                  "path": "installed_release.version"
+                  "label": "Active release",
+                  "path": "installation_summary.release_digest"
                 },
                 {
                   "label": "Status",
-                  "path": "installation.status",
+                  "path": "installation_summary.status",
                   "valueI18nPrefix": "applications.installation.status."
                 },
                 {
                   "label": "Updated",
-                  "path": "installation.updated_at",
+                  "path": "installation_summary.updated_at",
                   "format": "datetime"
                 },
                 {
-                  "label": "Update track",
-                  "path": "subscription.update_track",
-                  "valueI18nPrefix": "applications.update_track."
+                  "label": "Runtime source",
+                  "path": "installation_summary.source"
                 },
                 {
-                  "label": "Update policy",
-                  "path": "subscription.update_policy",
-                  "valueI18nPrefix": "applications.update_policy."
+                  "label": "Auto update",
+                  "path": "installation_summary.auto_update_enabled"
                 }
               ]
             }

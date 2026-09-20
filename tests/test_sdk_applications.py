@@ -35,6 +35,80 @@ class _Record:
         return dict(self.payload)
 
 
+def test_installation_summary_projects_local_beta_without_stable_installation() -> None:
+    release_digest = "sha256:" + "a" * 64
+    summary = applications._installation_summary(
+        {
+            "installed": True,
+            "installation": None,
+            "subscription": None,
+            "installed_release": None,
+            "local_beta_active": True,
+            "auto_update_enabled": False,
+            "runtime_selections": [
+                {
+                    "webspace_id": "desktop",
+                    "source": "local_trial",
+                    "release_digest": release_digest,
+                    "runtime_root_ref": "trial:desktop-beta",
+                    "updated_at": "2026-09-20T18:42:32+00:00",
+                }
+            ],
+        },
+        webspace_id="desktop",
+    )
+
+    assert summary == {
+        "schema": "adaos.application.installation_summary.v1",
+        "installed": True,
+        "status": "beta_active",
+        "source": "local_trial",
+        "version": None,
+        "release_digest": release_digest,
+        "updated_at": "2026-09-20T18:42:32+00:00",
+        "webspace_id": "desktop",
+        "runtime_root_ref": "trial:desktop-beta",
+        "update_track": None,
+        "update_policy": None,
+        "auto_update_enabled": False,
+        "local_beta_active": True,
+    }
+
+
+def test_installation_summary_prefers_selected_webspace_runtime() -> None:
+    summary = applications._installation_summary(
+        {
+            "installed": True,
+            "installation": {"status": "active", "updated_at": "stable-time"},
+            "subscription": {
+                "update_track": "stable",
+                "update_policy": "auto_compatible",
+            },
+            "installed_release": {"version": "1.2.3", "release_digest": "stable"},
+            "auto_update_enabled": True,
+            "runtime_selections": [
+                {
+                    "webspace_id": "other",
+                    "source": "local_trial",
+                    "release_digest": "other-beta",
+                },
+                {
+                    "webspace_id": "desktop",
+                    "source": "installed",
+                    "release_digest": "desktop-stable",
+                },
+            ],
+        },
+        webspace_id="desktop",
+    )
+
+    assert summary["status"] == "active"
+    assert summary["source"] == "installation"
+    assert summary["version"] == "1.2.3"
+    assert summary["update_track"] == "stable"
+    assert summary["auto_update_enabled"] is True
+
+
 def test_application_service_uses_authority_state_in_trial(
     monkeypatch, tmp_path: Path
 ) -> None:

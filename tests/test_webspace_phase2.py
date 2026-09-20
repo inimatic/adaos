@@ -28,7 +28,10 @@ except Exception:
     sys.modules["ypy_websocket.ystore"] = ystore_mod
 
 from adaos.services.scenario import webspace_runtime as webspace_runtime_module
-from adaos.services.scenario.webspace_components.resolution import _apply_component_metadata
+from adaos.services.scenario.webspace_components.resolution import (
+    _apply_component_metadata,
+    _merge_trial_and_ambient_skill_decls,
+)
 from adaos.services.workspaces import (
     ensure_workspace,
     get_workspace,
@@ -97,6 +100,42 @@ def test_json_fingerprint_normalizes_yjs_integral_float_roundtrip() -> None:
     assert webspace_runtime_module._fingerprint_json_like({"ratio": 1.25}) != (  # noqa: SLF001
         webspace_runtime_module._fingerprint_json_like({"ratio": 1.5})  # noqa: SLF001
     )
+
+
+def test_trial_skill_declarations_override_only_the_same_node_component() -> None:
+    merged = _merge_trial_and_ambient_skill_decls(
+        [
+            {
+                "skill": "web_desktop_skill",
+                "node_id": "local",
+                "source_authority": "immutable_trial_workspace",
+            }
+        ],
+        [
+            {
+                "skill": "web_desktop_skill",
+                "node_id": "local",
+                "source_authority": "workspace",
+            },
+            {
+                "skill": "weather_skill",
+                "node_id": "local",
+                "widgets": [{"id": "weather"}],
+            },
+            {
+                "skill": "web_desktop_skill",
+                "node_id": "remote",
+                "source_authority": "remote_workspace",
+            },
+        ],
+    )
+
+    assert [(item["node_id"], item["skill"]) for item in merged] == [
+        ("local", "web_desktop_skill"),
+        ("local", "weather_skill"),
+        ("remote", "web_desktop_skill"),
+    ]
+    assert merged[0]["source_authority"] == "immutable_trial_workspace"
 
 
 def test_component_metadata_replaces_stale_publication_projection() -> None:

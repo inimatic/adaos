@@ -243,6 +243,79 @@ def _application_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
     return model
 
 
+def _installation_summary(
+    model: Mapping[str, Any], *, webspace_id: str | None
+) -> dict[str, Any]:
+    """Project persisted installations and active Trial runtimes uniformly."""
+
+    installation = (
+        dict(model.get("installation") or {})
+        if isinstance(model.get("installation"), Mapping)
+        else {}
+    )
+    subscription = (
+        dict(model.get("subscription") or {})
+        if isinstance(model.get("subscription"), Mapping)
+        else {}
+    )
+    installed_release = (
+        dict(model.get("installed_release") or {})
+        if isinstance(model.get("installed_release"), Mapping)
+        else {}
+    )
+    selections = [
+        dict(item)
+        for item in model.get("runtime_selections") or ()
+        if isinstance(item, Mapping)
+    ]
+    webspace = str(webspace_id or "").strip()
+    active_runtime = next(
+        (
+            item
+            for item in selections
+            if webspace and str(item.get("webspace_id") or "") == webspace
+        ),
+        selections[0] if selections else {},
+    )
+    local_trial = str(active_runtime.get("source") or "") == "local_trial"
+    installed = bool(model.get("installed"))
+    if local_trial:
+        status = "beta_active"
+        source = "local_trial"
+    elif installation:
+        status = str(installation.get("status") or "active")
+        source = "installation"
+    else:
+        status = "not_installed"
+        source = None
+    return {
+        "schema": "adaos.application.installation_summary.v1",
+        "installed": installed,
+        "status": status,
+        "source": source,
+        "version": installed_release.get("version"),
+        "release_digest": (
+            active_runtime.get("release_digest")
+            if local_trial
+            else installation.get("installed_release_digest")
+            or installed_release.get("release_digest")
+        ),
+        "updated_at": (
+            active_runtime.get("updated_at")
+            if local_trial
+            else installation.get("updated_at")
+        ),
+        "webspace_id": active_runtime.get("webspace_id") if active_runtime else None,
+        "runtime_root_ref": (
+            active_runtime.get("runtime_root_ref") if active_runtime else None
+        ),
+        "update_track": subscription.get("update_track"),
+        "update_policy": subscription.get("update_policy"),
+        "auto_update_enabled": bool(model.get("auto_update_enabled")),
+        "local_beta_active": bool(model.get("local_beta_active")),
+    }
+
+
 def _application_home_aliases(model: Mapping[str, Any]) -> tuple[str, ...]:
     application = (
         dict(model.get("application") or {})
@@ -883,6 +956,9 @@ def _enrich_application_models(
         home = _home_projection(model, webspace_id, snapshot=home_snapshot)
         model["home"] = home
         model["pinned"] = bool(home.get("pinned"))
+        model["installation_summary"] = _installation_summary(
+            model, webspace_id=webspace_id
+        )
         enriched.append(model)
     return enriched
 

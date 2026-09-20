@@ -116,6 +116,32 @@ def _apply_component_metadata(
     return data
 
 
+def _merge_trial_and_ambient_skill_decls(
+    trial_declarations: Any,
+    ambient_declarations: Any,
+) -> list[dict[str, Any]]:
+    """Keep the candidate exact while preserving extensions owned by other apps."""
+
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for source in (trial_declarations, ambient_declarations):
+        if not isinstance(source, (list, tuple)):
+            continue
+        for raw in source:
+            if not isinstance(raw, Mapping):
+                continue
+            item = dict(raw)
+            skill = str(item.get("skill") or "").strip()
+            node_id = str(item.get("node_id") or "").strip()
+            key = (node_id, skill)
+            if skill and key in seen:
+                continue
+            if skill:
+                seen.add(key)
+            merged.append(item)
+    return merged
+
+
 class WebspaceResolutionService:
     def collect_inputs(
         self,
@@ -271,7 +297,24 @@ class WebspaceResolutionService:
             skill_decls_fingerprint = str(getattr(runtime, "_last_skill_decls_fingerprint", "") or "").strip()
         else:
             skill_decls = [dict(item) for item in skill_decls_override if isinstance(item, Mapping)]
-            skill_decls_fingerprint = str(skill_decls_fingerprint_override or "").strip()
+            if trial is not None:
+                try:
+                    ambient_skill_decls = runtime._collect_skill_decls(mode=mode)
+                except Exception:
+                    operations.logger.warning(
+                        "failed to collect ambient skill declarations for Trial materialization",
+                        exc_info=True,
+                    )
+                    ambient_skill_decls = []
+                skill_decls = _merge_trial_and_ambient_skill_decls(
+                    skill_decls,
+                    ambient_skill_decls,
+                )
+            skill_decls_fingerprint = (
+                operations.fingerprint_json_like(skill_decls)
+                if trial is not None
+                else str(skill_decls_fingerprint_override or "").strip()
+            )
             if not skill_decls_fingerprint:
                 skill_decls_fingerprint = operations.fingerprint_json_like(skill_decls)
             runtime._last_skill_decls_fingerprint = skill_decls_fingerprint
