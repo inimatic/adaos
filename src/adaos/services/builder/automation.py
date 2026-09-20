@@ -1266,11 +1266,21 @@ class BuilderAutomationService:
 
     def _workflow(self) -> BuilderWorkflowService:
         if self.workflow_service is None:
-            self.workflow_service = BuilderWorkflowService(
-                dev_skills_root=self.dev_skills_root,
-                dev_scenarios_root=self.dev_scenarios_root,
-                state_dir=self.state_dir,
-            )
+            try:
+                # Keep Automation on the same subnet-scoped DEV roots and
+                # workflow event sink as the controlling Builder SDK. The
+                # workspace service roots alone are insufficient for projects
+                # whose accepted Prototype archive has already been reduced to
+                # its immutable receipt during checkpointing.
+                self.workflow_service = BuilderWorkflowService.from_context()
+            except (AttributeError, RuntimeError):
+                # Unit tests and offline workers intentionally run without an
+                # AgentContext; preserve their explicitly supplied roots.
+                self.workflow_service = BuilderWorkflowService(
+                    dev_skills_root=self.dev_skills_root,
+                    dev_scenarios_root=self.dev_scenarios_root,
+                    state_dir=self.state_dir,
+                )
         return self.workflow_service
 
     def _contexts(self) -> ContextControlService:

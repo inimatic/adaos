@@ -229,6 +229,24 @@ def test_automation_resolves_project_to_its_primary_component(
     assert service._project_ref("project", "recipes_app") == ("scenario", "recipes")
 
 
+def test_automation_reuses_context_scoped_workflow_service(
+    tmp_path, monkeypatch
+) -> None:
+    from adaos.services.builder.workflow import BuilderWorkflowService
+
+    service = _service(tmp_path)
+    service.workflow_service = None
+    expected = object()
+    monkeypatch.setattr(
+        BuilderWorkflowService,
+        "from_context",
+        classmethod(lambda cls: expected),
+    )
+
+    assert service._workflow() is expected
+    assert service._workflow() is expected
+
+
 def test_current_workflow_head_exposes_bounded_change_message_ownership(
     tmp_path,
 ) -> None:

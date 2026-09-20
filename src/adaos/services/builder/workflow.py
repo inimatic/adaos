@@ -5228,7 +5228,7 @@ class BuilderWorkflowService:
                         f"Prototype data contracts require implementation mappings: {missing}"
                     )
                 if bool(_mapping(workflow.get("prototype")).get("acceptance_required")):
-                    self._admit_current_prototype_acceptance(kind, project_id, workflow)
+                    self.require_current_prototype_acceptance(kind, project_id)
             if action_token == "stabilize_prototype" and bool(
                 _mapping(workflow.get("prototype")).get("acceptance_required")
             ):

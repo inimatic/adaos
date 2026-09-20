@@ -1524,6 +1524,59 @@ def test_automation_followup_reuses_immutable_acceptance_after_source_changes(
     assert admitted["digest"] == acceptance["digest"]
 
 
+def test_automation_transition_uses_canonical_acceptance_admission(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _root = workflow_project
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        BuilderWorkflowService,
+        "require_current_prototype_acceptance",
+        lambda self, kind, project_id: calls.append((kind, project_id))
+        or {"revision": "001"},
+    )
+    monkeypatch.setattr(
+        BuilderWorkflowService,
+        "_admit_current_prototype_acceptance",
+        lambda self, *_args, **_kwargs: pytest.fail(
+            "automation transition bypassed canonical acceptance admission"
+        ),
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-acceptance-admission",
+            "request": "Implement the accepted prototype.",
+            "issues": [
+                {
+                    "issue_id": "automation",
+                    "title": "Implement the accepted prototype",
+                    "lane": "automation",
+                    "acceptance_criteria": ["The implementation is tested."],
+                }
+            ],
+        },
+    )
+    state_path = service._state_path("scenario", "recipes")
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.setdefault("workflow", {}).setdefault("prototype", {})[
+        "acceptance_required"
+    ] = True
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata={"task_id": "task.acceptance-admission", "confirmed": True},
+    )
+
+    assert calls == [("scenario", "recipes")]
+
+
 def test_change_set_projects_one_canonical_change_and_transition_runs(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
