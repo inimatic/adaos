@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.3.9",
+  "catalog_version": "3.3.10",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -1068,6 +1068,63 @@
         "A first-class conversation destination uses a dedicated region and fillHeight=true.",
         "A visible composer has an explicit sendCommand; a static read-only transcript has no decorative composer.",
         "Conversation routing metadata is explicit when the stream is scoped to a channel or thread."
+      ]
+    },
+    {
+      "id": "collection.grid",
+      "kind": "component",
+      "title": "Installed application launcher",
+      "summary": "The canonical subnet desktop projection for pinned application launchers and application catalog collections.",
+      "aliases": {
+        "en": ["application launcher", "desktop icons", "pinned applications"],
+        "ru": ["запуск приложений", "иконки рабочего стола", "закрепленные приложения"]
+      },
+      "manifest": {
+        "widget_type": "collection.grid",
+        "desktop_projection": "For the authoritative pinned desktop launcher use widget.dataSource={kind:'y',transform:'desktop.icons'}. This projection owns installed and pinned application identity, ordering and launch metadata; do not replace it with a skill list or static records.",
+        "selection": "Use on=select with the projection's $event.action.navigate and $event.launchModal. The tile itself is the primary action; do not add a redundant Open button.",
+        "catalog_projection": "Catalog collections may use kind='y' with an explicit catalog path, but installation lifecycle belongs to the Applications scenario."
+      },
+      "data_shape": {
+        "kind": "system_application_projection",
+        "record": "Platform-owned launcher item including stable id, icon, title, action and optional launchModal/channel badge"
+      },
+      "events": ["select"],
+      "responsive": {
+        "desktop": "responsive application tile grid with platform-owned ordering",
+        "compact": "bounded launcher grid without per-tile command clutter"
+      },
+      "postconditions": [
+        "The desktop launcher reads the desktop.icons Yjs projection rather than authored or static application records.",
+        "Selecting a tile follows platform launch metadata and does not simulate installation lifecycle."
+      ]
+    },
+    {
+      "id": "desktop.widgets",
+      "kind": "component",
+      "title": "Installed desktop widgets",
+      "summary": "The canonical system projection for widgets installed and pinned to the current desktop.",
+      "aliases": {
+        "en": ["desktop widgets", "pinned widgets", "widget area"],
+        "ru": ["виджеты рабочего стола", "закрепленные виджеты", "область виджетов"]
+      },
+      "manifest": {
+        "widget_type": "desktop.widgets",
+        "required_data_source": "widget.dataSource must equal {kind:'y',transform:'desktop.widgets'}; this component is not a generic authored content container.",
+        "ownership": "The platform projection owns installed, pinned, removed and reordered widget state. Keep widget catalog management connected to the established desktop runtime instead of emulating it with local state."
+      },
+      "data_shape": {
+        "kind": "system_widget_projection",
+        "record": "Platform-owned installed widget contribution and placement"
+      },
+      "events": [],
+      "responsive": {
+        "desktop": "responsive installed-widget regions controlled by the desktop runtime",
+        "compact": "single ordered widget flow with platform controls"
+      },
+      "postconditions": [
+        "The component reads the desktop.widgets Yjs projection.",
+        "Install, pin, unpin, remove and reorder behavior remains owned by the platform desktop runtime."
       ]
     },
     {

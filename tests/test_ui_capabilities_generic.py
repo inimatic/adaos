@@ -586,6 +586,19 @@ def test_generic_validation_rejects_product_extension_as_content_container() -> 
     }
 
 
+def test_desktop_product_extensions_publish_authoritative_projection_contracts() -> None:
+    catalog = ui_capability_catalog()
+    components = {item["id"]: item for item in catalog["components"]}
+
+    assert components["collection.grid"]["manifest"]["desktop_projection"].find(
+        "desktop.icons"
+    ) >= 0
+    assert components["desktop.widgets"]["manifest"]["required_data_source"].find(
+        "desktop.widgets"
+    ) >= 0
+    assert components["desktop.widgets"].get("semantic_profile") is None
+
+
 def test_generic_validation_requires_renderer_consumable_collection_source() -> None:
     webui = _empty_webui()
     widget = {

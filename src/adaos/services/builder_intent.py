@@ -81,6 +81,10 @@ _REF_PATTERN = re.compile(
     r"(?:https?://[^\s<>()]+|(?:project|change|scenario|skill|modal):[A-Za-z0-9_.:/-]+)",
     flags=re.IGNORECASE,
 )
+_INLINE_CODE_PATTERN = re.compile(r"`[^`\r\n]+`")
+_DOTTED_IDENTIFIER_PATTERN = re.compile(
+    r"\b[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+\b"
+)
 _CYRILLIC_PATTERN = re.compile(r"[\u0400-\u04ff]")
 _AUTHORING_PATTERNS = (
     re.compile(
@@ -309,7 +313,12 @@ def _clauses(statement: str) -> list[tuple[str, int, int]]:
     # Reference punctuation is not sentence punctuation. Keep original offsets
     # so extracted evidence still points into the exact unmodified statement.
     boundary_text = list(statement)
-    for reference in _REF_PATTERN.finditer(statement):
+    protected = (
+        *_REF_PATTERN.finditer(statement),
+        *_INLINE_CODE_PATTERN.finditer(statement),
+        *_DOTTED_IDENTIFIER_PATTERN.finditer(statement),
+    )
+    for reference in protected:
         end = reference.end()
         while end > reference.start() and statement[end - 1] in ".!?;":
             end -= 1

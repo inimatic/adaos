@@ -28,6 +28,26 @@ def test_reference_punctuation_and_words_are_not_operations(statement):
     assert brief["residual_requirements"][0]["statement"] == clauses[0][0]
 
 
+def test_inline_and_dotted_abi_identifiers_are_not_sentence_boundaries() -> None:
+    from adaos.services.builder_intent import _clauses
+
+    statement = (
+        "Use `desktop-icons` / `collection.grid` and `desktop-widgets` / "
+        "`desktop.widgets` for the launcher. Open items through "
+        "desktop.scenario.set. Keep the existing application state."
+    )
+
+    clauses = _clauses(statement)
+
+    assert [item[0] for item in clauses] == [
+        "Use `desktop-icons` / `collection.grid` and `desktop-widgets` / "
+        "`desktop.widgets` for the launcher",
+        "Open items through desktop.scenario.set",
+        "Keep the existing application state",
+    ]
+    assert all(statement[start:end] == clause for clause, start, end in clauses)
+
+
 @pytest.mark.parametrize("statement", [
     "Stop for Prototype review after applying.",
     "This is a Prototype correction, not an Automation or publication request.",
