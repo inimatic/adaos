@@ -132,6 +132,24 @@ def _preserved_candidate_has_changes(run_root: Path) -> bool:
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
+def _preserved_candidate_is_clean(run_root: Path) -> bool:
+    workspace = run_root / "workspace"
+    if not (workspace / ".git").is_dir():
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=workspace,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and not result.stdout.strip()
+
+
 def _preserved_candidate_changed_paths(run_root: Path) -> list[str]:
     workspace = run_root / "workspace"
     if not (workspace / ".git").is_dir():
@@ -5370,20 +5388,24 @@ class BuilderAutomationService:
         self,
         session: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Rewind an unstarted automatic browser repair to its validated source."""
+        """Rewind a source-clean automatic browser repair to its validated source."""
 
         current = copy.deepcopy(dict(session))
         task = current.get("task") if isinstance(current.get("task"), Mapping) else {}
         if (
             str(current.get("status") or "") != "cancelled"
             or str(task.get("status") or "") != "cancelled"
-            or int(task.get("attempts") or 0) != 0
             or not isinstance(current.get("pending_browser_feedback"), Mapping)
             or int(current.get("browser_feedback_repair_count") or 0) <= 0
         ):
             return current
 
         current_task_id = str(current.get("current_task_id") or "").strip()
+        attempts = max(0, int(task.get("attempts") or 0))
+        if attempts > 0 and not _preserved_candidate_is_clean(
+            Path(self.runs_root) / _safe_token(current_task_id)
+        ):
+            return current
         task_history = [
             str(item).strip()
             for item in current.get("task_history") or []
@@ -5440,7 +5462,11 @@ class BuilderAutomationService:
                 "schema": "adaos.builder.cancelled_repair_recovery.v1",
                 "cancelled_task_id": current_task_id,
                 "source_task_id": source_task_id,
-                "reason": "unstarted_browser_feedback_repair_cancelled",
+                "reason": (
+                    "clean_started_browser_feedback_repair_cancelled"
+                    if attempts > 0
+                    else "unstarted_browser_feedback_repair_cancelled"
+                ),
                 "recovered_at": _now_iso(),
             }
         )

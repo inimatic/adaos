@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -10669,17 +10670,97 @@ def test_validated_result_recovery_rewinds_unstarted_browser_feedback_repair(
     }
 
 
+def test_validated_result_recovery_rewinds_clean_started_browser_feedback_repair(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    source_task = {
+        "task_id": "task.validated",
+        "status": "completed",
+        "updated_at": "2026-09-20T17:10:00+00:00",
+        "result": {"summary": "Validated candidate."},
+    }
+    cancelled_task = {
+        "task_id": "task.clean-repair",
+        "status": "cancelled",
+        "attempts": 1,
+        "updated_at": "2026-09-20T17:20:00+00:00",
+    }
+    workspace = tmp_path / "runs" / "task.clean-repair" / "workspace"
+    workspace.mkdir(parents=True)
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.clean-repair",
+        "status": "cancelled",
+        "iteration": 5,
+        "task": cancelled_task,
+        "task_history": ["task.validated", "task.clean-repair"],
+        "browser_feedback_repair_count": 1,
+        "pending_browser_feedback": {"ok": False, "receipt_digest": "sha256:1"},
+        "completion_history": [
+            {
+                "task_id": "task.validated",
+                "iteration": 4,
+                "browser_feedback_repair": {"status": "queued", "attempt": 1},
+            }
+        ],
+    }
+    service._save_session(session)
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    monkeypatch.setattr(
+        type(service.factory),
+        "read_task",
+        lambda _self, task_id: (
+            source_task if task_id == "task.validated" else cancelled_task
+        ),
+    )
+
+    def finalize(_service, value):
+        completed = dict(value)
+        completed["status"] = "completed"
+        _service._save_session(completed)
+
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not rerun")
+    )
+
+    result = service.recover_validated_result(
+        object_type="scenario", object_id="recipes"
+    )
+
+    recovery = result["session"]["cancelled_repair_recovery_history"][-1]
+    assert result["ok"] is True
+    assert result["worker"]["recovery_stage"] == "validated_activation"
+    assert result["session"]["current_task_id"] == "task.validated"
+    assert recovery["cancelled_task_id"] == "task.clean-repair"
+    assert recovery["reason"] == "clean_started_browser_feedback_repair_cancelled"
+
+
 @pytest.mark.parametrize(
-    "attempts,pending",
-    [(1, {"ok": False}), (0, None)],
+    "attempts,pending,workspace_change",
+    [(1, {"ok": False}, True), (1, {"ok": False}, False), (0, None, False)],
 )
 def test_validated_result_recovery_does_not_rewind_ambiguous_cancelled_task(
     tmp_path: Path,
     monkeypatch,
     attempts: int,
     pending: dict | None,
+    workspace_change: bool,
 ) -> None:
     service = _service(tmp_path)
+    if attempts and workspace_change:
+        workspace = tmp_path / "runs" / "task.cancelled" / "workspace"
+        workspace.mkdir(parents=True)
+        subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+        (workspace / "changed.txt").write_text("changed", encoding="utf-8")
     session = {
         "object_type": "scenario",
         "object_id": "recipes",
