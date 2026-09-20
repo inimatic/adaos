@@ -243,6 +243,9 @@ def test_local_builder_beta_updates_display_flag_without_joining_public_testing(
         expected_revision=0, actor_ref="user:owner", subnet_ref="subnet:sn_home", capability="applications.apply")
     beta = service.list_models()[0]
     assert beta["use_prerelease"] and beta["local_beta_active"]
+    assert beta["installed"] is True
+    assert beta["installation"] is None
+    assert service.list_models(installed_only=True)[0]["application"]["application_id"] == "app_recipes"
     assert not beta["prerelease_following"]
     assert service.store.get_subscription("app_recipes") == subscription
     service.select_runtime(webspace_id="desktop", application_id="app_recipes", source="stable_installation",

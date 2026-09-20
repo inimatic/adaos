@@ -770,6 +770,14 @@ same `home.pinned` state and a direct pin/unpin control for installed products.
 This presentation state is not copied into `ProjectDeployment` and is never
 used as evidence that a component is running.
 
+An active publisher-local Trial is also an effective installed Application for
+the user-facing inventory, although it deliberately has no Stable
+`ApplicationInstallation` record. Builder placement must atomically select that
+Trial and project its Application entry point into the production Home as
+installed and pinned. Repeating placement is idempotent. This local projection
+does not opt the subnet into a public prerelease channel, fabricate a Stable
+installation, or use Home state as runtime-placement evidence.
+
 Static scenario localization is owned by the scenario package. The scenario
 declares locale resources in `webui.json` and stores string dictionaries under
 `assets/i18n/<locale>.json`; Applications initially requires `en` and `ru`.

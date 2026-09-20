@@ -217,6 +217,20 @@ def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup,
     monkeypatch.setattr(projects, "get_candidate", lambda _: {"candidate": {"release_digest": new.release_digest, "validation_evidence": [{"status": "passed"}]}})
     monkeypatch.setattr(WebspaceRelationshipRegistry, "from_context", lambda: SimpleNamespace(resolve_production_host=lambda value: value))
     monkeypatch.setattr(NativeTrialRuntime, "ready_manager", lambda *_: object())
+    home_projections = []
+    monkeypatch.setattr(
+        applications,
+        "_sync_local_trial_home",
+        lambda application_id, **kwargs: home_projections.append(
+            (application_id, kwargs)
+        )
+        or {
+            "application_id": application_id,
+            "webspace_id": kwargs["webspace_id"],
+            "installed": True,
+            "pinned": True,
+        },
+    )
     updates = ComponentUpdateService(owner.paths.state_dir())
     updates.record_aprobation(component_type="scenario", component_id="sample", aprobation={
         "source_kind": "builder_local_trial", "trial": {"candidate_id": "previous-candidate",
@@ -233,6 +247,8 @@ def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup,
     monkeypatch.setattr(applications, "refresh_placement", refresh)
     result = applications.place_local_trial("candidate-sample", webspace_id="desktop", actor_ref="user:owner")
     assert result["ok"] and result["data_transition"]["completed"]
+    assert result["home"]["pinned"] is True
+    assert service.store.get_installation("sample").installed_release_digest == old.release_digest
     assert service.list_models()[0]["use_prerelease"]
     assert not service.list_models()[0]["prerelease_following"]
     notices = updates._read()
@@ -259,6 +275,10 @@ def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup,
     assert bind_local_data_lifecycle(owner, runtime, new).stable_digest == old.release_digest
     assert promote_with_local_data(owner, "candidate-sample", publish)["ok"]
     assert len(calls) == 1 and refreshes == ["desktop", "desktop"]
+    assert home_projections == [
+        ("sample", {"webspace_id": "desktop"}),
+        ("sample", {"webspace_id": "desktop"}),
+    ]
     private_metadata = (runtime.root / ".adaos/data-transition.json").read_text(encoding="utf-8")
     assert "private stable" not in private_metadata and "private beta" not in private_metadata
 

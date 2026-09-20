@@ -612,8 +612,10 @@ Builder development and consumes only public contracts.
   placement: successful install pins by default, Home customization and
   Applications can unpin without uninstalling, uninstall removes the launcher,
   and order/pin state persists in the target Webspace overlay. SDK, Root MCP
-  and Client contracts are implemented; Applications and beta end-to-end proof
-  remain open.
+  and Client contracts are implemented. Publisher-local Trial is now an
+  effective installed state and Builder placement projects it to Home without
+  creating a Stable installation; Applications and beta browser proof remain
+  open.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
 - [ ] `[could]` `APP4-38` Store UI revisions as base plus content-addressed

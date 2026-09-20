@@ -479,6 +479,18 @@ def production_webspace_id(webspace_id: str) -> str:
     return WebspaceRelationshipRegistry.from_context().resolve_production_host(webspace_id)
 
 
+def _sync_local_trial_home(application_id: str, *, webspace_id: str) -> dict[str, Any]:
+    """Project an admitted local Beta as an installed, pinned Home application."""
+
+    from adaos.sdk.applications import _sync_home_installation
+
+    return _sync_home_installation(
+        application_id,
+        installed=True,
+        webspace_id=webspace_id,
+    )
+
+
 def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) -> dict[str, Any]:
     """Admit local Builder Beta, migrating Stable data without a second UI approval."""
     import json
@@ -581,10 +593,12 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
             "data_transition": transition_proof,
         },
     )
+    home = _sync_local_trial_home(application.application_id, webspace_id=webspace_id)
     refresh = _refresh_application_placements(application.application_id)
     return {"ok": True, "runtime_selection": selection.to_dict(), "trial_activation": activation,
             "runtime_refresh": refresh, "data_transition": transition,
-            "verification": verification, "publisher_owner_access": owner_access}
+            "verification": verification, "publisher_owner_access": owner_access,
+            "home": home}
 
 
 def _refresh_application_placements(application_id: str) -> dict[str, Any]:

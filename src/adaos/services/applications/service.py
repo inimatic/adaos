@@ -923,6 +923,7 @@ class ApplicationService:
             self.store.get_channels(application.application_id).get("channels") or {}
         )
         local_beta = any(item.source == "local_trial" for item in runtime_selections)
+        effective_installed = installation is not None or local_beta
         prerelease_following = bool(
             subscription and subscription.update_track == "prerelease"
         )
@@ -948,7 +949,11 @@ class ApplicationService:
 
         return {
             "application": application.to_dict(),
-            "installed": installation is not None,
+            # An active local Trial exclusively supplies this Application in at
+            # least one Webspace.  It is therefore installed from the user's
+            # perspective even though it deliberately has no Stable
+            # ApplicationInstallation record yet.
+            "installed": effective_installed,
             "installation": installation.to_dict() if installation else None,
             "available": bool(channels.get("stable"))
             or application.visibility != "public",
@@ -1024,10 +1029,12 @@ class ApplicationService:
         models: list[dict[str, Any]] = []
         for application in self.store.list_applications():
             installation = installations.get(application.application_id)
-            if installed_only and installation is None:
-                continue
             subscription = subscriptions.get(application.application_id)
             runtime_selections = selections.get(application.application_id, [])
+            if installed_only and installation is None and not any(
+                item.source == "local_trial" for item in runtime_selections
+            ):
+                continue
             models.append(
                 self._read_model(
                     application,
