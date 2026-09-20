@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
-DEFAULT_BILLABLE_TOKEN_MULTIPLIER = 8
+# Tool-heavy Builder runs repeatedly reuse a stable prompt and source context.
+# Keep an aggregate circuit breaker, but leave enough room for cached turns to
+# finish while the independent fresh-plus-output and wall-time limits remain
+# authoritative for useful work.
+DEFAULT_BILLABLE_TOKEN_MULTIPLIER = 16
 DEFAULT_BILLABLE_TOKEN_FLOOR = 200_000
 DEFAULT_PROMPT_TOKEN_MIN_RESERVE = 1_024
 DEFAULT_PROMPT_TOKEN_MAX_RESERVE = 8_192

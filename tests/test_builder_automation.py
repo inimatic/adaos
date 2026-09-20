@@ -896,7 +896,7 @@ def test_builder_execution_budget_defaults_to_fresh_tokens_with_aggregate_guard(
 
     assert admitted is not None
     assert admitted["token_budget_metric"] == "fresh_plus_output"
-    assert admitted["max_billable_tokens"] == 1_600_000
+    assert admitted["max_billable_tokens"] == 3_200_000
     explicit = _admitted_execution_budget(
         {
             "max_model_tokens": 200_000,
@@ -3508,7 +3508,7 @@ def test_followup_turn_can_replace_bounded_execution_budget(tmp_path: Path) -> N
 
     session = followed["session"]
     assert session["execution_budget"]["max_model_tokens"] == 200000
-    assert session["execution_budget"]["max_billable_tokens"] == 1600000
+    assert session["execution_budget"]["max_billable_tokens"] == 3200000
     assert session["execution_budget_history"][-1]["max_model_tokens"] == 120000
     assert session["execution_budget_history"][-1]["max_billable_tokens"] == 2000000
     task = next(
@@ -3523,7 +3523,7 @@ def test_followup_turn_can_replace_bounded_execution_budget(tmp_path: Path) -> N
     assert (
         task["realize_request"]["artifacts"]["execution_budget"]
         ["max_billable_tokens"]
-        == 1600000
+        == 3200000
     )
     assert task["realize_request"]["artifacts"]["context_projection"]["change"][
         "issues"
