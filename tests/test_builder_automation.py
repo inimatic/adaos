@@ -3921,6 +3921,81 @@ def test_retry_after_reaccepting_same_change_reenters_automation(
         assert history[0]["replaced_at"]
 
 
+def test_browser_feedback_repair_keeps_canonical_change_authority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "status": "failed",
+            "iteration": 2,
+            "change_set_id": "change.recipes",
+            "change_id": "automation.browser-feedback",
+            "current_task_id": "task.browser-feedback-source",
+            "pending_browser_feedback": {"status": "failed"},
+            "updated_at": "2026-09-04T00:00:00+00:00",
+        }
+    )
+    workflow = SimpleNamespace(
+        describe=lambda *_args: {
+            "active_phase": "automation",
+            "governed": {"state": "automation_waiting"},
+            "change_set": {
+                "change_set_id": "change.recipes",
+                "status": "approved",
+                "gate": "automation",
+            },
+        },
+        transition=lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: workflow)
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_qualified_continuation_checkpoint",
+        lambda self, session: None,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_refresh_session_companion_skill_ids",
+        lambda self, session: None,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_capture_preview_binding",
+        lambda self, session: None,
+    )
+    submissions: list[dict] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_submit",
+        lambda _self, _session, **kwargs: submissions.append(dict(kwargs))
+        or {"task": {"task_id": "task.browser-feedback-repair"}},
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_notify_started_session",
+        lambda self, session: session,
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_launch_worker", lambda *_args: None)
+
+    result = service.submit_turn(
+        text="Repair only the independently observed browser failures.",
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    assert result["status"] == "automation_queued"
+    assert submissions[0]["canonical_change_authority"] is True
+
+
 def test_followup_in_automation_phase_uses_iteration_without_reacceptance(
     tmp_path: Path,
     monkeypatch,

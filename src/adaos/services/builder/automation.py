@@ -4091,6 +4091,7 @@ class BuilderAutomationService:
                 canonical_change_authority=(
                     canonical_change_rebound
                     or instruction == _UNCHANGED_RETRY_INSTRUCTION
+                    or isinstance(session.get("pending_browser_feedback"), Mapping)
                 ),
                 execution_brief_override=(
                     str(session.get("last_execution_brief") or "").strip() or None
