@@ -708,6 +708,15 @@ successful browser materialization instead of rebuilding it after checkpoint.
 Acceptance must inspect the materialized active semantic view. Source-only
 checks over legacy `pageSchema.widgets` are insufficient when `semantic.views`
 owns rendering; the Taiga UI Demo regression demonstrates this boundary.
+Web Desktop beta qualification extends this rule to data authority: required
+bindings publish loading/ready/error plus authoritative-value presence, and the
+gate waits for settled real projections before evaluating content. It uses an
+explicit Workspace target for Trial, snapshots primary semantic tabs before
+dynamic nested navigation, records bounded per-phase timings, and rejects a
+compact region whose usable width collapses even when the document itself does
+not overflow. Optional cancelled loopback probes are warnings only after all
+required sources settle. Candidate fixtures cannot satisfy an installed
+Applications or identity projection owned by node authority.
 
 - [x] `[must]` Expose candidate browser actions, DOM/accessibility, image bytes,
   console/network and synthetic data evidence through scoped check operations.
@@ -853,12 +862,15 @@ Implementation boundary: Two native local Reading List increments complete at St
   under the preceding open gate.
 - [x] `[must]` Qualify one first-release Web Desktop foreground delivery from an
   exact accepted Prototype through Automation, complete DEV checkpoint,
-  immutable Candidate and automatic local Beta placement. Revision `036`, task
-  `task.01M2WKK6FF7QNH9TVP3CJ3N8YE` and Candidate
-  `web_desktop-0-3-28-ffba58b12ff6` resolve `desktop` through
-  `application_trial`; live Yjs plus wide/390px browser checks observe the
-  accepted 45-widget schema without errors or a legacy fallback. This does not
-  close installed-Stable upgrade, all-room/background or public delivery.
+  immutable Candidate and automatic local Beta placement. The earlier Candidate
+  `web_desktop-0-3-28-ffba58b12ff6` established placement but not data authority.
+  Accepted Candidate `web_desktop-0-3-33-afc508c5ef2b` (`0.3.33`, acceptance
+  receipt `web-desktop-beta-authoritative-final/attempt-05`, restart replay
+  `attempt-06`) resolves `desktop` through
+  `application_trial`; nine-section wide/390px review proves authoritative
+  projections, host page navigation and non-collapsed compact regions without a
+  modal/legacy fallback. This does not close installed-Stable upgrade,
+  all-room/background or public delivery.
 - [ ] `[must]` Include versioned data schemas, semantics and invariants in
   Automation context without real user records. Require algorithmic forward
   migrations tested on synthetic data and clarification of ambiguous mappings;

@@ -198,6 +198,32 @@ revision from `workspace.lock.json`. Transport-safe fingerprint spelling may be
 canonicalized, but a shortened, stale, DEV, Stable, or different Trial identity
 must fail closed.
 
+Browser review carries the target `space_kind` explicitly. Prototype and
+Automation use the paired `development` Preview; Trial review uses the real
+`workspace` Webspace selected by the immutable beta activation. A helper must
+not silently substitute its default development target. Required skill, API,
+MCP and resource-query bindings expose a machine-readable loading/ready/error
+state and whether an authoritative value is present. Rendered cached data while
+a source reconnects is diagnostic fallback, not passing evidence. Acceptance
+waits for every required binding used by the active view to settle with an
+authoritative value and checks expected projection outcomes, not only the
+absence of a renderer exception.
+
+The browser gate snapshots the primary semantic navigation scope before it
+starts interaction; nested dynamic tabs cannot shift subsequent checks. Each
+startup, interaction and data-settlement phase has its own bounded timing and
+progress record. A compact layout must give every visible semantic region a
+usable share of the viewport, not merely avoid document-level overflow. A
+cancelled optional loopback probe may be retained as a warning only after all
+required sources settle. Navigation from an application record to a page
+scenario uses the host navigation contract; modal runtimes reject page surfaces.
+
+An immutable Trial reads shared control-plane projections, such as installed
+Applications and identities, from the node authority state. Candidate-owned
+mutable application data remains in the isolated Trial store. Trial-local
+fixtures may not replace an available authoritative projection or make a
+superficially populated page pass review.
+
 Select checks by changed contracts, affected behavior and reported failures, with
 mandatory final coverage retained. This is not a fixed series of model requests,
 mandatory screenshots for non-UI edits, or a mandatory multi-agent evaluator.

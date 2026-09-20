@@ -255,15 +255,21 @@ same-project conflicting work is refused. BIP-26 owns busy/reconnect/cancellatio
 and finalization/preview contention qualification. Advanced scheduling remains
 outside this correction; a process-local lock is not an interprocess delivery lock.
 
-The first Web Desktop delivery iteration preserves accepted Prototype revision
-`036` through Automation task `task.01M2WKK6FF7QNH9TVP3CJ3N8YE`, exact DEV
-checkpointing and immutable local Candidate
-`web_desktop-0-3-28-ffba58b12ff6`. Trial placement resolves the production
-`desktop` Webspace from `application_trial`; live Yjs inspection and wide/390px
-browser checks observe the 45-widget accepted schema with no Client, network or
-horizontal-overflow failures. This qualifies the exact first-release foreground
-Beta path only. It does not accept Stable, public distribution, all-room or
-background cutover.
+The first Web Desktop delivery line preserves accepted Prototype revision `036`
+through Automation, exact DEV checkpointing and immutable local Candidates. The
+initial `web_desktop-0-3-28-ffba58b12ff6` visual pass was insufficient: it did
+not prove authoritative data or page navigation. The accepted replacement is
+`web_desktop-0-3-33-afc508c5ef2b` (`0.3.33`, release digest
+`sha256:2d9726cb93f9a7e2242e4f6465fca1ad7a63cf1563b93b89b1f2afc508c5ef2b`).
+Trial placement resolves the production `desktop` Webspace from
+`application_trial`. Receipt
+`web-desktop-beta-authoritative-final/attempt-05` accepts the Trial; restart
+replay `attempt-06` checks all nine primary
+sections at wide and 390px widths, authoritative source values, usable compact
+region widths and application page navigation without modal fallback. It also
+proves the installed Applications projection comes from node authority rather
+than Candidate fixtures. This accepts the exact local foreground Beta only. It
+does not accept Stable, public distribution, all-room or background cutover.
 
 - [ ] `[could]` Add multi-node pools, placement and parallel tasks after
   one-task-per-node isolation and the separately deferred queue/topology
