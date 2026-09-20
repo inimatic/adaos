@@ -978,29 +978,15 @@ def set_home_pinned(
         # Installation is subnet-scoped.  The legacy desktop-installed list is
         # only a presentation projection, so materialize it on first pin
         # instead of requiring a second, contradictory installation record.
-        service.set_installed_with_live_room(
-            WebDesktopInstalled(
-                apps=[
-                    *[item for item in snapshot.installed.apps if item not in alias_set],
-                    application_ref,
-                ],
-                widgets=list(snapshot.installed.widgets),
-                removed_apps=[
-                    item
-                    for item in snapshot.installed.removed_apps
-                    if item not in alias_set
-                ],
-                removed_widgets=list(snapshot.installed.removed_widgets),
-            ),
-            webspace,
-        )
+        service.toggle_install_with_live_room("app", application_ref, webspace)
         projection_reconciled = True
-    next_pinned = [
-        item for item in snapshot.pinned_applications if item not in alias_set
-    ]
-    if pinned:
-        next_pinned.append(application_ref)
-    service.set_pinned_applications_with_live_room(next_pinned, webspace)
+    else:
+        next_pinned = [
+            item for item in snapshot.pinned_applications if item not in alias_set
+        ]
+        if pinned:
+            next_pinned.append(application_ref)
+        service.set_pinned_applications_with_live_room(next_pinned, webspace)
     return {
         "schema": "adaos.application.home_projection.v1",
         "application_id": application_id,

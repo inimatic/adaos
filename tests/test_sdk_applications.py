@@ -318,7 +318,7 @@ def test_home_pin_materializes_missing_desktop_projection_for_subnet_install(
         ),
         pinned_applications=["scenario:notes"],
     )
-    installed_writes = []
+    toggle_writes = []
     pinned_writes = []
 
     class Desktop:
@@ -326,8 +326,8 @@ def test_home_pin_materializes_missing_desktop_projection_for_subnet_install(
             assert webspace_id == "family"
             return snapshot
 
-        def set_installed_with_live_room(self, value, webspace_id):
-            installed_writes.append((value, webspace_id))
+        def toggle_install_with_live_room(self, item_type, target_id, webspace_id):
+            toggle_writes.append((item_type, target_id, webspace_id))
 
         def set_pinned_applications_with_live_room(self, values, webspace_id):
             pinned_writes.append((values, webspace_id))
@@ -356,15 +356,8 @@ def test_home_pin_materializes_missing_desktop_projection_for_subnet_install(
 
     assert result["pinned"] is True
     assert result["projection_reconciled"] is True
-    assert pinned_writes == [
-        (["scenario:notes", "scenario:reading_list"], "family")
-    ]
-    installed, webspace_id = installed_writes[0]
-    assert webspace_id == "family"
-    assert installed.apps == ["scenario:notes", "scenario:reading_list"]
-    assert installed.widgets == ["notes-summary"]
-    assert installed.removed_apps == []
-    assert installed.removed_widgets == ["retired-widget"]
+    assert toggle_writes == [("app", "scenario:reading_list", "family")]
+    assert pinned_writes == []
 
 
 def test_application_list_reads_home_and_placement_inventory_once(monkeypatch) -> None:
