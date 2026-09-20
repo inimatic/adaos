@@ -6,12 +6,14 @@ filesystem paths, process commands, Git credentials, or raw registry writes.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from adaos.domain.application import RuntimeSelection
 from adaos.sdk.core._ctx import require_ctx
+from adaos.services.application_registry_projection import ApplicationRegistryProjection
 from adaos.services.applications import (
     ApplicationAccessManagementService,
     ApplicationAccessService,
@@ -24,13 +26,19 @@ from adaos.services.applications import (
 )
 from adaos.services.builder.workbench import BuilderWorkbenchService
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
-from adaos.services.application_registry_projection import ApplicationRegistryProjection
 from adaos.services.policy.skill_capabilities import require_skill_capability
 
 
-def _service():
+def _state_dir() -> Path:
+    """Return the platform authority state, not an isolated Trial data store."""
+
     ctx = require_ctx("sdk.applications")
-    return get_application_service(Path(ctx.paths.state_dir()))
+    raw = getattr(ctx, "authority_state_dir", None) or ctx.paths.state_dir()
+    return Path(raw).expanduser().resolve()
+
+
+def _service():
+    return get_application_service(_state_dir())
 
 
 def _access_management() -> ApplicationAccessManagementService:
@@ -40,7 +48,9 @@ def _access_management() -> ApplicationAccessManagementService:
 def _local_subnet_ref() -> str:
     config = require_ctx("sdk.applications").config
     subnet_id = str(
-        config.subnet_id_value if hasattr(config, "subnet_id_value") else config.subnet_id
+        config.subnet_id_value
+        if hasattr(config, "subnet_id_value")
+        else config.subnet_id
     ).strip()
     return subnet_id if subnet_id.startswith("subnet:") else f"subnet:{subnet_id}"
 
@@ -106,35 +116,55 @@ def _release_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
     for item in project.get("components") or ():
         if not isinstance(item, Mapping):
             continue
-        components.append({
-            key: deepcopy(item[key])
-            for key in (
-                "kind", "artifact_id", "version", "digest", "manifest_digest",
-                "builder_id", "build_policy_digest", "schema_locks",
-                "conversational_lock", "workflow_lock", "workflow_validation_lock",
-                "workflow_adapter_locks", "workflow_binding_digest",
-                "workflow_role_policy_digest",
-            )
-            if key in item
-        })
+        components.append(
+            {
+                key: deepcopy(item[key])
+                for key in (
+                    "kind",
+                    "artifact_id",
+                    "version",
+                    "digest",
+                    "manifest_digest",
+                    "builder_id",
+                    "build_policy_digest",
+                    "schema_locks",
+                    "conversational_lock",
+                    "workflow_lock",
+                    "workflow_validation_lock",
+                    "workflow_adapter_locks",
+                    "workflow_binding_digest",
+                    "workflow_role_policy_digest",
+                )
+                if key in item
+            }
+        )
     dependencies = []
     for item in project.get("resolved_dependencies") or ():
         if not isinstance(item, Mapping):
             continue
-        dependencies.append({
-            key: deepcopy(item[key])
-            for key in (
-                "kind", "artifact_id", "version", "package_digest", "version_spec",
-                "optional",
-            )
-            if key in item
-        })
+        dependencies.append(
+            {
+                key: deepcopy(item[key])
+                for key in (
+                    "kind",
+                    "artifact_id",
+                    "version",
+                    "package_digest",
+                    "version_spec",
+                    "optional",
+                )
+                if key in item
+            }
+        )
     composition = project.get("composition_lock")
     composition = dict(composition) if isinstance(composition, Mapping) else {}
     safe_composition = {
         key: deepcopy(composition[key])
         for key in (
-            "schema", "project_definition_digest", "profiles", "members",
+            "schema",
+            "project_definition_digest",
+            "profiles",
+            "members",
             "project_dependencies",
         )
         if key in composition
@@ -147,28 +177,45 @@ def _release_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
     safe_project = {
         key: deepcopy(project[key])
         for key in (
-            "schema", "project_id", "version", "permissions", "schema_locks",
-            "migration_locks", "validation_evidence_refs", "release_digest",
+            "schema",
+            "project_id",
+            "version",
+            "permissions",
+            "schema_locks",
+            "migration_locks",
+            "validation_evidence_refs",
+            "release_digest",
         )
         if key in project
     }
-    safe_project.update({
-        "components": components,
-        "resolved_dependencies": dependencies,
-        "composition_lock": safe_composition or None,
-        "migration": {
-            "required": bool(project.get("migrations")),
-            "count": len(project.get("migrations") or ()),
-        },
-        "validation_evidence_count": len(project.get("validation_evidence") or ()),
-        "private_source": "redacted",
-    })
+    safe_project.update(
+        {
+            "components": components,
+            "resolved_dependencies": dependencies,
+            "composition_lock": safe_composition or None,
+            "migration": {
+                "required": bool(project.get("migrations")),
+                "count": len(project.get("migrations") or ()),
+            },
+            "validation_evidence_count": len(project.get("validation_evidence") or ()),
+            "private_source": "redacted",
+        }
+    )
     return {
         key: deepcopy(raw[key])
         for key in (
-            "schema", "application_id", "publisher_ref", "legacy_project_id", "version",
-            "release_digest", "accepted_candidate_id", "provenance_refs",
-            "addresses_report_ids", "lifecycle", "published_at", "channels",
+            "schema",
+            "application_id",
+            "publisher_ref",
+            "legacy_project_id",
+            "version",
+            "release_digest",
+            "accepted_candidate_id",
+            "provenance_refs",
+            "addresses_report_ids",
+            "lifecycle",
+            "published_at",
+            "channels",
         )
         if key in raw
     } | {
@@ -195,11 +242,10 @@ def _workspace_project_read_models(
     existing: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     """Project manifests remain visible while their Application aggregate is migrated."""
-    ctx = require_ctx("sdk.applications")
     try:
-        projects = ApplicationRegistryProjection(
-            Path(ctx.paths.state_dir())
-        ).list_workspace_projects(include_hidden=False)
+        projects = ApplicationRegistryProjection(_state_dir()).list_workspace_projects(
+            include_hidden=False
+        )
     except (OSError, RuntimeError, ValueError):
         return []
     claimed = {
@@ -218,8 +264,7 @@ def _workspace_project_read_models(
             for item in existing
             if isinstance(item, Mapping)
             and isinstance((application := item.get("application")), Mapping)
-            and str(application.get("publisher_ref") or "").lower()
-            == local_ref.lower()
+            and str(application.get("publisher_ref") or "").lower() == local_ref.lower()
             and isinstance(application.get("publisher"), Mapping)
         ),
         {
@@ -323,9 +368,57 @@ def _workspace_project_read_models(
     return models
 
 
+def list_development_projects(
+    *,
+    profile: str | None = None,
+    query: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Read sanitized local development metadata from the authority projection.
+
+    Immutable Trial runtimes may inspect this projection, but never receive DEV
+    filesystem paths or direct access to mutable source trees.
+    """
+
+    _admit_active_skill_capability("workspace.read")
+    rows = ApplicationRegistryProjection(_state_dir()).list_development_projects(
+        profile=str(profile or "").strip() or None,
+        query=str(query or "").strip() or None,
+        limit=max(1, min(int(limit), 5000)),
+    )
+    public_fields = (
+        "id",
+        "title",
+        "title_i18n",
+        "description",
+        "description_i18n",
+        "version",
+        "updated_at",
+        "stage",
+        "visibility",
+        "primary_ref",
+        "profiles",
+        "categories",
+        "tags",
+        "source_kind",
+        "validation_status",
+    )
+    return [
+        {
+            **{
+                key: deepcopy(row[key])
+                for key in public_fields
+                if key in row
+            },
+            "status": "development",
+        }
+        for row in rows
+        if isinstance(row, Mapping) and str(row.get("id") or "").strip()
+    ]
+
+
 def _local_development_index() -> dict[str, dict[str, Any]]:
-    ctx = require_ctx("sdk.applications")
-    operations = ApplicationDevelopmentCoordinator(Path(ctx.paths.state_dir())).list()
+    operations = ApplicationDevelopmentCoordinator(_state_dir()).list()
     local_subnet = _local_subnet_ref().lower()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for operation in operations:
@@ -357,7 +450,9 @@ def _local_development_index() -> dict[str, dict[str, Any]]:
                     reverse=True,
                 )
                 if isinstance(item.get("intent"), Mapping)
-                and str((item.get("intent") or {}).get("source_webspace_id") or "").strip()
+                and str(
+                    (item.get("intent") or {}).get("source_webspace_id") or ""
+                ).strip()
             ),
             "",
         )
@@ -381,7 +476,13 @@ def _development_workflow_summary(
             object_type,
             object_id,
         )
-    except (AttributeError, FileNotFoundError, BuilderWorkflowError, OSError, ValueError):
+    except (
+        AttributeError,
+        FileNotFoundError,
+        BuilderWorkflowError,
+        OSError,
+        ValueError,
+    ):
         return None
 
 
@@ -391,8 +492,9 @@ def list_applications(
     catalog_only: bool = False,
     available_only: bool = False,
     developed_only: bool = False,
+    include_development: bool = True,
 ) -> list[dict[str, Any]]:
-    development = _local_development_index()
+    development = _local_development_index() if include_development else {}
     models = [
         _application_read_model(item)
         for item in _service().list_models(
@@ -412,12 +514,12 @@ def list_applications(
                 (entrypoints[0] if entrypoints else {}).get("presentation_ref") or ""
             )
             object_type, _, object_id = presentation_ref.partition(":")
-            source_webspace_id = str(local.pop("source_webspace_id", None) or "").strip()
+            source_webspace_id = str(
+                local.pop("source_webspace_id", None) or ""
+            ).strip()
             if not source_webspace_id and object_type and object_id:
                 source_webspace_id = str(
-                    BuilderWorkbenchService(
-                        state_dir=Path(require_ctx("sdk.applications").paths.state_dir())
-                    ).find_existing_source_for_selection(
+                    BuilderWorkbenchService(state_dir=_state_dir()).find_existing_source_for_selection(
                         object_type=object_type,
                         object_id=object_id,
                     )
@@ -465,7 +567,9 @@ def list_applications(
                         "manifest_digest": str(project.get("manifest_digest") or ""),
                         "primary_ref": str((primary or {}).get("ref") or ""),
                         "allowed": not bool(
-                            (application.get("protection") or {}).get("system_application")
+                            (application.get("protection") or {}).get(
+                                "system_application"
+                            )
                         )
                         and not bool(model.get("installed"))
                         and not bool(model.get("channels")),
@@ -527,7 +631,9 @@ def get_identity(application_id: str) -> dict[str, Any]:
     return {
         "application_id": application.application_id,
         "publisher_ref": application.publisher_ref,
-        "display_name": str(application.publisher.get("display_name") or application.publisher_ref),
+        "display_name": str(
+            application.publisher.get("display_name") or application.publisher_ref
+        ),
         "source": "application_registry",
     }
 
@@ -549,9 +655,15 @@ def get_subscription(application_id: str) -> dict[str, Any] | None:
         return None
 
 
-def get_runtime_selection(webspace_id: str, application_id: str) -> dict[str, Any] | None:
+def get_runtime_selection(
+    webspace_id: str, application_id: str
+) -> dict[str, Any] | None:
     try:
-        return _service().store.get_runtime_selection(webspace_id, application_id).to_dict()
+        return (
+            _service()
+            .store.get_runtime_selection(webspace_id, application_id)
+            .to_dict()
+        )
     except FileNotFoundError:
         return None
 
@@ -639,7 +751,10 @@ def submit_development_report(
     idempotency_key: str,
 ) -> dict[str, Any]:
     _report_identity(
-        actor_ref, subnet_ref, capability, idempotency_key,
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
         required_capability="applications.report",
     )
     return get_development_report_service().create_report(
@@ -661,7 +776,10 @@ def sync_development_reports(
     idempotency_key: str,
 ) -> dict[str, Any]:
     _report_identity(
-        actor_ref, subnet_ref, capability, idempotency_key,
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
         required_capability="applications.report",
     )
     service = get_development_report_service()
@@ -682,7 +800,10 @@ def triage_development_report(
     idempotency_key: str,
 ) -> dict[str, Any]:
     _report_identity(
-        actor_ref, subnet_ref, capability, idempotency_key,
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
         required_capability="applications.publisher.triage",
     )
     return get_development_report_service().triage(
@@ -700,7 +821,10 @@ def accept_development_report(
     idempotency_key: str,
 ) -> dict[str, Any]:
     _report_identity(
-        actor_ref, subnet_ref, capability, idempotency_key,
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
         required_capability="applications.publisher.triage",
     )
     return get_development_report_service().accept(
@@ -720,7 +844,10 @@ def set_development_report_status(
     idempotency_key: str,
 ) -> dict[str, Any]:
     _report_identity(
-        actor_ref, subnet_ref, capability, idempotency_key,
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
         required_capability="applications.publisher.triage",
     )
     return get_development_report_service().set_public_status(
@@ -741,7 +868,10 @@ def submit_development_report_appeal(
     idempotency_key: str,
 ) -> dict[str, Any]:
     _report_identity(
-        actor_ref, subnet_ref, capability, idempotency_key,
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
         required_capability="applications.report",
     )
     return get_development_report_service().submit_appeal(
@@ -760,7 +890,10 @@ def resolve_development_report_appeal(
     idempotency_key: str,
 ) -> dict[str, Any]:
     _report_identity(
-        actor_ref, subnet_ref, capability, idempotency_key,
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
         required_capability="applications.publisher.triage",
     )
     return get_development_report_service().resolve_appeal(
@@ -779,7 +912,10 @@ def verify_development_report_release(
     idempotency_key: str,
 ) -> dict[str, Any]:
     _report_identity(
-        actor_ref, subnet_ref, capability, idempotency_key,
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
         required_capability="applications.report",
     )
     return get_development_report_service().verify_release(
@@ -798,7 +934,10 @@ def request_development_report_resync(
     idempotency_key: str,
 ) -> dict[str, Any]:
     _report_identity(
-        actor_ref, subnet_ref, capability, idempotency_key,
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
         required_capability="applications.report",
     )
     return get_development_report_service().request_resync(
@@ -851,18 +990,22 @@ def grant_application_access(
         idempotency_key,
         required_capability="applications.apply",
     )
-    return ApplicationAccessService(_service()).grant_access(
-        application_id,
-        release_digest=release_digest,
-        subject_ref=subject_ref,
-        application_roles=application_roles,
-        permission_ceiling=permission_ceiling,
-        explicit_denies=explicit_denies,
-        constraints=constraints,
-        expires_at=expires_at,
-        issuer_ref=issuer_ref or actor,
-        idempotency_key=key,
-    ).to_dict()
+    return (
+        ApplicationAccessService(_service())
+        .grant_access(
+            application_id,
+            release_digest=release_digest,
+            subject_ref=subject_ref,
+            application_roles=application_roles,
+            permission_ceiling=permission_ceiling,
+            explicit_denies=explicit_denies,
+            constraints=constraints,
+            expires_at=expires_at,
+            issuer_ref=issuer_ref or actor,
+            idempotency_key=key,
+        )
+        .to_dict()
+    )
 
 
 def revoke_application_access(
@@ -881,11 +1024,15 @@ def revoke_application_access(
         f"revoke-application-access:{grant_id}:{expected_revision}",
         required_capability="applications.apply",
     )
-    return ApplicationAccessService(_service()).revoke_access(
-        grant_id,
-        issuer_ref=issuer_ref or actor,
-        expected_revision=expected_revision,
-    ).to_dict()
+    return (
+        ApplicationAccessService(_service())
+        .revoke_access(
+            grant_id,
+            issuer_ref=issuer_ref or actor,
+            expected_revision=expected_revision,
+        )
+        .to_dict()
+    )
 
 
 def change_application_access(
@@ -911,17 +1058,21 @@ def change_application_access(
         idempotency_key,
         required_capability="applications.apply",
     )
-    return ApplicationAccessService(_service()).change_access(
-        grant_id,
-        release_digest=release_digest,
-        application_roles=application_roles,
-        expected_revision=expected_revision,
-        issuer_ref=issuer_ref or actor,
-        permission_ceiling=permission_ceiling,
-        explicit_denies=explicit_denies,
-        constraints=constraints,
-        expires_at=expires_at,
-    ).to_dict()
+    return (
+        ApplicationAccessService(_service())
+        .change_access(
+            grant_id,
+            release_digest=release_digest,
+            application_roles=application_roles,
+            expected_revision=expected_revision,
+            issuer_ref=issuer_ref or actor,
+            permission_ceiling=permission_ceiling,
+            explicit_denies=explicit_denies,
+            constraints=constraints,
+            expires_at=expires_at,
+        )
+        .to_dict()
+    )
 
 
 def get_application_access_surface(
@@ -966,7 +1117,10 @@ def get_application_access_surface(
                 "connected_accounts": [],
                 "release_readiness": None,
                 "activity": [],
-                "activity_page": {"limit": max(1, min(int(activity_limit), 200)), "has_more": False},
+                "activity_page": {
+                    "limit": max(1, min(int(activity_limit), 200)),
+                    "has_more": False,
+                },
             },
         }
 
@@ -1004,7 +1158,9 @@ def get_application_privacy_report(
 ) -> dict[str, Any]:
     service = _access_management()
     return {
-        "privacy_report": service.privacy_report(application_id, release_digest=release_digest),
+        "privacy_report": service.privacy_report(
+            application_id, release_digest=release_digest
+        ),
         "anomalies": service.anomalies(application_id, release_digest=release_digest),
         "badges": service.privacy_badges(application_id, release_digest=release_digest),
     }
@@ -1127,21 +1283,25 @@ def decide_application_access(
         idempotency_key,
         required_capability="applications.plan",
     )
-    return ApplicationAccessService(_service()).decide(
-        application_id,
-        release_digest=release_digest,
-        subject_ref=subject_ref,
-        permission_id=permission_id,
-        app_capability=app_capability,
-        component_capabilities=component_capabilities,
-        approval_id=approval_id,
-        actor_chain={
-            "actor_ref": actor,
-            "subnet_ref": subnet,
-            "capability": granted,
-            **dict(actor_chain or {}),
-        },
-    ).to_dict()
+    return (
+        ApplicationAccessService(_service())
+        .decide(
+            application_id,
+            release_digest=release_digest,
+            subject_ref=subject_ref,
+            permission_id=permission_id,
+            app_capability=app_capability,
+            component_capabilities=component_capabilities,
+            approval_id=approval_id,
+            actor_chain={
+                "actor_ref": actor,
+                "subnet_ref": subnet,
+                "capability": granted,
+                **dict(actor_chain or {}),
+            },
+        )
+        .to_dict()
+    )
 
 
 def list_application_access_audit(
@@ -1368,11 +1528,15 @@ def revoke_trial_access(
     )
     if publisher_ref != subnet:
         raise ValueError("publisher_ref must match the authorized subnet")
-    return TrialAccessService(_service()).revoke(
-        grant_id,
-        publisher_ref=publisher_ref,
-        expected_revision=expected_revision,
-    ).to_dict()
+    return (
+        TrialAccessService(_service())
+        .revoke(
+            grant_id,
+            publisher_ref=publisher_ref,
+            expected_revision=expected_revision,
+        )
+        .to_dict()
+    )
 
 
 def plan_install(
@@ -1394,18 +1558,22 @@ def plan_install(
         idempotency_key,
         required_capability="applications.plan",
     )
-    return _service().plan_operation(
-        application_id,
-        "install",
-        release_digest=release_digest,
-        expected_revision=expected_revision,
-        actor_ref=actor,
-        subnet_ref=subnet,
-        capability=granted,
-        idempotency_key=key,
-        data_policy=data_policy,
-        access_redemption_id=access_redemption_id,
-    ).to_dict()
+    return (
+        _service()
+        .plan_operation(
+            application_id,
+            "install",
+            release_digest=release_digest,
+            expected_revision=expected_revision,
+            actor_ref=actor,
+            subnet_ref=subnet,
+            capability=granted,
+            idempotency_key=key,
+            data_policy=data_policy,
+            access_redemption_id=access_redemption_id,
+        )
+        .to_dict()
+    )
 
 
 def plan_update(
@@ -1426,17 +1594,21 @@ def plan_update(
         idempotency_key,
         required_capability="applications.plan",
     )
-    return _service().plan_operation(
-        application_id,
-        "update",
-        release_digest=release_digest,
-        expected_revision=expected_revision,
-        actor_ref=actor,
-        subnet_ref=subnet,
-        capability=granted,
-        idempotency_key=key,
-        access_redemption_id=access_redemption_id,
-    ).to_dict()
+    return (
+        _service()
+        .plan_operation(
+            application_id,
+            "update",
+            release_digest=release_digest,
+            expected_revision=expected_revision,
+            actor_ref=actor,
+            subnet_ref=subnet,
+            capability=granted,
+            idempotency_key=key,
+            access_redemption_id=access_redemption_id,
+        )
+        .to_dict()
+    )
 
 
 def plan_remove(
@@ -1456,16 +1628,20 @@ def plan_remove(
         idempotency_key,
         required_capability="applications.plan",
     )
-    return _service().plan_operation(
-        application_id,
-        "remove",
-        expected_revision=expected_revision,
-        actor_ref=actor,
-        subnet_ref=subnet,
-        capability=granted,
-        idempotency_key=key,
-        data_policy=data_policy,
-    ).to_dict()
+    return (
+        _service()
+        .plan_operation(
+            application_id,
+            "remove",
+            expected_revision=expected_revision,
+            actor_ref=actor,
+            subnet_ref=subnet,
+            capability=granted,
+            idempotency_key=key,
+            data_policy=data_policy,
+        )
+        .to_dict()
+    )
 
 
 def plan_update_track(
@@ -1489,19 +1665,23 @@ def plan_update_track(
         idempotency_key,
         required_capability="applications.plan",
     )
-    return _service().plan_operation(
-        application_id,
-        "select_track",
-        expected_revision=expected_revision,
-        actor_ref=actor,
-        subnet_ref=subnet,
-        capability=granted,
-        idempotency_key=key,
-        update_track=update_track,
-        update_policy=update_policy,
-        paused=paused,
-        pinned_release_digest=pinned_release_digest,
-    ).to_dict()
+    return (
+        _service()
+        .plan_operation(
+            application_id,
+            "select_track",
+            expected_revision=expected_revision,
+            actor_ref=actor,
+            subnet_ref=subnet,
+            capability=granted,
+            idempotency_key=key,
+            update_track=update_track,
+            update_policy=update_policy,
+            paused=paused,
+            pinned_release_digest=pinned_release_digest,
+        )
+        .to_dict()
+    )
 
 
 def apply_operation(
@@ -1524,14 +1704,18 @@ def apply_operation(
         idempotency_key,
         required_capability="applications.apply",
     )
-    return _service().apply_operation(
-        operation_id,
-        plan_digest=plan_digest,
-        idempotency_key=key,
-        actor_ref=actor,
-        subnet_ref=subnet,
-        capability=granted,
-    ).to_dict()
+    return (
+        _service()
+        .apply_operation(
+            operation_id,
+            plan_digest=plan_digest,
+            idempotency_key=key,
+            actor_ref=actor,
+            subnet_ref=subnet,
+            capability=granted,
+        )
+        .to_dict()
+    )
 
 
 def select_runtime(
@@ -1567,7 +1751,9 @@ def select_runtime(
     return selection.to_dict()
 
 
-def simulate_removal(application_id: str, *, data_policy: str = "retain") -> dict[str, Any]:
+def simulate_removal(
+    application_id: str, *, data_policy: str = "retain"
+) -> dict[str, Any]:
     return _service().simulate_removal(application_id, data_policy=data_policy)
 
 
@@ -1578,7 +1764,9 @@ def explain_plan(operation_id: str) -> dict[str, Any]:
         "plan_digest": operation.plan_digest,
         "plan": dict(operation.plan),
         "conflicts": list(operation.plan.get("conflicts") or []),
-        "requires_snapshot": bool((operation.plan.get("snapshot") or {}).get("required")),
+        "requires_snapshot": bool(
+            (operation.plan.get("snapshot") or {}).get("required")
+        ),
     }
 
 
@@ -1593,33 +1781,34 @@ __all__ = [
     "get_application_access_surface",
     "get_application_privacy_report",
     "get_application_update_review",
-    "get_identity",
     "get_development_report",
     "get_development_report_status",
     "get_development_report_triage",
+    "get_identity",
     "get_operation",
     "get_prerelease_rollout",
     "get_runtime_selection",
     "get_subscription",
     "get_users_access_surface",
     "grant_application_access",
-    "issue_trial_access",
     "import_application_access_snapshot",
+    "issue_trial_access",
     "list_application_access",
     "list_application_access_audit",
     "list_application_access_reviews",
     "list_applications",
     "list_catalog",
-    "list_development_report_intakes",
+    "list_development_projects",
     "list_development_report_appeals",
+    "list_development_report_intakes",
     "list_development_reports",
     "list_operations",
+    "list_publisher_development_report_appeals",
     "list_releases",
     "list_trial_access",
-    "list_publisher_development_report_appeals",
     "plan_install",
-    "plan_trial_link_install",
     "plan_remove",
+    "plan_trial_link_install",
     "plan_update",
     "plan_update_track",
     "poll_operation_events",
@@ -1632,14 +1821,14 @@ __all__ = [
     "revoke_application_access",
     "revoke_trial_access",
     "select_runtime",
-    "set_prerelease_rollout",
     "set_development_report_status",
+    "set_prerelease_rollout",
+    "simulate_application_access",
+    "simulate_removal",
     "submit_development_report",
     "submit_development_report_appeal",
     "sync_development_reports",
     "triage_development_report",
-    "verify_development_report_release",
-    "simulate_removal",
-    "simulate_application_access",
     "verify_application_release",
+    "verify_development_report_release",
 ]

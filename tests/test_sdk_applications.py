@@ -8,8 +8,10 @@ import pytest
 
 from adaos.sdk import applications
 from adaos.sdk.core.exporter import export
-from adaos.services.applications import register_development_report_service
-from adaos.services.applications import ApplicationDevelopmentCoordinator
+from adaos.services.applications import (
+    ApplicationDevelopmentCoordinator,
+    register_development_report_service,
+)
 
 
 class _StubService:
@@ -33,30 +35,140 @@ class _Record:
         return dict(self.payload)
 
 
+def test_application_service_uses_authority_state_in_trial(
+    monkeypatch, tmp_path: Path
+) -> None:
+    authority = tmp_path / "authority"
+    trial = tmp_path / "trial"
+    observed: list[Path] = []
+    service = object()
+    monkeypatch.setattr(
+        applications,
+        "require_ctx",
+        lambda _label: SimpleNamespace(
+            authority_state_dir=authority,
+            paths=SimpleNamespace(state_dir=lambda: trial),
+        ),
+    )
+    monkeypatch.setattr(
+        applications,
+        "get_application_service",
+        lambda state_dir: observed.append(state_dir) or service,
+    )
+
+    assert applications._service() is service
+    assert observed == [authority.resolve()]
+
+
 def test_identity_read_is_bounded_and_does_not_scan_or_create(monkeypatch):
-    record = SimpleNamespace(application_id="example", publisher_ref="subnet:other",
-                             publisher={"display_name": "Registered publisher", "private": "not exported"})
+    record = SimpleNamespace(
+        application_id="example",
+        publisher_ref="subnet:other",
+        publisher={"display_name": "Registered publisher", "private": "not exported"},
+    )
     calls = []
+
     def get(application_id):
         calls.append(application_id)
         if application_id == "missing":
             raise FileNotFoundError(application_id)
         return record
-    monkeypatch.setattr(applications, "_service", lambda: SimpleNamespace(store=SimpleNamespace(get_application=get)))
-    monkeypatch.setattr(applications, "list_applications", lambda: pytest.fail("No catalog/runtime scan"))
+
+    monkeypatch.setattr(
+        applications,
+        "_service",
+        lambda: SimpleNamespace(store=SimpleNamespace(get_application=get)),
+    )
+    monkeypatch.setattr(
+        applications,
+        "list_applications",
+        lambda: pytest.fail("No catalog/runtime scan"),
+    )
     assert applications.get_identity("example") == {
-        "application_id": "example", "publisher_ref": "subnet:other", "display_name": "Registered publisher",
-        "source": "application_registry"}
+        "application_id": "example",
+        "publisher_ref": "subnet:other",
+        "display_name": "Registered publisher",
+        "source": "application_registry",
+    }
     with pytest.raises(FileNotFoundError):
         applications.get_identity("missing")
     assert calls == ["example", "missing"]
+
+
+def test_development_projects_use_authority_projection_and_hide_paths(
+    monkeypatch, tmp_path: Path
+) -> None:
+    authority = tmp_path / "authority"
+    observed: dict[str, object] = {}
+
+    class Projection:
+        def __init__(self, state_dir: Path) -> None:
+            observed["state_dir"] = state_dir
+
+        def list_development_projects(self, **kwargs):
+            observed["kwargs"] = kwargs
+            return [
+                {
+                    "id": "builder",
+                    "title": "Builder",
+                    "description": "Development workbench",
+                    "version": "0.2.171",
+                    "updated_at": "2026-09-19T05:39:56Z",
+                    "stage": "alpha",
+                    "visibility": "unlisted",
+                    "primary_ref": "scenario:builder",
+                    "source_kind": "dev_project",
+                    "validation_status": "valid",
+                    "source_path": "D:/private/dev/projects/builder",
+                    "components": {"owned": [{"ref": "scenario:builder"}]},
+                }
+            ]
+
+    monkeypatch.setattr(
+        applications,
+        "require_ctx",
+        lambda _label: SimpleNamespace(
+            authority_state_dir=authority,
+            paths=SimpleNamespace(state_dir=lambda: tmp_path / "trial"),
+        ),
+    )
+    monkeypatch.setattr(
+        applications, "_admit_active_skill_capability", lambda _capability: None
+    )
+    monkeypatch.setattr(applications, "ApplicationRegistryProjection", Projection)
+
+    result = applications.list_development_projects(
+        profile="desktop", query="build", limit=7000
+    )
+
+    assert observed == {
+        "state_dir": authority,
+        "kwargs": {"profile": "desktop", "query": "build", "limit": 5000},
+    }
+    assert result == [
+        {
+            "id": "builder",
+            "title": "Builder",
+            "description": "Development workbench",
+            "version": "0.2.171",
+            "updated_at": "2026-09-19T05:39:56Z",
+            "stage": "alpha",
+            "visibility": "unlisted",
+            "primary_ref": "scenario:builder",
+            "source_kind": "dev_project",
+            "validation_status": "valid",
+            "status": "development",
+        }
+    ]
 
 
 def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) -> None:
     stub = _StubService()
     monkeypatch.setattr(applications, "_service", lambda: stub)
     monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:sn_home")
-    monkeypatch.setattr(applications, "_admit_active_skill_capability", lambda _capability: None)
+    monkeypatch.setattr(
+        applications, "_admit_active_skill_capability", lambda _capability: None
+    )
 
     plan = applications.plan_install(
         "app_recipes",
@@ -121,10 +233,16 @@ def test_sdk_application_access_helpers_forward_review_context(monkeypatch) -> N
             return _Record({"decision": "allow"})
 
     access = Access()
-    monkeypatch.setattr(applications, "_service", lambda: SimpleNamespace(store=SimpleNamespace()))
-    monkeypatch.setattr(applications, "ApplicationAccessService", lambda _service: access)
+    monkeypatch.setattr(
+        applications, "_service", lambda: SimpleNamespace(store=SimpleNamespace())
+    )
+    monkeypatch.setattr(
+        applications, "ApplicationAccessService", lambda _service: access
+    )
     monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:sn_home")
-    monkeypatch.setattr(applications, "_admit_active_skill_capability", lambda _capability: None)
+    monkeypatch.setattr(
+        applications, "_admit_active_skill_capability", lambda _capability: None
+    )
 
     assert applications.grant_application_access(
         "app_demo",
@@ -190,7 +308,14 @@ def test_sdk_application_access_helpers_forward_review_context(monkeypatch) -> N
 
 
 def test_sdk_application_surface_has_no_raw_path_or_process_parameters() -> None:
-    forbidden = {"path", "filesystem_path", "command", "process", "git_credentials", "registry_path"}
+    forbidden = {
+        "path",
+        "filesystem_path",
+        "command",
+        "process",
+        "git_credentials",
+        "registry_path",
+    }
     for name in applications.__all__:
         function = getattr(applications, name)
         assert forbidden.isdisjoint(inspect.signature(function).parameters), name
@@ -404,6 +529,40 @@ def test_application_read_survives_missing_development_project(
     assert applications.list_applications(developed_only=True) == []
 
 
+def test_application_list_can_skip_development_enrichment(monkeypatch) -> None:
+    class Service:
+        def list_models(self, **_kwargs):
+            return [
+                {
+                    "application": {
+                        "application_id": "notes",
+                        "visibility": "private",
+                        "entrypoints": [],
+                    },
+                    "installed": True,
+                    "channels": {},
+                }
+            ]
+
+    monkeypatch.setattr(applications, "_service", lambda: Service())
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:home")
+    monkeypatch.setattr(
+        applications, "_workspace_project_read_models", lambda models: []
+    )
+    monkeypatch.setattr(
+        applications,
+        "_local_development_index",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("development index must be skipped")
+        ),
+    )
+
+    models = applications.list_applications(include_development=False)
+
+    assert models[0]["application"]["application_id"] == "notes"
+    assert models[0]["local_development"] is None
+
+
 def test_application_list_includes_read_only_workspace_project_projection(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -412,7 +571,7 @@ def test_application_list_includes_read_only_workspace_project_projection(
         config=SimpleNamespace(subnet_id_value="sn_home"),
     )
     monkeypatch.setattr(applications, "require_ctx", lambda _reason: context)
-    monkeypatch.setattr(applications, "_local_development_index", lambda: {})
+    monkeypatch.setattr(applications, "_local_development_index", dict)
 
     class Service:
         def list_models(self, **_kwargs):
@@ -474,7 +633,9 @@ def test_workspace_project_access_surface_is_read_only(monkeypatch) -> None:
             raise FileNotFoundError("not migrated")
 
     monkeypatch.setattr(applications, "_access_management", lambda: Access())
-    monkeypatch.setattr(applications, "get_application", lambda _application_id: projected)
+    monkeypatch.setattr(
+        applications, "get_application", lambda _application_id: projected
+    )
 
     surface = applications.get_application_access_surface("legacy_notes")
 
@@ -505,9 +666,17 @@ def test_sdk_exposes_development_report_status_without_internal_store_access() -
     register_development_report_service(Reports())
     try:
         assert applications.list_development_reports()[0]["report_id"] == "report.1"
-        assert applications.get_development_report_status("report.1")["status"] == "accepted"
-        assert applications.list_development_report_intakes()[0]["status"] == "quarantined"
-        assert applications.list_development_report_appeals("report.1")[0]["appeal_id"] == "appeal.1"
+        assert (
+            applications.get_development_report_status("report.1")["status"]
+            == "accepted"
+        )
+        assert (
+            applications.list_development_report_intakes()[0]["status"] == "quarantined"
+        )
+        assert (
+            applications.list_development_report_appeals("report.1")[0]["appeal_id"]
+            == "appeal.1"
+        )
     finally:
         register_development_report_service(None)
 
@@ -527,32 +696,50 @@ def test_sdk_report_mutations_require_local_narrow_capability(monkeypatch) -> No
 
     reports = Reports()
     monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:sn_home")
-    monkeypatch.setattr(applications, "_admit_active_skill_capability", lambda _capability: None)
+    monkeypatch.setattr(
+        applications, "_admit_active_skill_capability", lambda _capability: None
+    )
     register_development_report_service(reports)
     try:
         submitted = applications.submit_development_report(
-            "app_recipes", summary="Failure", details="Expected A, observed B",
-            actor_ref="user:owner", subnet_ref="subnet:sn_home",
-            capability="applications.report", idempotency_key="report-1",
+            "app_recipes",
+            summary="Failure",
+            details="Expected A, observed B",
+            actor_ref="user:owner",
+            subnet_ref="subnet:sn_home",
+            capability="applications.report",
+            idempotency_key="report-1",
         )
         assert submitted["report"]["report_id"] == "report.1"
         triaged = applications.triage_development_report(
-            "report.1", outcome="declined", reason_code="not_reproduced",
-            actor_ref="user:owner", subnet_ref="subnet:sn_home",
-            capability="applications.publisher.triage", idempotency_key="triage-1",
+            "report.1",
+            outcome="declined",
+            reason_code="not_reproduced",
+            actor_ref="user:owner",
+            subnet_ref="subnet:sn_home",
+            capability="applications.publisher.triage",
+            idempotency_key="triage-1",
         )
         assert triaged["event"]["status"] == "declined"
         with pytest.raises(ValueError, match="applications.report"):
             applications.submit_development_report(
-                "app_recipes", summary="Failure", details="Details",
-                actor_ref="user:owner", subnet_ref="subnet:sn_home",
-                capability="applications.apply", idempotency_key="report-2",
+                "app_recipes",
+                summary="Failure",
+                details="Details",
+                actor_ref="user:owner",
+                subnet_ref="subnet:sn_home",
+                capability="applications.apply",
+                idempotency_key="report-2",
             )
         with pytest.raises(ValueError, match="local identity"):
             applications.submit_development_report(
-                "app_recipes", summary="Failure", details="Details",
-                actor_ref="user:owner", subnet_ref="subnet:foreign",
-                capability="applications.report", idempotency_key="report-3",
+                "app_recipes",
+                summary="Failure",
+                details="Details",
+                actor_ref="user:owner",
+                subnet_ref="subnet:foreign",
+                capability="applications.report",
+                idempotency_key="report-3",
             )
     finally:
         register_development_report_service(None)
@@ -580,7 +767,10 @@ def test_application_sdk_admits_active_skill_capability(monkeypatch) -> None:
     )
 
     assert identity == (
-        "user:owner", "subnet:home", "applications.apply", "apply-1",
+        "user:owner",
+        "subnet:home",
+        "applications.apply",
+        "apply-1",
     )
     assert decisions == [(context, "applications.apply")]
     with pytest.raises(ValueError, match="local identity"):
@@ -593,7 +783,9 @@ def test_application_sdk_admits_active_skill_capability(monkeypatch) -> None:
         )
 
 
-def test_sdk_release_reads_preserve_identity_and_redact_private_source(monkeypatch) -> None:
+def test_sdk_release_reads_preserve_identity_and_redact_private_source(
+    monkeypatch,
+) -> None:
     digest = "sha256:" + "a" * 64
     package_digest = "sha256:" + "b" * 64
     raw_release = {
@@ -613,14 +805,20 @@ def test_sdk_release_reads_preserve_identity_and_redact_private_source(monkeypat
             "project_id": "private",
             "version": "1.0.0",
             "source_ref": {
-                "repository": "private/repository", "path_scope": ["secret/"],
+                "repository": "private/repository",
+                "path_scope": ["secret/"],
             },
-            "components": [{
-                "kind": "scenario", "artifact_id": "private", "version": "1.0.0",
-                "digest": package_digest, "manifest_digest": digest,
-                "source_ref": {"repository": "private/repository"},
-                "materialization_path": "scenarios/private",
-            }],
+            "components": [
+                {
+                    "kind": "scenario",
+                    "artifact_id": "private",
+                    "version": "1.0.0",
+                    "digest": package_digest,
+                    "manifest_digest": digest,
+                    "source_ref": {"repository": "private/repository"},
+                    "materialization_path": "scenarios/private",
+                }
+            ],
             "resolved_dependencies": [],
             "permissions": ["network.read"],
             "migrations": [{"command": "private-migration"}],
@@ -647,7 +845,11 @@ def test_sdk_release_reads_preserve_identity_and_redact_private_source(monkeypat
     assert release["project_release"]["private_source"] == "redacted"
     assert release["project_release"]["migration"] == {"required": True, "count": 1}
     for private_value in (
-        "private/repository", "D:/private/source", "D:/private/log",
-        "private-migration", "materialization_path", "secret",
+        "private/repository",
+        "D:/private/source",
+        "D:/private/log",
+        "private-migration",
+        "materialization_path",
+        "secret",
     ):
         assert private_value not in serialized

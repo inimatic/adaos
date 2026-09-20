@@ -1580,26 +1580,27 @@ class ApplicationRegistryProjection:
         profile_token = str(profile or "").strip()
         query_token = str(query or "").strip()
         params: list[Any] = [DEVELOPMENT_PROJECT_SOURCE_KIND, "valid"]
-        where = ["source_kind=?", "validation_status=?"]
-        order = "application_id COLLATE NOCASE"
+        where = ["ai.source_kind=?", "ai.validation_status=?"]
+        order = "COALESCE(ps.mtime_ns, 0) DESC, ai.application_id COLLATE NOCASE"
         with self._connect() as con:
             fts_available = bool(self._get_meta(con, "fts5_available", False))
             if query_token and fts_available:
                 fts = _fts_query(query_token)
                 if fts:
                     where.append(
-                        "(rowid IN (SELECT rowid FROM application_index_fts WHERE application_index_fts MATCH ?) OR search_text LIKE ? ESCAPE '\\')"
+                        "(ai.rowid IN (SELECT rowid FROM application_index_fts WHERE application_index_fts MATCH ?) OR ai.search_text LIKE ? ESCAPE '\\')"
                     )
                     params.append(fts)
                     params.append(_like_token(query_token))
             if query_token and (not fts_available or not _fts_query(query_token)):
-                where.append("search_text LIKE ? ESCAPE '\\'")
+                where.append("ai.search_text LIKE ? ESCAPE '\\'")
                 params.append(_like_token(query_token))
             params.append(5000 if profile_token else maximum)
             rows = con.execute(
                 f"""
-                SELECT payload_json
-                FROM application_index
+                SELECT ai.payload_json, ai.updated_at, ps.mtime_ns
+                FROM application_index ai
+                LEFT JOIN projection_source ps ON ps.source_id=ai.source_id
                 WHERE {" AND ".join(where)}
                 ORDER BY {order}
                 LIMIT ?
@@ -1609,6 +1610,15 @@ class ApplicationRegistryProjection:
         result = []
         for row in rows:
             payload = _load_json(row["payload_json"], {})
+            if not str(payload.get("updated_at") or "").strip():
+                mtime_ns = int(row["mtime_ns"] or 0)
+                payload["updated_at"] = (
+                    datetime.fromtimestamp(mtime_ns / 1_000_000_000, timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                    if mtime_ns
+                    else str(row["updated_at"] or "")
+                )
             if profile_token and profile_token not in set(
                 payload.get("profiles") or []
             ):
