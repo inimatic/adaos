@@ -866,11 +866,13 @@ Implementation boundary: Two native local Reading List increments complete at St
   `web_desktop-0-3-28-ffba58b12ff6` established placement but not data authority.
   Accepted Candidate `web_desktop-0-3-33-afc508c5ef2b` (`0.3.33`, acceptance
   receipt `web-desktop-beta-authoritative-final/attempt-05`, restart replay
-  `attempt-06`) resolves `desktop` through
+  `attempt-06`, post-supersession replay `attempt-07`) resolves `desktop` through
   `application_trial`; nine-section wide/390px review proves authoritative
   projections, host page navigation and non-collapsed compact regions without a
-  modal/legacy fallback. This does not close installed-Stable upgrade,
-  all-room/background or public delivery.
+  modal/legacy fallback. Older `0.3.28`, `0.3.31` and `0.3.32` Trial activations
+  are rejected and detached through the governed lifecycle; exact rollback does
+  not remove the selected `0.3.33` Beta. This does not close installed-Stable
+  upgrade, all-room/background or public delivery.
 - [ ] `[must]` Include versioned data schemas, semantics and invariants in
   Automation context without real user records. Require algorithmic forward
   migrations tested on synthetic data and clarification of ambiguous mappings;

@@ -268,8 +268,12 @@ replay `attempt-06` checks all nine primary
 sections at wide and 390px widths, authoritative source values, usable compact
 region widths and application page navigation without modal fallback. It also
 proves the installed Applications projection comes from node authority rather
-than Candidate fixtures. This accepts the exact local foreground Beta only. It
-does not accept Stable, public distribution, all-room or background cutover.
+than Candidate fixtures. Superseded `0.3.28`, `0.3.31` and `0.3.32` activations
+are rejected and detached through the Trial lifecycle; post-cleanup replay
+`attempt-07` passes against `0.3.33`, proving the exclusive foreground Beta was
+not removed by stale-candidate rollback. This accepts the exact local foreground
+Beta only. It does not accept Stable, public distribution, all-room or
+background cutover.
 
 - [ ] `[could]` Add multi-node pools, placement and parallel tasks after
   one-task-per-node isolation and the separately deferred queue/topology
