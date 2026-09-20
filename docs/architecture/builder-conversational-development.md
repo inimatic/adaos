@@ -575,6 +575,22 @@ canonical Change id; the Automation session and workflow Run keep the same
 identities. Candidate validation and checkpoint/publication metadata carry the
 digest forward so a release can be traced to the exact execution capsule.
 
+The isolated task also receives a read-only, commit-bound implementation
+reference. It contains the exact AdaOS Core commit and, when the Core tree pins
+the Client as a Git link, the exact Client commit with only universal renderer
+and runtime roots admitted. Application/domain extensions and unrelated Client
+source stay excluded. A missing pinned Client worktree fails context
+materialization; the worker must not silently substitute the current branch or
+an unversioned host checkout.
+
+An unchanged Automation retry is a replay of the same governed Change, not a
+new chat follow-up. It retains the selected Codex provider/model/reasoning
+profile, complete active Issues and acceptance criteria, accepted Prototype,
+source identities, and allowed paths while recording a new Run/task identity.
+Ordinary follow-up turns may use a bounded `current_iteration` issue overlay;
+that optimization is forbidden for unchanged retry because a phrase such as
+"retry the six issues" is not sufficient context without the six issue bodies.
+
 Interactive Prototype work uses the same boundary. Router supplies its bounded
 `adaos.context.packet.v1`; `builder_skill` adds only Pending Action references
 belonging to the selected project, asks the workflow service to construct and

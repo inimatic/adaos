@@ -114,6 +114,14 @@ data and never start a model, create topology or mutate release acceptance.
 Read-only projections and explicit missing-project/runtime errors exist;
 all-purpose context and truthful partial progress remain Phase 13 and BIP-02.
 
+- [x] `[must]` Bind Automation implementation references to the exact Core
+  commit and pinned Client Git-link commit. Admit only universal Client
+  renderer/runtime roots read-only; fail if the pinned worktree is unavailable.
+- [x] `[must]` Preserve the selected Codex profile and complete canonical
+  Change Issues/acceptance criteria on unchanged Automation retry. Keep
+  current-iteration issue elision limited to actual new follow-up turns and
+  regression-test the retry input before model execution.
+
 ## Phase 2. Task And Candidate Model
 
 One bounded Change owns Issues, Runs, immutable Revisions, approval and
