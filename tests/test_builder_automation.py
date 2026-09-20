@@ -3628,6 +3628,7 @@ def test_retry_failed_reuses_governed_request_and_refreshes_prototype_acceptance
         BuilderAutomationService,
         "_workflow",
         lambda self: SimpleNamespace(
+            describe=lambda *_args: {"active_phase": "prototype"},
             require_current_prototype_acceptance=lambda *_args: refreshed_acceptance
         ),
     )
@@ -3731,7 +3732,10 @@ def test_retry_failed_stops_before_codex_when_prototype_acceptance_is_stale(
     monkeypatch.setattr(
         BuilderAutomationService,
         "_workflow",
-        lambda self: SimpleNamespace(require_current_prototype_acceptance=_stale),
+        lambda self: SimpleNamespace(
+            describe=lambda *_args: {"active_phase": "prototype"},
+            require_current_prototype_acceptance=_stale,
+        ),
     )
     monkeypatch.setattr(
         BuilderAutomationService,
@@ -3741,6 +3745,53 @@ def test_retry_failed_stops_before_codex_when_prototype_acceptance_is_stale(
 
     with pytest.raises(ValueError, match="prototype acceptance is stale"):
         service.retry_failed(object_type="scenario", object_id="recipes")
+
+
+def test_retry_failed_automation_iteration_reuses_immutable_acceptance(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "status": "failed",
+            "iteration": 2,
+            "prototype_acceptance": {"acceptance_id": "accepted.prototype"},
+            "updated_at": "2026-09-04T00:00:00+00:00",
+        }
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda self: SimpleNamespace(
+            describe=lambda *_args: {"active_phase": "automation"},
+            require_current_prototype_acceptance=lambda *_args: pytest.fail(
+                "Automation source must not be re-admitted as a Prototype"
+            ),
+        ),
+    )
+    submitted: list[dict] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "submit_turn",
+        lambda self, **kwargs: submitted.append(dict(kwargs))
+        or {"ok": True, "session": {"status": "queued"}},
+    )
+
+    result = service.retry_failed(object_type="scenario", object_id="recipes")
+
+    assert result["retried_unchanged_request"] is True
+    assert submitted[0]["text"] == _UNCHANGED_RETRY_INSTRUCTION
+    assert service.get_session("scenario", "recipes")["prototype_acceptance"] == {
+        "acceptance_id": "accepted.prototype"
+    }
 
 
 @pytest.mark.parametrize("replace_profile", [False, True])

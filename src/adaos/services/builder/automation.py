@@ -4455,9 +4455,16 @@ class BuilderAutomationService:
                 }
             if status != "failed":
                 raise ValueError("only a failed Automation session can be retried")
-            if isinstance(session.get("prototype_acceptance"), Mapping):
+            workflow = self._workflow()
+            workflow_projection = workflow.describe(kind, project_id)
+            active_phase = str(
+                workflow_projection.get("active_phase") or ""
+            ).strip()
+            if active_phase != "automation" and isinstance(
+                session.get("prototype_acceptance"), Mapping
+            ):
                 session["prototype_acceptance"] = (
-                    self._workflow().require_current_prototype_acceptance(
+                    workflow.require_current_prototype_acceptance(
                         kind,
                         project_id,
                     )
