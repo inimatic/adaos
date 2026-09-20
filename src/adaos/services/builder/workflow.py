@@ -2913,7 +2913,6 @@ class BuilderWorkflowService:
             automation_direct
             and not acceptance_required
             and not prototype.get("head_revision")
-            and bool(prototype.get("stable"))
         ):
             return None
         if not prototype.get("head_revision") or not bool(prototype.get("stable")):

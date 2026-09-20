@@ -1536,7 +1536,7 @@ def test_automation_direct_change_does_not_invent_prototype_acceptance(
             "active_phase": "automation",
             "prototype": {
                 "head_revision": None,
-                "stable": True,
+                "stable": False,
                 "acceptance_required": False,
                 "acceptance": None,
             },
