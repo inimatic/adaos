@@ -9399,6 +9399,151 @@ def test_browser_feedback_temporarily_borrows_and_restores_unrelated_preview(
     ]
 
 
+def test_browser_feedback_restore_advances_follow_active_automation_revision(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[tuple[str, str, str]] = []
+    snapshot_root = (
+        tmp_path
+        / "state"
+        / "builder"
+        / "workflow_snapshots"
+        / "scenario"
+        / "web_desktop"
+        / "automation"
+    )
+    snapshot_root.mkdir(parents=True)
+    (snapshot_root / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "object_type": "scenario",
+                "object_id": "web_desktop",
+                "task_id": "task.current",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeWorkbench:
+        def __init__(self, **_kwargs):
+            pass
+
+        def set_active_draft(
+            self, *, source_webspace_id, runtime_scenario_id, **_kwargs
+        ):
+            calls.append(("prepare", source_webspace_id, runtime_scenario_id))
+            return {}
+
+        def set_preview_target(self, *, source_webspace_id, target):
+            calls.append(
+                (
+                    "select",
+                    source_webspace_id,
+                    str(target.get("revision") or ""),
+                )
+            )
+            return {"preview_target": dict(target)}
+
+        async def ensure_dev_webspace(
+            self, source_webspace_id, *, runtime_scenario_id, **_kwargs
+        ):
+            calls.append(("topology", source_webspace_id, runtime_scenario_id))
+            return {
+                "preview_webspace_id": "desktop-dev",
+                "runtime": {"ok": True, "webspace_id": "desktop-dev"},
+            }
+
+    def fake_owner_materialize(
+        webspace_id,
+        *,
+        scenario_id,
+        revision,
+        preview_stage,
+        **_kwargs,
+    ):
+        calls.append(("owner", scenario_id, f"{preview_stage}:{revision}"))
+        return {"ok": True, "accepted": True, "webspace_id": webspace_id}
+
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
+    monkeypatch.setattr(
+        "adaos.sdk.builder.preview.materialize_revision_via_owner",
+        fake_owner_materialize,
+    )
+
+    restored = service._restore_preview_after_browser_feedback(
+        {
+            "temporary_preview_override": True,
+            "webspace_id": "desktop",
+            "previous_preview_target": {
+                "object_type": "project",
+                "object_id": "web_desktop",
+                "scenario_id": "web_desktop",
+                "stage": "automation",
+                "revision": "task.stale",
+                "follow_active": True,
+            },
+        }
+    )
+
+    assert restored["ok"] is True
+    assert restored["restored"] is True
+    assert restored["adjustment"] == {
+        "reason": "follow_active_revision_advanced",
+        "requested_revision": "task.stale",
+        "retained_revision": "task.current",
+    }
+    assert calls == [
+        ("prepare", "desktop", "web_desktop"),
+        ("select", "desktop", "task.current"),
+        ("topology", "desktop", "web_desktop"),
+        ("owner", "web_desktop", "automation:task.current"),
+    ]
+
+
+def test_browser_feedback_restore_preserves_candidate_when_exact_revision_expired(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("an unavailable target must not replace the candidate")
+        ),
+    )
+
+    restored = service._restore_preview_after_browser_feedback(
+        {
+            "temporary_preview_override": True,
+            "webspace_id": "desktop",
+            "previous_preview_target": {
+                "object_type": "scenario",
+                "object_id": "web_desktop",
+                "scenario_id": "web_desktop",
+                "stage": "automation",
+                "revision": "task.expired",
+                "follow_active": False,
+            },
+        }
+    )
+
+    assert restored == {
+        "ok": False,
+        "restored": False,
+        "status": "unavailable",
+        "reason": "previous_preview_revision_not_retained",
+        "webspace_id": "desktop",
+        "scenario_id": "web_desktop",
+        "requested_revision": "task.expired",
+        "retained_revision": None,
+        "candidate_preview_retained": True,
+    }
+
+
 def test_browser_feedback_timeout_is_not_sent_to_codex_repair() -> None:
     assert (
         BuilderAutomationService._browser_feedback_is_repairable(

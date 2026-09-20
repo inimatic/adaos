@@ -9643,6 +9643,7 @@ class BuilderAutomationService:
             "webspace_id": webspace_id,
             "preview_webspace_id": preview_webspace_id or None,
             "topology_runtime": topology_runtime,
+            "candidate_preview_target": copy.deepcopy(target),
             "temporary_preview_override": temporary_override,
             "previous_preview_target": (
                 copy.deepcopy(current_target) if temporary_override else None
@@ -9669,12 +9670,65 @@ class BuilderAutomationService:
         previous = materialization.get("previous_preview_target")
         if not isinstance(previous, Mapping) or not previous:
             raise RuntimeError("Temporary browser Preview has no previous target")
+        previous = dict(previous)
         source_webspace_id = str(materialization.get("webspace_id") or "").strip()
         scenario_id = str(
             previous.get("scenario_id") or previous.get("object_id") or ""
         ).strip()
         if not source_webspace_id or not scenario_id:
             raise RuntimeError("Previous browser Preview target is incomplete")
+
+        stage = str(previous.get("stage") or "").strip().lower()
+        revision = str(previous.get("revision") or "").strip()
+        if stage not in {"prototype", "automation"}:
+            raise RuntimeError("Previous browser Preview has no restorable DEV revision")
+        if not revision and not bool(previous.get("follow_active")):
+            raise RuntimeError("Previous browser Preview has no restorable DEV revision")
+
+        adjustment: dict[str, Any] | None = None
+        if stage == "automation":
+            snapshot_path = (
+                self.state_dir
+                / "builder"
+                / "workflow_snapshots"
+                / "scenario"
+                / _safe_token(scenario_id)
+                / "automation"
+                / "snapshot.json"
+            )
+            try:
+                snapshot = json.loads(snapshot_path.read_text(encoding="utf-8-sig"))
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                snapshot = {}
+            retained_revision = (
+                str(snapshot.get("task_id") or "").strip()
+                if isinstance(snapshot, Mapping)
+                and snapshot.get("object_type") == "scenario"
+                and str(snapshot.get("object_id") or "").strip() == scenario_id
+                else ""
+            )
+            if revision != retained_revision:
+                if bool(previous.get("follow_active")) and retained_revision:
+                    adjustment = {
+                        "reason": "follow_active_revision_advanced",
+                        "requested_revision": revision or None,
+                        "retained_revision": retained_revision,
+                    }
+                    revision = retained_revision
+                    previous["revision"] = retained_revision
+                    previous["label"] = f"active: {scenario_id} @ {retained_revision}"
+                else:
+                    return {
+                        "ok": False,
+                        "restored": False,
+                        "status": "unavailable",
+                        "reason": "previous_preview_revision_not_retained",
+                        "webspace_id": source_webspace_id,
+                        "scenario_id": scenario_id,
+                        "requested_revision": revision or None,
+                        "retained_revision": retained_revision or None,
+                        "candidate_preview_retained": True,
+                    }
 
         from adaos.services.builder.workbench import BuilderWorkbenchService
 
@@ -9716,12 +9770,6 @@ class BuilderAutomationService:
                     or "Previous browser Preview could not be restored"
                 )
             )
-        stage = str(previous.get("stage") or "").strip().lower()
-        revision = str(previous.get("revision") or "").strip()
-        if stage not in {"prototype", "automation"}:
-            raise RuntimeError("Previous browser Preview has no restorable DEV revision")
-        if not revision and not bool(previous.get("follow_active")):
-            raise RuntimeError("Previous browser Preview has no restorable DEV revision")
         exact_stage = stage if revision else None
         from adaos.sdk.builder.preview import materialize_revision_via_owner
 
@@ -9755,6 +9803,8 @@ class BuilderAutomationService:
             "webspace_id": source_webspace_id,
             "scenario_id": scenario_id,
             "topology_runtime": topology_runtime,
+            "restored": True,
+            "adjustment": adjustment,
         }
 
     @staticmethod
