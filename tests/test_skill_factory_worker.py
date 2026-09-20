@@ -4391,6 +4391,37 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
     (repo_root / "docs" / "architecture" / "domain-reference.md").write_text(
         "must stay hidden\n", encoding="utf-8"
     )
+    client_root = repo_root / "src/adaos/integrations/adaos-client"
+    (client_root / "src/app/renderer/widgets").mkdir(parents=True)
+    (client_root / "src/app/runtime").mkdir(parents=True)
+    (client_root / "src/app/product-extensions").mkdir(parents=True)
+    (client_root / "src/app/renderer/widgets/list.widget.component.ts").write_text(
+        "export const listWidget = true\n", encoding="utf-8"
+    )
+    (client_root / "src/app/runtime/page-data.service.ts").write_text(
+        "export const pageData = true\n", encoding="utf-8"
+    )
+    (client_root / "src/app/product-extensions/domain.ts").write_text(
+        "export const domain = true\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "init"], cwd=client_root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=client_root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "AdaOS Test"],
+        cwd=client_root,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=client_root, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "client fixture"],
+        cwd=client_root,
+        check=True,
+        capture_output=True,
+    )
     subprocess.run(["git", "init"], cwd=repo_root, check=True, capture_output=True)
     subprocess.run(
         ["git", "config", "user.email", "test@example.invalid"],
@@ -4415,6 +4446,12 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
     assert (snapshot / "src" / "adaos" / "sdk_marker.py").is_file()
     assert (snapshot / "docs" / "skill_runtime.md").is_file()
     assert not (snapshot / "docs" / "architecture").exists()
+    client_reference = snapshot / "src/adaos/integrations/adaos-client"
+    assert (
+        client_reference / "src/app/renderer/widgets/list.widget.component.ts"
+    ).is_file()
+    assert (client_reference / "src/app/runtime/page-data.service.ts").is_file()
+    assert not (client_reference / "src/app/product-extensions/domain.ts").exists()
     receipt = json.loads((snapshot / "SDK_SNAPSHOT.json").read_text(encoding="utf-8"))
     expected_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -4424,6 +4461,13 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
         text=True,
     ).stdout.strip()
     assert receipt["core_commit"] == expected_commit
+    assert receipt["client_commit"] == subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=client_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     environment = executor._execution_environment(sdk_root=snapshot)
     assert environment["ADAOS_REPO_ROOT"] == str(snapshot.resolve())
 

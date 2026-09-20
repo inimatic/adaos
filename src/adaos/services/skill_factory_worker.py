@@ -3695,6 +3695,18 @@ class SubprocessCodexExecutor:
             return sdk_root
         root.mkdir(parents=True, exist_ok=True)
         commit = _git(["rev-parse", "HEAD"], cwd=self.repo_root)
+        client_relative = Path("src/adaos/integrations/adaos-client")
+        client_root = self.repo_root / client_relative
+        client_commit = ""
+        client_tree = _run(
+            ["git", "ls-tree", commit, "--", client_relative.as_posix()],
+            cwd=self.repo_root,
+            timeout=30,
+        )
+        if client_tree.returncode == 0 and client_tree.stdout.strip():
+            fields = client_tree.stdout.strip().split(None, 3)
+            if len(fields) >= 3 and fields[0] == "160000" and fields[1] == "commit":
+                client_commit = fields[2]
         archive_path = root / "sdk-reference.tar"
         result = _run(
             [
@@ -3737,12 +3749,71 @@ class SubprocessCodexExecutor:
                     if member.issym() or member.islnk():
                         raise RuntimeError("AdaOS SDK archive may not contain links")
                 archive.extractall(sdk_root, members=members)
+            if client_commit:
+                if not client_root.is_dir():
+                    raise RuntimeError(
+                        "cannot materialize commit-bound Client reference: "
+                        f"submodule worktree is missing at {client_root}"
+                    )
+                client_archive_path = root / "client-reference.tar"
+                client_result = _run(
+                    [
+                        "git",
+                        "archive",
+                        "--format=tar",
+                        f"--output={client_archive_path}",
+                        client_commit,
+                        "--",
+                        "src/app/renderer",
+                        "src/app/runtime",
+                    ],
+                    cwd=client_root,
+                    timeout=120,
+                )
+                if client_result.returncode:
+                    detail = (client_result.stderr or client_result.stdout).strip()
+                    raise RuntimeError(
+                        "cannot materialize filtered AdaOS Client reference: "
+                        f"{detail}"
+                    )
+                client_destination = (sdk_root / client_relative).resolve()
+                client_destination.mkdir(parents=True, exist_ok=True)
+                try:
+                    with tarfile.open(client_archive_path, mode="r:") as archive:
+                        client_members = archive.getmembers()
+                        for member in client_members:
+                            destination = (client_destination / member.name).resolve()
+                            try:
+                                destination.relative_to(client_destination)
+                            except ValueError as exc:
+                                raise RuntimeError(
+                                    "AdaOS Client archive contains an unsafe path"
+                                ) from exc
+                            if member.issym() or member.islnk():
+                                raise RuntimeError(
+                                    "AdaOS Client archive may not contain links"
+                                )
+                        archive.extractall(client_destination, members=client_members)
+                finally:
+                    client_archive_path.unlink(missing_ok=True)
             _write_json(
                 receipt_path,
                 {
                     "schema": "adaos.skill_factory.sdk_snapshot.v1",
                     "core_commit": commit,
-                    "included_roots": ["src/adaos", "docs/skill_runtime.md"],
+                    "client_commit": client_commit or None,
+                    "included_roots": [
+                        "src/adaos",
+                        "docs/skill_runtime.md",
+                        *(
+                            [
+                                "src/adaos/integrations/adaos-client/src/app/renderer",
+                                "src/adaos/integrations/adaos-client/src/app/runtime",
+                            ]
+                            if client_commit
+                            else []
+                        ),
+                    ],
                     "excluded_by_default": [
                         "docs/architecture",
                         "tests",
