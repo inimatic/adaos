@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.3.10",
+  "catalog_version": "3.3.11",
   "webui_schema": "adaos.webui.v1",
   "layouts": [
     {
@@ -1081,7 +1081,7 @@
       },
       "manifest": {
         "widget_type": "collection.grid",
-        "desktop_projection": "For the authoritative pinned desktop launcher use widget.dataSource={kind:'y',transform:'desktop.icons'}. This projection owns installed and pinned application identity, ordering and launch metadata; do not replace it with a skill list or static records.",
+        "desktop_projection": "For the authoritative pinned desktop launcher use the stable widget id 'desktop-icons', type 'collection.grid', and widget.dataSource={kind:'y',transform:'desktop.icons'}. The stable id activates platform layout customization, drag/reorder and responsive desktop behavior. This projection owns installed and pinned application identity, ordering and launch metadata; do not replace it with a skill list or static records.",
         "selection": "Use on=select with the projection's $event.action.navigate and $event.launchModal. The tile itself is the primary action; do not add a redundant Open button.",
         "catalog_projection": "Catalog collections may use kind='y' with an explicit catalog path, but installation lifecycle belongs to the Applications scenario."
       },
@@ -1096,6 +1096,7 @@
       },
       "postconditions": [
         "The desktop launcher reads the desktop.icons Yjs projection rather than authored or static application records.",
+        "The desktop.icons launcher uses stable widget id desktop-icons so platform layout controls remain active.",
         "Selecting a tile follows platform launch metadata and does not simulate installation lifecycle."
       ]
     },

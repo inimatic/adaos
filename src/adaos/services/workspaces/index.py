@@ -272,6 +272,7 @@ def _normalize_ui_overlay_payload(value: Any) -> dict[str, Any]:
     legacy_pinned_raw = value.get("pinnedWidgets")
     has_installed = "installed" in desktop_raw or "installed" in value
     has_pinned_widgets = "pinnedWidgets" in desktop_raw or "pinnedWidgets" in value
+    has_pinned_applications = "pinnedApplications" in desktop_raw or "pinnedApplications" in value
     installed = {
         "apps": _dedupe_text_list(installed_source.get("apps") if isinstance(installed_source, dict) else []),
         "widgets": _dedupe_text_list(installed_source.get("widgets") if isinstance(installed_source, dict) else []),
@@ -284,6 +285,12 @@ def _normalize_ui_overlay_payload(value: Any) -> dict[str, Any]:
     }
     pinned_widgets_source = desktop_raw.get("pinnedWidgets") if "pinnedWidgets" in desktop_raw else legacy_pinned_raw
     pinned_widgets = _normalize_overlay_widget_list(pinned_widgets_source)
+    pinned_applications_source = (
+        desktop_raw.get("pinnedApplications")
+        if "pinnedApplications" in desktop_raw
+        else value.get("pinnedApplications")
+    )
+    pinned_applications = _clone_overlay_text_list(pinned_applications_source)
     legacy_icon_order_raw = value.get("iconOrder")
     legacy_widget_order_raw = value.get("widgetOrder")
     icon_order_source = desktop_raw.get("iconOrder") if "iconOrder" in desktop_raw else legacy_icon_order_raw
@@ -327,6 +334,8 @@ def _normalize_ui_overlay_payload(value: Any) -> dict[str, Any]:
         desktop["installed"] = installed
     if has_pinned_widgets or pinned_widgets:
         desktop["pinnedWidgets"] = pinned_widgets
+    if has_pinned_applications or pinned_applications:
+        desktop["pinnedApplications"] = pinned_applications
     if has_icon_order or icon_order:
         desktop["iconOrder"] = icon_order
     if has_widget_order or widget_order:
@@ -499,6 +508,10 @@ class WebspaceManifest:
             }
         if "pinnedWidgets" in desktop:
             out["pinnedWidgets"] = _normalize_overlay_widget_list(desktop.get("pinnedWidgets"))
+        if "pinnedApplications" in desktop:
+            out["pinnedApplications"] = _clone_overlay_text_list(
+                desktop.get("pinnedApplications")
+            )
         if "topbar" in desktop:
             out["topbar"] = _clone_overlay_json_list(desktop.get("topbar"))
         if "pageSchema" in desktop:
@@ -526,6 +539,10 @@ class WebspaceManifest:
     @property
     def pinned_widgets_overlay(self) -> list[dict[str, Any]]:
         return _normalize_overlay_widget_list(self.desktop_overlay.get("pinnedWidgets"))
+
+    @property
+    def pinned_applications_overlay(self) -> list[str]:
+        return _clone_overlay_text_list(self.desktop_overlay.get("pinnedApplications"))
 
     @property
     def topbar_overlay(self) -> list[Any]:
@@ -564,6 +581,10 @@ class WebspaceManifest:
     @property
     def has_pinned_widgets_overlay(self) -> bool:
         return "pinnedWidgets" in self.desktop_overlay
+
+    @property
+    def has_pinned_applications_overlay(self) -> bool:
+        return "pinnedApplications" in self.desktop_overlay
 
     @property
     def has_topbar_overlay(self) -> bool:
@@ -1188,6 +1209,13 @@ def get_workspace_pinned_widgets_overlay(workspace_id: str) -> list[dict[str, An
     return row.pinned_widgets_overlay
 
 
+def get_workspace_pinned_applications_overlay(workspace_id: str) -> list[str]:
+    row = get_workspace(workspace_id)
+    if row is None:
+        return []
+    return row.pinned_applications_overlay
+
+
 def get_workspace_topbar_overlay(workspace_id: str) -> list[Any]:
     row = get_workspace(workspace_id)
     if row is None:
@@ -1464,6 +1492,15 @@ def set_workspace_pinned_widgets_overlay(workspace_id: str, pinned_widgets: Any)
     current = get_workspace_desktop_overlay(workspace_id)
     desktop = dict(current) if isinstance(current, dict) else {}
     desktop["pinnedWidgets"] = _normalize_overlay_widget_list(pinned_widgets)
+    return set_workspace_desktop_overlay(workspace_id, desktop)
+
+
+def set_workspace_pinned_applications_overlay(
+    workspace_id: str, pinned_applications: Any
+) -> WebspaceManifest:
+    current = get_workspace_desktop_overlay(workspace_id)
+    desktop = dict(current) if isinstance(current, dict) else {}
+    desktop["pinnedApplications"] = _clone_overlay_text_list(pinned_applications)
     return set_workspace_desktop_overlay(workspace_id, desktop)
 
 

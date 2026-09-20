@@ -28,6 +28,7 @@ from adaos.services.workspaces import (
     get_workspace_installed_overlay,
     get_workspace_overlay,
     get_workspace_pinned_widgets_overlay,
+    get_workspace_pinned_applications_overlay,
     get_workspace_topbar_overlay,
     get_workspace_page_schema_overlay,
     get_workspace_icon_order_overlay,
@@ -40,6 +41,7 @@ from adaos.services.workspaces import (
     set_workspace_installed_overlay,
     set_workspace_icon_order_overlay,
     set_workspace_pinned_widgets_overlay,
+    set_workspace_pinned_applications_overlay,
     set_workspace_topbar_overlay,
     set_workspace_page_schema_overlay,
     set_workspace_widget_order_overlay,
@@ -1017,6 +1019,7 @@ def test_web_desktop_service_get_snapshot_returns_overlay_state(monkeypatch) -> 
             "removedWidgets": [],
         },
         "pinnedWidgets": [{"id": "infra-status", "type": "visual.metricTile", "title": "Infra"}],
+        "pinnedApplications": ["scenario:prompt_engineer_scenario"],
         "topbar": [],
         "pageSchema": {},
         "iconOrder": ["scenario:prompt_engineer_scenario"],
@@ -1084,6 +1087,7 @@ def test_web_desktop_service_get_snapshot_clones_yjs_map_like_materialized_state
     assert snapshot.page_schema["id"] == "todo-list"
     assert snapshot.page_schema["widgets"][0]["id"] == "prototype-form"
     assert snapshot.pinned_widgets[0]["type"] == "visual.metricTile"
+    assert snapshot.pinned_applications == ["weather_app"]
     assert snapshot.pinned_widgets[0]["dataSource"]["path"] == "data/weather/current"
     assert snapshot.icon_order == ["weather_app"]
     assert snapshot.widget_order == ["weather"]
@@ -1158,6 +1162,7 @@ def test_web_desktop_service_get_snapshot_async_prefers_read_only_live_doc(monke
             "removedWidgets": [],
         },
         "pinnedWidgets": [{"id": "infra-status", "type": "visual.metricTile", "title": "Infra"}],
+        "pinnedApplications": ["scenario:prompt_engineer_scenario"],
         "topbar": [],
         "pageSchema": {},
         "iconOrder": ["scenario:prompt_engineer_scenario"],
@@ -1178,6 +1183,7 @@ def test_web_desktop_service_set_snapshot_updates_overlay_and_live_doc(monkeypat
     snapshot = desktop_module.WebDesktopSnapshot(
         installed=desktop_module.WebDesktopInstalled(apps=["scenario:web_desktop"], widgets=["weather"]),
         pinned_widgets=[{"id": "infra-status", "type": "visual.metricTile"}],
+        pinned_applications=["scenario:web_desktop"],
         topbar=[{"id": "home", "label": "Home"}],
         page_schema={
             "id": "desktop",
@@ -1193,6 +1199,7 @@ def test_web_desktop_service_set_snapshot_updates_overlay_and_live_doc(monkeypat
     assert get_workspace_topbar_overlay(webspace_id) == []
     assert get_workspace_page_schema_overlay(webspace_id) == {}
     assert get_workspace_hidden_sections_overlay(webspace_id) == []
+    assert get_workspace_pinned_applications_overlay(webspace_id) == ["scenario:web_desktop"]
     assert get_workspace_icon_order_overlay(webspace_id) == ["scenario:web_desktop"]
     assert get_workspace_widget_order_overlay(webspace_id) == ["weather"]
     assert fake_state["ui"]["application"]["desktop"]["topbar"] == [{"id": "home", "label": "Home"}]
@@ -1201,3 +1208,68 @@ def test_web_desktop_service_set_snapshot_updates_overlay_and_live_doc(monkeypat
     assert fake_state["data"]["desktop"]["pageSchema"]["widgets"][0]["id"] == "desktop-widgets"
     assert fake_state["data"]["desktop"]["iconOrder"] == ["scenario:web_desktop"]
     assert fake_state["data"]["desktop"]["widgetOrder"] == ["weather"]
+    assert fake_state["data"]["desktop"]["pinnedApplications"] == ["scenario:web_desktop"]
+
+
+def test_web_desktop_service_preserves_explicit_empty_pinned_applications(monkeypatch) -> None:
+    webspace_id = "phase5-empty-pinned-applications"
+    ensure_workspace(webspace_id)
+    set_workspace_installed_overlay(webspace_id, {"apps": ["scenario:applications"]})
+    set_workspace_pinned_applications_overlay(webspace_id, [])
+    fake_state = {
+        "ui": _FakeMap({"application": {"desktop": {}}}),
+        "data": _FakeMap({"desktop": {}, "installed": {}}),
+    }
+    monkeypatch.setattr(desktop_module, "get_ydoc", lambda _webspace_id: _FakeSyncDoc(fake_state))
+
+    snapshot = desktop_module.WebDesktopService().get_snapshot(webspace_id)
+
+    assert snapshot.installed.apps == ["scenario:applications"]
+    assert snapshot.pinned_applications == []
+
+
+def test_web_desktop_service_install_pins_and_uninstall_unpins_application(monkeypatch) -> None:
+    service = desktop_module.WebDesktopService()
+    snapshot = desktop_module.WebDesktopSnapshot(
+        installed=desktop_module.WebDesktopInstalled(
+            apps=["scenario:applications"], widgets=[]
+        ),
+        pinned_widgets=[],
+        topbar=[],
+        page_schema={},
+        pinned_applications=["scenario:applications"],
+        icon_order=["scenario:applications"],
+    )
+    pinned_updates: list[list[str]] = []
+    installed_updates: list[list[str]] = []
+    order_updates: list[list[str]] = []
+    monkeypatch.setattr(service, "get_snapshot", lambda _webspace: snapshot)
+    monkeypatch.setattr(
+        service,
+        "set_pinned_applications",
+        lambda items, _webspace: pinned_updates.append(list(items)),
+    )
+    monkeypatch.setattr(
+        service,
+        "set_installed",
+        lambda installed, _webspace: installed_updates.append(list(installed.apps)),
+    )
+    monkeypatch.setattr(
+        service,
+        "set_icon_order",
+        lambda items, _webspace: order_updates.append(list(items)),
+    )
+
+    service.toggle_install("app", "scenario:applications", "desktop")
+
+    assert pinned_updates == [[]]
+    assert installed_updates == [[]]
+    assert order_updates == [[]]
+
+    snapshot.installed = desktop_module.WebDesktopInstalled(apps=[], widgets=[])
+    snapshot.pinned_applications = []
+    snapshot.icon_order = []
+    service.toggle_install("app", "scenario:users_access", "desktop")
+
+    assert pinned_updates[-1] == ["scenario:users_access"]
+    assert installed_updates[-1] == ["scenario:users_access"]

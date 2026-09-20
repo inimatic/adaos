@@ -195,6 +195,10 @@ class WebspaceResolutionService:
                         "hiddenSections": list(getattr(row, "hidden_sections_overlay", []) or []),
                         "source": "workspace_manifest_overlay",
                     }
+                    if getattr(row, "has_pinned_applications_overlay", False):
+                        overlay_snapshot["pinnedApplications"] = list(
+                            getattr(row, "pinned_applications_overlay", []) or []
+                        )
         except Exception:
             mode = "mixed"
             metadata = {}
@@ -243,7 +247,7 @@ class WebspaceResolutionService:
             )
             live_desktop = operations.coerce_live_branch_subset(
                 operations.mapping_get(data_map, "desktop") or {},
-                ("installed", "topbar", "pageSchema", "pinnedWidgets", "iconOrder", "widgetOrder", "hiddenSections"),
+                ("installed", "topbar", "pageSchema", "pinnedWidgets", "pinnedApplications", "iconOrder", "widgetOrder", "hiddenSections"),
             )
             live_routing = operations.coerce_live_branch_subset(
                 operations.mapping_get(data_map, "routing") or {},
@@ -613,6 +617,10 @@ class WebspaceResolutionService:
         installed_current = operations.coerce_dict((inputs.overlay_snapshot or {}).get("installed") or {})
         overlay_has_pinned_widgets = "pinnedWidgets" in (inputs.overlay_snapshot or {})
         overlay_pinned_widgets = operations.normalize_overlay_widget_entries((inputs.overlay_snapshot or {}).get("pinnedWidgets"))
+        overlay_has_pinned_applications = "pinnedApplications" in (inputs.overlay_snapshot or {})
+        overlay_pinned_applications = operations.dedupe_str_list(
+            (inputs.overlay_snapshot or {}).get("pinnedApplications")
+        )
         overlay_icon_order = operations.dedupe_str_list((inputs.overlay_snapshot or {}).get("iconOrder"))
         overlay_widget_order = operations.dedupe_str_list((inputs.overlay_snapshot or {}).get("widgetOrder"))
         overlay_hidden_sections = operations.dedupe_str_list((inputs.overlay_snapshot or {}).get("hiddenSections"))
@@ -805,6 +813,11 @@ class WebspaceResolutionService:
             pinned_widgets_source,
             merged_widgets,
         )
+        desktop_config["pinnedApplications"] = (
+            list(overlay_pinned_applications)
+            if overlay_has_pinned_applications
+            else list(installed_with_auto.get("apps") or [])
+        )
         desktop_config["iconOrder"] = list(overlay_icon_order)
         desktop_config["iconMediaOverrides"] = operations.coerce_dict((inputs.overlay_snapshot or {}).get("iconMediaOverrides") or {})
         desktop_config["widgetOrder"] = list(overlay_widget_order)
@@ -841,6 +854,9 @@ class WebspaceResolutionService:
         desktop_next["topbar"] = list(desktop_config.get("topbar") or [])
         desktop_next["pageSchema"] = operations.coerce_dict(desktop_config.get("pageSchema") or {})
         desktop_next["pinnedWidgets"] = list(desktop_config.get("pinnedWidgets") or [])
+        desktop_next["pinnedApplications"] = list(
+            desktop_config.get("pinnedApplications") or []
+        )
         desktop_next["iconOrder"] = list(desktop_config.get("iconOrder") or [])
         desktop_next["iconMediaOverrides"] = operations.coerce_dict(desktop_config.get("iconMediaOverrides") or {})
         desktop_next["widgetOrder"] = list(desktop_config.get("widgetOrder") or [])

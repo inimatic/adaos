@@ -1320,6 +1320,24 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                         ),
                     }
                 )
+            if (
+                widget_type == "collection.grid"
+                and str(data_source.get("kind") or "") == "y"
+                and str(data_source.get("transform") or "") == "desktop.icons"
+                and str(widget.get("id") or "").strip() != "desktop-icons"
+            ):
+                findings.append(
+                    {
+                        "code": "ui.desktop_icons.id_invalid",
+                        "severity": "error",
+                        "path": f"{widget_path}.id",
+                        "message": (
+                            "The desktop.icons system projection requires stable widget id "
+                            "'desktop-icons' so layout customization, drag/reorder and compact "
+                            "desktop behavior remain active."
+                        ),
+                    }
+                )
             if widget_type in {"ui.list", "item.details"} and not data_source:
                 findings.append(
                     {

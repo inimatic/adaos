@@ -3536,6 +3536,11 @@ def _apply_webspace_overlay_to_resolved(
         pinned_source,
         core.catalog.get("widgets"),
     )
+    application_desktop["pinnedApplications"] = (
+        _dedupe_str_list(overlay.get("pinnedApplications"))
+        if "pinnedApplications" in overlay
+        else _dedupe_str_list(installed.get("apps"))
+    )
     for key, normalizer in (
         ("iconOrder", _dedupe_str_list),
         ("iconMediaOverrides", _coerce_dict),
@@ -3553,6 +3558,7 @@ def _apply_webspace_overlay_to_resolved(
         "topbar",
         "pageSchema",
         "pinnedWidgets",
+        "pinnedApplications",
         "iconOrder",
         "iconMediaOverrides",
         "widgetOrder",
@@ -6031,7 +6037,7 @@ def _webspace_info_from_row(
         current_scenario = _workspace_manifest_current_scenario(row)
     validation = _build_webspace_validation(
         source_mode=row.effective_source_mode,
-        webspace_id=row.workspace_id,
+        webspace_id=str(getattr(row, "workspace_id", "") or target_webspace_id),
         stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
         effective_home_scenario=row.effective_home_scenario,
         current_scenario=current_scenario,
@@ -6067,7 +6073,7 @@ def _describe_webspace_manifest_state_sync(
     current_scenario = _workspace_manifest_current_scenario(row)
     validation = _build_webspace_validation(
         source_mode=row.effective_source_mode,
-        webspace_id=row.workspace_id,
+        webspace_id=str(getattr(row, "workspace_id", "") or target_webspace_id),
         stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
         effective_home_scenario=row.effective_home_scenario,
         current_scenario=current_scenario,

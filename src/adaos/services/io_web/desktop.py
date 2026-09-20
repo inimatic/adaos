@@ -125,6 +125,7 @@ class WebDesktopSnapshot:
     pinned_widgets: List[Dict[str, Any]]
     topbar: List[Any]
     page_schema: Dict[str, Any]
+    pinned_applications: List[str] = field(default_factory=list)
     icon_order: List[str] = field(default_factory=list)
     widget_order: List[str] = field(default_factory=list)
     hidden_sections: List[str] = field(default_factory=list)
@@ -133,6 +134,7 @@ class WebDesktopSnapshot:
         return {
             "installed": self.installed.to_dict(),
             "pinnedWidgets": _clone_pinned_widgets(self.pinned_widgets),
+            "pinnedApplications": _clone_text_list(self.pinned_applications),
             "topbar": _clone_json_list(self.topbar),
             "pageSchema": _clone_json_dict(self.page_schema),
             "iconOrder": _clone_text_list(self.icon_order),
@@ -345,6 +347,23 @@ class WebDesktopService:
         workspace_index.set_workspace_pinned_widgets_overlay(webspace_id, _clone_pinned_widgets(items))
 
     @staticmethod
+    def _read_overlay_pinned_applications(webspace_id: str) -> tuple[List[str], bool]:
+        row = workspace_index.get_workspace(webspace_id)
+        if row is None or not getattr(row, "has_pinned_applications_overlay", False):
+            return [], False
+        return _clone_text_list(
+            getattr(row, "pinned_applications_overlay", []) or []
+        ), True
+
+    @staticmethod
+    def _persist_overlay_pinned_applications(
+        webspace_id: str, items: List[str]
+    ) -> None:
+        workspace_index.set_workspace_pinned_applications_overlay(
+            webspace_id, _clone_text_list(items)
+        )
+
+    @staticmethod
     def _read_overlay_topbar(webspace_id: str) -> tuple[List[Any], bool]:
         row = workspace_index.get_workspace(webspace_id)
         if row is None or not getattr(row, "has_topbar_overlay", False):
@@ -421,6 +440,16 @@ class WebDesktopService:
         _set_json_map_value(data_map, txn, "desktop", desktop_next)
 
     @staticmethod
+    def _apply_pinned_applications_state(
+        ydoc: Any, txn: Any, pinned_applications: List[str]
+    ) -> None:
+        data_map = ydoc.get_map("data")
+        desktop_raw = data_map.get("desktop") or {}
+        desktop_next = _coerce_dict(desktop_raw)
+        desktop_next["pinnedApplications"] = _clone_text_list(pinned_applications)
+        _set_json_map_value(data_map, txn, "desktop", desktop_next)
+
+    @staticmethod
     def _apply_topbar_state(ydoc: Any, txn: Any, topbar: List[Any]) -> None:
         next_topbar = _clone_json_list(topbar)
         ui_map = ydoc.get_map("ui")
@@ -487,6 +516,9 @@ class WebDesktopService:
     def _apply_snapshot_state(ydoc: Any, txn: Any, snapshot: WebDesktopSnapshot) -> None:
         WebDesktopService._apply_installed_state(ydoc, txn, snapshot.installed)
         WebDesktopService._apply_pinned_widgets_state(ydoc, txn, snapshot.pinned_widgets)
+        WebDesktopService._apply_pinned_applications_state(
+            ydoc, txn, snapshot.pinned_applications
+        )
         WebDesktopService._apply_topbar_state(ydoc, txn, snapshot.topbar)
         WebDesktopService._apply_page_schema_state(ydoc, txn, snapshot.page_schema)
         WebDesktopService._apply_icon_order_state(ydoc, txn, snapshot.icon_order)
@@ -499,6 +531,8 @@ class WebDesktopService:
         *,
         installed: WebDesktopInstalled,
         pinned_widgets: List[Dict[str, Any]],
+        pinned_applications: List[str],
+        pinned_applications_explicit: bool,
         topbar: List[Any],
         page_schema: Dict[str, Any],
         icon_order: List[str],
@@ -524,6 +558,16 @@ class WebDesktopService:
             pinned_next,
             _catalog_widgets_by_id_from_data_map(data_map),
         )
+        if "pinnedApplications" in desktop_raw:
+            pinned_applications_next = _clone_text_list(
+                desktop_raw.get("pinnedApplications")
+            )
+        else:
+            pinned_applications_next = (
+                _clone_text_list(pinned_applications)
+                if pinned_applications_explicit
+                else _clone_text_list(installed_next.apps)
+            )
 
         application_raw = _coerce_dict(ui_map.get("application") or {})
         app_desktop = _coerce_dict(application_raw.get("desktop") or {})
@@ -554,6 +598,7 @@ class WebDesktopService:
         return WebDesktopSnapshot(
             installed=installed_next,
             pinned_widgets=pinned_next,
+            pinned_applications=pinned_applications_next,
             topbar=topbar_next,
             page_schema=page_schema_next,
             icon_order=icon_order_next,
@@ -597,6 +642,24 @@ class WebDesktopService:
         if not has_overlay:
             return []
         return items
+
+    def get_pinned_applications(
+        self, webspace_id: Optional[str] = None
+    ) -> List[str]:
+        webspace = self._resolve_webspace(webspace_id)
+        items, has_overlay = self._read_overlay_pinned_applications(webspace)
+        if has_overlay:
+            return items
+        return list(self.get_installed(webspace).apps)
+
+    async def get_pinned_applications_async(
+        self, webspace_id: Optional[str] = None
+    ) -> List[str]:
+        webspace = self._resolve_webspace(webspace_id)
+        items, has_overlay = self._read_overlay_pinned_applications(webspace)
+        if has_overlay:
+            return items
+        return list((await self.get_installed_async(webspace)).apps)
 
     def get_topbar(self, webspace_id: Optional[str] = None) -> List[Any]:
         webspace = self._resolve_webspace(webspace_id)
@@ -710,6 +773,11 @@ class WebDesktopService:
         webspace = self._resolve_webspace(webspace_id)
         installed = self.get_installed(webspace)
         pinned_widgets = self.get_pinned_widgets(webspace)
+        pinned_applications, pinned_applications_explicit = (
+            self._read_overlay_pinned_applications(webspace)
+        )
+        if not pinned_applications_explicit:
+            pinned_applications = list(installed.apps)
         topbar = self.get_topbar(webspace)
         page_schema = self.get_page_schema(webspace)
         icon_order = self.get_icon_order(webspace)
@@ -721,6 +789,8 @@ class WebDesktopService:
                     ydoc,
                     installed=installed,
                     pinned_widgets=pinned_widgets,
+                    pinned_applications=pinned_applications,
+                    pinned_applications_explicit=pinned_applications_explicit,
                     topbar=topbar,
                     page_schema=page_schema,
                     icon_order=icon_order,
@@ -731,6 +801,7 @@ class WebDesktopService:
             return WebDesktopSnapshot(
                 installed=installed,
                 pinned_widgets=pinned_widgets,
+                pinned_applications=pinned_applications,
                 topbar=topbar,
                 page_schema=page_schema,
                 icon_order=icon_order,
@@ -742,6 +813,11 @@ class WebDesktopService:
         webspace = self._resolve_webspace(webspace_id)
         installed = await self.get_installed_async(webspace)
         pinned_widgets = await self.get_pinned_widgets_async(webspace)
+        pinned_applications, pinned_applications_explicit = (
+            self._read_overlay_pinned_applications(webspace)
+        )
+        if not pinned_applications_explicit:
+            pinned_applications = list(installed.apps)
         topbar = await self.get_topbar_async(webspace)
         page_schema = await self.get_page_schema_async(webspace)
         icon_order = await self.get_icon_order_async(webspace)
@@ -753,6 +829,8 @@ class WebDesktopService:
                     ydoc,
                     installed=installed,
                     pinned_widgets=pinned_widgets,
+                    pinned_applications=pinned_applications,
+                    pinned_applications_explicit=pinned_applications_explicit,
                     topbar=topbar,
                     page_schema=page_schema,
                     icon_order=icon_order,
@@ -763,6 +841,7 @@ class WebDesktopService:
             return WebDesktopSnapshot(
                 installed=installed,
                 pinned_widgets=pinned_widgets,
+                pinned_applications=pinned_applications,
                 topbar=topbar,
                 page_schema=page_schema,
                 icon_order=icon_order,
@@ -852,6 +931,38 @@ class WebDesktopService:
                     self._apply_pinned_widgets_state(ydoc, txn, next_pinned)
         _log.debug(
             "set pinned widgets (async) webspace=%s count=%s",
+            webspace,
+            len(next_pinned),
+        )
+
+    def set_pinned_applications(
+        self, pinned_applications: List[str], webspace_id: Optional[str] = None
+    ) -> None:
+        webspace = self._resolve_webspace(webspace_id)
+        next_pinned = _clone_text_list(pinned_applications)
+        self._persist_overlay_pinned_applications(webspace, next_pinned)
+        with _desktop_sync_write_meta():
+            with get_ydoc(webspace) as ydoc:
+                with ydoc.begin_transaction() as txn:
+                    self._apply_pinned_applications_state(ydoc, txn, next_pinned)
+        _log.debug(
+            "set pinned applications webspace=%s count=%s",
+            webspace,
+            len(next_pinned),
+        )
+
+    async def set_pinned_applications_async(
+        self, pinned_applications: List[str], webspace_id: Optional[str] = None
+    ) -> None:
+        webspace = self._resolve_webspace(webspace_id)
+        next_pinned = _clone_text_list(pinned_applications)
+        self._persist_overlay_pinned_applications(webspace, next_pinned)
+        async with _desktop_async_write_meta():
+            async with async_get_ydoc(webspace) as ydoc:
+                with ydoc.begin_transaction() as txn:
+                    self._apply_pinned_applications_state(ydoc, txn, next_pinned)
+        _log.debug(
+            "set pinned applications (async) webspace=%s count=%s",
             webspace,
             len(next_pinned),
         )
@@ -968,6 +1079,7 @@ class WebDesktopService:
         webspace = self._resolve_webspace(webspace_id)
         self._persist_overlay_installed(webspace, snapshot.installed)
         self._persist_overlay_pinned_widgets(webspace, snapshot.pinned_widgets)
+        self._persist_overlay_pinned_applications(webspace, snapshot.pinned_applications)
         self._persist_overlay_topbar(webspace, snapshot.topbar)
         self._persist_overlay_page_schema(webspace, snapshot.page_schema)
         self._persist_overlay_icon_order(webspace, snapshot.icon_order)
@@ -983,6 +1095,7 @@ class WebDesktopService:
         webspace = self._resolve_webspace(webspace_id)
         self._persist_overlay_installed(webspace, snapshot.installed)
         self._persist_overlay_pinned_widgets(webspace, snapshot.pinned_widgets)
+        self._persist_overlay_pinned_applications(webspace, snapshot.pinned_applications)
         self._persist_overlay_topbar(webspace, snapshot.topbar)
         self._persist_overlay_page_schema(webspace, snapshot.page_schema)
         self._persist_overlay_icon_order(webspace, snapshot.icon_order)
@@ -1005,7 +1118,20 @@ class WebDesktopService:
         snapshot = self.get_snapshot(webspace)
         current = snapshot.installed
         next_installed = self._next_installed_state(current, item_type, target_id)
+        target = str(target_id or "").strip()
+        removing_app = item_type == "app" and target in set(current.apps)
         removing_widget = item_type != "app" and str(target_id or "").strip() in set(current.widgets)
+        if item_type == "app":
+            next_pinned_applications = [
+                item for item in snapshot.pinned_applications if item != target
+            ]
+            if not removing_app and target:
+                next_pinned_applications.append(target)
+            self.set_pinned_applications(next_pinned_applications, webspace)
+            if removing_app:
+                self.set_icon_order(
+                    [item for item in snapshot.icon_order if item != target], webspace
+                )
         if removing_widget:
             self._persist_overlay_pinned_widgets(
                 webspace,
@@ -1026,7 +1152,20 @@ class WebDesktopService:
         snapshot = await self.get_snapshot_async(webspace)
         current = snapshot.installed
         next_installed = self._next_installed_state(current, item_type, target_id)
+        target = str(target_id or "").strip()
+        removing_app = item_type == "app" and target in set(current.apps)
         removing_widget = item_type != "app" and str(target_id or "").strip() in set(current.widgets)
+        if item_type == "app":
+            next_pinned_applications = [
+                item for item in snapshot.pinned_applications if item != target
+            ]
+            if not removing_app and target:
+                next_pinned_applications.append(target)
+            await self.set_pinned_applications_async(next_pinned_applications, webspace)
+            if removing_app:
+                await self.set_icon_order_async(
+                    [item for item in snapshot.icon_order if item != target], webspace
+                )
         if removing_widget:
             self._persist_overlay_pinned_widgets(
                 webspace,
@@ -1055,7 +1194,21 @@ class WebDesktopService:
         snapshot = self.get_snapshot(webspace)
         current = snapshot.installed
         next_installed = self._next_installed_state(current, item_type, target_id)
+        target = str(target_id or "").strip()
+        removing_app = item_type == "app" and target in set(current.apps)
         removing_widget = item_type != "app" and str(target_id or "").strip() in set(current.widgets)
+        next_pinned_applications = (
+            [item for item in snapshot.pinned_applications if item != target]
+            if item_type == "app"
+            else snapshot.pinned_applications
+        )
+        if item_type == "app" and not removing_app and target:
+            next_pinned_applications.append(target)
+        next_icon_order = (
+            [item for item in snapshot.icon_order if item != target]
+            if removing_app
+            else snapshot.icon_order
+        )
         next_pinned_widgets = (
             [item for item in snapshot.pinned_widgets if str(item.get("id") or "").strip() != target_id]
             if removing_widget
@@ -1067,12 +1220,22 @@ class WebDesktopService:
             else snapshot.widget_order
         )
         self._persist_overlay_installed(webspace, next_installed)
+        if item_type == "app":
+            self._persist_overlay_pinned_applications(webspace, next_pinned_applications)
+        if removing_app:
+            self._persist_overlay_icon_order(webspace, next_icon_order)
         if removing_widget:
             self._persist_overlay_pinned_widgets(webspace, next_pinned_widgets)
             self._persist_overlay_widget_order(webspace, next_widget_order)
 
         def _mutator(doc: Any, txn: Any) -> None:
             self._apply_installed_state(doc, txn, next_installed)
+            if item_type == "app":
+                self._apply_pinned_applications_state(
+                    doc, txn, next_pinned_applications
+                )
+            if removing_app:
+                self._apply_icon_order_state(doc, txn, next_icon_order)
             if removing_widget:
                 self._apply_pinned_widgets_state(doc, txn, next_pinned_widgets)
                 self._apply_widget_order_state(doc, txn, next_widget_order)
@@ -1093,13 +1256,22 @@ class WebDesktopService:
                 target_id,
             )
 
+        async def _persist_toggle() -> None:
+            await self.set_installed_async(next_installed, webspace)
+            if item_type == "app":
+                await self.set_pinned_applications_async(
+                    next_pinned_applications, webspace
+                )
+            if removing_app:
+                await self.set_icon_order_async(next_icon_order, webspace)
+
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(self.set_installed_async(next_installed, webspace))
+            asyncio.run(_persist_toggle())
         else:
             loop.create_task(
-                self.set_installed_async(next_installed, webspace),
+                _persist_toggle(),
                 name=f"web-desktop-toggle-{webspace}",
             )
 
@@ -1181,6 +1353,42 @@ class WebDesktopService:
             loop.create_task(
                 self.set_pinned_widgets_async(next_pinned, webspace),
                 name=f"web-desktop-set-pinned-{webspace}",
+            )
+
+    def set_pinned_applications_with_live_room(
+        self,
+        pinned_applications: List[str],
+        webspace_id: Optional[str] = None,
+    ) -> None:
+        webspace = self._resolve_webspace(webspace_id)
+        next_pinned = _clone_text_list(pinned_applications)
+        self._persist_overlay_pinned_applications(webspace, next_pinned)
+
+        def _mutator(doc: Any, txn: Any) -> None:
+            self._apply_pinned_applications_state(doc, txn, next_pinned)
+
+        live_applied = mutate_live_room(
+            webspace,
+            _mutator,
+            root_names=["data"],
+            source="io_web.desktop",
+            owner="core:desktop",
+            channel="core.desktop.live_room",
+        )
+        if not live_applied:
+            _log.debug(
+                "mutate_live_room skipped for set_pinned_applications webspace=%s",
+                webspace,
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.set_pinned_applications_async(next_pinned, webspace))
+        else:
+            loop.create_task(
+                self.set_pinned_applications_async(next_pinned, webspace),
+                name=f"web-desktop-set-pinned-applications-{webspace}",
             )
 
     def set_topbar_with_live_room(
@@ -1356,6 +1564,7 @@ class WebDesktopService:
         webspace = self._resolve_webspace(webspace_id)
         self._persist_overlay_installed(webspace, snapshot.installed)
         self._persist_overlay_pinned_widgets(webspace, snapshot.pinned_widgets)
+        self._persist_overlay_pinned_applications(webspace, snapshot.pinned_applications)
         self._persist_overlay_topbar(webspace, snapshot.topbar)
         self._persist_overlay_page_schema(webspace, snapshot.page_schema)
         self._persist_overlay_icon_order(webspace, snapshot.icon_order)

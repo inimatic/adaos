@@ -593,10 +593,36 @@ def test_desktop_product_extensions_publish_authoritative_projection_contracts()
     assert components["collection.grid"]["manifest"]["desktop_projection"].find(
         "desktop.icons"
     ) >= 0
+    assert components["collection.grid"]["manifest"]["desktop_projection"].find(
+        "desktop-icons"
+    ) >= 0
     assert components["desktop.widgets"]["manifest"]["required_data_source"].find(
         "desktop.widgets"
     ) >= 0
     assert components["desktop.widgets"].get("semantic_profile") is None
+
+
+def test_desktop_icons_projection_requires_canonical_widget_id() -> None:
+    webui = _empty_webui()
+    webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"] = [
+        {
+            "id": "home-pinned",
+            "type": "collection.grid",
+            "area": "main",
+            "dataSource": {"kind": "y", "transform": "desktop.icons"},
+        }
+    ]
+
+    invalid = validate_webui_capabilities(webui)
+    webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["id"] = "desktop-icons"
+    valid = validate_webui_capabilities(webui)
+
+    assert "ui.desktop_icons.id_invalid" in {
+        item["code"] for item in invalid["findings"]
+    }
+    assert "ui.desktop_icons.id_invalid" not in {
+        item["code"] for item in valid["findings"]
+    }
 
 
 def test_generic_validation_requires_renderer_consumable_collection_source() -> None:

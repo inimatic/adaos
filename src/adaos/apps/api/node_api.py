@@ -3871,9 +3871,14 @@ class WebspacePinnedWidgetsRequest(BaseModel):
     pinnedWidgets: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class WebspacePinnedApplicationsRequest(BaseModel):
+    pinnedApplications: list[str] = Field(default_factory=list)
+
+
 class WebspaceDesktopUpdateRequest(BaseModel):
     installed: dict[str, Any] | None = None
     pinnedWidgets: list[dict[str, Any]] | None = None
+    pinnedApplications: list[str] | None = None
     topbar: list[Any] | None = None
     pageSchema: dict[str, Any] | None = None
     iconOrder: list[str] | None = None
@@ -6600,6 +6605,42 @@ async def node_yjs_set_pinned_widgets(
     }
 
 
+@router.post("/yjs/webspaces/{webspace_id}/desktop/pinned-applications", dependencies=[Depends(require_token)])
+async def node_yjs_set_pinned_applications(
+    webspace_id: str,
+    payload: WebspacePinnedApplicationsRequest,
+) -> dict[str, Any]:
+    conf = load_config()
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": target_webspace_id,
+            "error": "hub_role_required",
+        }
+    svc = WebDesktopService()
+    svc.set_pinned_applications_with_live_room(
+        [
+            str(item or "").strip()
+            for item in payload.pinnedApplications
+            if str(item or "").strip()
+        ],
+        target_webspace_id,
+    )
+    desktop = await svc.get_snapshot_async(target_webspace_id)
+    return {
+        "ok": True,
+        "accepted": True,
+        "webspace_id": target_webspace_id,
+        "desktop": desktop.to_dict(),
+        "runtime": yjs_sync_runtime_snapshot(
+            role=conf.role,
+            webspace_id=target_webspace_id,
+        ),
+    }
+
+
 @router.patch("/yjs/webspaces/{webspace_id}/desktop", dependencies=[Depends(require_token)])
 async def node_yjs_update_desktop(
     webspace_id: str,
@@ -6628,6 +6669,15 @@ async def node_yjs_update_desktop(
         )
     if payload.pinnedWidgets is not None:
         svc.set_pinned_widgets_with_live_room(list(payload.pinnedWidgets or []), target_webspace_id)
+    if payload.pinnedApplications is not None:
+        svc.set_pinned_applications_with_live_room(
+            [
+                str(item or "").strip()
+                for item in payload.pinnedApplications
+                if str(item or "").strip()
+            ],
+            target_webspace_id,
+        )
     if payload.topbar is not None:
         svc.set_topbar_with_live_room(list(payload.topbar or []), target_webspace_id)
     if payload.pageSchema is not None:

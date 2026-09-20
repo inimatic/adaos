@@ -108,6 +108,15 @@ def desktop_get_snapshot(webspace_id: Optional[str] = None) -> dict:
     return svc.get_snapshot(webspace_id).to_dict()
 
 
+@tool(
+    "web.desktop.get_pinned_applications",
+    summary="Return application ids pinned to a webspace Home.",
+    stability="experimental",
+)
+def desktop_get_pinned_applications(webspace_id: Optional[str] = None) -> list[str]:
+    return WebDesktopService().get_pinned_applications(webspace_id)
+
+
 async def desktop_get_installed_async(webspace_id: Optional[str] = None) -> dict:
     """
     Async helper for reading installed desktop items for a webspace.
@@ -220,6 +229,25 @@ def desktop_set_pinned_widgets(
 
 
 @tool(
+    "web.desktop.set_pinned_applications",
+    summary="Replace the applications pinned to a webspace Home.",
+    stability="experimental",
+    examples=["web.desktop.set_pinned_applications(['scenario:applications'])"],
+)
+def desktop_set_pinned_applications(
+    app_ids: list[str],
+    webspace_id: Optional[str] = None,
+    *,
+    live: bool = True,
+) -> None:
+    svc = WebDesktopService()
+    if live:
+        svc.set_pinned_applications_with_live_room(list(app_ids or []), webspace_id)
+    else:
+        svc.set_pinned_applications(list(app_ids or []), webspace_id)
+
+
+@tool(
     "web.desktop.set_topbar",
     summary="Replace desktop topbar items for a webspace.",
     stability="experimental",
@@ -261,7 +289,7 @@ def desktop_set_page_schema(
     "web.desktop.set_snapshot",
     summary="Replace materialized desktop customization state for a webspace.",
     stability="experimental",
-    examples=["web.desktop.set_snapshot({'installed': {'apps': [], 'widgets': []}, 'pinnedWidgets': [], 'topbar': [], 'pageSchema': {}})"],
+    examples=["web.desktop.set_snapshot({'installed': {'apps': [], 'widgets': []}, 'pinnedApplications': [], 'pinnedWidgets': [], 'topbar': [], 'pageSchema': {}})"],
 )
 def desktop_set_snapshot(
     snapshot: dict[str, Any],
@@ -277,6 +305,7 @@ def desktop_set_snapshot(
             widgets=list(installed_raw.get("widgets") or []),
         ),
         pinned_widgets=list(payload.get("pinnedWidgets") or []),
+        pinned_applications=list(payload.get("pinnedApplications") or []),
         topbar=list(payload.get("topbar") or []),
         page_schema=dict(payload.get("pageSchema") or {}),
     )
