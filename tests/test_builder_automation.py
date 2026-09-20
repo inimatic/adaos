@@ -2615,6 +2615,27 @@ def test_validation_failure_reuses_original_budget_candidate_after_requalificati
     assert checkpoint["continuation_contract"] == continuation_contract
 
 
+def test_manifest_scope_requalification_admits_only_the_preserved_candidate(
+) -> None:
+    checkpoint = {
+        "schema": "adaos.builder.automation_continuation_checkpoint.v1",
+        "mode": "validate_preserved_candidate",
+        "source_task_id": "task.source",
+        "failure_id": "failure.source",
+        "reason": "manifest_scope_requalified_after_guard",
+        "continuation_contract": automation_module._continuation_contract(),
+    }
+
+    assert automation_module._continuation_allows_large_manifest_rewrite(checkpoint)
+    assert not automation_module._continuation_allows_large_manifest_rewrite(
+        {**checkpoint, "reason": "codex_token_budget_exceeded"}
+    )
+    assert not automation_module._continuation_allows_large_manifest_rewrite(
+        {**checkpoint, "source_task_id": ""}
+    )
+    assert not automation_module._continuation_allows_large_manifest_rewrite(None)
+
+
 def test_mcp_retry_preserves_underlying_validation_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

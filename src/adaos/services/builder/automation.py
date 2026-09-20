@@ -1204,6 +1204,20 @@ def _continuation_contract() -> dict[str, Any]:
     }
 
 
+def _continuation_allows_large_manifest_rewrite(
+    checkpoint: Mapping[str, Any] | None,
+) -> bool:
+    """Admit only the preserved candidate rejected by the manifest-size guard."""
+
+    return bool(
+        isinstance(checkpoint, Mapping)
+        and checkpoint.get("mode") == "validate_preserved_candidate"
+        and checkpoint.get("reason") == "manifest_scope_requalified_after_guard"
+        and str(checkpoint.get("source_task_id") or "").strip()
+        and isinstance(checkpoint.get("continuation_contract"), Mapping)
+    )
+
+
 def _publish_automation_changed(projection: Mapping[str, Any]) -> None:
     try:
         from adaos.services.agent_context import get_ctx
@@ -8625,6 +8639,14 @@ class BuilderAutomationService:
             target={"type": kind, "id": project_id},
             companion_skill_ids=companions,
         )
+        continuation_checkpoint = (
+            dict(session.get("pending_continuation_checkpoint"))
+            if isinstance(session.get("pending_continuation_checkpoint"), Mapping)
+            else {}
+        )
+        allow_large_manifest_rewrite = _continuation_allows_large_manifest_rewrite(
+            continuation_checkpoint
+        )
         if request_mcp.get("enabled") is not False and subnet_id:
             request_mcp.setdefault("subnet_id", subnet_id)
             request_mcp.setdefault("bound_target_id", f"hub:{subnet_id}")
@@ -8674,6 +8696,9 @@ class BuilderAutomationService:
                 ),
                 "continuation_checkpoint": copy.deepcopy(
                     session.get("pending_continuation_checkpoint")
+                ),
+                "allow_large_manifest_rewrite": (
+                    True if allow_large_manifest_rewrite else None
                 ),
                 "browser_feedback": copy.deepcopy(
                     session.get("pending_browser_feedback")
