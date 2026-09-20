@@ -4070,7 +4070,10 @@ class BuilderAutomationService:
                 session,
                 iteration_instruction=instruction,
                 canonical_brief_authority=development_session_rebound,
-                canonical_change_authority=canonical_change_rebound,
+                canonical_change_authority=(
+                    canonical_change_rebound
+                    or instruction == _UNCHANGED_RETRY_INSTRUCTION
+                ),
                 execution_brief_override=(
                     str(session.get("last_execution_brief") or "").strip() or None
                     if instruction == _UNCHANGED_RETRY_INSTRUCTION

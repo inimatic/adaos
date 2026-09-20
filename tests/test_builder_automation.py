@@ -3858,11 +3858,13 @@ def test_retry_after_reaccepting_same_change_reenters_automation(
         "_capture_preview_binding",
         lambda self, session: None,
     )
-    monkeypatch.setattr(
-        BuilderAutomationService,
-        "_submit",
-        lambda self, session, **_kwargs: {"task": {"task_id": "task.retry"}},
-    )
+    submissions: list[dict] = []
+
+    def _submit(_self, _session, **kwargs):
+        submissions.append(dict(kwargs))
+        return {"task": {"task_id": "task.retry"}}
+
+    monkeypatch.setattr(BuilderAutomationService, "_submit", _submit)
     monkeypatch.setattr(
         BuilderAutomationService,
         "_notify_started_session",
@@ -3871,13 +3873,14 @@ def test_retry_after_reaccepting_same_change_reenters_automation(
     monkeypatch.setattr(BuilderAutomationService, "_launch_worker", lambda *_args: None)
 
     result = service.submit_turn(
-        text="Retry the unchanged accepted implementation.",
+        text=_UNCHANGED_RETRY_INSTRUCTION,
         object_type="scenario",
         object_id="recipes",
         agent_profile=new_profile if replace_profile else None,
     )
 
     assert result["status"] == "automation_queued"
+    assert submissions[0]["canonical_change_authority"] is True
     assert transitions == ["automation_started"]
     retained = service.get_session("scenario", "recipes")
     assert retained["iteration"] == 2
