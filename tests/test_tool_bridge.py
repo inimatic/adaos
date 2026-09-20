@@ -973,7 +973,7 @@ def test_webspace_runtime_resolution_uses_http_context(monkeypatch) -> None:
     monkeypatch.setattr(workspace_index, "get_workspace", _get_workspace)
 
     assert tool_bridge_module._webspace_uses_dev_runtime(
-        {},
+        {"webspace_id": "desktop"},
         {"webspace_id": "builder-sdk-control-dev"},
     ) is True
     assert requested == ["builder-sdk-control-dev"]
@@ -1027,12 +1027,13 @@ def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> N
 
     assert result["ok"] is True
     assert calls == ["recipe_skill:list_recipes"]
-    assert len(preflight_thread_ids) == 2
+    assert len(preflight_thread_ids) == 3
     assert all(thread_id != owner_thread_id for thread_id in preflight_thread_ids)
 
 
 def test_call_tool_infers_dev_runtime_from_http_context(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object]]] = []
+    trial_selections: list[str] = []
 
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
@@ -1060,6 +1061,13 @@ def test_call_tool_infers_dev_runtime_from_http_context(monkeypatch) -> None:
         "_webspace_uses_dev_runtime",
         lambda payload: payload.get("webspace_id") == "builder-sdk-control-dev",
     )
+    from adaos.services.applications import runtime_selection
+
+    monkeypatch.setattr(
+        runtime_selection,
+        "selected_trial",
+        lambda _ctx, webspace_id, *_args: trial_selections.append(webspace_id),
+    )
     monkeypatch.setattr(tool_bridge_module, "_maybe_sync_dev_runtime", lambda *_args: None)
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
 
@@ -1079,6 +1087,7 @@ def test_call_tool_infers_dev_runtime_from_http_context(monkeypatch) -> None:
     assert result["ok"] is True
     assert calls[0][:2] == ("builder_sdk_control_skill", "list_projects")
     assert calls[0][2]["_meta"]["webspace_id"] == "builder-sdk-control-dev"
+    assert trial_selections == []
 
 
 def test_call_tool_syncs_dev_runtime_before_read_contract_preflight(monkeypatch, tmp_path) -> None:

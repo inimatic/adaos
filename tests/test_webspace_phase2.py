@@ -5404,7 +5404,20 @@ def test_builder_preview_sources_exact_prototype_and_retained_automation(monkeyp
     automation_dir.mkdir(parents=True)
     automation = {
         "schema": "adaos.webui.v1",
-        "ui": {"application": {"desktop": {"pageSchema": {"title": "Recipes automation"}}}},
+        "ui": {"application": {"desktop": {"pageSchema": {
+            "title": "Recipes automation",
+            "initialState": {
+                "prototypeFixtures": {"recipes": {"result": [{"id": "sample"}]}},
+            },
+            "widgets": [{
+                "id": "recipes",
+                "dataSource": {
+                    "kind": "mcp",
+                    "toolId": "recipes.list",
+                    "prototypeFixture": "$state.prototypeFixtures.recipes",
+                },
+            }],
+        }}}},
     }
     (automation_dir / "webui.json").write_text(json.dumps(automation), encoding="utf-8")
     (automation_dir / "snapshot.json").write_text(json.dumps({
@@ -5443,6 +5456,9 @@ def test_builder_preview_sources_exact_prototype_and_retained_automation(monkeyp
     }
     assert automation_space == "dev"
     assert automation_content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "active: Recipes automation"
+    automation_page = automation_content["ui"]["application"]["desktop"]["pageSchema"]
+    assert automation_page["initialState"]["prototypeFixtures"] == {}
+    assert automation_page["widgets"][0]["dataSource"]["prototypeFixture"] is None
     assert automation_content["ui"]["application"]["desktop"]["pageSchema"]["_adaos"]["releaseStage"] == "ALPHA"
     modal_meta = prototype_content["ui"]["application"]["modals"]["edit"]["_adaos"]
     assert modal_meta["releaseStage"] == "ALPHA"

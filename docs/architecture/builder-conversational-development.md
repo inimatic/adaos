@@ -1306,6 +1306,16 @@ implemented behavior, and interface changes that accidentally bind real writes
 during design review. Safe detachment or sanitization is recorded as an
 evidence-producing transformer; an LLM claim that data is safe is not evidence.
 
+An Automation preview is an authority check, not another Prototype rendering.
+Its materialized projection removes `prototypeFixture` bindings and the
+corresponding `prototypeFixtures` payload without rewriting the accepted
+Prototype or DEV source. Reads must therefore settle through the declared MCP
+or SDK authority. A `-dev` Webspace suffix alone never authorizes fixture use.
+If an authoritative read remains loading or fails, Builder first compares the
+declared binding, direct tool diagnostics and transport state; it must not ask
+the implementing model to manufacture fixture data to make the browser gate
+green. Platform-owned findings become Development Feedback with exact evidence.
+
 ## Review And Executable Acceptance
 
 Review belongs to a Change, not to browser local storage or a transient page

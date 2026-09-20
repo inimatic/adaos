@@ -2486,6 +2486,7 @@ def test_materialize_catalog_items_uses_matching_materialized_payload_when_live_
             return SimpleNamespace(
                 installed=SimpleNamespace(apps=["weather_app"], widgets=[]),
                 pinned_widgets=[],
+                pinned_applications=["weather_app"],
             )
 
     monkeypatch.setattr(node_api_module, "WebDesktopService", _DesktopService)
@@ -2494,6 +2495,8 @@ def test_materialize_catalog_items_uses_matching_materialized_payload_when_live_
 
     assert result[0]["id"] == "weather_app"
     assert result[0]["installed"] is True
+    assert result[0]["pinnable"] is True
+    assert result[0]["pinned"] is True
     assert result[0]["icon"] == "cloud-outline"
     assert result[0]["version"] == "0.3.0"
     assert result[0]["release_stage"] == "beta"

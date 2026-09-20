@@ -286,6 +286,24 @@ def test_missing_semantic_target_fails_before_model_submission(
     assert report["coverage"]["missing"] == ["target_structure"]
 
 
+def test_evidence_reference_does_not_require_spatial_target(
+    service: BuilderWorkflowService,
+) -> None:
+    _plan(service, "dticket.01M2YYDDB0ZRFG5144FVBE54FF")
+
+    packet = service.build_context_packet(
+        "scenario",
+        "recipes",
+        required_facets=["abi"],
+        enforce_context_coverage=True,
+    )
+
+    target = packet["facets"]["target_structure"]
+    assert target["requested_refs"] == []
+    assert target["status"] == "missing"
+    assert packet["coverage"]["ready"] is True
+
+
 def test_context_packet_digest_covers_purpose_facets_and_review_constraints(
     service: BuilderWorkflowService,
 ) -> None:

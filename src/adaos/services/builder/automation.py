@@ -31,7 +31,10 @@ from adaos.domain.development_budget import (
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.builder.workspace import BuilderWorkspaceService
-from adaos.services.builder.workflow import BuilderWorkflowService
+from adaos.services.builder.workflow import (
+    BuilderWorkflowService,
+    ui_spatial_target_refs,
+)
 from adaos.services.context_control import ContextControlService
 from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
@@ -5131,6 +5134,7 @@ class BuilderAutomationService:
                     "snapshot",
                     "candidate_materialization",
                     "browser_feedback",
+                    "preview_restoration",
                     "live_readiness",
                     "project_checkpoint",
                     "aprobation_activation",
@@ -8170,13 +8174,13 @@ class BuilderAutomationService:
             if isinstance(workflow_state.get("change_set"), Mapping)
             else {}
         )
-        semantic_refs = [
+        semantic_refs = ui_spatial_target_refs([
             str(ref).strip()
             for issue in change_set.get("issues") or []
             if isinstance(issue, Mapping)
             for ref in issue.get("semantic_refs") or []
             if str(ref).strip()
-        ]
+        ])
         required_context_facets = [
             "application_permissions",
             "data_policy",
@@ -9303,28 +9307,37 @@ class BuilderAutomationService:
             if isinstance(binding.get("preview_target"), Mapping)
             else {}
         )
-        if current_target and not self._preview_target_matches_project(
-            current_target,
-            object_type=str(current.get("object_type") or "scenario"),
-            object_id=scenario_id,
-        ):
-            raise RuntimeError(
-                "Browser feedback cannot replace a Preview selection from another project"
+        temporary_override = bool(
+            current_target
+            and not self._preview_target_matches_project(
+                current_target,
+                object_type=str(current.get("object_type") or "scenario"),
+                object_id=scenario_id,
             )
+        )
         task_id = str(current.get("current_task_id") or "").strip()
         if not task_id:
             raise RuntimeError("Browser feedback requires an exact Automation task revision")
         target = {
             **current_target,
             "schema": "adaos.builder.preview_target.v1",
-            "object_type": str(current_target.get("object_type") or "scenario"),
-            "object_id": str(current_target.get("object_id") or scenario_id),
+            "object_type": str(current.get("object_type") or "scenario"),
+            "object_id": scenario_id,
             "scenario_id": scenario_id,
             "stage": "automation",
             "revision": task_id,
             "label": f"active: {scenario_id} @ {task_id}",
             "follow_active": bool(current_target.get("follow_active", True)),
         }
+        # Align the project selection before pinning the exact revision. Otherwise
+        # ensure_dev_webspace() can clear the pin while reconciling a changed
+        # selection, and an already-open scenario can retain its previous payload.
+        workbench.set_active_draft(
+            source_webspace_id=webspace_id,
+            active_draft_id=None,
+            runtime_scenario_id=scenario_id,
+            persist_projection=False,
+        )
         # Runtime bootstrap resolves Automation content through the persisted
         # Preview identity. Pin the exact retained task before rebuilding so it
         # cannot read a previous task snapshot or DEV working-tree content.
@@ -9334,9 +9347,10 @@ class BuilderAutomationService:
                 webspace_id,
                 runtime_scenario_id=scenario_id,
                 wait_for_rebuild=True,
+                force_runtime_reload=True,
             )
         )
-        runtime = (
+        topology_runtime = (
             dict(binding.get("runtime"))
             if isinstance(binding.get("runtime"), Mapping)
             else {}
@@ -9344,15 +9358,43 @@ class BuilderAutomationService:
         preview_webspace_id = str(
             binding.get("preview_webspace_id")
             or binding.get("dev_webspace_id")
-            or runtime.get("webspace_id")
+            or topology_runtime.get("webspace_id")
             or ""
         ).strip()
+        if not bool(topology_runtime.get("ok")) or not preview_webspace_id:
+            raise RuntimeError(
+                str(
+                    topology_runtime.get("detail")
+                    or topology_runtime.get("error")
+                    or "candidate DEV topology preparation failed"
+                )
+            )
+        from adaos.sdk.builder.preview import materialize_revision_via_owner
+
+        runtime = materialize_revision_via_owner(
+            preview_webspace_id,
+            scenario_id=scenario_id,
+            revision=task_id,
+            preview_stage="automation",
+            preview_label=str(target.get("label") or "").strip() or None,
+            event_payload={
+                "source": "builder.automation.browser_feedback",
+                "source_webspace_id": webspace_id,
+                "_meta": {"cmd_id": f"browser-feedback:{task_id}"},
+            },
+            timeout_s=120.0,
+        )
         result = {
             **runtime,
-            "ok": bool(runtime.get("ok")),
+            "ok": bool(runtime.get("ok")) and bool(runtime.get("accepted", True)),
             "source": "candidate_browser_feedback",
             "webspace_id": webspace_id,
             "preview_webspace_id": preview_webspace_id or None,
+            "topology_runtime": topology_runtime,
+            "temporary_preview_override": temporary_override,
+            "previous_preview_target": (
+                copy.deepcopy(current_target) if temporary_override else None
+            ),
         }
         if not result["ok"] or not preview_webspace_id:
             raise RuntimeError(
@@ -9363,6 +9405,105 @@ class BuilderAutomationService:
                 )
             )
         return result
+
+    def _restore_preview_after_browser_feedback(
+        self,
+        materialization: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Restore a user's unrelated Preview after sharing the single DEV rail."""
+
+        if not bool(materialization.get("temporary_preview_override")):
+            return {"ok": True, "skipped": "preview_target_not_overridden"}
+        previous = materialization.get("previous_preview_target")
+        if not isinstance(previous, Mapping) or not previous:
+            raise RuntimeError("Temporary browser Preview has no previous target")
+        source_webspace_id = str(materialization.get("webspace_id") or "").strip()
+        scenario_id = str(
+            previous.get("scenario_id") or previous.get("object_id") or ""
+        ).strip()
+        if not source_webspace_id or not scenario_id:
+            raise RuntimeError("Previous browser Preview target is incomplete")
+
+        from adaos.services.builder.workbench import BuilderWorkbenchService
+
+        workbench = BuilderWorkbenchService(state_dir=self.state_dir)
+        workbench.set_active_draft(
+            source_webspace_id=source_webspace_id,
+            active_draft_id=None,
+            runtime_scenario_id=scenario_id,
+            persist_projection=False,
+        )
+        workbench.set_preview_target(
+            source_webspace_id=source_webspace_id,
+            target=dict(previous),
+        )
+        binding = asyncio.run(
+            workbench.ensure_dev_webspace(
+                source_webspace_id,
+                runtime_scenario_id=scenario_id,
+                wait_for_rebuild=True,
+                force_runtime_reload=True,
+            )
+        )
+        topology_runtime = (
+            dict(binding.get("runtime"))
+            if isinstance(binding.get("runtime"), Mapping)
+            else {}
+        )
+        preview_webspace_id = str(
+            binding.get("preview_webspace_id")
+            or binding.get("dev_webspace_id")
+            or topology_runtime.get("webspace_id")
+            or ""
+        ).strip()
+        if not bool(topology_runtime.get("ok")) or not preview_webspace_id:
+            raise RuntimeError(
+                str(
+                    topology_runtime.get("detail")
+                    or topology_runtime.get("error")
+                    or "Previous browser Preview could not be restored"
+                )
+            )
+        stage = str(previous.get("stage") or "").strip().lower()
+        revision = str(previous.get("revision") or "").strip()
+        if stage not in {"prototype", "automation"}:
+            raise RuntimeError("Previous browser Preview has no restorable DEV revision")
+        if not revision and not bool(previous.get("follow_active")):
+            raise RuntimeError("Previous browser Preview has no restorable DEV revision")
+        exact_stage = stage if revision else None
+        from adaos.sdk.builder.preview import materialize_revision_via_owner
+
+        runtime = materialize_revision_via_owner(
+            preview_webspace_id,
+            scenario_id=scenario_id,
+            revision=revision or None,
+            preview_stage=exact_stage,
+            preview_label=str(previous.get("label") or "").strip() or None,
+            event_payload={
+                "source": "builder.automation.browser_feedback.restore",
+                "source_webspace_id": source_webspace_id,
+                "_meta": {
+                    "cmd_id": f"browser-feedback-restore:{revision or 'current'}"
+                },
+            },
+            timeout_s=120.0,
+        )
+        if not bool(runtime.get("ok")) or not bool(runtime.get("accepted", True)):
+            raise RuntimeError(
+                str(
+                    runtime.get("detail")
+                    or runtime.get("error")
+                    or "Previous browser Preview revision could not be restored"
+                )
+            )
+        return {
+            **runtime,
+            "ok": True,
+            "source": "browser_feedback_preview_restore",
+            "webspace_id": source_webspace_id,
+            "scenario_id": scenario_id,
+            "topology_runtime": topology_runtime,
+        }
 
     @staticmethod
     def _browser_feedback_is_repairable(receipt: Mapping[str, Any]) -> bool:
@@ -9388,12 +9529,19 @@ class BuilderAutomationService:
     def _browser_feedback_repair_instruction(receipt: Mapping[str, Any]) -> str:
         from adaos.services.builder.browser_feedback import browser_feedback_failures
 
+        def portable_evidence_ref(value: Any) -> str:
+            normalized = str(value or "").strip().replace("\\", "/")
+            for marker in ("/.adaos/", "/e2e/artifacts/"):
+                if marker in normalized:
+                    return marker.strip("/") + "/" + normalized.split(marker, 1)[1]
+            return normalized
+
         failures = browser_feedback_failures(receipt)
         rendered = "\n".join(f"- {item}" for item in failures[:16])
         if not rendered:
             rendered = "- The independently executed browser gate did not pass."
         evidence = [
-            str(item.get("path") or "").strip()
+            portable_evidence_ref(item.get("path"))
             for item in receipt.get("evidence") or []
             if isinstance(item, Mapping) and str(item.get("path") or "").strip()
         ][:8]
@@ -9402,7 +9550,12 @@ class BuilderAutomationService:
             "Repair only the independently observed browser failures below. Preserve the "
             "accepted prototype, working behavior, data contracts, and unrelated layout. "
             "Do not weaken validation or suppress runtime errors. Re-run focused checks before "
-            "returning.\n\nObserved failures:\n"
+            "returning. A loading/error MCP source can be a Core, transport, or source-binding "
+            "failure: inspect the admitted MCP contract and runtime diagnostics before editing "
+            "Application source. Never add or restore prototypeFixture/prototypeFixtures in an "
+            "Automation repair. If the authoritative tool succeeds and the declared binding is "
+            "exact, report a Core/Client development escalation instead of fabricating data."
+            "\n\nObserved failures:\n"
             + rendered
             + (
                 "\n\nRead-only evidence paths:\n" + evidence_text
@@ -9623,34 +9776,52 @@ class BuilderAutomationService:
                                 webspace_id=webspace_id,
                             )
                         )
-                    with self._finalization_stage(
-                        current,
-                        readiness,
-                        "browser_feedback",
-                        "Observing the candidate in wide and compact browser layouts",
-                    ):
-                        readiness["browser_feedback"] = (
-                            self._browser_feedback().evaluate(
-                                scenario_id=object_id,
-                                webspace_id=str(
-                                    readiness["materialization"].get(
-                                        "preview_webspace_id"
+                    try:
+                        with self._finalization_stage(
+                            current,
+                            readiness,
+                            "browser_feedback",
+                            "Observing the candidate in wide and compact browser layouts",
+                        ):
+                            readiness["browser_feedback"] = (
+                                self._browser_feedback().evaluate(
+                                    scenario_id=object_id,
+                                    webspace_id=str(
+                                        readiness["materialization"].get(
+                                            "preview_webspace_id"
+                                        )
+                                        or ""
+                                    ),
+                                    subnet_id=str(_builder_subnet_id(current) or ""),
+                                    task_id=str(
+                                        current.get("current_task_id")
+                                        or current.get("change_id")
+                                        or ""
+                                    ),
+                                    source_path=self.dev_scenarios_root / object_id,
+                                    context_packet_digest=str(
+                                        current.get("context_packet_digest") or ""
                                     )
-                                    or ""
-                                ),
-                                subnet_id=str(_builder_subnet_id(current) or ""),
-                                task_id=str(
-                                    current.get("current_task_id")
-                                    or current.get("change_id")
-                                    or ""
-                                ),
-                                source_path=self.dev_scenarios_root / object_id,
-                                context_packet_digest=str(
-                                    current.get("context_packet_digest") or ""
+                                    or None,
                                 )
-                                or None,
                             )
-                        )
+                    finally:
+                        if bool(
+                            readiness["materialization"].get(
+                                "temporary_preview_override"
+                            )
+                        ):
+                            with self._finalization_stage(
+                                current,
+                                readiness,
+                                "preview_restoration",
+                                "Restoring the user's previous Preview selection",
+                            ):
+                                readiness["preview_restoration"] = (
+                                    self._restore_preview_after_browser_feedback(
+                                        readiness["materialization"]
+                                    )
+                                )
                     feedback = readiness["browser_feedback"]
                     history = [
                         copy.deepcopy(dict(item))

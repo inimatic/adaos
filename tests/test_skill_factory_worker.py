@@ -2357,6 +2357,113 @@ def test_worker_rejects_unreachable_form_success_action_before_browser(tmp_path)
     )
 
 
+def test_worker_rejects_webui_capability_drift_before_browser(tmp_path):
+    repo = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "desktop"
+    scenario.mkdir(parents=True)
+    document = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "desktop",
+                        "layout": {
+                            "version": 2,
+                            "pattern": "dashboard",
+                            "density": "comfortable",
+                            "contentWidth": "fluid",
+                            "scroll": "page",
+                            "interaction": {
+                                "selection": "single",
+                                "rowActivation": "select",
+                                "filters": "inline",
+                                "actions": "adaptive",
+                            },
+                            "regions": [
+                                {
+                                    "id": "main",
+                                    "role": "main",
+                                    "priority": 100,
+                                    "scroll": "page",
+                                    "presentation": {
+                                        "wide": "pane",
+                                        "compact": "stack",
+                                    },
+                                }
+                            ],
+                        },
+                        "widgets": [
+                            {
+                                "id": "desktop-widgets",
+                                "type": "desktop.widgets",
+                                "area": "main",
+                                "dataSource": {
+                                    "kind": "skill",
+                                    "name": "desktop.list_widgets",
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+    path = scenario / "webui.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    (scenario / "scenario.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "desktop",
+                "version": "0.1.0",
+                "description": "Desktop scenario",
+                "depends": [],
+                "ui": {"manifest": "webui.json"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo,
+        dev_skills_root=workspace / "skills",
+        dev_scenarios_root=workspace / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    assignment = {
+        "target": {"type": "scenario", "id": "desktop"},
+        "forge": {"sparse_paths": ["scenarios/desktop/"]},
+    }
+
+    rejected = worker._validate_workspace(assignment, workspace)
+
+    assert not rejected["ok"]
+    assert any(
+        "ui.desktop_widgets.source_invalid" in error
+        for error in rejected["errors"]
+    )
+    check = next(
+        item
+        for item in rejected["checks"]
+        if item["kind"] == "ui.capability_catalog"
+    )
+    assert check["ok"] is False
+
+    document["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0][
+        "dataSource"
+    ] = {"kind": "y", "transform": "desktop.widgets"}
+    path.write_text(json.dumps(document), encoding="utf-8")
+    accepted = worker._validate_workspace(assignment, workspace)
+
+    assert accepted["ok"], accepted["errors"]
+    assert any(
+        item["kind"] == "ui.capability_catalog" and item["ok"]
+        for item in accepted["checks"]
+    )
+
+
 def test_surgical_repair_enforces_exact_files_and_file_count(tmp_path: Path) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
@@ -8089,6 +8196,66 @@ def test_worker_binds_exact_external_mcp_contracts_and_prototype_identity(
     assert "Exact external MCP contracts" in prompt
     assert "Do not invoke or reimplement the Builder browser-feedback gate" in prompt
     assert "do not try to recreate its canonicalization" in prompt
+
+
+def test_worker_binds_new_external_mcp_contract_named_by_approved_brief(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    project_id = "applications"
+    workspace = tmp_path / "workspace"
+    scenario_root = workspace / "scenarios" / project_id
+    scenario_root.mkdir(parents=True)
+    (scenario_root / "webui.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.webui.v1",
+                "ui": {
+                    "application": {
+                        "desktop": {
+                            "pageSchema": {
+                                "id": project_id,
+                                "widgets": [],
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assignment = {
+        "task_id": "task.applications-home-pin",
+        "target": {"type": "scenario", "id": project_id},
+        "forge": {"sparse_paths": [f"scenarios/{project_id}/"]},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": (
+                    "Add a command backed by applications.set_home_pin. "
+                    "Display home.pinned and execution_placement.status as values."
+                )
+            }
+        },
+    }
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+
+    worker._build_packet(assignment, workspace, tmp_path / "input")
+
+    contracts = json.loads(
+        (tmp_path / "input" / "external-mcp-contracts.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert contracts["unresolved_tool_ids"] == []
+    assert [item["id"] for item in contracts["contracts"]] == [
+        "applications.set_home_pin"
+    ]
+    assert contracts["contracts"][0]["binding_usage"] == ["brief_reference"]
 
 
 def test_worker_reuses_pristine_prototype_identity_for_automation_continuation(

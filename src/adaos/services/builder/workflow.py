@@ -1157,6 +1157,27 @@ def _bounded_pending_action_refs(values: Any) -> list[dict[str, Any]]:
     return refs
 
 
+def ui_spatial_target_refs(refs: Sequence[Any]) -> list[str]:
+    """Return refs that can be resolved against the WebUI spatial tree.
+
+    Change issues also carry evidence and non-spatial semantic references such
+    as ``dticket.*``, ``state:*`` and ``command:*``.  Those references belong
+    in their dedicated context facets and must not make the spatial target
+    facet fail closed.
+    """
+
+    supported_prefixes = ("widget:", "surface:", "field:")
+    return list(
+        dict.fromkeys(
+            token
+            for value in refs
+            if (token := str(value).strip())
+            and token.startswith(supported_prefixes)
+            and token.rsplit(":", 1)[-1]
+        )
+    )
+
+
 def _semantic_target_context(
     webui: Mapping[str, Any], refs: list[str]
 ) -> dict[str, Any]:
@@ -5908,6 +5929,7 @@ class BuilderWorkflowService:
                 ref = str(review.get("target_ref") or "").strip()
                 if ref and ref not in semantic_refs:
                     semantic_refs.append(ref)
+            spatial_target_refs = ui_spatial_target_refs(semantic_refs)
             webui: dict[str, Any] = {}
             webui_digest = None
             webui_root = root
@@ -5930,7 +5952,7 @@ class BuilderWorkflowService:
                     webui_digest = f"sha256:{hashlib.sha256(webui_raw).hexdigest()}"
                 except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                     webui = {}
-            target_structure = _semantic_target_context(webui, semantic_refs)
+            target_structure = _semantic_target_context(webui, spatial_target_refs)
             constraints = {
                 "status": "present",
                 "issue_acceptance": [

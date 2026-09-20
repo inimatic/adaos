@@ -233,7 +233,10 @@ def _webspace_uses_dev_runtime(
     context: Mapping[str, Any] | None = None,
 ) -> bool:
     """Resolve DEV execution from authoritative webspace metadata."""
-    webspace_id = _resolve_tool_webspace_id(payload, context=context)
+    request_context = _mapping(context)
+    webspace_id = str(request_context.get("webspace_id") or "").strip()
+    if not webspace_id:
+        webspace_id = _resolve_tool_webspace_id(payload, context=context)
     if not webspace_id:
         return False
     try:
@@ -2438,9 +2441,22 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
     from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
     from adaos.services.applications.runtime_channel import RuntimeChannelConflict
 
-    webspace = _resolve_tool_webspace_id(body.arguments or {}, context=body.context)
+    request_context = _mapping(body.context)
+    webspace = str(request_context.get("webspace_id") or "").strip() or _resolve_tool_webspace_id(
+        body.arguments or {}, context=body.context
+    )
+    routing = dict(body.arguments or {})
+    if webspace:
+        routing["webspace_id"] = webspace
+    implicit_dev_webspace = (not body.dev) and await asyncio.to_thread(
+        _webspace_uses_dev_runtime,
+        routing,
+    )
     try:
-        trial_runtime = None if body.dev else await asyncio.to_thread(selected_trial, ctx, webspace, "skill", body.tool.partition(":")[0])
+        # A DEV webspace is authoritative for its preview rail. Selecting a
+        # production Trial first can otherwise bind one declarative read to an
+        # older beta runtime while the rest of the page uses DEV.
+        trial_runtime = None if body.dev or implicit_dev_webspace else await asyncio.to_thread(selected_trial, ctx, webspace, "skill", body.tool.partition(":")[0])
         if trial_runtime is not None:
             if body.dev:
                 raise TrialRuntimeUnavailable("A production Trial selection cannot execute DEV tools")
@@ -2534,10 +2550,9 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
     payload: Dict[str, Any] = dict(body.arguments or {})
     routing_payload = dict(payload)
     routing_context = _mapping(body.context)
-    if not str(routing_payload.get("webspace_id") or "").strip():
-        context_webspace_id = str(routing_context.get("webspace_id") or "").strip()
-        if context_webspace_id:
-            routing_payload["webspace_id"] = context_webspace_id
+    context_webspace_id = str(routing_context.get("webspace_id") or "").strip()
+    if context_webspace_id:
+        routing_payload["webspace_id"] = context_webspace_id
     implicit_dev_webspace = (not body.dev) and await asyncio.to_thread(
         _webspace_uses_dev_runtime,
         routing_payload,

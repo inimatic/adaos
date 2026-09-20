@@ -108,6 +108,7 @@ class BuilderPreviewReconciler:
         project_kind: str,
         project_id: str,
         desired_scenario: str,
+        force: bool = False,
     ) -> tuple[dict[str, Any], bool]:
         source = str(source_webspace_id or "").strip()
         preview = str(preview_webspace_id or "").strip()
@@ -126,7 +127,12 @@ class BuilderPreviewReconciler:
                 and current.get("selected_project") == selected_project
                 and str(current.get("desired_scenario") or "").strip() == desired
             )
-            if same_request and str(current.get("status") or "") in {"requested", "running", "accepted", "ready"}:
+            if (
+                not force
+                and same_request
+                and str(current.get("status") or "")
+                in {"requested", "running", "accepted", "ready"}
+            ):
                 return current, True
 
             now = time.time()

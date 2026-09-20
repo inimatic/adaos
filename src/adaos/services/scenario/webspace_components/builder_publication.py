@@ -385,6 +385,24 @@ class WebspaceBuilderPublicationService:
             )
 
         override = operations.clone_json_like(content)
+        if stage_token == "automation":
+            def without_prototype_fixtures(value: Any) -> Any:
+                if isinstance(value, Mapping):
+                    return {
+                        key: (
+                            None
+                            if key == "prototypeFixture"
+                            else {}
+                            if key == "prototypeFixtures"
+                            else without_prototype_fixtures(item)
+                        )
+                        for key, item in value.items()
+                    }
+                if isinstance(value, list):
+                    return [without_prototype_fixtures(item) for item in value]
+                return value
+
+            override = without_prototype_fixtures(override)
         ui = override.get("ui") if isinstance(override.get("ui"), Mapping) else {}
         application = ui.get("application") if isinstance(ui.get("application"), Mapping) else {}
         desktop = (

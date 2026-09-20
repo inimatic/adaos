@@ -6170,6 +6170,10 @@ def test_finalize_prepares_materialized_runtime_then_notifies(
             calls.append(f"pin:{kwargs['target']['revision']}")
             return {"preview_target": kwargs["target"]}
 
+        def set_active_draft(self, **kwargs):  # noqa: ANN003
+            calls.append(f"select:{kwargs['runtime_scenario_id']}")
+            return {}
+
         async def ensure_dev_webspace(self, source_webspace_id, **kwargs):  # noqa: ARG002
             calls.append("ensure")
             return {
@@ -6212,6 +6216,7 @@ def test_finalize_prepares_materialized_runtime_then_notifies(
 
     assert calls == [
         "activate:recipes_skill:candidate:True",
+        "select:recipes",
         "pin:task.1",
         "ensure",
         "browser_feedback",
@@ -8773,6 +8778,10 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
             calls.append(f"pin:{kwargs['target']['revision']}")
             return {"preview_target": kwargs["target"]}
 
+        def set_active_draft(self, **kwargs):  # noqa: ANN003
+            calls.append(f"select:{kwargs['runtime_scenario_id']}")
+            return {}
+
         def resolve_builder_context(self, source_webspace_id):  # noqa: ARG002
             raise ValueError("Builder is not active in Webspace 'desktop'")
 
@@ -8829,9 +8838,124 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
     )
 
     readiness = saved[-1]["completion_readiness"]
-    assert calls == ["pin:task.1", "materialize", "browser_feedback"]
+    assert calls == [
+        "select:recipes",
+        "pin:task.1",
+        "materialize",
+        "browser_feedback",
+    ]
     assert readiness["browser_feedback"]["status"] == "passed"
     assert readiness["materialization"]["source"] == "candidate_browser_feedback"
+
+
+def test_browser_feedback_temporarily_borrows_and_restores_unrelated_preview(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    calls: list[tuple[str, str, str]] = []
+    previous = {
+        "schema": "adaos.builder.preview_target.v1",
+        "object_type": "scenario",
+        "object_id": "web_desktop",
+        "scenario_id": "web_desktop",
+        "stage": "prototype",
+        "revision": "004",
+        "follow_active": False,
+    }
+
+    class FakeWorkbench:
+        def __init__(self, **_kwargs):
+            pass
+
+        def get_workspace_binding(self, _source_webspace_id):
+            return {
+                "preview_webspace_id": "desktop-dev",
+                "preview_target": previous,
+            }
+
+        def set_preview_target(self, *, source_webspace_id, target):
+            calls.append(
+                (
+                    "select",
+                    source_webspace_id,
+                    str(target.get("object_id") or ""),
+                )
+            )
+            return {"preview_target": dict(target)}
+
+        def set_active_draft(
+            self,
+            *,
+            source_webspace_id,
+            runtime_scenario_id,
+            **_kwargs,
+        ):
+            calls.append(("prepare", source_webspace_id, runtime_scenario_id))
+            return {}
+
+        async def ensure_dev_webspace(
+            self, source_webspace_id, *, runtime_scenario_id, **_kwargs
+        ):
+            calls.append(
+                (
+                    "topology",
+                    source_webspace_id,
+                    f"{runtime_scenario_id}:force={_kwargs.get('force_runtime_reload')}",
+                )
+            )
+            return {
+                "preview_webspace_id": "desktop-dev",
+                "runtime": {"ok": True, "webspace_id": "desktop-dev"},
+            }
+
+    def fake_owner_materialize(
+        webspace_id,
+        *,
+        scenario_id,
+        revision,
+        preview_stage,
+        **_kwargs,
+    ):
+        calls.append(("owner", scenario_id, f"{preview_stage}:{revision}"))
+        return {
+            "ok": True,
+            "accepted": True,
+            "webspace_id": webspace_id,
+            "scenario_id": scenario_id,
+        }
+
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
+    monkeypatch.setattr(
+        "adaos.sdk.builder.preview.materialize_revision_via_owner",
+        fake_owner_materialize,
+    )
+
+    materialized = service._materialize_candidate_for_browser_feedback(
+        {
+            "object_type": "scenario",
+            "object_id": "applications",
+            "current_task_id": "task.applications",
+        },
+        webspace_id="desktop",
+    )
+    restored = service._restore_preview_after_browser_feedback(materialized)
+
+    assert materialized["temporary_preview_override"] is True
+    assert materialized["previous_preview_target"] == previous
+    assert restored["ok"] is True
+    assert calls == [
+        ("prepare", "desktop", "applications"),
+        ("select", "desktop", "applications"),
+        ("topology", "desktop", "applications:force=True"),
+        ("owner", "applications", "automation:task.applications"),
+        ("prepare", "desktop", "web_desktop"),
+        ("select", "desktop", "web_desktop"),
+        ("topology", "desktop", "web_desktop:force=True"),
+        ("owner", "web_desktop", "prototype:004"),
+    ]
 
 
 def test_browser_feedback_timeout_is_not_sent_to_codex_repair() -> None:
@@ -8866,6 +8990,33 @@ def test_browser_feedback_timeout_is_not_sent_to_codex_repair() -> None:
         )
         is True
     )
+
+
+def test_browser_feedback_repair_requires_authority_diagnosis_and_portable_evidence() -> None:
+    instruction = BuilderAutomationService._browser_feedback_repair_instruction(
+        {
+            "report": {
+                "samples": [
+                    {
+                        "layout": "wide",
+                        "hard_failures": [
+                            "Data did not settle at primary-selection: details=loading"
+                        ],
+                    }
+                ]
+            },
+            "evidence": [
+                {
+                    "path": "D:/git/inimatic/adaos/.adaos/state/builder/browser_feedback/task.1/report.json"
+                }
+            ],
+        }
+    )
+
+    assert "inspect the admitted MCP contract and runtime diagnostics" in instruction
+    assert "Never add or restore prototypeFixture/prototypeFixtures" in instruction
+    assert ".adaos/state/builder/browser_feedback/task.1/report.json" in instruction
+    assert "D:/git/inimatic" not in instruction
 
 
 @pytest.mark.parametrize(
@@ -9493,6 +9644,7 @@ def test_checkpoint_reconciliation_reuses_change_id_for_partially_committed_pair
         ("live_readiness", "materialization"),
         ("candidate_materialization", "candidate_materialization"),
         ("browser_feedback", "browser_feedback"),
+        ("preview_restoration", "preview_restoration"),
         ("activation", "activation"),
         ("tests", "activation"),
     ],

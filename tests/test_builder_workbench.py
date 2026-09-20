@@ -203,6 +203,133 @@ async def test_ensure_dev_webspace_switches_current_without_reloading_ready_skip
 
 
 @pytest.mark.asyncio
+async def test_ensure_dev_webspace_force_reload_reapplies_exact_preview_target(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class _Webspaces:
+        def __init__(self) -> None:
+            self.items: dict[str, SimpleNamespace] = {}
+
+        def list(self, mode: str = "mixed"):
+            return list(self.items.values())
+
+        async def create(
+            self, requested_id: str, title: str, *, scenario_id: str, dev: bool
+        ):
+            info = SimpleNamespace(
+                id=requested_id,
+                title=title,
+                kind="dev",
+                source_mode="dev",
+                home_scenario=scenario_id,
+            )
+            self.items[requested_id] = info
+            return info
+
+    import adaos.services.scenario.webspace_runtime as webspace_runtime
+
+    revision_calls: list[tuple[str, str, str, str, str]] = []
+    switch_calls: list[tuple[str, str]] = []
+    reload_calls: list[tuple[str, str | None, str, str]] = []
+
+    async def _switch(webspace_id: str, scenario_id: str, **_kwargs):
+        switch_calls.append((webspace_id, scenario_id))
+        return {
+            "ok": True,
+            "switch_skipped": True,
+            "skip_reason": "already_current_ready",
+            "scenario_id": scenario_id,
+        }
+
+    async def _reload(
+        webspace_id: str,
+        *,
+        scenario_id=None,
+        action="reload",
+        event_payload=None,
+    ):
+        reload_calls.append(
+            (
+                webspace_id,
+                scenario_id,
+                action,
+                str((event_payload or {}).get("source") or ""),
+            )
+        )
+        return {"ok": True, "scenario_id": scenario_id, "action": action}
+
+    async def _apply_revision(
+        webspace_id: str,
+        *,
+        scenario_id: str,
+        revision: str,
+        preview_stage: str,
+        event_payload=None,
+        **_kwargs,
+    ):
+        revision_calls.append(
+            (
+                webspace_id,
+                scenario_id,
+                revision,
+                preview_stage,
+                str((event_payload or {}).get("source") or ""),
+            )
+        )
+        return {
+            "ok": True,
+            "accepted": True,
+            "scenario_id": scenario_id,
+            "action": "builder_revision_apply",
+        }
+
+    monkeypatch.setattr(webspace_runtime, "WebspaceService", lambda: _Webspaces())
+    monkeypatch.setattr(webspace_runtime, "switch_webspace_scenario", _switch)
+    monkeypatch.setattr(webspace_runtime, "reload_webspace_from_scenario", _reload)
+    monkeypatch.setattr(
+        webspace_runtime, "apply_builder_revision_materialization", _apply_revision
+    )
+
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    service.set_active_draft(
+        source_webspace_id="desktop",
+        active_draft_id=None,
+        runtime_scenario_id="applications",
+        persist_projection=False,
+    )
+    service.set_preview_target(
+        source_webspace_id="desktop",
+        target={
+            "object_type": "scenario",
+            "object_id": "applications",
+            "scenario_id": "applications",
+            "stage": "automation",
+            "revision": "task.applications",
+        },
+    )
+    result = await service.ensure_dev_webspace(
+        "desktop",
+        runtime_scenario_id="applications",
+        force_runtime_reload=True,
+    )
+
+    preview_id = result["preview_webspace_id"]
+    assert result["runtime"]["coalesced"] is False
+    assert result["runtime"]["switch"]["action"] == "builder_revision_apply"
+    assert revision_calls == [
+        (
+            preview_id,
+            "applications",
+            "task.applications",
+            "automation",
+            "builder.workbench.preview_target_apply",
+        )
+    ]
+    assert switch_calls == []
+    assert reload_calls == []
+
+
+@pytest.mark.asyncio
 async def test_ensure_dev_webspace_schedules_reconcile_but_waits_inside_single_worker(monkeypatch, tmp_path: Path) -> None:
     class _Webspaces:
         def list(self, mode: str = "mixed"):

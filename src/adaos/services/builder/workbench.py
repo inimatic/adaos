@@ -963,6 +963,7 @@ class BuilderWorkbenchService:
         runtime_scenario_id: str | None = None,
         preview_state: Mapping[str, Any] | None = None,
         wait_for_rebuild: bool = True,
+        force_runtime_reload: bool = False,
     ) -> dict[str, Any]:
         # Relationship and binding persistence use the process-wide SQLite
         # write gate. Keep those synchronous calls off the API event loop so a
@@ -1015,7 +1016,17 @@ class BuilderWorkbenchService:
             info_payload = _info_to_dict(existing)
             if runtime_scenario and self.webspace_service is None:
                 try:
-                    from adaos.services.scenario.webspace_runtime import reload_webspace_from_scenario, switch_webspace_scenario
+                    from adaos.services.scenario.webspace_runtime import (
+                        apply_builder_revision_materialization,
+                        reload_webspace_from_scenario,
+                        switch_webspace_scenario,
+                    )
+
+                    selected_preview_target = (
+                        dict(legacy_binding.get("preview_target"))
+                        if isinstance(legacy_binding.get("preview_target"), Mapping)
+                        else {}
+                    )
 
                     _requested, coalesced = self.reconciler.request(
                         source_webspace_id=source_id,
@@ -1023,11 +1034,44 @@ class BuilderWorkbenchService:
                         project_kind="scenario",
                         project_id=runtime_scenario,
                         desired_scenario=runtime_scenario,
+                        force=force_runtime_reload,
                     )
 
                     async def _apply_preview(record: Mapping[str, Any]) -> Mapping[str, Any]:
                         desired = str(record.get("desired_scenario") or "").strip()
                         preview_id = str(record.get("preview_webspace_id") or "").strip()
+                        target_stage = str(
+                            selected_preview_target.get("stage") or ""
+                        ).strip().lower()
+                        target_scenario = str(
+                            selected_preview_target.get("scenario_id")
+                            or selected_preview_target.get("object_id")
+                            or ""
+                        ).strip()
+                        target_revision = str(
+                            selected_preview_target.get("revision") or ""
+                        ).strip()
+                        if (
+                            force_runtime_reload
+                            and target_stage in {"prototype", "automation"}
+                            and target_scenario == desired
+                            and target_revision
+                        ):
+                            return await apply_builder_revision_materialization(
+                                preview_id,
+                                scenario_id=desired,
+                                revision=target_revision,
+                                preview_stage=target_stage,
+                                preview_label=str(
+                                    selected_preview_target.get("label") or ""
+                                ).strip()
+                                or None,
+                                event_payload={
+                                    "source": "builder.workbench.preview_target_apply",
+                                    "source_webspace_id": source_id,
+                                    "operation_id": record.get("operation_id"),
+                                },
+                            )
                         switch_payload = await switch_webspace_scenario(
                             preview_id,
                             desired,
@@ -1055,6 +1099,20 @@ class BuilderWorkbenchService:
                                 action="reload",
                                 event_payload={
                                     "source": "builder.workbench.reconciler",
+                                    "source_webspace_id": source_id,
+                                    "operation_id": record.get("operation_id"),
+                                },
+                            )
+                        if force_runtime_reload and skip_reason in {
+                            "already_current",
+                            "already_current_ready",
+                        }:
+                            return await reload_webspace_from_scenario(
+                                preview_id,
+                                scenario_id=desired,
+                                action="reload",
+                                event_payload={
+                                    "source": "builder.workbench.preview_target_reload",
                                     "source_webspace_id": source_id,
                                     "operation_id": record.get("operation_id"),
                                 },

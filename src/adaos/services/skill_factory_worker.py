@@ -6424,6 +6424,8 @@ class LocalSkillFactoryWorker:
         workspace: Path,
         *,
         target_id: str,
+        implementation_brief: str = "",
+        iteration_instruction: str = "",
     ) -> dict[str, Any] | None:
         """Bind MCP-backed WebUI elements to exact, local Root contracts."""
 
@@ -6456,10 +6458,26 @@ class LocalSkillFactoryWorker:
                     collect(nested)
 
         collect(webui)
+
+        from adaos.services.root_mcp import get_tool_contract, list_tool_contracts
+
+        requirement_text = "\n".join(
+            value
+            for value in (
+                str(implementation_brief or "").strip(),
+                str(iteration_instruction or "").strip(),
+            )
+            if value
+        )
+        if requirement_text:
+            for contract in list_tool_contracts():
+                if re.search(
+                    rf"(?<![A-Za-z0-9_-]){re.escape(contract.id)}(?![A-Za-z0-9_-])",
+                    requirement_text,
+                ):
+                    usage.setdefault(contract.id, set()).add("brief_reference")
         if not usage:
             return None
-
-        from adaos.services.root_mcp import get_tool_contract
 
         contracts: list[dict[str, Any]] = []
         unresolved: list[str] = []
@@ -7334,7 +7352,12 @@ class LocalSkillFactoryWorker:
                 (input_dir / "implementation-bindings.json").resolve().as_posix()
             )
         external_mcp_contracts = (
-            self._external_mcp_contract_bundle(workspace, target_id=target_id)
+            self._external_mcp_contract_bundle(
+                workspace,
+                target_id=target_id,
+                implementation_brief=brief,
+                iteration_instruction=iteration,
+            )
             if target_type == "scenario"
             else None
         )
@@ -8595,6 +8618,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         if webui_schema_path.exists():
             try:
                 from jsonschema import Draft202012Validator
+                from adaos.services.ui_capabilities import validate_webui_capabilities
 
                 validator = Draft202012Validator(_read_json(webui_schema_path))
                 for path in sorted(workspace.rglob("webui.json")):
@@ -8620,6 +8644,28 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                                 "path": path.relative_to(workspace).as_posix(),
                                 "ok": True,
                             }
+                        )
+                        capability_report = validate_webui_capabilities(payload)
+                        capability_findings = list(
+                            capability_report.get("findings") or []
+                        )
+                        checks.append(
+                            {
+                                "kind": "ui.capability_catalog",
+                                "path": path.relative_to(workspace).as_posix(),
+                                "ok": bool(capability_report.get("ok")),
+                                "issues": capability_findings,
+                            }
+                        )
+                        errors.extend(
+                            (
+                                f"{path.relative_to(workspace)}: "
+                                f"{item.get('code') or 'ui.capability.invalid'}: "
+                                f"{item.get('message') or 'UI capability validation failed'}"
+                            )
+                            for item in capability_findings
+                            if str(item.get("severity") or "").strip().lower()
+                            == "error"
                         )
             except Exception as exc:
                 errors.append(

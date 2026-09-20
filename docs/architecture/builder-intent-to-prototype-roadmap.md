@@ -378,6 +378,11 @@ Implementation boundary: Runtime lock profiling and the path-promotion fix are r
   Local worker profiling and manifest/SDK regressions qualify this mechanism.
 - [ ] `[must]` Requalify cold/warm Select project browser latency after loading
   the catalog fix; do not infer full HTTP/browser performance from worker timings.
+- [x] `[must]` Remove per-row authority reads from the Applications hot path.
+  One list request now reads the Home snapshot and deployment inventory once;
+  one detail request enriches only its selected Application. Local Root MCP
+  measurements improved `applications.show` from about 16 seconds to 1.4
+  seconds and installed/available lists to 0.6-1.5 seconds on the same node.
 
 Exit/remaining work: Measure the loaded fix on cold/warm browser journeys; separate queueing, import lock, execution, invalidation, readiness and Root phases. Reconcile billed/normalized cost and exact environment digests; do not mask stalls with larger timeouts.
 
@@ -717,6 +722,11 @@ compact region whose usable width collapses even when the document itself does
 not overflow. Optional cancelled loopback probes are warnings only after all
 required sources settle. Candidate fixtures cannot satisfy an installed
 Applications or identity projection owned by node authority.
+Automation materialization now strips Prototype fixture payloads and bindings
+from the runtime projection while preserving the accepted source revision.
+Browser repair context explicitly requires Root MCP/runtime diagnosis before a
+source edit and forbids restoring fixtures. Repeated live Applications evidence
+after this correction remains part of the open gate.
 
 - [x] `[must]` Expose candidate browser actions, DOM/accessibility, image bytes,
   console/network and synthetic data evidence through scoped check operations.
