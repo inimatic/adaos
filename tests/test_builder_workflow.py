@@ -1524,6 +1524,38 @@ def test_automation_followup_reuses_immutable_acceptance_after_source_changes(
     assert admitted["digest"] == acceptance["digest"]
 
 
+def test_automation_direct_change_does_not_invent_prototype_acceptance(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _root = workflow_project
+    monkeypatch.setattr(
+        BuilderWorkflowService,
+        "describe",
+        lambda *_args: {
+            "active_phase": "automation",
+            "prototype": {
+                "head_revision": None,
+                "stable": True,
+                "acceptance_required": False,
+                "acceptance": None,
+            },
+            "automation": {"status": "completed"},
+            "change": {
+                "change_id": "CH-direct-followup",
+                "change_set_id": "CH-direct-followup",
+                "request": "Revalidate the existing implementation.",
+                "route": "automation_direct",
+                "gate": "automation",
+            },
+        },
+    )
+
+    admitted = service.require_current_prototype_acceptance("scenario", "recipes")
+
+    assert admitted is None
+
+
 def test_automation_transition_uses_canonical_acceptance_admission(
     workflow_project: tuple[BuilderWorkflowService, Path],
     monkeypatch: pytest.MonkeyPatch,

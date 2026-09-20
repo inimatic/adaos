@@ -2903,6 +2903,19 @@ class BuilderWorkflowService:
         prototype = _mapping(current.get("prototype"))
         acceptance = _mapping(prototype.get("acceptance"))
         acceptance_required = bool(prototype.get("acceptance_required"))
+        change = _normalize_change(current.get("change") or current.get("change_set"))
+        automation_direct = bool(
+            change
+            and str(change.get("route") or "").strip().lower()
+            == "automation_direct"
+        )
+        if (
+            automation_direct
+            and not acceptance_required
+            and not prototype.get("head_revision")
+            and bool(prototype.get("stable"))
+        ):
+            return None
         if not prototype.get("head_revision") or not bool(prototype.get("stable")):
             raise BuilderWorkflowError(
                 "A Prototype revision must be accepted before Automation starts"
@@ -2927,9 +2940,6 @@ class BuilderWorkflowService:
                 admit_prototype_acceptance,
             )
 
-            change = _normalize_change(
-                current.get("change") or current.get("change_set")
-            )
             if change is None:
                 raise BuilderWorkflowError(
                     "prototype acceptance requires an active Change"
