@@ -283,7 +283,7 @@ def test_room_serve_blocks_malformed_state_update_before_native_apply(monkeypatc
     assert room._diag_native_preflight_last_reason == "malformed_sync_frame"
 
 
-def test_room_serve_preflights_state_vector_before_native_call(monkeypatch) -> None:
+def test_room_serve_processes_state_vector_without_mutating_preflight(monkeypatch) -> None:
     processed: list[bytes] = []
     preflight_types: list[int] = []
 
@@ -326,10 +326,9 @@ def test_room_serve_preflights_state_vector_before_native_call(monkeypatch) -> N
     room.ydoc = y_py.YDoc()
     asyncio.run(room.serve(_Websocket()))
 
-    assert preflight_types == [int(gateway_module.YSyncMessageType.SYNC_STEP1)]
-    assert processed == []
-    assert room._diag_native_preflight_block_total == 1
-    assert room._diag_native_preflight_last_reason == "native_panic"
+    assert preflight_types == []
+    assert processed == [b"\x00vector"]
+    assert room._diag_native_preflight_block_total == 0
 
 
 def test_tracked_client_send_prunes_failed_transport_without_failing_room() -> None:

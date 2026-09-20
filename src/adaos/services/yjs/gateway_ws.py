@@ -2036,9 +2036,13 @@ class DiagnosticYRoom(YRoom):
                             sync_type is not None
                             and inbound_payload is not None
                             and _YROOM_NATIVE_PREFLIGHT_ENABLED
+                            and sync_type
+                            in {
+                                int(YSyncMessageType.SYNC_STEP2),
+                                int(YSyncMessageType.SYNC_UPDATE),
+                            }
                             and (
-                                sync_type == int(YSyncMessageType.SYNC_STEP1)
-                                or initial_native_update_pending
+                                initial_native_update_pending
                                 or len(inbound_payload) >= _YROOM_NATIVE_PREFLIGHT_THRESHOLD_BYTES
                             )
                         )
