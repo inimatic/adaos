@@ -96,6 +96,20 @@ _UNCHANGED_RETRY_INSTRUCTION = (
 )
 
 
+def _admitted_execution_budget(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    budget = dict(value)
+    # Builder tool loops repeatedly reuse the same bounded context. Cached
+    # input remains visible in provider usage, but it must not exhaust the
+    # primary work budget as if every turn were fresh. The independent
+    # billable guard still caps aggregate provider usage.
+    budget.setdefault("token_budget_metric", "fresh_plus_output")
+    return with_effective_billable_token_limit(budget)
+
+
 def _preserved_candidate_has_changes(run_root: Path) -> bool:
     workspace = run_root / "workspace"
     if not (workspace / ".git").is_dir():
@@ -2194,9 +2208,7 @@ class BuilderAutomationService:
             external_links["development_ticket_id"] = external_ticket_ids[0]
             external_links["development_ticket_ids"] = external_ticket_ids
             external_links["development_ticket_history_ids"] = external_ticket_ids
-        admitted_execution_budget = with_effective_billable_token_limit(
-            execution_budget
-        )
+        admitted_execution_budget = _admitted_execution_budget(execution_budget)
         admitted_agent_profile = (
             dict(agent_profile) if isinstance(agent_profile, Mapping) else None
         )
@@ -3782,12 +3794,7 @@ class BuilderAutomationService:
                     if isinstance(session.get("execution_budget"), Mapping)
                     else {}
                 )
-                next_budget = (
-                    with_effective_billable_token_limit(
-                        dict(execution_budget)
-                    )
-                    or {}
-                )
+                next_budget = _admitted_execution_budget(execution_budget) or {}
                 try:
                     max_model_tokens = int(
                         next_budget.get("max_model_tokens")

@@ -15,6 +15,7 @@ from adaos.services.builder import automation as automation_module
 from adaos.services.builder.automation import (
     BuilderAutomationService,
     _UNCHANGED_RETRY_INSTRUCTION,
+    _admitted_execution_budget,
     _accepted_prototype_validation_brief,
     _brief_has_structured_edits,
     _context_budget_window,
@@ -886,6 +887,26 @@ def test_builder_adapts_inferred_context_budget_for_required_capsules(
     assert control["initial_token_budget"] == 8_000
     assert control["token_budget"] == 9_000
     assert control["token_budget_adapted"] is True
+
+
+def test_builder_execution_budget_defaults_to_fresh_tokens_with_aggregate_guard() -> (
+    None
+):
+    admitted = _admitted_execution_budget({"max_model_tokens": 200_000})
+
+    assert admitted is not None
+    assert admitted["token_budget_metric"] == "fresh_plus_output"
+    assert admitted["max_billable_tokens"] == 1_600_000
+    explicit = _admitted_execution_budget(
+        {
+            "max_model_tokens": 200_000,
+            "max_billable_tokens": 300_000,
+            "token_budget_metric": "model_tokens",
+        }
+    )
+    assert explicit is not None
+    assert explicit["token_budget_metric"] == "model_tokens"
+    assert explicit["max_billable_tokens"] == 300_000
 
 
 def test_explicit_context_budget_is_a_hard_limit_with_diagnostics() -> None:
