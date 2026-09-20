@@ -96,9 +96,19 @@ def contracts() -> list[RootMcpToolContract]:
                     **scope,
                     "subject_id": {"type": "string", "minLength": 1, "maxLength": 240},
                     "role": {"type": "string", "enum": _ROLE_VALUES},
-                    "expires_in_minutes": {"type": ["integer", "null"], "minimum": 1, "maximum": 525600},
+                    "expires_in_minutes": {
+                        "type": ["integer", "null"],
+                        "minimum": 1,
+                        "maximum": 525600,
+                    },
                 },
-                required=["subject_id", "role", "scope_kind", "scope_id", "idempotency_key"],
+                required=[
+                    "subject_id",
+                    "role",
+                    "scope_kind",
+                    "scope_id",
+                    "idempotency_key",
+                ],
             ),
             output_schema=deepcopy(response),
             required_capability="users_access.manage",
@@ -117,10 +127,21 @@ def contracts() -> list[RootMcpToolContract]:
                     "kind": {"type": "string", "enum": ["guest", "targeted"]},
                     "role": {"type": "string", "enum": _ROLE_VALUES},
                     "profile_hint": {"type": ["string", "null"], "maxLength": 240},
-                    "expires_in_minutes": {"type": "integer", "minimum": 1, "maximum": 10080},
+                    "expires_in_minutes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10080,
+                    },
                     "max_sessions": {"type": "integer", "minimum": 1, "maximum": 100},
                 },
-                required=["kind", "role", "scope_kind", "scope_id", "expires_in_minutes", "idempotency_key"],
+                required=[
+                    "kind",
+                    "role",
+                    "scope_kind",
+                    "scope_id",
+                    "expires_in_minutes",
+                    "idempotency_key",
+                ],
             ),
             output_schema=deepcopy(response),
             required_capability="users_access.invite",
@@ -187,7 +208,11 @@ def contracts() -> list[RootMcpToolContract]:
 def _mcp_context(arguments: Mapping[str, Any]) -> dict[str, Any]:
     raw = arguments.get("_mcp_context")
     context = dict(raw) if isinstance(raw, Mapping) else {}
-    auth = context.get("auth_context") if isinstance(context.get("auth_context"), Mapping) else {}
+    auth = (
+        context.get("auth_context")
+        if isinstance(context.get("auth_context"), Mapping)
+        else {}
+    )
     scope = context.get("scope") if isinstance(context.get("scope"), Mapping) else {}
     actor_ref = str(context.get("actor") or auth.get("actor") or "").strip()
     subnet_id = str(scope.get("subnet_id") or auth.get("subnet_id") or "").strip()
@@ -239,7 +264,8 @@ def _claim_url(invite_id: str) -> str:
         raise RuntimeError("Application base URL is not configured")
     subnet_id = personalization_runtime.current_subnet_id(ctx)
     destination = sdk_navigation.login_destination(
-        zone=str(getattr(getattr(ctx, "config", None), "zone_id", "") or "").strip() or None,
+        zone=str(getattr(getattr(ctx, "config", None), "zone_id", "") or "").strip()
+        or None,
         subnet_id=subnet_id,
         auto_login=True,
         try_local_hub=False,
@@ -275,7 +301,9 @@ def _audit_projection(value: Mapping[str, Any]) -> dict[str, Any]:
     timestamp = value.get("ts")
     occurred_at = ""
     if isinstance(timestamp, (int, float)) and timestamp > 0:
-        occurred_at = datetime.fromtimestamp(float(timestamp), tz=timezone.utc).isoformat()
+        occurred_at = datetime.fromtimestamp(
+            float(timestamp), tz=timezone.utc
+        ).isoformat()
     elif timestamp:
         occurred_at = str(timestamp)
     return {
@@ -317,18 +345,39 @@ def _handle_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
             if not isinstance(raw, Mapping):
                 continue
             access = raw.get("application_access")
+            memberships = raw.get("memberships")
+            membership_roles = list(
+                dict.fromkeys(
+                    str(item.get("role") or "").strip()
+                    for item in memberships or []
+                    if isinstance(item, Mapping) and str(item.get("role") or "").strip()
+                )
+            )
             rows.append(
                 {
                     key: deepcopy(raw.get(key))
-                    for key in ("subject_ref", "kind", "profile", "memberships", "invite")
+                    for key in (
+                        "subject_ref",
+                        "kind",
+                        "profile",
+                        "memberships",
+                        "invite",
+                    )
                     if key in raw
                 }
-                | {"application_access_count": len(access) if isinstance(access, list) else 0}
+                | {
+                    "membership_summary": ", ".join(membership_roles),
+                    "application_access_count": len(access)
+                    if isinstance(access, list)
+                    else 0,
+                }
             )
         return rows
 
     surface_result = {
-        key: compact_people(value) if key in {"people", "guests", "children", "subjects"} else deepcopy(value)
+        key: compact_people(value)
+        if key in {"people", "guests", "children", "subjects"}
+        else deepcopy(value)
         for key, value in surface.items()
         if key in {"schema", "diagnostics"} or key in requested
     }
@@ -350,14 +399,22 @@ def _handle_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
 
 def _handle_grant_role(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
-        return {"would_grant": True, "subject_id": arguments.get("subject_id"), "role": arguments.get("role")}
+        return {
+            "would_grant": True,
+            "subject_id": arguments.get("subject_id"),
+            "role": arguments.get("role"),
+        }
     service = _service()
     subject = _user_subject(arguments.get("subject_id"))
     scope = _scope(arguments)
     role = str(arguments.get("role") or "").strip()
     for grant in service.store.iter_grants(status="active"):
-        grant_subject = grant.get("subject") if isinstance(grant.get("subject"), Mapping) else {}
-        grant_scope = grant.get("scope") if isinstance(grant.get("scope"), Mapping) else {}
+        grant_subject = (
+            grant.get("subject") if isinstance(grant.get("subject"), Mapping) else {}
+        )
+        grant_scope = (
+            grant.get("scope") if isinstance(grant.get("scope"), Mapping) else {}
+        )
         if (
             grant_subject.get("kind") == subject.kind
             and grant_subject.get("id") == subject.id
@@ -378,9 +435,15 @@ def _handle_grant_role(arguments: dict[str, Any], *, dry_run: bool) -> dict[str,
     }
 
 
-def _handle_create_invite(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_create_invite(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     if dry_run:
-        return {"would_create": True, "kind": arguments.get("kind"), "role": arguments.get("role")}
+        return {
+            "would_create": True,
+            "kind": arguments.get("kind"),
+            "role": arguments.get("role"),
+        }
     service = _service()
     actor = _actor(arguments)
     kind = str(arguments.get("kind") or "").strip()
@@ -414,12 +477,16 @@ def _handle_create_invite(arguments: dict[str, Any], *, dry_run: bool) -> dict[s
         )
     # The access store intentionally ignores unknown manifest fields. Persist
     # the idempotency marker as metadata owned by this adapter.
-    stored = service.store.update_invite(invite_id, {"idempotency_key": idempotency_key})
+    stored = service.store.update_invite(
+        invite_id, {"idempotency_key": idempotency_key}
+    )
     stored["claim_url"] = _claim_url(invite_id)
     return {"invite": stored, "duplicate": False}
 
 
-def _handle_revoke_invite(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_revoke_invite(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     invite_id = str(arguments.get("invite_id") or "").strip()
     if dry_run:
         return {"would_revoke": True, "invite_id": invite_id}
@@ -436,7 +503,9 @@ def _handle_revoke_invite(arguments: dict[str, Any], *, dry_run: bool) -> dict[s
     }
 
 
-def _handle_revoke_device(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_revoke_device(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     device_id = str(arguments.get("device_id") or "").strip()
     if dry_run:
         return {"would_revoke": True, "device_id": device_id}
@@ -453,7 +522,9 @@ def _handle_revoke_device(arguments: dict[str, Any], *, dry_run: bool) -> dict[s
     }
 
 
-def _handle_revoke_session(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_revoke_session(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     session_id = str(arguments.get("session_id") or "").strip()
     if dry_run:
         return {"would_revoke": True, "session_id": session_id}

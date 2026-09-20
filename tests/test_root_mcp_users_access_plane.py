@@ -62,7 +62,9 @@ class _Service:
             "audit": [],
         }
 
-    def grant_role_preset(self, *, subject, scope, role, actor, expires_at=None) -> dict:
+    def grant_role_preset(
+        self, *, subject, scope, role, actor, expires_at=None
+    ) -> dict:
         grant = {
             "grant_id": "grant-1",
             "subject": subject.to_dict(),
@@ -73,7 +75,9 @@ class _Service:
         self.store.grants.append(grant)
         return {"grant": grant, "membership": {"role": role}}
 
-    def create_guest_join_link(self, *, invite_id, scope, issued_by, expires_at, max_sessions):
+    def create_guest_join_link(
+        self, *, invite_id, scope, issued_by, expires_at, max_sessions
+    ):
         invite = {
             "invite_id": invite_id,
             "kind": "guest_join_link",
@@ -86,7 +90,17 @@ class _Service:
         self.store.invites[invite_id] = invite
         return dict(invite)
 
-    def create_targeted_invite_link(self, *, invite_id, scope, role, issued_by, profile_hint, expires_at, constraints):
+    def create_targeted_invite_link(
+        self,
+        *,
+        invite_id,
+        scope,
+        role,
+        issued_by,
+        profile_hint,
+        expires_at,
+        constraints,
+    ):
         invite = {
             "invite_id": invite_id,
             "kind": "targeted_invite_link",
@@ -100,7 +114,9 @@ class _Service:
         return dict(invite)
 
     def revoke_invite(self, invite_id: str, *, actor, reason=None):
-        return self.store.update_invite(invite_id, {"status": "revoked", "reason": reason})
+        return self.store.update_invite(
+            invite_id, {"status": "revoked", "reason": reason}
+        )
 
     def revoke_device(self, device_id: str, *, actor, reason=None):
         self.store.devices[device_id].update({"status": "revoked", "reason": reason})
@@ -115,11 +131,18 @@ class _Service:
 def service(monkeypatch: pytest.MonkeyPatch) -> _Service:
     value = _Service()
     monkeypatch.setattr(plane, "_service", lambda: value)
-    monkeypatch.setattr(plane, "_claim_url", lambda invite_id: f"https://app.test/?adaos_invite={invite_id}")
+    monkeypatch.setattr(
+        plane,
+        "_claim_url",
+        lambda invite_id: f"https://app.test/?adaos_invite={invite_id}",
+    )
     monkeypatch.setattr(
         plane.applications_sdk,
         "get_users_access_surface",
-        lambda directory: {"schema": "adaos.users_access.surface.v1", "people": directory["users"]},
+        lambda directory: {
+            "schema": "adaos.users_access.surface.v1",
+            "people": directory["users"],
+        },
     )
     return value
 
@@ -127,12 +150,18 @@ def service(monkeypatch: pytest.MonkeyPatch) -> _Service:
 def test_contracts_publish_owner_governed_read_and_write_tools() -> None:
     items = {item.id: item for item in plane.contracts()}
     assert items["users_access.summary"].required_capability == "users_access.read"
-    assert items["users_access.create_invite"].required_capability == "users_access.invite"
-    assert items["users_access.revoke_device"].required_capability == "users_access.manage"
+    assert (
+        items["users_access.create_invite"].required_capability == "users_access.invite"
+    )
+    assert (
+        items["users_access.revoke_device"].required_capability == "users_access.manage"
+    )
     assert items["users_access.revoke_device"].side_effects == "write"
 
 
-def test_summary_combines_personalization_and_application_access(service: _Service) -> None:
+def test_summary_combines_personalization_and_application_access(
+    service: _Service,
+) -> None:
     result = plane.handlers()["users_access.summary"](
         {"audit_limit": 20, "_mcp_context": _context()},
         dry_run=False,
@@ -142,7 +171,9 @@ def test_summary_combines_personalization_and_application_access(service: _Servi
     assert service.calls == [("summary", "user:owner", 20)]
 
 
-def test_summary_projects_requested_compact_sections(service: _Service, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_summary_projects_requested_compact_sections(
+    service: _Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(
         plane.applications_sdk,
         "get_users_access_surface",
@@ -153,7 +184,13 @@ def test_summary_projects_requested_compact_sections(service: _Service, monkeypa
                     "subject_ref": "user:owner",
                     "kind": "user",
                     "profile": {"display_name": "Owner"},
-                    "memberships": [],
+                    "memberships": [
+                        {"role": "owner", "scope": {"kind": "subnet", "id": "home"}},
+                        {
+                            "role": "owner",
+                            "scope": {"kind": "workspace", "id": "desktop"},
+                        },
+                    ],
                     "application_access": [{"grant_id": "grant-1"}],
                 }
             ],
@@ -177,14 +214,20 @@ def test_summary_projects_requested_compact_sections(service: _Service, monkeypa
             "subject_ref": "user:owner",
             "kind": "user",
             "profile": {"display_name": "Owner"},
-            "memberships": [],
+            "memberships": [
+                {"role": "owner", "scope": {"kind": "subnet", "id": "home"}},
+                {"role": "owner", "scope": {"kind": "workspace", "id": "desktop"}},
+            ],
+            "membership_summary": "owner",
             "application_access_count": 1,
         }
     ]
     assert result["administration"] == {}
 
 
-def test_summary_redacts_and_normalizes_access_audit(service: _Service, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_summary_redacts_and_normalizes_access_audit(
+    service: _Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
     original = service.admin_summary
 
     def summary(*, actor, audit_limit: int) -> dict:
@@ -251,7 +294,9 @@ def test_grant_role_is_state_idempotent(service: _Service) -> None:
     assert len(service.store.grants) == 1
 
 
-def test_grant_role_accepts_typed_user_reference_from_people_projection(service: _Service) -> None:
+def test_grant_role_accepts_typed_user_reference_from_people_projection(
+    service: _Service,
+) -> None:
     result = plane.handlers()["users_access.grant_role"](
         {
             "subject_id": "user:member",
@@ -304,17 +349,55 @@ def test_invite_creation_and_revocation_are_replay_safe(service: _Service) -> No
         "idempotency_key": "revoke-alex-1",
         "_mcp_context": _context(),
     }
-    assert plane.handlers()["users_access.revoke_invite"](revoke, dry_run=False)["duplicate"] is False
-    assert plane.handlers()["users_access.revoke_invite"](revoke, dry_run=False)["duplicate"] is True
+    assert (
+        plane.handlers()["users_access.revoke_invite"](revoke, dry_run=False)[
+            "duplicate"
+        ]
+        is False
+    )
+    assert (
+        plane.handlers()["users_access.revoke_invite"](revoke, dry_run=False)[
+            "duplicate"
+        ]
+        is True
+    )
 
 
 def test_device_and_session_revocation_are_replay_safe(service: _Service) -> None:
-    device = {"device_id": "phone", "idempotency_key": "device-1", "_mcp_context": _context()}
-    session = {"session_id": "browser", "idempotency_key": "session-1", "_mcp_context": _context()}
-    assert plane.handlers()["users_access.revoke_device"](device, dry_run=False)["duplicate"] is False
-    assert plane.handlers()["users_access.revoke_device"](device, dry_run=False)["duplicate"] is True
-    assert plane.handlers()["users_access.revoke_session"](session, dry_run=False)["duplicate"] is False
-    assert plane.handlers()["users_access.revoke_session"](session, dry_run=False)["duplicate"] is True
+    device = {
+        "device_id": "phone",
+        "idempotency_key": "device-1",
+        "_mcp_context": _context(),
+    }
+    session = {
+        "session_id": "browser",
+        "idempotency_key": "session-1",
+        "_mcp_context": _context(),
+    }
+    assert (
+        plane.handlers()["users_access.revoke_device"](device, dry_run=False)[
+            "duplicate"
+        ]
+        is False
+    )
+    assert (
+        plane.handlers()["users_access.revoke_device"](device, dry_run=False)[
+            "duplicate"
+        ]
+        is True
+    )
+    assert (
+        plane.handlers()["users_access.revoke_session"](session, dry_run=False)[
+            "duplicate"
+        ]
+        is False
+    )
+    assert (
+        plane.handlers()["users_access.revoke_session"](session, dry_run=False)[
+            "duplicate"
+        ]
+        is True
+    )
 
 
 def test_actor_context_is_required(service: _Service) -> None:

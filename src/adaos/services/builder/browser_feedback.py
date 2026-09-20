@@ -3,22 +3,25 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 import subprocess
-from typing import Any, Callable, Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
-from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
+from adaos.apps.cli.active_control import (
+    resolve_control_base_url,
+    resolve_control_token,
+)
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.core_update_policy import current_env_type
-
 
 BROWSER_FEEDBACK_SCHEMA = "adaos.builder.browser_feedback_receipt.v1"
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _digest_bytes(value: bytes) -> str:
@@ -92,6 +95,7 @@ class BuilderBrowserFeedbackService:
         source_path: Path,
         context_packet_digest: str | None = None,
         runtime_url: str | None = None,
+        space_kind: str = "development",
     ) -> dict[str, Any]:
         env_type = current_env_type()
         if env_type != "dev":
@@ -119,9 +123,12 @@ class BuilderBrowserFeedbackService:
         scenario = _safe_token(scenario_id)
         webspace = str(webspace_id or "").strip()
         subnet = str(subnet_id or "").strip()
+        normalized_space_kind = str(space_kind or "").strip().lower()
         task = _safe_token(task_id, fallback=f"scenario-{scenario}")
         if not webspace or not subnet:
             raise ValueError("browser feedback requires webspace_id and subnet_id")
+        if normalized_space_kind not in {"development", "workspace"}:
+            raise ValueError("browser feedback space_kind must be development or workspace")
         if not self.script_path.is_file():
             raise RuntimeError(f"browser feedback script is missing: {self.script_path}")
 
@@ -140,6 +147,7 @@ class BuilderBrowserFeedbackService:
             "ENV_TYPE": "dev",
             "ADAOS_E2E_SCENARIO_ID": scenario,
             "ADAOS_E2E_WEBSPACE_ID": webspace,
+            "ADAOS_E2E_SPACE_KIND": normalized_space_kind,
             "ADAOS_E2E_SUBNET_ID": subnet,
             "ADAOS_E2E_HUB_TOKEN": token,
             "ADAOS_E2E_HUB_URL": control_url,
@@ -211,7 +219,20 @@ class BuilderBrowserFeedbackService:
             Path(self.repo_root) / "src" / "adaos" / "abi" / "ui.capability_catalog.v1.json"
         )
         client_path = Path(self.repo_root) / "src" / "adaos" / "integrations" / "adaos-client"
-        passed = bool(report.get("passed")) and exit_code == 0
+        samples = [
+            item for item in report.get("samples") or [] if isinstance(item, Mapping)
+        ]
+        authoritative_data_settled = bool(samples) and all(
+            item.get("authoritative_data_settled") is True for item in samples
+        )
+        if bool(report.get("passed")) and not authoritative_data_settled:
+            report["passed"] = False
+            report["failure"] = "authoritative_data_not_settled"
+        passed = (
+            bool(report.get("passed"))
+            and authoritative_data_settled
+            and exit_code == 0
+        )
         receipt = {
             "schema": BROWSER_FEEDBACK_SCHEMA,
             "ok": passed,
@@ -220,6 +241,7 @@ class BuilderBrowserFeedbackService:
             "task_id": str(task_id or "").strip() or None,
             "scenario_id": scenario,
             "webspace_id": webspace,
+            "space_kind": normalized_space_kind,
             "runtime_url": control_url,
             "source": {
                 "path": webui_path.resolve().as_posix(),

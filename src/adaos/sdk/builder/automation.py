@@ -12,7 +12,9 @@ from typing import Any
 def _service():
     from adaos.services.builder.automation import BuilderAutomationService
 
-    execution_mode = str(os.getenv("ADAOS_DEV_TOOL_EXECUTION_MODE") or "").strip().lower()
+    execution_mode = (
+        str(os.getenv("ADAOS_DEV_TOOL_EXECUTION_MODE") or "").strip().lower()
+    )
     return BuilderAutomationService.from_context(background=execution_mode != "oneshot")
 
 
@@ -44,8 +46,14 @@ def _foreground_result(
     )
     if not isinstance(final, Mapping):
         return merged
-    session = final.get("session") if isinstance(final.get("session"), Mapping) else None
-    projection = final.get("automation") if isinstance(final.get("automation"), Mapping) else None
+    session = (
+        final.get("session") if isinstance(final.get("session"), Mapping) else None
+    )
+    projection = (
+        final.get("automation")
+        if isinstance(final.get("automation"), Mapping)
+        else None
+    )
     if session is not None:
         merged["session"] = dict(session)
     if projection is not None:
@@ -82,27 +90,32 @@ def start(
     if agent_profile is None:
         from adaos.sdk.developer import prompt_context
 
-        agent_profile = prompt_context.get(object_type, object_id).get("builder_codex_profile")
+        agent_profile = prompt_context.get(object_type, object_id).get(
+            "builder_codex_profile"
+        )
     if agent_profile and agent_profile.get("model"):
         from adaos.sdk.builder.model_settings import require_local_profile
 
         require_local_profile(agent_profile)
     service = _service()
-    result = service.start_from_execute(
-        object_type=object_type,
-        object_id=object_id,
-        implementation_brief=implementation_brief,
-        webspace_id=webspace_id,
-        conversation_id=conversation_id,
-        brief_path=brief_path,
-        change_set_id=change_set_id,
-        prototype_handoff=prototype_handoff,
-        development_session_id=development_session_id,
-        links=links,
-        execution_budget=execution_budget,
-        agent_profile=agent_profile,
-        mcp=mcp,
-    ) or {}
+    result = (
+        service.start_from_execute(
+            object_type=object_type,
+            object_id=object_id,
+            implementation_brief=implementation_brief,
+            webspace_id=webspace_id,
+            conversation_id=conversation_id,
+            brief_path=brief_path,
+            change_set_id=change_set_id,
+            prototype_handoff=prototype_handoff,
+            development_session_id=development_session_id,
+            links=links,
+            execution_budget=execution_budget,
+            agent_profile=agent_profile,
+            mcp=mcp,
+        )
+        or {}
+    )
     return _foreground_result(
         service,
         result,
@@ -122,6 +135,7 @@ def submit(
     development_session_id: str | None = None,
     expected_session_id: str | None = None,
     expected_iteration: int | None = None,
+    execution_budget: Mapping[str, Any] | None = None,
     agent_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Submit one follow-up instruction and include the current projection."""
@@ -141,6 +155,7 @@ def submit(
             development_session_id=development_session_id,
             expected_session_id=expected_session_id,
             expected_iteration=expected_iteration,
+            execution_budget=execution_budget,
             agent_profile=agent_profile,
         )
         or {}
@@ -167,23 +182,50 @@ def get_clarification(*, object_type: str, object_id: str) -> dict[str, Any]:
     return _service().clarification_state(object_type=object_type, object_id=object_id)
 
 
-def answer_clarification(*, object_type: str, object_id: str, interaction_id: str,
-                         expected_generation: int, answers: Mapping[str, str],
-                         idempotency_key: str) -> dict[str, Any]:
+def answer_clarification(
+    *,
+    object_type: str,
+    object_id: str,
+    interaction_id: str,
+    expected_generation: int,
+    answers: Mapping[str, str],
+    idempotency_key: str,
+) -> dict[str, Any]:
     """Save partial owner answers; this never starts a model execution."""
-    return _service().answer_clarification(object_type=object_type, object_id=object_id,
-        interaction_id=interaction_id, expected_generation=expected_generation,
-        answers=dict(answers), idempotency_key=idempotency_key)
+    return _service().answer_clarification(
+        object_type=object_type,
+        object_id=object_id,
+        interaction_id=interaction_id,
+        expected_generation=expected_generation,
+        answers=dict(answers),
+        idempotency_key=idempotency_key,
+    )
 
 
-def resume_clarification(*, object_type: str, object_id: str, interaction_id: str,
-                         expected_generation: int, confirmed: bool) -> dict[str, Any]:
+def resume_clarification(
+    *,
+    object_type: str,
+    object_id: str,
+    interaction_id: str,
+    expected_generation: int,
+    confirmed: bool,
+) -> dict[str, Any]:
     """Explicitly continue the same Change after every required question is answered."""
     service = _service()
-    result = service.resume_clarification(object_type=object_type, object_id=object_id,
-        interaction_id=interaction_id, expected_generation=expected_generation, confirmed=confirmed)
-    return _foreground_result(service, result, object_type=object_type, object_id=object_id,
-                              webspace_id=str((result.get("session") or {}).get("webspace_id") or "desktop"))
+    result = service.resume_clarification(
+        object_type=object_type,
+        object_id=object_id,
+        interaction_id=interaction_id,
+        expected_generation=expected_generation,
+        confirmed=confirmed,
+    )
+    return _foreground_result(
+        service,
+        result,
+        object_type=object_type,
+        object_id=object_id,
+        webspace_id=str((result.get("session") or {}).get("webspace_id") or "desktop"),
+    )
 
 
 def retry_failed(
@@ -197,13 +239,16 @@ def retry_failed(
     """Retry a failed run without accepting a replacement user instruction."""
 
     service = _service()
-    result = service.retry_failed(
-        object_type=object_type,
-        object_id=object_id,
-        webspace_id=webspace_id,
-        conversation_id=conversation_id,
-        execution_budget=execution_budget,
-    ) or {}
+    result = (
+        service.retry_failed(
+            object_type=object_type,
+            object_id=object_id,
+            webspace_id=webspace_id,
+            conversation_id=conversation_id,
+            execution_budget=execution_budget,
+        )
+        or {}
+    )
     return _foreground_result(
         service,
         result,
@@ -230,13 +275,16 @@ def return_to_prototype(
         "tests that prove the prototype has no functional production bindings."
     )
     service = _service()
-    result = service.submit_turn(
-        text=instruction,
-        object_type=object_type,
-        object_id=object_id,
-        webspace_id=webspace_id,
-        workflow_transition="return_to_prototype",
-    ) or {}
+    result = (
+        service.submit_turn(
+            text=instruction,
+            object_type=object_type,
+            object_id=object_id,
+            webspace_id=webspace_id,
+            workflow_transition="return_to_prototype",
+        )
+        or {}
+    )
     return _foreground_result(
         service,
         result,
@@ -322,9 +370,7 @@ def trial_verification_evidence(
         or {}
     )
     automation = (
-        state.get("automation")
-        if isinstance(state.get("automation"), Mapping)
-        else {}
+        state.get("automation") if isinstance(state.get("automation"), Mapping) else {}
     )
     task_id = str(automation.get("task_id") or "").strip()
     if (
@@ -369,7 +415,9 @@ def trial_verification_evidence(
             "task_id": task_id,
         }
 
-    manifest = result.get("evidence") if isinstance(result.get("evidence"), Mapping) else {}
+    manifest = (
+        result.get("evidence") if isinstance(result.get("evidence"), Mapping) else {}
+    )
     artifacts = [
         dict(item)
         for item in manifest.get("artifacts") or ()

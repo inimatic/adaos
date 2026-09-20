@@ -37,7 +37,11 @@ from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_sources import capture_source_snapshot
-from adaos.services.skill_factory_worker import LocalSkillFactoryWorker, context_packet_prompt_projection, requalified_feedback_message
+from adaos.services.skill_factory_worker import (
+    LocalSkillFactoryWorker,
+    context_packet_prompt_projection,
+    requalified_feedback_message,
+)
 
 
 AUTOMATION_SESSION_SCHEMA = "adaos.builder.automation_session.v1"
@@ -166,6 +170,8 @@ def _repair_hints_with_continuation_paths(
         len(target_files),
     )
     return merged
+
+
 _DEVELOPMENT_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _RUNTIME_DIAGNOSTIC_MAX_FILES = 4096
 _RUNTIME_DIAGNOSTIC_MAX_BYTES = 128 * 1024 * 1024
@@ -222,7 +228,10 @@ def _context_plan_failure_message(
 
 
 def _safe_token(value: Any, *, fallback: str = "project") -> str:
-    token = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in str(value or "").strip())
+    token = "".join(
+        ch if ch.isalnum() or ch in {"-", "_", "."} else "_"
+        for ch in str(value or "").strip()
+    )
     return token.strip("._") or fallback
 
 
@@ -310,9 +319,7 @@ def _brief_summary(value: Any) -> str:
         else {}
     )
     summary = str(
-        payload.get("summary")
-        or repair_hints.get("change_summary")
-        or brief
+        payload.get("summary") or repair_hints.get("change_summary") or brief
     ).strip()
     return " ".join(summary.split())
 
@@ -326,13 +333,18 @@ def _workflow_request_projection(value: Any) -> str:
         summary = " ".join(brief.split())
         if len(summary) <= 3800:
             return summary
-        return json.dumps({
-            "schema": "adaos.builder.workflow_request.v1",
-            "summary": summary[:1600].rsplit(" ", 1)[0] + "...",
-            "summary_only": True,
-            "instruction_source": "Full implementation_brief in the task specification is authoritative.",
-            "brief_digest": "sha256:" + hashlib.sha256(brief.encode("utf-8")).hexdigest(),
-        }, ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(
+            {
+                "schema": "adaos.builder.workflow_request.v1",
+                "summary": summary[:1600].rsplit(" ", 1)[0] + "...",
+                "summary_only": True,
+                "instruction_source": "Full implementation_brief in the task specification is authoritative.",
+                "brief_digest": "sha256:"
+                + hashlib.sha256(brief.encode("utf-8")).hexdigest(),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     repair_hints = (
         dict(payload.get("repair_hints"))
         if isinstance(payload.get("repair_hints"), Mapping)
@@ -380,6 +392,64 @@ def _workflow_request_projection(value: Any) -> str:
     return json.dumps(fallback, ensure_ascii=False, separators=(",", ":"))
 
 
+def _iteration_acceptance_checks(value: Any) -> list[str]:
+    """Extract explicit, bounded acceptance checks from one Automation turn."""
+
+    brief = str(value or "").strip()
+    payload = _brief_payload(brief)
+    hints = (
+        dict(payload.get("repair_hints"))
+        if isinstance(payload.get("repair_hints"), Mapping)
+        else {}
+    )
+    explicit = hints.get("acceptance_checks") or payload.get("acceptance_checks")
+    if isinstance(explicit, Sequence) and not isinstance(explicit, (str, bytes)):
+        checks = [
+            " ".join(str(item).split())[:800]
+            for item in explicit
+            if str(item).strip()
+        ][:16]
+        if checks:
+            return checks
+
+    checks: list[str] = []
+    in_acceptance = False
+    for raw_line in brief.splitlines():
+        line = raw_line.strip()
+        lowered = line.lower().rstrip(":")
+        if lowered in {
+            "acceptance",
+            "acceptance checks",
+            "acceptance criteria",
+            "acceptance requirements",
+            "criteria",
+            "requirements",
+        }:
+            in_acceptance = True
+            continue
+        if not in_acceptance:
+            continue
+        match = re.match(r"^(?:[-*]|\d+[.)])\s+(.+)$", line)
+        if match:
+            checks.append(" ".join(match.group(1).split())[:800])
+            if len(checks) >= 16:
+                break
+            continue
+        if not line and checks:
+            break
+    if checks:
+        return checks
+    summary = _brief_summary(brief)
+    return (
+        [
+            "The current Automation iteration is implemented without broadening "
+            f"its declared scope: {summary[:600]}"
+        ]
+        if summary
+        else []
+    )
+
+
 def _brief_has_structured_edits(value: Any) -> bool:
     payload = _brief_payload(value)
     repair_hints = (
@@ -394,7 +464,9 @@ def _brief_has_structured_edits(value: Any) -> bool:
     )
     return bool(
         str(structured.get("schema") or "").strip()
-        and any(isinstance(item, Mapping) for item in structured.get("operations") or [])
+        and any(
+            isinstance(item, Mapping) for item in structured.get("operations") or []
+        )
     )
 
 
@@ -430,13 +502,10 @@ def _accepted_prototype_validation_brief(
     if str(kind).strip() != "scenario" or str(iteration_instruction or "").strip():
         return {}
     acceptance = (
-        dict(prototype_acceptance)
-        if isinstance(prototype_acceptance, Mapping)
-        else {}
+        dict(prototype_acceptance) if isinstance(prototype_acceptance, Mapping) else {}
     )
-    if (
-        str(acceptance.get("decision") or "").strip() != "accepted"
-        or list(acceptance.get("prototype_resources") or [])
+    if str(acceptance.get("decision") or "").strip() != "accepted" or list(
+        acceptance.get("prototype_resources") or []
     ):
         return {}
     evaluation = (
@@ -527,7 +596,7 @@ def _canonical_repair_path(value: Any, *, kind: str, object_id: str) -> str:
     path = str(value or "").replace("\\", "/").strip("/")
     if not path:
         return ""
-    if path.split("/", 1)[0] in {"skills", "scenarios", "docs"}:
+    if path.split("/", 1)[0] in {"skills", "scenarios", "projects", "docs"}:
         return path
     prefix = {"skill": "skills", "scenario": "scenarios"}.get(str(kind).strip())
     target = _safe_token(object_id, fallback="")
@@ -611,14 +680,17 @@ def _iteration_context_projection(
         if execution_strategy == "structured_edits"
         else repair_hints.get("source_preconditions") or []
     )
-    deterministic_digest = "sha256:" + hashlib.sha256(
-        json.dumps(
-            deterministic_input,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+    deterministic_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                deterministic_input,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    )
     result = {
         "schema": (
             "adaos.builder.deterministic_context_projection.v1"
@@ -650,10 +722,14 @@ def _iteration_context_projection(
             ][:12],
             "deterministic_input_digest": deterministic_digest,
             "structured_edit_set_digest": (
-                deterministic_digest if execution_strategy == "structured_edits" else None
+                deterministic_digest
+                if execution_strategy == "structured_edits"
+                else None
             ),
             "operation_count": len(structured.get("operations") or []),
-            "source_precondition_count": len(repair_hints.get("source_preconditions") or []),
+            "source_precondition_count": len(
+                repair_hints.get("source_preconditions") or []
+            ),
         },
         "authority": {
             "write_scope": f"{kind}:{project_id}",
@@ -909,11 +985,10 @@ def _context_projection_brief(
     iteration_brief: str,
 ) -> str:
     canonical_brief = str(session.get("implementation_brief") or "")
-    return (
-        canonical_brief
-        if _brief_deterministic_strategy(canonical_brief)
-        else iteration_brief
-    )
+    # A deterministic brief is authority only for the run that submitted it.
+    # Reusing it for a later free-form turn can silently replay one-shot edits
+    # and hide the actual instruction from the model context.
+    return str(iteration_brief or "").strip() or canonical_brief
 
 
 def _cleanup_dev_skill_runtime(skill_id: str) -> dict[str, Any]:
@@ -946,24 +1021,38 @@ def _automation_worker_resource_policy(
     platform_name: str | None = None,
 ) -> tuple[list[str], int, dict[str, Any]]:
     selected_platform = str(platform_name or os.name).strip().lower()
-    requested = str(os.getenv("ADAOS_BUILDER_AUTOMATION_RESOURCE_PRIORITY") or "background").strip().lower()
+    requested = (
+        str(os.getenv("ADAOS_BUILDER_AUTOMATION_RESOURCE_PRIORITY") or "background")
+        .strip()
+        .lower()
+    )
     if requested in {"normal", "off", "disabled"}:
-        return list(command), 0, {
-            "mode": "normal",
-            "cpu_priority": "inherited",
-            "io_priority": "inherited",
-        }
+        return (
+            list(command),
+            0,
+            {
+                "mode": "normal",
+                "cpu_priority": "inherited",
+                "io_priority": "inherited",
+            },
+        )
     if selected_platform == "nt":
         flag = int(getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) or 0)
-        return list(command), flag, {
-            "mode": "background",
-            "cpu_priority": "below_normal" if flag else "inherited_unavailable",
-            "io_priority": "inherited",
-            "inherited_by_children": True,
-        }
+        return (
+            list(command),
+            flag,
+            {
+                "mode": "background",
+                "cpu_priority": "below_normal" if flag else "inherited_unavailable",
+                "io_priority": "inherited",
+                "inherited_by_children": True,
+            },
+        )
 
     try:
-        nice_value = max(1, min(int(os.getenv("ADAOS_BUILDER_AUTOMATION_NICE") or "10"), 19))
+        nice_value = max(
+            1, min(int(os.getenv("ADAOS_BUILDER_AUTOMATION_NICE") or "10"), 19)
+        )
     except ValueError:
         nice_value = 10
     wrapped = list(command)
@@ -973,12 +1062,18 @@ def _automation_worker_resource_policy(
         wrapped = [nice_path, "-n", str(nice_value), *wrapped]
     if ionice_path:
         wrapped = [ionice_path, "-c", "3", *wrapped]
-    return wrapped, 0, {
-        "mode": "background",
-        "cpu_priority": f"nice:{nice_value}" if nice_path else "inherited_unavailable",
-        "io_priority": "idle" if ionice_path else "inherited_unavailable",
-        "inherited_by_children": True,
-    }
+    return (
+        wrapped,
+        0,
+        {
+            "mode": "background",
+            "cpu_priority": f"nice:{nice_value}"
+            if nice_path
+            else "inherited_unavailable",
+            "io_priority": "idle" if ionice_path else "inherited_unavailable",
+            "inherited_by_children": True,
+        },
+    )
 
 
 def _prefer_persisted_session(
@@ -1033,25 +1128,29 @@ def _prefer_persisted_session(
             or incoming.get("rebind_confirmed_checkpoint") is True
         )
     )
-    if terminal_readiness and not explicit_checkpoint_recovery and not (
-        incoming_status == "completed"
-        and incoming_readiness.get("ok")
-        and str(incoming_readiness.get("task_id") or "").strip() == incoming_task
+    if (
+        terminal_readiness
+        and not explicit_checkpoint_recovery
+        and not (
+            incoming_status == "completed"
+            and incoming_readiness.get("ok")
+            and str(incoming_readiness.get("task_id") or "").strip() == incoming_task
+        )
     ):
         return True
 
     previous_rank = _STATUS_RANK.get(previous_status, -1)
     incoming_rank = _STATUS_RANK.get(incoming_status, -1)
     if previous_rank > incoming_rank:
-        if not explicit_finalization or (terminal_readiness and not explicit_checkpoint_recovery):
+        if not explicit_finalization or (
+            terminal_readiness and not explicit_checkpoint_recovery
+        ):
             return True
 
     previous_updated = str(previous.get("updated_at") or "").strip()
     incoming_updated = str(incoming.get("updated_at") or "").strip()
     return bool(
-        previous_updated
-        and incoming_updated
-        and previous_updated > incoming_updated
+        previous_updated and incoming_updated and previous_updated > incoming_updated
     )
 
 
@@ -1128,7 +1227,9 @@ class BuilderAutomationService:
         self.repo_root = Path(self.repo_root)
         self.dev_skills_root = Path(self.dev_skills_root)
         self.dev_scenarios_root = Path(self.dev_scenarios_root)
-        self.runs_root = Path(self.runs_root or (self.state_dir / "skill_factory" / "local_runs"))
+        self.runs_root = Path(
+            self.runs_root or (self.state_dir / "skill_factory" / "local_runs")
+        )
         self.factory = SkillFactoryService(state_dir=self.state_dir)
 
     @classmethod
@@ -1137,8 +1238,12 @@ class BuilderAutomationService:
 
         workspace = BuilderWorkspaceService.from_context()
         repo_root = Path(workspace.repo_root or current_repo_root() or Path.cwd())
-        dev_skills = workspace.dev_skills_root or (repo_root / ".adaos" / "workspace" / "skills")
-        dev_scenarios = workspace.dev_scenarios_root or (repo_root / ".adaos" / "workspace" / "scenarios")
+        dev_skills = workspace.dev_skills_root or (
+            repo_root / ".adaos" / "workspace" / "skills"
+        )
+        dev_scenarios = workspace.dev_scenarios_root or (
+            repo_root / ".adaos" / "workspace" / "scenarios"
+        )
         return cls(
             state_dir=Path(workspace.state_dir or current_state_dir()),
             repo_root=repo_root,
@@ -1172,7 +1277,9 @@ class BuilderAutomationService:
 
     def _browser_feedback(self):
         if self.browser_feedback_service is None:
-            from adaos.services.builder.browser_feedback import BuilderBrowserFeedbackService
+            from adaos.services.builder.browser_feedback import (
+                BuilderBrowserFeedbackService,
+            )
 
             self.browser_feedback_service = BuilderBrowserFeedbackService(
                 state_dir=self.state_dir,
@@ -1211,10 +1318,8 @@ class BuilderAutomationService:
             "object_id": project_id,
             "state": str(governed.get("state") or "").strip() or None,
             "generation": governed.get("generation"),
-            "change_set_id": str(change_set.get("change_set_id") or "").strip()
-            or None,
-            "change_set_status": str(change_set.get("status") or "").strip()
-            or None,
+            "change_set_id": str(change_set.get("change_set_id") or "").strip() or None,
+            "change_set_status": str(change_set.get("status") or "").strip() or None,
             "source_message_ids": source_message_ids,
         }
 
@@ -1259,7 +1364,9 @@ class BuilderAutomationService:
                 "license": "internal",
                 "retention_class": "accepted_release_lineage",
                 "source_digests": {
-                    "core": f"git:{BUILD_INFO.git_commit}" if BUILD_INFO.git_commit else BUILD_INFO.version,
+                    "core": f"git:{BUILD_INFO.git_commit}"
+                    if BUILD_INFO.git_commit
+                    else BUILD_INFO.version,
                     "prompt_profile": STANDARD_PROMPT_VERSION,
                 },
                 "valid_from": BUILD_INFO.build_date,
@@ -1414,13 +1521,19 @@ class BuilderAutomationService:
         task = service.register_capsule(
             {
                 "kind": "task",
-                "subject_refs": [run_ref, change_ref, *[f"dev-ticket:{item}" for item in ticket_ids]],
+                "subject_refs": [
+                    run_ref,
+                    change_ref,
+                    *[f"dev-ticket:{item}" for item in ticket_ids],
+                ],
                 "authority_ref": change_ref,
                 "trust_class": "validated",
                 "sensitivity": "workspace",
                 "license": "internal",
                 "retention_class": "episodic_run",
-                "source_digests": {"builder_context_packet": context_packet.get("digest")},
+                "source_digests": {
+                    "builder_context_packet": context_packet.get("digest")
+                },
                 "valid_from": now,
                 "recorded_at": now,
                 "summary": effective_brief[:2000],
@@ -1655,7 +1768,9 @@ class BuilderAutomationService:
         component_ref: str,
         fallback_project_id: str,
     ) -> str:
-        development_session_id = str(session.get("development_session_id") or "").strip()
+        development_session_id = str(
+            session.get("development_session_id") or ""
+        ).strip()
         if development_session_id:
             development_session, _ = self._load_development_session(
                 development_session_id,
@@ -1744,9 +1859,13 @@ class BuilderAutomationService:
         for index, item in enumerate(session.get("artifact_inputs") or []):
             source = Path(str(item["root_path"])).resolve()
             if not source.is_dir():
-                raise ValueError(f"development artifact input is unavailable: {item['ref']}")
+                raise ValueError(
+                    f"development artifact input is unavailable: {item['ref']}"
+                )
             target_path = f"{context_root}/artifacts/{index:02d}"
-            attachments.append((f"development_artifact_{index:02d}", source, target_path))
+            attachments.append(
+                (f"development_artifact_{index:02d}", source, target_path)
+            )
             artifact_receipts.append(
                 {
                     "ref": item["ref"],
@@ -1763,12 +1882,18 @@ class BuilderAutomationService:
             if not instruction_root.is_dir():
                 raise ValueError("development instruction root is unavailable")
             attachments.append(
-                ("development_instructions", instruction_root, f"{context_root}/instructions")
+                (
+                    "development_instructions",
+                    instruction_root,
+                    f"{context_root}/instructions",
+                )
             )
         for item in session.get("instruction_inputs") or []:
             source = Path(str(item["path"])).resolve()
             if source.parent != instruction_root or not source.is_file():
-                raise ValueError(f"development instruction is unavailable: {item['kind']}")
+                raise ValueError(
+                    f"development instruction is unavailable: {item['kind']}"
+                )
             payload = source.read_bytes()
             media_type = str(item.get("media_type") or "").lower()
             digest_mode = str(item.get("digest_mode") or "").strip() or (
@@ -1778,14 +1903,20 @@ class BuilderAutomationService:
                 try:
                     decoded = json.loads(payload.decode("utf-8-sig"))
                 except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise ValueError(f"development JSON instruction is invalid: {item['kind']}") from exc
+                    raise ValueError(
+                        f"development JSON instruction is invalid: {item['kind']}"
+                    ) from exc
                 if not isinstance(decoded, Mapping):
-                    raise ValueError(f"development JSON instruction must be an object: {item['kind']}")
+                    raise ValueError(
+                        f"development JSON instruction must be an object: {item['kind']}"
+                    )
                 content_digest = _canonical_digest(decoded)
             else:
                 content_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
             if content_digest != str(item["content_digest"]):
-                raise ValueError(f"development instruction digest drifted: {item['kind']}")
+                raise ValueError(
+                    f"development instruction digest drifted: {item['kind']}"
+                )
             instruction_receipts.append(
                 {
                     "ref": item["ref"],
@@ -1803,8 +1934,12 @@ class BuilderAutomationService:
             "project_ref": session["project_ref"],
             "target_ref": target_ref,
             "request": session["handoff"].get("request"),
-            "execution_budget": copy.deepcopy(session["handoff"].get("execution_budget")),
-            "validation_budget": copy.deepcopy(session["handoff"].get("validation_budget")),
+            "execution_budget": copy.deepcopy(
+                session["handoff"].get("execution_budget")
+            ),
+            "validation_budget": copy.deepcopy(
+                session["handoff"].get("validation_budget")
+            ),
             "agent_profile": copy.deepcopy(session["handoff"].get("agent_profile")),
             "artifact_inputs": artifact_receipts,
             "instruction_inputs": instruction_receipts,
@@ -1846,7 +1981,9 @@ class BuilderAutomationService:
         try:
             value = json.loads(source.read_text(encoding="utf-8-sig"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"development JSON instruction is invalid: {kind}") from exc
+            raise ValueError(
+                f"development JSON instruction is invalid: {kind}"
+            ) from exc
         if not isinstance(value, Mapping):
             raise ValueError(f"development JSON instruction must be an object: {kind}")
         if _canonical_digest(value) != str(descriptor.get("content_digest") or ""):
@@ -1885,11 +2022,15 @@ class BuilderAutomationService:
         session.setdefault("development_session_history", []).append(
             {
                 "development_session_id": current or None,
-                "automation_brief_digest": _brief_digest(session.get("implementation_brief")),
+                "automation_brief_digest": _brief_digest(
+                    session.get("implementation_brief")
+                ),
                 "rebound_at": changed_at,
             }
         )
-        session["development_session_history"] = session["development_session_history"][-20:]
+        session["development_session_history"] = session["development_session_history"][
+            -20:
+        ]
         session["development_session_id"] = incoming
         session["implementation_brief"] = json.dumps(
             brief,
@@ -1905,14 +2046,18 @@ class BuilderAutomationService:
     @staticmethod
     def _change_id(*, session_id: str, iteration: int, seed: str) -> str:
         identity = f"{session_id}:{max(0, int(iteration))}:{seed}"
-        return "builder_change_automation_" + hashlib.sha256(
-            identity.encode("utf-8")
-        ).hexdigest()[:16]
+        return (
+            "builder_change_automation_"
+            + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+        )
 
     def _capture_preview_binding(self, session: dict[str, Any]) -> None:
         """Remember the user's Preview choice so completion cannot overwrite a later one."""
 
-        if str(session.get("object_type") or "").strip().lower().rstrip("s") != "scenario":
+        if (
+            str(session.get("object_type") or "").strip().lower().rstrip("s")
+            != "scenario"
+        ):
             return
         try:
             from adaos.services.builder.workbench import BuilderWorkbenchService
@@ -1942,13 +2087,16 @@ class BuilderAutomationService:
         if not isinstance(captured, Mapping) or not bool(captured.get("captured")):
             return False
         current_target = binding.get("preview_target")
-        normalized_current = dict(current_target) if isinstance(current_target, Mapping) else None
-        submitted_target = captured.get("target")
-        normalized_submitted = dict(submitted_target) if isinstance(submitted_target, Mapping) else None
-        return (
-            normalized_current == normalized_submitted
-            and binding.get("updated_at") == captured.get("updated_at")
+        normalized_current = (
+            dict(current_target) if isinstance(current_target, Mapping) else None
         )
+        submitted_target = captured.get("target")
+        normalized_submitted = (
+            dict(submitted_target) if isinstance(submitted_target, Mapping) else None
+        )
+        return normalized_current == normalized_submitted and binding.get(
+            "updated_at"
+        ) == captured.get("updated_at")
 
     @staticmethod
     def _preview_target_matches_project(
@@ -1962,11 +2110,13 @@ class BuilderAutomationService:
         return (
             str(target.get("object_type") or "").strip().lower().rstrip("s")
             == str(object_type or "").strip().lower().rstrip("s")
-            and str(target.get("object_id") or "").strip() == str(object_id or "").strip()
+            and str(target.get("object_id") or "").strip()
+            == str(object_id or "").strip()
         ) or (
             target.get("object_type") == "project"
             and str(object_type or "").strip().lower().rstrip("s") == "scenario"
-            and str(target.get("scenario_id") or "").strip() == str(object_id or "").strip()
+            and str(target.get("scenario_id") or "").strip()
+            == str(object_id or "").strip()
         )
 
     def start_from_execute(
@@ -1990,11 +2140,15 @@ class BuilderAutomationService:
         kind, project_id = self._project_ref(object_type, object_id)
         brief = str(implementation_brief or "").strip()
         if not brief:
-            raise ValueError("implementation_brief is required after Prompt IDE Execute")
+            raise ValueError(
+                "implementation_brief is required after Prompt IDE Execute"
+            )
         _reject_transport_corruption(brief, field="implementation_brief")
         external_links = dict(links) if isinstance(links, Mapping) else {}
         if requested_object_type == "project":
-            external_links.setdefault("project_ref", f"project:{str(object_id).strip()}")
+            external_links.setdefault(
+                "project_ref", f"project:{str(object_id).strip()}"
+            )
             external_links.setdefault("project_id", str(object_id).strip())
         if not str(
             external_links.get("development_ticket_project_ref")
@@ -2027,10 +2181,16 @@ class BuilderAutomationService:
             external_links["development_ticket_id"] = external_ticket_ids[0]
             external_links["development_ticket_ids"] = external_ticket_ids
             external_links["development_ticket_history_ids"] = external_ticket_ids
-        admitted_execution_budget = with_effective_billable_token_limit(execution_budget)
-        admitted_agent_profile = dict(agent_profile) if isinstance(agent_profile, Mapping) else None
+        admitted_execution_budget = with_effective_billable_token_limit(
+            execution_budget
+        )
+        admitted_agent_profile = (
+            dict(agent_profile) if isinstance(agent_profile, Mapping) else None
+        )
         admitted_mcp = _sanitized_mcp_profile(mcp)
-        admitted_development_session_id = str(development_session_id or "").strip() or None
+        admitted_development_session_id = (
+            str(development_session_id or "").strip() or None
+        )
         if admitted_development_session_id:
             self._load_development_session(
                 admitted_development_session_id,
@@ -2038,7 +2198,9 @@ class BuilderAutomationService:
             )
         admitted_handoff: dict[str, Any] | None = None
         if prototype_handoff is not None:
-            from adaos.services.builder.prototype_handoff import admit_automation_handoff
+            from adaos.services.builder.prototype_handoff import (
+                admit_automation_handoff,
+            )
 
             admitted_handoff = admit_automation_handoff(
                 prototype_handoff,
@@ -2077,7 +2239,9 @@ class BuilderAutomationService:
             # Follow-up Dev Tickets belong to that trial batch, but each one
             # receives a separate Automation task and usage receipt.
             ticket_id = str(external_links.get("development_ticket_id") or "").strip()
-            issue_seed = ticket_id or hashlib.sha256(brief.encode("utf-8")).hexdigest()[:20]
+            issue_seed = (
+                ticket_id or hashlib.sha256(brief.encode("utf-8")).hexdigest()[:20]
+            )
             issue_id = f"automation-followup-{issue_seed}"[:160]
             try:
                 brief_payload = json.loads(brief)
@@ -2121,7 +2285,9 @@ class BuilderAutomationService:
                     actor="builder.automation.compat",
                     reason="follow-up Dev Ticket admitted into the active trial batch",
                     metadata={
-                        "change_set_id": str(active_change_set.get("change_set_id") or ""),
+                        "change_set_id": str(
+                            active_change_set.get("change_set_id") or ""
+                        ),
                         "request": issue_summary,
                         "issues": [
                             {
@@ -2130,9 +2296,13 @@ class BuilderAutomationService:
                                 "lane": "automation",
                                 "status": "open",
                                 "acceptance_criteria": [
-                                    f"The follow-up implementation satisfies: {issue_summary}"[:500]
+                                    f"The follow-up implementation satisfies: {issue_summary}"[
+                                        :500
+                                    ]
                                 ],
-                                "source_message_ids": ([ticket_id] if ticket_id else []),
+                                "source_message_ids": (
+                                    [ticket_id] if ticket_id else []
+                                ),
                             }
                         ],
                         "source_message_ids": ([ticket_id] if ticket_id else []),
@@ -2151,7 +2321,9 @@ class BuilderAutomationService:
                     if isinstance(workflow_before.get("change_set"), Mapping)
                     else {}
                 )
-        if not active_change_set or str(active_change_set.get("status") or "").strip().lower() in {
+        if not active_change_set or str(
+            active_change_set.get("status") or ""
+        ).strip().lower() in {
             "published",
             "rejected",
             "superseded",
@@ -2184,7 +2356,9 @@ class BuilderAutomationService:
                             "lane": "automation",
                             "status": "open",
                             "acceptance_criteria": [
-                                f"The implementation and its tests satisfy: {issue_summary}"[:500]
+                                f"The implementation and its tests satisfy: {issue_summary}"[
+                                    :500
+                                ]
                             ],
                         }
                     ],
@@ -2202,9 +2376,17 @@ class BuilderAutomationService:
                 else {}
             )
         active_change_set_id = str(active_change_set.get("change_set_id") or "").strip()
-        requested_change_set_id = str(change_set_id or active_change_set_id).strip() or None
-        if change_set_id and active_change_set_id and str(change_set_id).strip() != active_change_set_id:
-            raise ValueError("change_set_id does not match the active Builder change set")
+        requested_change_set_id = (
+            str(change_set_id or active_change_set_id).strip() or None
+        )
+        if (
+            change_set_id
+            and active_change_set_id
+            and str(change_set_id).strip() != active_change_set_id
+        ):
+            raise ValueError(
+                "change_set_id does not match the active Builder change set"
+            )
         if (
             active_change_set_id
             and str(active_change_set.get("status") or "")
@@ -2216,7 +2398,14 @@ class BuilderAutomationService:
             )
         with _LOCK:
             current = self.get_session(kind, project_id)
-            if current and current.get("status") in {"queued", "assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}:
+            if current and current.get("status") in {
+                "queued",
+                "assigned",
+                "workspace_preparing",
+                "in_progress",
+                "tests_running",
+                "commit_ready",
+            }:
                 if admitted_handoff is not None:
                     current_handoff = (
                         current.get("prototype_handoff")
@@ -2226,17 +2415,24 @@ class BuilderAutomationService:
                     current_digest = str((current_handoff or {}).get("digest") or "")
                     incoming_digest = str(admitted_handoff.get("digest") or "")
                     if current_digest and current_digest != incoming_digest:
-                        raise ValueError("another Prototype handoff already owns the active Automation session")
+                        raise ValueError(
+                            "another Prototype handoff already owns the active Automation session"
+                        )
                     if not current_digest:
                         current["prototype_handoff"] = copy.deepcopy(admitted_handoff)
                         current["updated_at"] = _now_iso()
                         self._save_session(current)
                 incoming_conversation_id = str(conversation_id or "").strip()
-                if incoming_conversation_id and not str(current.get("conversation_id") or "").strip():
+                if (
+                    incoming_conversation_id
+                    and not str(current.get("conversation_id") or "").strip()
+                ):
                     current["conversation_id"] = incoming_conversation_id
                     current["updated_at"] = _now_iso()
                     self._save_session(current)
-                current_change_set_id = str(current.get("change_set_id") or "").strip() or None
+                current_change_set_id = (
+                    str(current.get("change_set_id") or "").strip() or None
+                )
                 if requested_change_set_id and not current_change_set_id:
                     # One-time migration for pre-Change queued sessions. The
                     # already queued task is retained and linked to the Change
@@ -2247,18 +2443,32 @@ class BuilderAutomationService:
                     current["updated_at"] = _now_iso()
                     self._save_session(current)
                     current_change_set_id = requested_change_set_id
-                if requested_change_set_id and current_change_set_id != requested_change_set_id:
-                    raise ValueError("another Builder change set already owns the active Automation session")
+                if (
+                    requested_change_set_id
+                    and current_change_set_id != requested_change_set_id
+                ):
+                    raise ValueError(
+                        "another Builder change set already owns the active Automation session"
+                    )
                 if external_links:
-                    current_links = current.get("links") if isinstance(current.get("links"), Mapping) else {}
+                    current_links = (
+                        current.get("links")
+                        if isinstance(current.get("links"), Mapping)
+                        else {}
+                    )
                     merged_links = {**dict(current_links), **external_links}
                     merged_links["development_ticket_history_ids"] = list(
                         dict.fromkeys(
                             [
-                                str(current_links.get("development_ticket_id") or "").strip(),
+                                str(
+                                    current_links.get("development_ticket_id") or ""
+                                ).strip(),
                                 *[
                                     str(item).strip()
-                                    for item in current_links.get("development_ticket_ids") or []
+                                    for item in current_links.get(
+                                        "development_ticket_ids"
+                                    )
+                                    or []
                                     if str(item).strip()
                                 ],
                                 *[
@@ -2278,20 +2488,27 @@ class BuilderAutomationService:
                         current["updated_at"] = _now_iso()
                         self._save_session(current)
                 if admitted_mcp:
-                    current_mcp = current.get("mcp") if isinstance(current.get("mcp"), Mapping) else {}
+                    current_mcp = (
+                        current.get("mcp")
+                        if isinstance(current.get("mcp"), Mapping)
+                        else {}
+                    )
                     merged_mcp = {**dict(current_mcp), **admitted_mcp}
                     if merged_mcp != current_mcp:
                         current["mcp"] = merged_mcp
                         current["updated_at"] = _now_iso()
                         self._save_session(current)
-                current_development_session_id = str(
-                    current.get("development_session_id") or ""
-                ).strip() or None
+                current_development_session_id = (
+                    str(current.get("development_session_id") or "").strip() or None
+                )
                 if (
                     admitted_development_session_id
-                    and current_development_session_id != admitted_development_session_id
+                    and current_development_session_id
+                    != admitted_development_session_id
                 ):
-                    raise ValueError("another Development Session already owns the active Automation session")
+                    raise ValueError(
+                        "another Development Session already owns the active Automation session"
+                    )
                 refreshed = self.refresh_session(current)
                 current_workflow = self._workflow().describe(kind, project_id)
                 current_governed = (
@@ -2299,7 +2516,10 @@ class BuilderAutomationService:
                     if isinstance(current_workflow.get("governed"), Mapping)
                     else {}
                 )
-                if str(current_governed.get("state") or "").strip() == "automation_ready":
+                if (
+                    str(current_governed.get("state") or "").strip()
+                    == "automation_ready"
+                ):
                     # Session/task persistence precedes the canonical workflow
                     # transition. If that last write was interrupted, a
                     # duplicate start must reconcile the same Run before its
@@ -2314,14 +2534,20 @@ class BuilderAutomationService:
                         metadata={
                             "confirmed": True,
                             "source_prototype_revision": (
-                                current_workflow.get("prototype", {}).get("head_revision")
-                                if isinstance(current_workflow.get("prototype"), Mapping)
+                                current_workflow.get("prototype", {}).get(
+                                    "head_revision"
+                                )
+                                if isinstance(
+                                    current_workflow.get("prototype"), Mapping
+                                )
                                 else refreshed.get("source_prototype_version")
                             ),
                             "task_id": refreshed.get("current_task_id"),
                             "change_id": refreshed.get("change_id"),
                             "run_id": refreshed.get("current_task_id"),
-                            "context_packet_digest": refreshed.get("context_packet_digest"),
+                            "context_packet_digest": refreshed.get(
+                                "context_packet_digest"
+                            ),
                         },
                     )
                     refreshed["workflow_start_reconciled_at"] = _now_iso()
@@ -2415,7 +2641,9 @@ class BuilderAutomationService:
                 "brief_path": str(brief_path or "").strip() or None,
                 "change_set_id": requested_change_set_id,
                 "canonical_change_id": requested_change_set_id,
-                "source_prototype_version": self._project_prototype_ref(kind, project_id),
+                "source_prototype_version": self._project_prototype_ref(
+                    kind, project_id
+                ),
                 "prototype_acceptance": prototype_acceptance,
                 "prototype_handoff": admitted_handoff,
                 "development_session_id": admitted_development_session_id,
@@ -2506,7 +2734,9 @@ class BuilderAutomationService:
         brief = str(implementation_brief or "").strip()
         ticket_id = str(dict(links or {}).get("development_ticket_id") or "").strip()
         if not brief or not ticket_id:
-            raise ValueError("failed Dev Ticket repair resume requires its brief and ticket link")
+            raise ValueError(
+                "failed Dev Ticket repair resume requires its brief and ticket link"
+            )
         _reject_transport_corruption(brief, field="implementation_brief")
         with _LOCK:
             session = self.get_session(kind, project_id)
@@ -2514,17 +2744,26 @@ class BuilderAutomationService:
                 raise ValueError("automation_session_not_found")
             session = self.refresh_session(session)
             if str(session.get("status") or "").strip() != "failed":
-                raise ValueError("only a failed Automation session can resume a Dev Ticket repair")
+                raise ValueError(
+                    "only a failed Automation session can resume a Dev Ticket repair"
+                )
             current_links = (
                 dict(session.get("links") or {})
                 if isinstance(session.get("links"), Mapping)
                 else {}
             )
-            if str(current_links.get("development_ticket_id") or "").strip() != ticket_id:
-                raise ValueError("failed Automation session belongs to another Dev Ticket")
+            if (
+                str(current_links.get("development_ticket_id") or "").strip()
+                != ticket_id
+            ):
+                raise ValueError(
+                    "failed Automation session belongs to another Dev Ticket"
+                )
             session["implementation_brief"] = brief
             session["links"] = {**current_links, **dict(links)}
-            session["webspace_id"] = str(webspace_id or session.get("webspace_id") or "desktop")
+            session["webspace_id"] = str(
+                webspace_id or session.get("webspace_id") or "desktop"
+            )
             if str(conversation_id or "").strip():
                 session["conversation_id"] = str(conversation_id).strip()
             if isinstance(agent_profile, Mapping):
@@ -2573,7 +2812,9 @@ class BuilderAutomationService:
         brief = str(implementation_brief or "").strip()
         ticket_id = str(dict(links or {}).get("development_ticket_id") or "").strip()
         if not brief or not ticket_id:
-            raise ValueError("Core-unblocked Dev Ticket repair resume requires its brief and ticket link")
+            raise ValueError(
+                "Core-unblocked Dev Ticket repair resume requires its brief and ticket link"
+            )
         _reject_transport_corruption(brief, field="implementation_brief")
         with _LOCK:
             session = self.get_session(kind, project_id)
@@ -2581,17 +2822,26 @@ class BuilderAutomationService:
                 raise ValueError("automation_session_not_found")
             session = self.refresh_session(session)
             if str(session.get("status") or "").strip() != "waiting_for_core":
-                raise ValueError("only an Automation session waiting for Core can resume this repair")
+                raise ValueError(
+                    "only an Automation session waiting for Core can resume this repair"
+                )
             current_links = (
                 dict(session.get("links") or {})
                 if isinstance(session.get("links"), Mapping)
                 else {}
             )
-            if str(current_links.get("development_ticket_id") or "").strip() != ticket_id:
-                raise ValueError("Core-blocked Automation session belongs to another Dev Ticket")
+            if (
+                str(current_links.get("development_ticket_id") or "").strip()
+                != ticket_id
+            ):
+                raise ValueError(
+                    "Core-blocked Automation session belongs to another Dev Ticket"
+                )
             session["implementation_brief"] = brief
             session["links"] = {**current_links, **dict(links)}
-            session["webspace_id"] = str(webspace_id or session.get("webspace_id") or "desktop")
+            session["webspace_id"] = str(
+                webspace_id or session.get("webspace_id") or "desktop"
+            )
             if str(conversation_id or "").strip():
                 session["conversation_id"] = str(conversation_id).strip()
             if isinstance(agent_profile, Mapping):
@@ -2636,7 +2886,9 @@ class BuilderAutomationService:
         kind, project_id = self._project_ref(object_type, object_id)
         brief = str(implementation_brief or "").strip()
         if not brief:
-            raise ValueError("follow-up Dev Ticket repair requires its implementation brief")
+            raise ValueError(
+                "follow-up Dev Ticket repair requires its implementation brief"
+            )
         _reject_transport_corruption(brief, field="implementation_brief")
         incoming_links = dict(links or {})
         ticket_ids = list(
@@ -2661,9 +2913,15 @@ class BuilderAutomationService:
                 raise ValueError("automation_session_not_found")
             session = self.refresh_session(session)
             if str(session.get("status") or "").strip() != "completed":
-                raise ValueError("follow-up Dev Ticket repair requires a completed Automation trial")
+                raise ValueError(
+                    "follow-up Dev Ticket repair requires a completed Automation trial"
+                )
             workflow = self._workflow().describe(kind, project_id)
-            governed = workflow.get("governed") if isinstance(workflow.get("governed"), Mapping) else {}
+            governed = (
+                workflow.get("governed")
+                if isinstance(workflow.get("governed"), Mapping)
+                else {}
+            )
             governed_state = str(governed.get("state") or "").strip()
             change_set = (
                 workflow.get("change_set")
@@ -2681,7 +2939,9 @@ class BuilderAutomationService:
                 age_seconds: float | None = None
                 if started_raw:
                     try:
-                        started_at = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+                        started_at = datetime.fromisoformat(
+                            started_raw.replace("Z", "+00:00")
+                        )
                         if started_at.tzinfo is None:
                             started_at = started_at.replace(tzinfo=timezone.utc)
                         age_seconds = max(
@@ -2690,7 +2950,10 @@ class BuilderAutomationService:
                         )
                     except ValueError:
                         age_seconds = None
-                if age_seconds is not None and age_seconds < TRIAL_PREPARATION_RECOVERY_GRACE_SECONDS:
+                if (
+                    age_seconds is not None
+                    and age_seconds < TRIAL_PREPARATION_RECOVERY_GRACE_SECONDS
+                ):
                     raise ValueError(
                         "follow-up Dev Ticket repair is waiting for active Trial preparation"
                     )
@@ -2740,7 +3003,9 @@ class BuilderAutomationService:
                 "rejected",
                 "superseded",
             }:
-                raise ValueError("follow-up Dev Ticket repair requires a non-terminal Change")
+                raise ValueError(
+                    "follow-up Dev Ticket repair requires a non-terminal Change"
+                )
 
             summary = _brief_summary(brief)
             existing_issue_ids = {
@@ -2806,7 +3071,8 @@ class BuilderAutomationService:
                         str(current_links.get("development_ticket_id") or "").strip(),
                         *[
                             str(item).strip()
-                            for item in current_links.get("development_ticket_ids") or []
+                            for item in current_links.get("development_ticket_ids")
+                            or []
                             if str(item).strip()
                         ],
                         *ticket_ids,
@@ -2823,7 +3089,9 @@ class BuilderAutomationService:
                 ],
             }
             session["implementation_brief"] = brief
-            session["webspace_id"] = str(webspace_id or session.get("webspace_id") or "desktop")
+            session["webspace_id"] = str(
+                webspace_id or session.get("webspace_id") or "desktop"
+            )
             if str(conversation_id or "").strip():
                 session["conversation_id"] = str(conversation_id).strip()
             if isinstance(agent_profile, Mapping):
@@ -2890,13 +3158,16 @@ class BuilderAutomationService:
                 kind=artifact_kind,
                 artifact_id=artifact_id,
                 source_idea=implementation_brief,
-                template_id="scenario_default" if artifact_kind == "scenario" else "skill_default",
+                template_id="scenario_default"
+                if artifact_kind == "scenario"
+                else "skill_default",
             )
             created.append(
                 {
                     "kind": artifact_kind,
                     "name": artifact_id,
-                    "draft_id": str((result.get("draft") or {}).get("draft_id") or "") or None,
+                    "draft_id": str((result.get("draft") or {}).get("draft_id") or "")
+                    or None,
                     "artifact_root": str(result.get("artifact_root") or root),
                 }
             )
@@ -2911,9 +3182,7 @@ class BuilderAutomationService:
         if prototype_record_evidence(prototype_acceptance or {}):
             return True
         acceptance = (
-            prototype_acceptance
-            if isinstance(prototype_acceptance, Mapping)
-            else {}
+            prototype_acceptance if isinstance(prototype_acceptance, Mapping) else {}
         )
         evaluation = (
             acceptance.get("deterministic_evaluation")
@@ -3055,13 +3324,17 @@ class BuilderAutomationService:
                 {
                     "component_ref": component_ref,
                     "idempotent": bool(result.get("idempotent")),
-                    "manifest_digest": str(project.get("manifest_digest") or "") or None,
+                    "manifest_digest": str(project.get("manifest_digest") or "")
+                    or None,
                 }
             )
         return receipts
 
     def _workspace_skills_root(self) -> Path:
-        if self.workspace_service is not None and self.workspace_service.skills_root is not None:
+        if (
+            self.workspace_service is not None
+            and self.workspace_service.skills_root is not None
+        ):
             return Path(self.workspace_service.skills_root)
         return self.repo_root / ".adaos" / "workspace" / "skills"
 
@@ -3102,14 +3375,15 @@ class BuilderAutomationService:
             if not manifest_path.is_file():
                 continue
             try:
-                value = yaml.safe_load(manifest_path.read_text(encoding="utf-8-sig")) or {}
+                value = (
+                    yaml.safe_load(manifest_path.read_text(encoding="utf-8-sig")) or {}
+                )
                 manifest = validate(value)
             except (OSError, ValueError, yaml.YAMLError, ProjectCompositionError):
                 continue
             owned = manifest["components"]["owned"]
             if owner_ref.startswith("project:") or any(
-                str(item.get("ref") or "") == f"scenario:{project_id}"
-                for item in owned
+                str(item.get("ref") or "") == f"scenario:{project_id}" for item in owned
             ):
                 owner = manifest
                 break
@@ -3162,8 +3436,7 @@ class BuilderAutomationService:
         )
         if (
             isinstance(changed_paths_value, list)
-            and str(result.get("execution_strategy") or "").strip()
-            == "validation_only"
+            and str(result.get("execution_strategy") or "").strip() == "validation_only"
         ):
             validation_only = (
                 provenance.get("validation_only")
@@ -3206,8 +3479,7 @@ class BuilderAutomationService:
             for skill_id in companion_ids
             if skill_id in created_skills
             or any(
-                path == f"skills/{skill_id}"
-                or path.startswith(f"skills/{skill_id}/")
+                path == f"skills/{skill_id}" or path.startswith(f"skills/{skill_id}/")
                 for path in changed_paths
             )
         ]
@@ -3248,7 +3520,18 @@ class BuilderAutomationService:
         if gate_checkpoint:
             return gate_checkpoint
         checkpoint = self._budget_continuation_checkpoint(session)
-        strategy = _brief_deterministic_strategy(session.get("implementation_brief"))
+        if checkpoint and checkpoint.get("reason") in {
+            "manifest_scope_requalified_after_guard",
+            "validation_scope_requalified_after_guard",
+            "repair_envelope_requalified_after_path_guard",
+        }:
+            return checkpoint
+        # A follow-up iteration owns its execution brief. The durable base brief
+        # can still describe an older deterministic repair and must not suppress
+        # preservation of the current model candidate at a token boundary.
+        strategy = _brief_deterministic_strategy(
+            session.get("last_execution_brief") or session.get("implementation_brief")
+        )
         if not strategy:
             return checkpoint
         if (
@@ -3265,8 +3548,13 @@ class BuilderAutomationService:
     ) -> dict[str, Any] | None:
         """Recover a gate candidate across repair sessions without trusting user refs."""
 
-        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
-        if str(links.get("development_ticket_source") or "").strip() != "builder_publication_gate":
+        links = (
+            session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        )
+        if (
+            str(links.get("development_ticket_source") or "").strip()
+            != "builder_publication_gate"
+        ):
             return None
         source_task_id = str(
             links.get("development_ticket_gate_parent_task_id") or ""
@@ -3307,7 +3595,9 @@ class BuilderAutomationService:
             if isinstance(assignment, Mapping)
             else {}
         )
-        target = request.get("target") if isinstance(request.get("target"), Mapping) else {}
+        target = (
+            request.get("target") if isinstance(request.get("target"), Mapping) else {}
+        )
         if not self._preview_target_matches_project(
             {
                 "object_type": target.get("object_type") or target.get("type"),
@@ -3317,7 +3607,9 @@ class BuilderAutomationService:
             object_id=str(session.get("object_id") or ""),
         ):
             return None
-        source_links = request.get("links") if isinstance(request.get("links"), Mapping) else {}
+        source_links = (
+            request.get("links") if isinstance(request.get("links"), Mapping) else {}
+        )
         source_ticket_ids = {
             str(item).strip()
             for item in [
@@ -3395,34 +3687,61 @@ class BuilderAutomationService:
                 else self.find_active_session(webspace_id=webspace_id)
             )
             if not session:
-                return {"ok": False, "handled": False, "error": "automation_session_not_found"}
+                return {
+                    "ok": False,
+                    "handled": False,
+                    "error": "automation_session_not_found",
+                }
             session = self.refresh_session(session)
             clarification_source = None
             clarification_input = None
-            needs_input = (session.get("last_failure") or {}).get("failure_class") == "user_input_required"
+            needs_input = (session.get("last_failure") or {}).get(
+                "failure_class"
+            ) == "user_input_required"
             if needs_input or clarification_response:
-                from adaos.services.builder.clarification import BuilderClarificationService
+                from adaos.services.builder.clarification import (
+                    BuilderClarificationService,
+                )
 
                 if not clarification_response:
-                    raise ValueError("Answer the current clarification questions and explicitly continue Automation")
+                    raise ValueError(
+                        "Answer the current clarification questions and explicitly continue Automation"
+                    )
                 clarification_service = BuilderClarificationService(self.state_dir)
-                clarification_input = clarification_service.resume_input(session, **dict(clarification_response))
+                clarification_input = clarification_service.resume_input(
+                    session, **dict(clarification_response)
+                )
                 clarification_source = copy.deepcopy(session)
                 instruction = clarification_input["text"]
             if expected_session_id is not None or expected_iteration is not None:
-                if (not expected_session_id or type(expected_iteration) is not int
-                        or expected_iteration < 0
-                        or session.get("session_id") != expected_session_id
-                        or int(session.get("iteration") or 0) != expected_iteration):
-                    raise ValueError("Automation follow-up does not match the expected session iteration")
+                if (
+                    not expected_session_id
+                    or type(expected_iteration) is not int
+                    or expected_iteration < 0
+                    or session.get("session_id") != expected_session_id
+                    or int(session.get("iteration") or 0) != expected_iteration
+                ):
+                    raise ValueError(
+                        "Automation follow-up does not match the expected session iteration"
+                    )
             incoming_conversation_id = str(conversation_id or "").strip()
-            if incoming_conversation_id and not str(session.get("conversation_id") or "").strip():
+            if (
+                incoming_conversation_id
+                and not str(session.get("conversation_id") or "").strip()
+            ):
                 session["conversation_id"] = incoming_conversation_id
                 session["updated_at"] = _now_iso()
                 self._save_session(session)
             if session.get("status") == "completed":
                 session = self._notify_completed_session(session)
-            if session.get("status") in {"queued", "assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}:
+            if session.get("status") in {
+                "queued",
+                "assigned",
+                "workspace_preparing",
+                "in_progress",
+                "tests_running",
+                "commit_ready",
+            }:
                 return {
                     "ok": True,
                     "handled": True,
@@ -3439,19 +3758,23 @@ class BuilderAutomationService:
                 session["pending_continuation_checkpoint"] = continuation_checkpoint
             else:
                 session.pop("pending_continuation_checkpoint", None)
-            self._rebind_development_session(
+            development_session_rebound = self._rebind_development_session(
                 session,
                 development_session_id=str(development_session_id or ""),
             )
+            canonical_change_rebound = False
             if isinstance(execution_budget, Mapping):
                 previous_budget = (
                     dict(session.get("execution_budget"))
                     if isinstance(session.get("execution_budget"), Mapping)
                     else {}
                 )
-                next_budget = with_effective_billable_token_limit(
-                    {**previous_budget, **dict(execution_budget)}
-                ) or {}
+                next_budget = (
+                    with_effective_billable_token_limit(
+                        dict(execution_budget)
+                    )
+                    or {}
+                )
                 try:
                     max_model_tokens = int(
                         next_budget.get("max_model_tokens")
@@ -3460,17 +3783,23 @@ class BuilderAutomationService:
                     )
                     max_wall_seconds = int(next_budget.get("max_wall_seconds") or 0)
                 except (TypeError, ValueError) as exc:
-                    raise ValueError("execution budget limits must be integers") from exc
+                    raise ValueError(
+                        "execution budget limits must be integers"
+                    ) from exc
                 if not 1024 <= max_model_tokens <= 20_000_000:
                     raise ValueError(
                         "execution budget max_model_tokens must be between 1024 and 20000000"
                     )
                 if not 60 <= max_wall_seconds <= 86_400:
-                    raise ValueError("execution budget max_wall_seconds must be between 60 and 86400")
+                    raise ValueError(
+                        "execution budget max_wall_seconds must be between 60 and 86400"
+                    )
                 next_budget.update(
                     {
                         "schema": "adaos.builder.execution_budget.v1",
-                        "source": str(next_budget.get("source") or "builder.continuation").strip()
+                        "source": str(
+                            next_budget.get("source") or "builder.continuation"
+                        ).strip()
                         or "builder.continuation",
                         "max_model_tokens": max_model_tokens,
                         "max_wall_seconds": max_wall_seconds,
@@ -3486,7 +3815,8 @@ class BuilderAutomationService:
                         {
                             **previous_budget,
                             "replaced_at": _now_iso(),
-                            "replaced_by_iteration": int(session.get("iteration") or 0) + 1,
+                            "replaced_by_iteration": int(session.get("iteration") or 0)
+                            + 1,
                         }
                     )
                 session["execution_budget_history"] = history[-20:]
@@ -3505,7 +3835,11 @@ class BuilderAutomationService:
                 )
                 governed_state = str(governed.get("state") or "").strip()
                 starts_automation = governed_state == "automation_ready"
-                if governed_state in {"trial_ready", "trial_review", "publication_ready"}:
+                if governed_state in {
+                    "trial_ready",
+                    "trial_review",
+                    "publication_ready",
+                }:
                     delivery = (
                         workflow_before.get("delivery")
                         if isinstance(workflow_before.get("delivery"), Mapping)
@@ -3549,7 +3883,10 @@ class BuilderAutomationService:
                     active_change_set.get("change_set_id") or ""
                 ).strip()
                 session_change_set_id = str(session.get("change_set_id") or "").strip()
-                if active_change_set_id and active_change_set_id != session_change_set_id:
+                if (
+                    active_change_set_id
+                    and active_change_set_id != session_change_set_id
+                ):
                     # Automation sessions are durable per project, while Builder
                     # Changes are deliberately short-lived review envelopes.  A
                     # terminal session may therefore be reused for an approved
@@ -3581,6 +3918,7 @@ class BuilderAutomationService:
                         session["change_set_history"] = history[-50:]
                     session["change_set_id"] = active_change_set_id
                     session["canonical_change_id"] = active_change_set_id
+                    canonical_change_rebound = True
                     session["browser_feedback_repair_count"] = 0
                     session.pop("pending_browser_feedback", None)
                     session.pop("context_packet_digest", None)
@@ -3590,10 +3928,14 @@ class BuilderAutomationService:
                 next_profile = normalize_codex_profile(agent_profile)
                 if next_profile != session.get("agent_profile"):
                     history = list(session.get("agent_profile_history") or [])
-                    history.append({"iteration": int(session.get("iteration") or 0),
-                                    "task_id": session.get("current_task_id"),
-                                    "profile": copy.deepcopy(session.get("agent_profile")),
-                                    "replaced_at": _now_iso()})
+                    history.append(
+                        {
+                            "iteration": int(session.get("iteration") or 0),
+                            "task_id": session.get("current_task_id"),
+                            "profile": copy.deepcopy(session.get("agent_profile")),
+                            "replaced_at": _now_iso(),
+                        }
+                    )
                     session["agent_profile_history"] = history[-50:]
                     session["agent_profile"] = next_profile
             session["iteration"] = int(session.get("iteration") or 0) + 1
@@ -3604,16 +3946,24 @@ class BuilderAutomationService:
             session["change_id"] = self._change_id(
                 session_id=str(session.get("session_id") or ""),
                 iteration=int(session["iteration"]),
-                seed=clarification_input["response_id"] if clarification_input else changed_at,
+                seed=clarification_input["response_id"]
+                if clarification_input
+                else changed_at,
             )
             if clarification_input:
                 session["clarification_continuation"] = {
-                    key: value for key, value in clarification_input.items() if key != "text"
+                    key: value
+                    for key, value in clarification_input.items()
+                    if key != "text"
                 }
             else:
                 session.pop("clarification_continuation", None)
             session.setdefault("turns", []).append(
-                {"iteration": session["iteration"], "text": instruction, "created_at": changed_at}
+                {
+                    "iteration": session["iteration"],
+                    "text": instruction,
+                    "created_at": changed_at,
+                }
             )
             if transition_token == "return_to_prototype":
                 workflow_before = self._workflow().describe(
@@ -3626,7 +3976,9 @@ class BuilderAutomationService:
                     else {}
                 )
                 if not bool(capabilities.get("can_return_to_prototype")):
-                    raise ValueError("return to Prototype requires the current completed Automation result")
+                    raise ValueError(
+                        "return to Prototype requires the current completed Automation result"
+                    )
             if transition_token:
                 session["pending_workflow_transition"] = transition_token
             previous_readiness = session.get("completion_readiness")
@@ -3638,7 +3990,8 @@ class BuilderAutomationService:
                 ]
                 history.append(
                     {
-                        "task_id": str(session.get("current_task_id") or "").strip() or None,
+                        "task_id": str(session.get("current_task_id") or "").strip()
+                        or None,
                         "iteration": max(0, int(session.get("iteration") or 1) - 1),
                         **dict(previous_readiness),
                     }
@@ -3663,14 +4016,25 @@ class BuilderAutomationService:
             ):
                 session.pop(stale_key, None)
             provider_artifacts = self._ensure_resource_provider_companion(
-                kind=str(session["object_type"]), project_id=str(session["object_id"]),
+                kind=str(session["object_type"]),
+                project_id=str(session["object_id"]),
                 links=dict(session.get("links") or {}),
                 prototype_acceptance=session.get("prototype_acceptance"),
             )
             session.setdefault("created_artifacts", []).extend(provider_artifacts)
             self._refresh_session_companion_skill_ids(session)
             self._capture_preview_binding(session)
-            submitted = self._submit(session, iteration_instruction=instruction)
+            submitted = self._submit(
+                session,
+                iteration_instruction=instruction,
+                canonical_brief_authority=development_session_rebound,
+                canonical_change_authority=canonical_change_rebound,
+                execution_brief_override=(
+                    str(session.get("last_execution_brief") or "").strip() or None
+                    if instruction == _UNCHANGED_RETRY_INSTRUCTION
+                    else None
+                ),
+            )
             if continuation_checkpoint:
                 history = [
                     dict(item)
@@ -3748,13 +4112,20 @@ class BuilderAutomationService:
         }
 
     def _clarification_matches_change(self, session: Mapping[str, Any]) -> bool:
-        workflow = self._workflow().describe(session["object_type"], session["object_id"])
+        workflow = self._workflow().describe(
+            session["object_type"], session["object_id"]
+        )
         change = workflow.get("change_set") or {}
-        return bool(change.get("change_set_id")
-                    and change["change_set_id"] == (session.get("canonical_change_id") or session.get("change_set_id"))
-                    and change.get("status") not in {"published", "rejected", "superseded"})
+        return bool(
+            change.get("change_set_id")
+            and change["change_set_id"]
+            == (session.get("canonical_change_id") or session.get("change_set_id"))
+            and change.get("status") not in {"published", "rejected", "superseded"}
+        )
 
-    def clarification_state(self, *, object_type: str, object_id: str) -> dict[str, Any]:
+    def clarification_state(
+        self, *, object_type: str, object_id: str
+    ) -> dict[str, Any]:
         from adaos.services.builder.clarification import BuilderClarificationService
 
         with _LOCK:
@@ -3762,12 +4133,20 @@ class BuilderAutomationService:
             if not session:
                 return {"pending": False, "questions": [], "can_resume": False}
             session = self.refresh_session(session)
-            if ((session.get("last_failure") or {}).get("failure_class") != "user_input_required"
-                    or not self._clarification_matches_change(session)):
+            if (session.get("last_failure") or {}).get(
+                "failure_class"
+            ) != "user_input_required" or not self._clarification_matches_change(
+                session
+            ):
                 return {"pending": False, "questions": [], "can_resume": False}
-            return {"pending": True, **BuilderClarificationService(self.state_dir).project(session)}
+            return {
+                "pending": True,
+                **BuilderClarificationService(self.state_dir).project(session),
+            }
 
-    def answer_clarification(self, *, object_type: str, object_id: str, **answer) -> dict[str, Any]:
+    def answer_clarification(
+        self, *, object_type: str, object_id: str, **answer
+    ) -> dict[str, Any]:
         from adaos.services.builder.clarification import BuilderClarificationService
 
         with _LOCK:
@@ -3777,59 +4156,129 @@ class BuilderAutomationService:
             session = self.refresh_session(session)
             if not self._clarification_matches_change(session):
                 raise ValueError("Clarification belongs to another or closed Change")
-            result = BuilderClarificationService(self.state_dir).answer(session, **answer)
+            result = BuilderClarificationService(self.state_dir).answer(
+                session, **answer
+            )
             return {"ok": True, "clarification": result}
 
-    def resume_clarification(self, *, object_type: str, object_id: str, interaction_id: str,
-                             expected_generation: int, confirmed: bool) -> dict[str, Any]:
+    def resume_clarification(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        interaction_id: str,
+        expected_generation: int,
+        confirmed: bool,
+    ) -> dict[str, Any]:
         from adaos.services import conversation_store
         from adaos.services.artifact_pipeline.storage import mutation_lock
         from adaos.services.policy.caller import current_caller
 
         token = hashlib.sha256(interaction_id.encode("utf-8")).hexdigest()
-        with _LOCK, mutation_lock(self.state_dir / "builder/clarifications" / (token + ".resume.lock")):
+        with (
+            _LOCK,
+            mutation_lock(
+                self.state_dir / "builder/clarifications" / (token + ".resume.lock")
+            ),
+        ):
             session = self.get_session(object_type, object_id)
             record = conversation_store.get_interaction(interaction_id)
             caller = current_caller()
             if not record or caller is None or caller.ref() != record["owner"]:
                 raise PermissionError("Clarification requires its verified owner")
             if not session or confirmed is not True:
-                raise ValueError("Current Automation and explicit continuation consent are required")
+                raise ValueError(
+                    "Current Automation and explicit continuation consent are required"
+                )
             if not self._clarification_matches_change(session):
                 raise ValueError("Clarification belongs to another or closed Change")
             binding = record["metadata"].get("binding") or {}
-            if (binding.get("object_type"), binding.get("object_id"), binding.get("change_id")) != (
-                session.get("object_type"), session.get("object_id"), session.get("canonical_change_id") or session.get("change_set_id")
+            if (
+                binding.get("object_type"),
+                binding.get("object_id"),
+                binding.get("change_id"),
+            ) != (
+                session.get("object_type"),
+                session.get("object_id"),
+                session.get("canonical_change_id") or session.get("change_set_id"),
             ):
                 raise ValueError("Clarification belongs to another Project/Change")
             receipt = session.get("clarification_continuation") or {}
             if receipt.get("interaction_id") == interaction_id:
-                if type(expected_generation) is not int or record["generation"] not in {expected_generation, expected_generation + 1}:
-                    raise ValueError("Clarification changed; reopen the current questions")
+                if type(expected_generation) is not int or record["generation"] not in {
+                    expected_generation,
+                    expected_generation + 1,
+                }:
+                    raise ValueError(
+                        "Clarification changed; reopen the current questions"
+                    )
                 task_id = session.get("current_task_id")
-                source = {**session, **binding, "current_task_id": binding["run_id"],
-                          "last_failure": {"failure_class": "user_input_required", "details": {
-                              "clarification_questions": record["metadata"]["questions"]}}}
-                from adaos.services.builder.clarification import BuilderClarificationService
+                source = {
+                    **session,
+                    **binding,
+                    "current_task_id": binding["run_id"],
+                    "last_failure": {
+                        "failure_class": "user_input_required",
+                        "details": {
+                            "clarification_questions": record["metadata"]["questions"]
+                        },
+                    },
+                }
+                from adaos.services.builder.clarification import (
+                    BuilderClarificationService,
+                )
 
-                BuilderClarificationService(self.state_dir).complete(source, interaction_id=interaction_id,
-                    expected_generation=expected_generation, continuation_task_id=task_id)
+                BuilderClarificationService(self.state_dir).complete(
+                    source,
+                    interaction_id=interaction_id,
+                    expected_generation=expected_generation,
+                    continuation_task_id=task_id,
+                )
                 task = self.factory.read_task(task_id)
                 if task.get("status") == "queued":
                     workflow = self._workflow().describe(object_type, object_id)
                     governed = workflow.get("governed") or {}
                     head = (workflow.get("automation") or {}).get("head_task_id")
                     if head != task_id:
-                        event = "automation_started" if governed.get("state") == "automation_ready" else "automation_iteration_started"
-                        self._workflow().transition(object_type, object_id, event, actor="builder.automation",
-                            metadata={"confirmed": True, "task_id": task_id, "change_id": session.get("change_id"),
-                                      "run_id": session.get("change_id"), "context_packet_digest": session.get("context_packet_digest")})
+                        event = (
+                            "automation_started"
+                            if governed.get("state") == "automation_ready"
+                            else "automation_iteration_started"
+                        )
+                        self._workflow().transition(
+                            object_type,
+                            object_id,
+                            event,
+                            actor="builder.automation",
+                            metadata={
+                                "confirmed": True,
+                                "task_id": task_id,
+                                "change_id": session.get("change_id"),
+                                "run_id": session.get("change_id"),
+                                "context_packet_digest": session.get(
+                                    "context_packet_digest"
+                                ),
+                            },
+                        )
                     self._launch_worker(session["session_id"])
-                return {"ok": True, "duplicate": True, "session": session, "automation": self.project_session(session)}
-            return self.submit_turn(text="Continue after explicit user clarification.", object_type=object_type,
-                object_id=object_id, expected_session_id=session["session_id"], expected_iteration=session["iteration"],
-                clarification_response={"interaction_id": interaction_id, "expected_generation": expected_generation,
-                                        "confirmed": confirmed})
+                return {
+                    "ok": True,
+                    "duplicate": True,
+                    "session": session,
+                    "automation": self.project_session(session),
+                }
+            return self.submit_turn(
+                text="Continue after explicit user clarification.",
+                object_type=object_type,
+                object_id=object_id,
+                expected_session_id=session["session_id"],
+                expected_iteration=session["iteration"],
+                clarification_response={
+                    "interaction_id": interaction_id,
+                    "expected_generation": expected_generation,
+                    "confirmed": confirmed,
+                },
+            )
 
     def retry_failed(
         self,
@@ -3848,8 +4297,12 @@ class BuilderAutomationService:
             if not session:
                 raise ValueError("automation_session_not_found")
             session = self.refresh_session(session)
-            if (session.get("last_failure") or {}).get("failure_class") == "user_input_required":
-                raise ValueError("Answer the current clarification questions before continuing Automation")
+            if (session.get("last_failure") or {}).get(
+                "failure_class"
+            ) == "user_input_required":
+                raise ValueError(
+                    "Answer the current clarification questions before continuing Automation"
+                )
             status = str(session.get("status") or "").strip()
             if status == "queued":
                 turns = [
@@ -3890,7 +4343,9 @@ class BuilderAutomationService:
                             "task_id": task_id,
                             "change_id": session.get("change_id"),
                             "run_id": session.get("change_id"),
-                            "context_packet_digest": session.get("context_packet_digest"),
+                            "context_packet_digest": session.get(
+                                "context_packet_digest"
+                            ),
                         },
                     )
                 elif active_phase != "automation":
@@ -3918,6 +4373,27 @@ class BuilderAutomationService:
                         project_id,
                     )
                 )
+            if not str(session.get("last_execution_brief") or "").strip():
+                task_id = str(session.get("current_task_id") or "").strip()
+                try:
+                    failed_task = self.factory.read_task(task_id) if task_id else {}
+                except (KeyError, RuntimeError):
+                    failed_task = {}
+                failed_request = (
+                    failed_task.get("realize_request")
+                    if isinstance(failed_task.get("realize_request"), Mapping)
+                    else {}
+                )
+                failed_artifacts = (
+                    failed_request.get("artifacts")
+                    if isinstance(failed_request.get("artifacts"), Mapping)
+                    else {}
+                )
+                session["last_execution_brief"] = str(
+                    failed_artifacts.get("implementation_brief")
+                    or session.get("implementation_brief")
+                    or ""
+                ).strip()
             session["updated_at"] = _now_iso()
             self._save_session(session)
 
@@ -3932,7 +4408,9 @@ class BuilderAutomationService:
         result["retried_unchanged_request"] = True
         return result
 
-    def _budget_continuation_checkpoint(self, session: Mapping[str, Any]) -> dict[str, Any] | None:
+    def _budget_continuation_checkpoint(
+        self, session: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
         task_id = str(session.get("current_task_id") or "").strip()
         if not task_id:
             return None
@@ -3957,10 +4435,21 @@ class BuilderAutomationService:
             retry_reason = None
             if "Generated project validation failed:" in failure_message:
                 retry_reason = "deterministic_validation_failure"
-            elif requalified_feedback_message(Path(self.runs_root) / _safe_token(task_id), failure):
+            elif requalified_feedback_message(
+                Path(self.runs_root) / _safe_token(task_id), failure
+            ):
                 retry_reason = "development_feedback_requalified"
             elif "changed paths outside the exact repair files:" in failure_message:
                 retry_reason = "repair_envelope_requalified_after_path_guard"
+            elif (
+                "large declarative manifest rewrite is not admitted" in failure_message
+            ):
+                retry_reason = "manifest_scope_requalified_after_guard"
+            elif (
+                "validation-only repair requires source preconditions"
+                in failure_message
+            ):
+                retry_reason = "validation_scope_requalified_after_guard"
             elif (
                 "accepted Prototype canonical webui.json does not match its acceptance digest"
                 in failure_message
@@ -3979,7 +4468,10 @@ class BuilderAutomationService:
                 retry_reason = "trusted_root_mcp_validation_retry"
             if retry_reason is None:
                 return None
-            if retry_reason in {"deterministic_validation_failure", "development_feedback_requalified"}:
+            if retry_reason in {
+                "deterministic_validation_failure",
+                "development_feedback_requalified",
+            }:
                 reason = retry_reason
             else:
                 failed_run_root = Path(self.runs_root) / _safe_token(task_id)
@@ -4084,18 +4576,15 @@ class BuilderAutomationService:
                 )
                 source_is_validation_boundary = (
                     source_reason == "deterministic_validation_failure"
-                    and "Generated project validation failed:"
-                    in source_failure_message
+                    and "Generated project validation failed:" in source_failure_message
                 )
-                if (
-                    str(source_task.get("status") or "").strip() != "failed"
-                    or not (
-                        source_is_budget_boundary
-                        or source_is_validation_boundary
-                    )
+                if str(source_task.get("status") or "").strip() != "failed" or not (
+                    source_is_budget_boundary or source_is_validation_boundary
                 ):
                     return None
-                trigger_failure_id = str(failure.get("failure_id") or "").strip() or None
+                trigger_failure_id = (
+                    str(failure.get("failure_id") or "").strip() or None
+                )
                 reason = (
                     "deterministic_validation_failure"
                     if source_is_validation_boundary
@@ -4140,7 +4629,9 @@ class BuilderAutomationService:
             "created_at": _now_iso(),
         }
 
-    def reconcile_checkpoint(self, *, object_type: str, object_id: str) -> dict[str, Any]:
+    def reconcile_checkpoint(
+        self, *, object_type: str, object_id: str
+    ) -> dict[str, Any]:
         """Explicitly reconcile failed Forge checkpoints for a validated task.
 
         This recovery never submits or runs Codex.  When a paired checkpoint is
@@ -4168,25 +4659,44 @@ class BuilderAutomationService:
                 for item in readiness.get("vcs_checkpoints") or []
                 if isinstance(item, Mapping)
             ]
-            task = current.get("task") if isinstance(current.get("task"), Mapping) else {}
-            result = current.get("last_result") if isinstance(current.get("last_result"), Mapping) else {}
-            if str(current.get("status") or "") != "failed" or str(failure.get("stage") or "") != "forge_checkpoint":
-                raise ValueError("checkpoint reconciliation requires a Forge checkpoint failure")
+            task = (
+                current.get("task") if isinstance(current.get("task"), Mapping) else {}
+            )
+            result = (
+                current.get("last_result")
+                if isinstance(current.get("last_result"), Mapping)
+                else {}
+            )
+            if (
+                str(current.get("status") or "") != "failed"
+                or str(failure.get("stage") or "") != "forge_checkpoint"
+            ):
+                raise ValueError(
+                    "checkpoint reconciliation requires a Forge checkpoint failure"
+                )
             if str(task.get("status") or "") != "completed" or not result:
-                raise ValueError("checkpoint reconciliation requires a validated completed Codex result")
-            if not checkpoints or not any(not bool(item.get("ok")) for item in checkpoints):
-                raise ValueError("checkpoint reconciliation requires at least one failed artifact")
+                raise ValueError(
+                    "checkpoint reconciliation requires a validated completed Codex result"
+                )
+            if not checkpoints or not any(
+                not bool(item.get("ok")) for item in checkpoints
+            ):
+                raise ValueError(
+                    "checkpoint reconciliation requires at least one failed artifact"
+                )
 
             task_id = str(current.get("current_task_id") or "").strip()
             previous_change_id = str(current.get("change_id") or "").strip()
             partial_checkpoint = any(bool(item.get("ok")) for item in checkpoints)
-            if partial_checkpoint and not previous_change_id:
-                raise ValueError("partial checkpoint reconciliation requires the original change id")
-            reconciliation_id = previous_change_id if partial_checkpoint else self._change_id(
-                session_id=str(current.get("session_id") or ""),
-                iteration=int(current.get("iteration") or 0),
-                seed=f"{task_id}:checkpoint-reconcile",
-            )
+            if not previous_change_id:
+                raise ValueError(
+                    "checkpoint reconciliation requires the original change id"
+                )
+            # A timeout can occur after Forge accepted the write. Reusing the
+            # original idempotency identity is required even when no sibling
+            # artifact was confirmed locally; minting a new change id could
+            # turn one unresolved transaction into a duplicate commit.
+            reconciliation_id = previous_change_id
             history = [
                 dict(item)
                 for item in current.get("reconciliation_history") or []
@@ -4198,7 +4708,7 @@ class BuilderAutomationService:
                     "task_id": task_id,
                     "previous_change_id": previous_change_id or None,
                     "change_id": reconciliation_id,
-                    "mode": "resume_partial" if partial_checkpoint else "retry_precommit",
+                    "mode": "resume_partial" if partial_checkpoint else "retry_exact",
                     "requested_at": _now_iso(),
                 }
             )
@@ -4242,8 +4752,13 @@ class BuilderAutomationService:
         """
 
         project_ref = str(publication_project_ref or "").strip()
-        if not project_ref.startswith("project:") or not project_ref.split(":", 1)[1].strip():
-            raise ValueError("checkpoint repackage requires publication_project_ref=project:<id>")
+        if (
+            not project_ref.startswith("project:")
+            or not project_ref.split(":", 1)[1].strip()
+        ):
+            raise ValueError(
+                "checkpoint repackage requires publication_project_ref=project:<id>"
+            )
         actor_ref = str(actor or "").strip()
         operation_key = str(idempotency_key or "").strip()
         if not actor_ref or not operation_key:
@@ -4267,7 +4782,9 @@ class BuilderAutomationService:
                 if isinstance(item, Mapping) and bool(item.get("ok"))
             ]
             if not checkpoints:
-                raise ValueError("checkpoint repackage requires confirmed Forge checkpoints")
+                raise ValueError(
+                    "checkpoint repackage requires confirmed Forge checkpoints"
+                )
 
             workflow = self._workflow().describe(object_type, object_id)
             workflow_automation = (
@@ -4281,9 +4798,13 @@ class BuilderAutomationService:
                 else {}
             )
             if str(workflow_automation.get("status") or "") != "completed":
-                raise ValueError("checkpoint repackage requires completed canonical Automation")
+                raise ValueError(
+                    "checkpoint repackage requires completed canonical Automation"
+                )
             if str(delivery.get("status") or "") != "checkpoint":
-                raise ValueError("checkpoint repackage requires an exact retryable checkpoint")
+                raise ValueError(
+                    "checkpoint repackage requires an exact retryable checkpoint"
+                )
 
             primary = next(
                 (
@@ -4291,7 +4812,8 @@ class BuilderAutomationService:
                     for item in checkpoints
                     if str(item.get("kind") or "").strip().lower().rstrip("s")
                     == str(object_type or "").strip().lower().rstrip("s")
-                    and str(item.get("name") or "").strip() == str(object_id or "").strip()
+                    and str(item.get("name") or "").strip()
+                    == str(object_id or "").strip()
                 ),
                 None,
             )
@@ -4299,17 +4821,29 @@ class BuilderAutomationService:
             source_revision = str(delivery.get("source_revision") or "").strip()
             if not primary or (
                 str(primary.get("package_digest") or "").strip() != package_digest
-                or str(primary.get("source_revision") or primary.get("commit") or "").strip()
+                or str(
+                    primary.get("source_revision") or primary.get("commit") or ""
+                ).strip()
                 != source_revision
             ):
-                raise ValueError("canonical delivery no longer matches the validated Forge checkpoint")
+                raise ValueError(
+                    "canonical delivery no longer matches the validated Forge checkpoint"
+                )
 
-            links = current.get("links") if isinstance(current.get("links"), Mapping) else {}
+            links = (
+                current.get("links")
+                if isinstance(current.get("links"), Mapping)
+                else {}
+            )
             linked_project_ref = str(
-                links.get("development_ticket_project_ref") or links.get("project_ref") or ""
+                links.get("development_ticket_project_ref")
+                or links.get("project_ref")
+                or ""
             ).strip()
             if linked_project_ref and linked_project_ref != project_ref:
-                raise ValueError("checkpoint repackage Project does not match the Automation session")
+                raise ValueError(
+                    "checkpoint repackage Project does not match the Automation session"
+                )
 
             repackage_id = self._change_id(
                 session_id=str(current.get("session_id") or ""),
@@ -4351,7 +4885,9 @@ class BuilderAutomationService:
                     "candidate_id": str(delivery.get("candidate_id") or ""),
                     "rebase_plan": {
                         "stale_reason": "release_abi_repackage",
-                        "source_change_id": str(delivery.get("checkpoint_change_id") or ""),
+                        "source_change_id": str(
+                            delivery.get("checkpoint_change_id") or ""
+                        ),
                     },
                     "run_id": f"repackage:{operation_key}:invalidate",
                     "idempotency_key": f"{operation_key}:invalidate",
@@ -4448,7 +4984,9 @@ class BuilderAutomationService:
             "workflow": transitioned.get("workflow"),
         }
 
-    def recover_validated_result(self, *, object_type: str, object_id: str) -> dict[str, Any]:
+    def recover_validated_result(
+        self, *, object_type: str, object_id: str
+    ) -> dict[str, Any]:
         """Activate a preserved validated task result without rerunning Codex."""
 
         with _LOCK:
@@ -4456,12 +4994,20 @@ class BuilderAutomationService:
             if not session:
                 raise ValueError("automation_session_not_found")
             current = self.refresh_session(session)
-            task = current.get("task") if isinstance(current.get("task"), Mapping) else {}
-            failure = current.get("last_failure") if isinstance(current.get("last_failure"), Mapping) else {}
+            task = (
+                current.get("task") if isinstance(current.get("task"), Mapping) else {}
+            )
+            failure = (
+                current.get("last_failure")
+                if isinstance(current.get("last_failure"), Mapping)
+                else {}
+            )
             current_status = str(current.get("status") or "")
             task_id = str(current.get("current_task_id") or "").strip()
             task_status = str(task.get("status") or "")
-            pending_transition = str(current.get("pending_workflow_transition") or "").strip()
+            pending_transition = str(
+                current.get("pending_workflow_transition") or ""
+            ).strip()
             readiness = (
                 current.get("completion_readiness")
                 if isinstance(current.get("completion_readiness"), Mapping)
@@ -4478,7 +5024,9 @@ class BuilderAutomationService:
                     and str(item.get("name") or "").strip()
                     == str(current.get("object_id") or "").strip()
                     and str(item.get("package_digest") or "").strip()
-                    and str(item.get("source_revision") or item.get("commit") or "").strip()
+                    and str(
+                        item.get("source_revision") or item.get("commit") or ""
+                    ).strip()
                 ),
                 None,
             )
@@ -4522,7 +5070,9 @@ class BuilderAutomationService:
                     and str(workflow_delivery.get("checkpoint_change_id") or "").strip()
                     == str(current.get("change_id") or "").strip()
                     and str(workflow_delivery.get("package_digest") or "").strip()
-                    == str(confirmed_primary_checkpoint.get("package_digest") or "").strip()
+                    == str(
+                        confirmed_primary_checkpoint.get("package_digest") or ""
+                    ).strip()
                     and str(workflow_delivery.get("source_revision") or "").strip()
                     == str(
                         confirmed_primary_checkpoint.get("source_revision")
@@ -4556,12 +5106,16 @@ class BuilderAutomationService:
                 and not validated_activation_pending
                 and not interrupted_finalization_pending
             ):
-                raise ValueError("validated result recovery requires a failed Automation task")
+                raise ValueError(
+                    "validated result recovery requires a failed Automation task"
+                )
             failure_stage = str(failure.get("stage") or "")
             native_activation_pending = bool(
-                current_status == "failed" and task_status == "completed"
+                current_status == "failed"
+                and task_status == "completed"
                 and readiness.get("stage") == "activation"
-                and readiness.get("task_id") == task_id and not readiness.get("ok")
+                and readiness.get("task_id") == task_id
+                and not readiness.get("ok")
                 and isinstance(current.get("last_result"), Mapping)
             )
             if (
@@ -4575,6 +5129,8 @@ class BuilderAutomationService:
                 and failure_stage
                 in {
                     "snapshot",
+                    "candidate_materialization",
+                    "browser_feedback",
                     "live_readiness",
                     "project_checkpoint",
                     "aprobation_activation",
@@ -4619,26 +5175,40 @@ class BuilderAutomationService:
                     current["rebind_confirmed_checkpoint"] = True
             else:
                 if task_status != "failed":
-                    raise ValueError("validated result recovery requires a failed Automation task")
+                    raise ValueError(
+                        "validated result recovery requires a failed Automation task"
+                    )
                 if not bool(failure.get("retryable")):
-                    raise ValueError("validated result recovery requires a retryable task failure")
-                worker = self.worker_factory() if self.worker_factory else LocalSkillFactoryWorker(
-                    state_dir=self.state_dir,
-                    repo_root=self.repo_root,
-                    dev_skills_root=self.dev_skills_root,
-                    dev_scenarios_root=self.dev_scenarios_root,
-                    runs_root=self.runs_root,
-                    progress_callback=lambda recovered_task_id, status, message: self._on_worker_progress(
-                        str(current.get("session_id") or ""),
-                        recovered_task_id,
+                    raise ValueError(
+                        "validated result recovery requires a retryable task failure"
+                    )
+                worker = (
+                    self.worker_factory()
+                    if self.worker_factory
+                    else LocalSkillFactoryWorker(
+                        state_dir=self.state_dir,
+                        repo_root=self.repo_root,
+                        dev_skills_root=self.dev_skills_root,
+                        dev_scenarios_root=self.dev_scenarios_root,
+                        runs_root=self.runs_root,
+                        progress_callback=lambda recovered_task_id,
                         status,
-                        message,
-                    ),
+                        message: self._on_worker_progress(
+                            str(current.get("session_id") or ""),
+                            recovered_task_id,
+                            status,
+                            message,
+                        ),
+                    )
                 )
                 recovered_result = worker.recover_validated_run(task_id)
                 current = self.refresh_session(current)
-                if str(current.get("status") or "") != "completed" or not isinstance(current.get("last_result"), Mapping):
-                    raise RuntimeError("validated result recovery did not complete the Automation task")
+                if str(current.get("status") or "") != "completed" or not isinstance(
+                    current.get("last_result"), Mapping
+                ):
+                    raise RuntimeError(
+                        "validated result recovery did not complete the Automation task"
+                    )
             current["status"] = "commit_ready"
             current["finalizing_task_id"] = task_id
             current["progress"] = {
@@ -4702,7 +5272,9 @@ class BuilderAutomationService:
             for item in session.get("task_history") or []
             if str(item).strip()
         ]
-        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        links = (
+            session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        )
         compact_links = {
             key: copy.deepcopy(links.get(key))
             for key in (
@@ -4769,7 +5341,11 @@ class BuilderAutomationService:
             if isinstance(session.get("last_failure"), Mapping)
             else {}
         )
-        progress = session.get("progress") if isinstance(session.get("progress"), Mapping) else {}
+        progress = (
+            session.get("progress")
+            if isinstance(session.get("progress"), Mapping)
+            else {}
+        )
         usage_receipts = [
             dict(item)
             for item in session.get("codex_usage_history") or []
@@ -4898,7 +5474,11 @@ class BuilderAutomationService:
             )
             candidate_id = str(trial.get("candidate_id") or "").strip()
             candidate_digest = str(trial.get("candidate_digest") or "").strip()
-            if not bool(aprobation.get("ok")) or not candidate_id or not candidate_digest:
+            if (
+                not bool(aprobation.get("ok"))
+                or not candidate_id
+                or not candidate_digest
+            ):
                 raise ValueError("reviewable Builder Trial is unavailable")
             expected_id = str(expected_candidate_id or "").strip()
             expected_digest = str(expected_candidate_digest or "").strip()
@@ -4954,14 +5534,18 @@ class BuilderAutomationService:
             ).strip()
             == candidate_id
         )
-        accepted_already = accepted and current_delivery and (
-            governed_state
-            in {
-                "publication_ready",
-                "publication_waiting",
-                "published",
-            }
-            or accepted_trial_recorded
+        accepted_already = (
+            accepted
+            and current_delivery
+            and (
+                governed_state
+                in {
+                    "publication_ready",
+                    "publication_waiting",
+                    "published",
+                }
+                or accepted_trial_recorded
+            )
         )
         published_already = accepted and current_publication
         if accepted_already:
@@ -5020,7 +5604,9 @@ class BuilderAutomationService:
                 persisted_aprobation,
             )
             if recorded_update is None:
-                raise RuntimeError("Builder Trial component update notice was not persisted")
+                raise RuntimeError(
+                    "Builder Trial component update notice was not persisted"
+                )
             component_update = dict(recorded_update)
             persisted_aprobation["component_update"] = component_update
 
@@ -5043,7 +5629,10 @@ class BuilderAutomationService:
                 )
                 if not bool(publication.get("ok", True)) or publication.get("error"):
                     raise RuntimeError(
-                        str(publication.get("error") or "Builder Trial publication failed")
+                        str(
+                            publication.get("error")
+                            or "Builder Trial publication failed"
+                        )
                     )
 
             workflow = self._workflow().describe(kind, project_id)
@@ -5082,9 +5671,11 @@ class BuilderAutomationService:
                     if isinstance(failure_workflow.get("publication"), Mapping)
                     else {}
                 )
-                publication_status = str(
-                    failure_publication.get("status") or "publication_failed"
-                ).strip().lower()
+                publication_status = (
+                    str(failure_publication.get("status") or "publication_failed")
+                    .strip()
+                    .lower()
+                )
                 failure_status = (
                     "publication_unknown"
                     if publication_status in {"unknown", "publication_unknown"}
@@ -5119,20 +5710,24 @@ class BuilderAutomationService:
                     "error": error_text,
                     "candidate_id": candidate_id,
                     "ticket_id": (
-                        str((gate_result or {}).get("ticket", {}).get("ticket_id") or "").strip()
+                        str(
+                            (gate_result or {}).get("ticket", {}).get("ticket_id") or ""
+                        ).strip()
                         or None
                     ),
                     "recorded_at": _now_iso(),
                 }
                 try:
-                    persisted, persisted_aprobation = self._persist_aprobation_trial_state(
-                        persisted,
-                        persisted_aprobation,
-                        trial,
-                        status=failure_status,
-                        decision=decision_token,
-                        actor=actor_token,
-                        failure=failure,
+                    persisted, persisted_aprobation = (
+                        self._persist_aprobation_trial_state(
+                            persisted,
+                            persisted_aprobation,
+                            trial,
+                            status=failure_status,
+                            decision=decision_token,
+                            actor=actor_token,
+                            failure=failure,
+                        )
                     )
                     self._project_aprobation_state(persisted, persisted_aprobation)
                 except Exception:
@@ -5298,7 +5893,8 @@ class BuilderAutomationService:
                         ticket_id,
                         actor=actor_token,
                         evidence_refs=evidence_refs,
-                        notes=str(reason or "").strip() or "User accepted the Builder Trial.",
+                        notes=str(reason or "").strip()
+                        or "User accepted the Builder Trial.",
                     )["ticket"]
                 if str(ticket.get("status") or "") == "verified":
                     ticket = ticket_service.close_ticket(
@@ -5377,7 +5973,9 @@ class BuilderAutomationService:
             "weak_patch": "builder_retry",
             "insufficient_validation": "validation_expansion",
         }
-        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        links = (
+            session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        )
         relation_refs = [
             {
                 "type": "builder_session",
@@ -5398,7 +5996,9 @@ class BuilderAutomationService:
             if str(value or "").strip()
         ):
             relation_refs.append({"type": "builder_repair", "id": repair_id})
-        for ticket_id in dict.fromkeys(str(value).strip() for value in ticket_ids if str(value).strip()):
+        for ticket_id in dict.fromkeys(
+            str(value).strip() for value in ticket_ids if str(value).strip()
+        ):
             relation_refs.append({"type": "development_ticket", "id": ticket_id})
         relation_refs = [item for item in relation_refs if item.get("id")]
         component_ref = f"{object_type}:{object_id}"
@@ -5430,7 +6030,9 @@ class BuilderAutomationService:
                 "SDK/API work, or validation expansion."
             )
         )
-        observed_reason = reason or "The user rejected the current Builder Trial without a note."
+        observed_reason = (
+            reason or "The user rejected the current Builder Trial without a note."
+        )
         result = DevelopmentFeedbackService(state_dir=self.state_dir).capture(
             source="human_review",
             category="result_rejected",
@@ -5487,7 +6089,10 @@ class BuilderAutomationService:
                 "automation": self.empty_projection(webspace_id=webspace_id),
             }
         incoming_conversation_id = str(conversation_id or "").strip()
-        if incoming_conversation_id and not str(session.get("conversation_id") or "").strip():
+        if (
+            incoming_conversation_id
+            and not str(session.get("conversation_id") or "").strip()
+        ):
             session["conversation_id"] = incoming_conversation_id
             session["updated_at"] = _now_iso()
             self._save_session(session)
@@ -5495,7 +6100,11 @@ class BuilderAutomationService:
         current = self._reconcile_required_aprobation(current)
         if current.get("status") == "completed":
             current = self._notify_completed_session(current)
-        return {"ok": True, "session": current, "automation": self.project_session(current)}
+        return {
+            "ok": True,
+            "session": current,
+            "automation": self.project_session(current),
+        }
 
     def _reconcile_required_aprobation(
         self,
@@ -5550,7 +6159,9 @@ class BuilderAutomationService:
             )
             notice = self._record_component_update(current, aprobation)
             if notice is None:
-                raise RuntimeError("Builder Trial component update notice was not persisted")
+                raise RuntimeError(
+                    "Builder Trial component update notice was not persisted"
+                )
             projection = self._refresh_component_update_projection(current, aprobation)
             reconciled_aprobation = dict(aprobation)
             reconciled_aprobation["component_update"] = notice
@@ -5663,7 +6274,11 @@ class BuilderAutomationService:
     def project_session(session: Mapping[str, Any]) -> dict[str, Any]:
         status = str(session.get("status") or "starting").strip() or "starting"
         task = session.get("task") if isinstance(session.get("task"), Mapping) else {}
-        result = session.get("last_result") if isinstance(session.get("last_result"), Mapping) else {}
+        result = (
+            session.get("last_result")
+            if isinstance(session.get("last_result"), Mapping)
+            else {}
+        )
         provenance = (
             result.get("provenance")
             if isinstance(result.get("provenance"), Mapping)
@@ -5675,9 +6290,21 @@ class BuilderAutomationService:
             else {}
         )
         forge = task.get("forge") if isinstance(task.get("forge"), Mapping) else {}
-        failure = session.get("last_failure") if isinstance(session.get("last_failure"), Mapping) else {}
-        progress = session.get("progress") if isinstance(session.get("progress"), Mapping) else {}
-        local_run = session.get("local_run") if isinstance(session.get("local_run"), Mapping) else {}
+        failure = (
+            session.get("last_failure")
+            if isinstance(session.get("last_failure"), Mapping)
+            else {}
+        )
+        progress = (
+            session.get("progress")
+            if isinstance(session.get("progress"), Mapping)
+            else {}
+        )
+        local_run = (
+            session.get("local_run")
+            if isinstance(session.get("local_run"), Mapping)
+            else {}
+        )
         budget_usage = BuilderAutomationService._budget_usage_projection(
             status=status,
             task=task,
@@ -5706,14 +6333,32 @@ class BuilderAutomationService:
             if isinstance(readiness.get("aprobation"), Mapping)
             else {}
         )
-        error = str(failure.get("error") or failure.get("message") or task.get("error") or "").strip() or None
-        clarification = session.get("clarification") if failure.get("failure_class") == "user_input_required" else None
-        awaiting_input = bool(clarification) and clarification.get("status") != "completed"
+        error = (
+            str(
+                failure.get("error")
+                or failure.get("message")
+                or task.get("error")
+                or ""
+            ).strip()
+            or None
+        )
+        clarification = (
+            session.get("clarification")
+            if failure.get("failure_class") == "user_input_required"
+            else None
+        )
+        awaiting_input = (
+            bool(clarification) and clarification.get("status") != "completed"
+        )
         current_task_id = str(
             session.get("current_task_id") or task.get("task_id") or ""
         ).strip()
         local_run_ref = str(result.get("local_run_ref") or "").strip()
-        if not local_run_ref and current_task_id and Path(current_task_id).name == current_task_id:
+        if (
+            not local_run_ref
+            and current_task_id
+            and Path(current_task_id).name == current_task_id
+        ):
             local_run_ref = f"skill-factory-run:{current_task_id}"
         return {
             "schema": AUTOMATION_PROJECTION_SCHEMA,
@@ -5724,29 +6369,44 @@ class BuilderAutomationService:
             "run_terminal": status in _TERMINAL_STATUSES,
             "waiting_for_input": awaiting_input,
             "clarification": copy.deepcopy(clarification),
-            "phase": "clarification" if awaiting_input else BuilderAutomationService._phase_for_status(status),
+            "phase": "clarification"
+            if awaiting_input
+            else BuilderAutomationService._phase_for_status(status),
             "busy": status in _ACTIVE_STATUSES,
             "terminal": not awaiting_input and status in _TERMINAL_STATUSES,
-            "can_submit": not bool(clarification) and status
+            "can_submit": not bool(clarification)
+            and status
             in {"waiting_for_core", "completed", "failed", "cancelled", "expired"},
             "webspace_id": str(session.get("webspace_id") or "desktop"),
             "project": {
                 "type": str(session.get("object_type") or ""),
                 "id": str(session.get("object_id") or ""),
-                "companion_skill_ids": BuilderAutomationService._session_companion_skill_ids(session),
+                "companion_skill_ids": BuilderAutomationService._session_companion_skill_ids(
+                    session
+                ),
             },
-            "source_prototype_version": str(session.get("source_prototype_version") or "").strip() or None,
+            "source_prototype_version": str(
+                session.get("source_prototype_version") or ""
+            ).strip()
+            or None,
             "prototype_handoff_digest": str(
                 dict(session.get("prototype_handoff") or {}).get("digest") or ""
-            ) or None,
+            )
+            or None,
             "iteration": int(session.get("iteration") or 0),
             "task_id": current_task_id or None,
             "change_set_id": str(session.get("change_set_id") or "").strip() or None,
             "change_id": str(session.get("change_id") or "").strip() or None,
-            "result_branch": str(result.get("branch") or forge.get("branch") or "").strip() or None,
-            "steps": BuilderAutomationService._step_projection("in_progress" if awaiting_input else status),
+            "result_branch": str(
+                result.get("branch") or forge.get("branch") or ""
+            ).strip()
+            or None,
+            "steps": BuilderAutomationService._step_projection(
+                "in_progress" if awaiting_input else status
+            ),
             "progress": dict(progress) if progress else None,
-            "summary": str(result.get("summary") or result.get("message") or "").strip() or None,
+            "summary": str(result.get("summary") or result.get("message") or "").strip()
+            or None,
             "budget_usage": budget_usage,
             "delivery": {
                 "aprobation_required": BuilderAutomationService._session_requires_aprobation_trial(
@@ -5759,11 +6419,13 @@ class BuilderAutomationService:
             "failure_id": str(failure.get("failure_id") or "").strip() or None,
             "failure_stage": str(failure.get("stage") or "").strip() or None,
             "retryable": bool(failure.get("retryable")) if failure else None,
-            "links": dict(session.get("links")) if isinstance(session.get("links"), Mapping) else {},
+            "links": dict(session.get("links"))
+            if isinstance(session.get("links"), Mapping)
+            else {},
             "diagnostic_hint": (
                 "Ответьте на вопросы и явно подтвердите продолжение Автоматизации."
-                if awaiting_input else
-                "Исправьте причину и отправьте уточнение в Автоматизации, чтобы запустить новую итерацию."
+                if awaiting_input
+                else "Исправьте причину и отправьте уточнение в Автоматизации, чтобы запустить новую итерацию."
                 if error
                 else None
             ),
@@ -5823,7 +6485,9 @@ class BuilderAutomationService:
                 )
                 if usage_receipt.get(key) is not None
             }
-        started_raw = str(task.get("assigned_at") or task.get("created_at") or "").strip()
+        started_raw = str(
+            task.get("assigned_at") or task.get("created_at") or ""
+        ).strip()
         finished_raw = str(task.get("updated_at") or "").strip()
         wall_seconds = 0.0
         try:
@@ -5847,12 +6511,15 @@ class BuilderAutomationService:
                 declared_model_tokens = 0
         observed_model_tokens = int(usage.get("model_tokens") or 0)
         declared_billable_tokens = execution_billable_token_limit(declared)
-        budget_metric = str((declared or {}).get("token_budget_metric") or "model_tokens").strip()
+        budget_metric = str(
+            (declared or {}).get("token_budget_metric") or "model_tokens"
+        ).strip()
         observed_budget_tokens = observed_model_tokens
         if budget_metric == "fresh_plus_output":
             observed_budget_tokens = max(
                 0,
-                int(usage.get("input_tokens") or 0) - int(usage.get("cached_input_tokens") or 0),
+                int(usage.get("input_tokens") or 0)
+                - int(usage.get("cached_input_tokens") or 0),
             ) + int(usage.get("output_tokens") or 0)
         budget_status = "unknown"
         overrun_tokens = 0
@@ -5867,7 +6534,9 @@ class BuilderAutomationService:
         if declared_billable_tokens > 0 and observed_model_tokens > 0:
             if observed_model_tokens > declared_billable_tokens:
                 billable_status = "exceeded"
-                billable_overrun_tokens = observed_model_tokens - declared_billable_tokens
+                billable_overrun_tokens = (
+                    observed_model_tokens - declared_billable_tokens
+                )
                 budget_status = "exceeded"
             else:
                 billable_status = "within_budget"
@@ -5883,7 +6552,9 @@ class BuilderAutomationService:
                     == "validate_preserved_candidate"
                 )
                 or bool(artifacts.get("structured_edits"))
-                or bool(dict(artifacts.get("repair_hints") or {}).get("validation_only"))
+                or bool(
+                    dict(artifacts.get("repair_hints") or {}).get("validation_only")
+                )
             )
         ):
             budget_status = "not_applicable"
@@ -5924,10 +6595,18 @@ class BuilderAutomationService:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                usage = event.get("usage") if isinstance(event.get("usage"), Mapping) else None
+                usage = (
+                    event.get("usage")
+                    if isinstance(event.get("usage"), Mapping)
+                    else None
+                )
                 if usage is None and isinstance(event.get("turn"), Mapping):
                     turn = event["turn"]
-                    usage = turn.get("usage") if isinstance(turn.get("usage"), Mapping) else None
+                    usage = (
+                        turn.get("usage")
+                        if isinstance(turn.get("usage"), Mapping)
+                        else None
+                    )
                 if usage is None:
                     continue
                 aliases = {
@@ -5938,7 +6617,14 @@ class BuilderAutomationService:
                 }
                 for key, candidates in aliases.items():
                     try:
-                        observed = next((usage.get(candidate) for candidate in candidates if usage.get(candidate) is not None), 0)
+                        observed = next(
+                            (
+                                usage.get(candidate)
+                                for candidate in candidates
+                                if usage.get(candidate) is not None
+                            ),
+                            0,
+                        )
                         values[key] = max(values.get(key, 0), int(observed or 0))
                     except (TypeError, ValueError):
                         continue
@@ -5954,7 +6640,11 @@ class BuilderAutomationService:
     def _codex_run_usage(local_run: Mapping[str, Any]) -> dict[str, Any]:
         run_root = Path(str(local_run.get("path") or "").strip())
         runtime_root = run_root / "runtime"
-        paths = sorted(runtime_root.glob("codex-events*.jsonl")) if runtime_root.is_dir() else []
+        paths = (
+            sorted(runtime_root.glob("codex-events*.jsonl"))
+            if runtime_root.is_dir()
+            else []
+        )
         if not paths:
             event_path = str(local_run.get("events_path") or "").strip()
             paths = [Path(event_path)] if event_path else []
@@ -5976,8 +6666,13 @@ class BuilderAutomationService:
                         receipt = json.loads(budget_path.read_text(encoding="utf-8"))
                     except (OSError, json.JSONDecodeError):
                         receipt = {}
-                    estimated = receipt.get("usage") if isinstance(receipt, Mapping) else {}
-                    if isinstance(estimated, Mapping) and int(estimated.get("model_tokens") or 0) > 0:
+                    estimated = (
+                        receipt.get("usage") if isinstance(receipt, Mapping) else {}
+                    )
+                    if (
+                        isinstance(estimated, Mapping)
+                        and int(estimated.get("model_tokens") or 0) > 0
+                    ):
                         usage = {
                             key: int(estimated.get(key) or 0)
                             for key in (
@@ -5993,12 +6688,20 @@ class BuilderAutomationService:
                 total["attempts"] = int(total.get("attempts") or 0) + 1
                 if accuracy != "provider_reported":
                     total["accuracy"] = accuracy
-                profile_path = path.with_name(path.name.replace("codex-events", "codex-execution-profile").replace(".jsonl", ".json"))
+                profile_path = path.with_name(
+                    path.name.replace(
+                        "codex-events", "codex-execution-profile"
+                    ).replace(".jsonl", ".json")
+                )
                 try:
                     profile = json.loads(profile_path.read_text(encoding="utf-8"))
                 except (OSError, ValueError):
                     profile = {}
-                model = str(profile.get("model") or "") if isinstance(profile, Mapping) else ""
+                model = (
+                    str(profile.get("model") or "")
+                    if isinstance(profile, Mapping)
+                    else ""
+                )
                 if model:
                     observed_models.add(model)
                 else:
@@ -6011,7 +6714,11 @@ class BuilderAutomationService:
             total["model_tokens"] = int(total.get("input_tokens") or 0) + int(
                 total.get("output_tokens") or 0
             )
-            total["model"] = next(iter(observed_models)) if len(observed_models) == 1 and not unresolved_models else None
+            total["model"] = (
+                next(iter(observed_models))
+                if len(observed_models) == 1 and not unresolved_models
+                else None
+            )
             total["model_accuracy"] = "explicit_cli" if total["model"] else "unresolved"
         return total
 
@@ -6163,10 +6870,16 @@ class BuilderAutomationService:
                     "unavailable": control.get("unavailable") or [],
                     "layer_usage": control.get("layer_usage") or [],
                     "usage": {
-                        "provider_input_tokens": int(usage_value.get("input_tokens") or 0),
-                        "cached_input_tokens": int(usage_value.get("cached_input_tokens") or 0),
+                        "provider_input_tokens": int(
+                            usage_value.get("input_tokens") or 0
+                        ),
+                        "cached_input_tokens": int(
+                            usage_value.get("cached_input_tokens") or 0
+                        ),
                         "output_tokens": int(usage_value.get("output_tokens") or 0),
-                        "reasoning_tokens": int(usage_value.get("reasoning_tokens") or 0),
+                        "reasoning_tokens": int(
+                            usage_value.get("reasoning_tokens") or 0
+                        ),
                         "model_tokens": int(usage_value.get("model_tokens") or 0),
                     },
                     "tool_boundary_count": 1,
@@ -6195,7 +6908,12 @@ class BuilderAutomationService:
                             else []
                         ),
                         *(
-                            [{"type": "root_usage_event", "ref": usage_value.get("root_event_id")}]
+                            [
+                                {
+                                    "type": "root_usage_event",
+                                    "ref": usage_value.get("root_event_id"),
+                                }
+                            ]
                             if usage_value.get("root_event_id")
                             else []
                         ),
@@ -6241,15 +6959,12 @@ class BuilderAutomationService:
             else {}
         )
         if (
-            (
-                accounting.get("status") == "reported"
-                or (
-                    accounting.get("status") == "not_applicable"
-                    and self.codex_usage_reporter is None
-                )
+            accounting.get("status") == "reported"
+            or (
+                accounting.get("status") == "not_applicable"
+                and self.codex_usage_reporter is None
             )
-            and str(accounting.get("task_id") or "") == task_id
-        ):
+        ) and str(accounting.get("task_id") or "") == task_id:
             return current
         local_run = (
             current.get("local_run")
@@ -6302,7 +7017,8 @@ class BuilderAutomationService:
                         "total_tokens": 0,
                         "billable_tokens": 0,
                         "occurred_at": str(current.get("updated_at") or _now_iso()),
-                        "change_id": str(current.get("change_id") or "").strip() or None,
+                        "change_id": str(current.get("change_id") or "").strip()
+                        or None,
                         "note": (
                             f"builder_status={task_status}; "
                             f"deterministic_strategy={zero_model_execution['strategy']}"
@@ -6377,7 +7093,9 @@ class BuilderAutomationService:
                 task_status=task_status,
                 usage=receipt,
             )
-        idempotency_key = f"builder:{current.get('session_id') or 'session'}:{task_id}:codex-usage:v1"
+        idempotency_key = (
+            f"builder:{current.get('session_id') or 'session'}:{task_id}:codex-usage:v1"
+        )
         object_type = str(current.get("object_type") or "").strip()
         object_id = str(current.get("object_id") or "").strip()
         usage_accuracy = str(usage.get("accuracy") or "provider_reported")
@@ -6387,7 +7105,9 @@ class BuilderAutomationService:
             "job_id": task_id,
             "status": task_status,
             "source": "builder_automation",
-            "accuracy": "reported" if usage_accuracy == "provider_reported" else "estimated",
+            "accuracy": "reported"
+            if usage_accuracy == "provider_reported"
+            else "estimated",
             "model": usage.get("model"),
             "input_tokens": int(usage.get("input_tokens") or 0),
             "cached_input_tokens": int(usage.get("cached_input_tokens") or 0),
@@ -6405,7 +7125,11 @@ class BuilderAutomationService:
             event["project_id"] = object_id
         try:
             reported = dict(self.codex_usage_reporter(event))
-            root_event = reported.get("event") if isinstance(reported.get("event"), Mapping) else {}
+            root_event = (
+                reported.get("event")
+                if isinstance(reported.get("event"), Mapping)
+                else {}
+            )
             receipt = {
                 "schema": "adaos.builder.codex_usage_receipt.v1",
                 "task_id": task_id,
@@ -6473,7 +7197,9 @@ class BuilderAutomationService:
                 state = "current"
             else:
                 state = "pending"
-            steps.append({"id": step_id, "label_i18n": {"key": label_key}, "state": state})
+            steps.append(
+                {"id": step_id, "label_i18n": {"key": label_key}, "state": state}
+            )
         return steps
 
     def get_session(self, object_type: str, object_id: str) -> dict[str, Any] | None:
@@ -6489,7 +7215,11 @@ class BuilderAutomationService:
                 raw = json.loads(path.read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError):
             return None
-        return self._hydrate_session_compatibility(raw) if isinstance(raw, Mapping) else None
+        return (
+            self._hydrate_session_compatibility(raw)
+            if isinstance(raw, Mapping)
+            else None
+        )
 
     def diagnostics(
         self,
@@ -6521,7 +7251,9 @@ class BuilderAutomationService:
         if not session:
             raise ValueError("automation_session_not_found")
         task = session.get("task") if isinstance(session.get("task"), Mapping) else {}
-        task_id = str(session.get("current_task_id") or task.get("task_id") or "").strip()
+        task_id = str(
+            session.get("current_task_id") or task.get("task_id") or ""
+        ).strip()
         if not task_id or _safe_token(task_id) != task_id:
             raise ValueError("automation_task_id_invalid")
 
@@ -6567,7 +7299,9 @@ class BuilderAutomationService:
         if kind != "skill":
             raise ValueError("candidate runtime release requires object_type=skill")
         expected_session_id = str(development_session_id or "").strip()
-        if not expected_session_id or not _DEVELOPMENT_SESSION_ID_RE.fullmatch(expected_session_id):
+        if not expected_session_id or not _DEVELOPMENT_SESSION_ID_RE.fullmatch(
+            expected_session_id
+        ):
             raise ValueError("a valid development_session_id is required")
 
         with _LOCK:
@@ -6576,17 +7310,30 @@ class BuilderAutomationService:
                 raise ValueError("automation_session_not_found")
             actual_session_id = str(session.get("development_session_id") or "").strip()
             if actual_session_id != expected_session_id:
-                raise ValueError("development_session_id does not match the candidate Automation session")
+                raise ValueError(
+                    "development_session_id does not match the candidate Automation session"
+                )
             status = str(session.get("status") or "").strip().lower()
             if status not in _TERMINAL_STATUSES:
-                raise ValueError("candidate runtime may be released only after terminal Automation")
+                raise ValueError(
+                    "candidate runtime may be released only after terminal Automation"
+                )
 
             previous = session.get("runtime_release")
             if isinstance(previous, Mapping):
-                if str(previous.get("development_session_id") or "") != expected_session_id:
-                    raise ValueError("stored runtime release belongs to a different Development Session")
+                if (
+                    str(previous.get("development_session_id") or "")
+                    != expected_session_id
+                ):
+                    raise ValueError(
+                        "stored runtime release belongs to a different Development Session"
+                    )
                 if str(previous.get("status") or "released") == "released":
-                    return {"ok": True, "idempotent": True, "runtime_release": dict(previous)}
+                    return {
+                        "ok": True,
+                        "idempotent": True,
+                        "runtime_release": dict(previous),
+                    }
 
             diagnostics = (
                 dict(previous.get("diagnostics") or {})
@@ -6680,7 +7427,9 @@ class BuilderAutomationService:
         data) is purged.
         """
 
-        source = (self.dev_skills_root / ".runtime" / project_id / "diagnostics").resolve()
+        source = (
+            self.dev_skills_root / ".runtime" / project_id / "diagnostics"
+        ).resolve()
         runtime_root = (self.dev_skills_root / ".runtime" / project_id).resolve()
         if source.parent != runtime_root or not source.is_dir():
             return None
@@ -6694,30 +7443,41 @@ class BuilderAutomationService:
         ).resolve()
         destination = (evidence_root / _safe_token(development_session_id)).resolve()
         if destination.parent != evidence_root:
-            raise ValueError("candidate diagnostic destination escaped its evidence root")
+            raise ValueError(
+                "candidate diagnostic destination escaped its evidence root"
+            )
 
         def manifest_for(root: Path) -> tuple[list[dict[str, Any]], int]:
             entries: list[dict[str, Any]] = []
             total_bytes = 0
             for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
                 if path.is_symlink():
-                    raise RuntimeError("candidate runtime diagnostics must not contain symlinks")
+                    raise RuntimeError(
+                        "candidate runtime diagnostics must not contain symlinks"
+                    )
                 if not path.is_file():
                     continue
                 resolved = path.resolve()
                 if root not in resolved.parents:
-                    raise RuntimeError("candidate runtime diagnostic escaped its evidence root")
+                    raise RuntimeError(
+                        "candidate runtime diagnostic escaped its evidence root"
+                    )
                 size = int(path.stat().st_size)
                 total_bytes += size
                 if len(entries) >= _RUNTIME_DIAGNOSTIC_MAX_FILES:
-                    raise RuntimeError("candidate runtime diagnostics exceed the file-count limit")
+                    raise RuntimeError(
+                        "candidate runtime diagnostics exceed the file-count limit"
+                    )
                 if total_bytes > _RUNTIME_DIAGNOSTIC_MAX_BYTES:
-                    raise RuntimeError("candidate runtime diagnostics exceed the byte limit")
+                    raise RuntimeError(
+                        "candidate runtime diagnostics exceed the byte limit"
+                    )
                 entries.append(
                     {
                         "path": path.relative_to(root).as_posix(),
                         "bytes": size,
-                        "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+                        "digest": "sha256:"
+                        + hashlib.sha256(path.read_bytes()).hexdigest(),
                     }
                 )
             return entries, total_bytes
@@ -6758,7 +7518,9 @@ class BuilderAutomationService:
             "digest": _canonical_digest(manifest),
         }
 
-    def find_active_session(self, *, webspace_id: str | None = None) -> dict[str, Any] | None:
+    def find_active_session(
+        self, *, webspace_id: str | None = None
+    ) -> dict[str, Any] | None:
         candidates: list[dict[str, Any]] = []
         for path in self.root.glob("*.json"):
             try:
@@ -6768,13 +7530,20 @@ class BuilderAutomationService:
             if not isinstance(raw, Mapping):
                 continue
             session = dict(raw)
-            if webspace_id and str(session.get("webspace_id") or "") != str(webspace_id):
+            if webspace_id and str(session.get("webspace_id") or "") != str(
+                webspace_id
+            ):
                 continue
             if session.get("status") not in {"cancelled"}:
                 candidates.append(session)
         if not candidates:
             return None
-        return max(candidates, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""))
+        return max(
+            candidates,
+            key=lambda item: str(
+                item.get("updated_at") or item.get("created_at") or ""
+            ),
+        )
 
     def refresh_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
         current = dict(session)
@@ -6829,7 +7598,9 @@ class BuilderAutomationService:
             if isinstance(realize_request.get("artifacts"), Mapping)
             else {}
         )
-        recovered_transition = str(request_artifacts.get("workflow_transition") or "").strip()
+        recovered_transition = str(
+            request_artifacts.get("workflow_transition") or ""
+        ).strip()
         if (
             task_status == "completed"
             and recovered_transition
@@ -6868,7 +7639,11 @@ class BuilderAutomationService:
             if isinstance(current.get("last_result"), Mapping)
             else None
         )
-        if task_status == "completed" and isinstance(development_escalations, list) and development_escalations:
+        if (
+            task_status == "completed"
+            and isinstance(development_escalations, list)
+            and development_escalations
+        ):
             return self._wait_for_core_capability(
                 current,
                 development_escalations=development_escalations,
@@ -6886,7 +7661,9 @@ class BuilderAutomationService:
                 for item in readiness.get("vcs_checkpoints") or []
                 if isinstance(item, Mapping)
             ]
-            failed_checkpoints = [item for item in checkpoints if not bool(item.get("ok"))]
+            failed_checkpoints = [
+                item for item in checkpoints if not bool(item.get("ok"))
+            ]
             if failed_checkpoints:
                 failed_refs = ", ".join(
                     f"{item.get('kind') or 'artifact'}:{item.get('name') or '?'}"
@@ -6899,7 +7676,8 @@ class BuilderAutomationService:
                 current["last_failure"] = {
                     "stage": "forge_checkpoint",
                     "message": error,
-                    "updated_at": readiness.get("completed_at") or current.get("updated_at"),
+                    "updated_at": readiness.get("completed_at")
+                    or current.get("updated_at"),
                 }
             elif not bool(readiness.get("ok", False)):
                 error = str(
@@ -6912,7 +7690,8 @@ class BuilderAutomationService:
                 current["last_failure"] = {
                     "stage": "live_readiness",
                     "message": error,
-                    "updated_at": readiness.get("completed_at") or current.get("updated_at"),
+                    "updated_at": readiness.get("completed_at")
+                    or current.get("updated_at"),
                 }
         terminal_readiness = bool(
             task_status == "completed"
@@ -6934,7 +7713,9 @@ class BuilderAutomationService:
             reconciled = self._reconcile_completed_workflow(current)
             if reconciled is not None:
                 return reconciled
-        task_progress = task.get("progress") if isinstance(task.get("progress"), list) else []
+        task_progress = (
+            task.get("progress") if isinstance(task.get("progress"), list) else []
+        )
         if terminal_readiness:
             existing_progress = (
                 current.get("progress")
@@ -6950,29 +7731,43 @@ class BuilderAutomationService:
                     if str(existing_progress.get("status") or "") == "completed"
                     else "Automation result activated and checkpointed"
                 ),
-                "updated_at": readiness.get("completed_at") or current.get("updated_at"),
+                "updated_at": readiness.get("completed_at")
+                or current.get("updated_at"),
             }
             current["updated_at"] = max(
                 str(current.get("updated_at") or ""),
                 str(current["progress"]["updated_at"] or ""),
             )
             current.pop("last_failure", None)
-        elif task_progress and isinstance(task_progress[-1], Mapping) and not finalizing:
+        elif (
+            task_progress and isinstance(task_progress[-1], Mapping) and not finalizing
+        ):
             current["progress"] = dict(task_progress[-1])
-        if current.get("status") == "failed" and isinstance(current.get("last_failure"), Mapping):
+        if current.get("status") == "failed" and isinstance(
+            current.get("last_failure"), Mapping
+        ):
             failure = current["last_failure"]
             current["progress"] = {
                 "task_id": task_id,
                 "status": "failed",
                 "stage": failure.get("stage") or "failed",
-                "message": failure.get("message") or failure.get("error") or "Automation failed",
+                "message": failure.get("message")
+                or failure.get("error")
+                or "Automation failed",
                 "updated_at": failure.get("reported_at") or current.get("updated_at"),
             }
             if failure.get("failure_class") == "user_input_required":
-                from adaos.services.builder.clarification import BuilderClarificationService
+                from adaos.services.builder.clarification import (
+                    BuilderClarificationService,
+                )
 
-                current["clarification"] = BuilderClarificationService(self.state_dir).project(current)
-                current["progress"].update(status="awaiting_input", message="Answer the clarification questions, then continue Automation")
+                current["clarification"] = BuilderClarificationService(
+                    self.state_dir
+                ).project(current)
+                current["progress"].update(
+                    status="awaiting_input",
+                    message="Answer the clarification questions, then continue Automation",
+                )
             else:
                 current.pop("clarification", None)
         self._save_session(current)
@@ -6996,10 +7791,13 @@ class BuilderAutomationService:
                 # status reader must not execute those writes concurrently.
                 return current
             self._finalize_completed_session(current)
-            return self.get_session(
-                str(current.get("object_type") or ""),
-                str(current.get("object_id") or ""),
-            ) or current
+            return (
+                self.get_session(
+                    str(current.get("object_type") or ""),
+                    str(current.get("object_id") or ""),
+                )
+                or current
+            )
         return current
 
     def _recover_orphaned_task(
@@ -7037,12 +7835,16 @@ class BuilderAutomationService:
                 or isinstance(latest.get("completion_readiness"), Mapping)
             ):
                 return None
-            worker = self.worker_factory() if self.worker_factory else LocalSkillFactoryWorker(
-                state_dir=self.state_dir,
-                repo_root=self.repo_root,
-                dev_skills_root=self.dev_skills_root,
-                dev_scenarios_root=self.dev_scenarios_root,
-                runs_root=self.runs_root,
+            worker = (
+                self.worker_factory()
+                if self.worker_factory
+                else LocalSkillFactoryWorker(
+                    state_dir=self.state_dir,
+                    repo_root=self.repo_root,
+                    dev_skills_root=self.dev_skills_root,
+                    dev_scenarios_root=self.dev_scenarios_root,
+                    runs_root=self.runs_root,
+                )
             )
             try:
                 worker.recover_orphaned_codex_run(task_id)
@@ -7052,21 +7854,30 @@ class BuilderAutomationService:
                 # normal race the explicit local-state guards decline recovery.
                 return None
             except Exception:
-                _log.exception("one-shot orphaned Automation recovery failed task=%s", task_id)
+                _log.exception(
+                    "one-shot orphaned Automation recovery failed task=%s", task_id
+                )
                 return None
 
             try:
                 completed_task = self.factory.read_task(task_id)
             except KeyError:
                 completed_task = None
-            if not isinstance(completed_task, Mapping) or completed_task.get("status") != "completed":
+            if (
+                not isinstance(completed_task, Mapping)
+                or completed_task.get("status") != "completed"
+            ):
                 return None
             current = dict(latest)
             current["task"] = dict(completed_task)
             if completed_task.get("result"):
                 current["last_result"] = completed_task.get("result")
-            current["status"] = "commit_ready" if self.materialize_on_completion else "completed"
-            current["finalizing_task_id"] = task_id if self.materialize_on_completion else None
+            current["status"] = (
+                "commit_ready" if self.materialize_on_completion else "completed"
+            )
+            current["finalizing_task_id"] = (
+                task_id if self.materialize_on_completion else None
+            )
             current["progress"] = {
                 "task_id": task_id,
                 "status": current["status"],
@@ -7083,10 +7894,13 @@ class BuilderAutomationService:
                 self.event_sink(self.project_session(current))
             if self.materialize_on_completion:
                 self._finalize_completed_session(current)
-                return self.get_session(
-                    str(current.get("object_type") or ""),
-                    str(current.get("object_id") or ""),
-                ) or current
+                return (
+                    self.get_session(
+                        str(current.get("object_type") or ""),
+                        str(current.get("object_id") or ""),
+                    )
+                    or current
+                )
             return current
         finally:
             _WORKER_LOCK.release()
@@ -7128,7 +7942,10 @@ class BuilderAutomationService:
                 and str(snapshot.get("object_id") or "").strip() == object_id
             ):
                 candidate_task_id = str(snapshot.get("task_id") or "").strip()
-                if candidate_task_id and Path(candidate_task_id).name == candidate_task_id:
+                if (
+                    candidate_task_id
+                    and Path(candidate_task_id).name == candidate_task_id
+                ):
                     snapshot_task_id = candidate_task_id
         task_ids = list(
             dict.fromkeys(
@@ -7166,8 +7983,7 @@ class BuilderAutomationService:
                 == "adaos.builder.accepted_prototype_identity.v1"
                 and candidate.get("verification_owner") == "trusted_worker"
                 and candidate.get("matches_acceptance") is True
-                and str(candidate.get("revision") or "").strip()
-                == expected_revision
+                and str(candidate.get("revision") or "").strip() == expected_revision
                 and str(candidate.get("expected_canonical_digest") or "").strip()
                 == expected_digest
                 and str(candidate.get("actual_canonical_digest") or "").strip()
@@ -7176,23 +7992,41 @@ class BuilderAutomationService:
                 return candidate
         return None
 
-    def _submit(self, session: Mapping[str, Any], *, iteration_instruction: str) -> dict[str, Any]:
+    def _submit(
+        self,
+        session: Mapping[str, Any],
+        *,
+        iteration_instruction: str,
+        canonical_brief_authority: bool = False,
+        canonical_change_authority: bool = False,
+        execution_brief_override: str | None = None,
+    ) -> dict[str, Any]:
         clarification_receipt = session.get("clarification_continuation") or {}
         clarification_task_id = None
         if clarification_receipt:
-            clarification_task_id = "task.clarification." + hashlib.sha256(
-                str(clarification_receipt["response_id"]).encode("utf-8")
-            ).hexdigest()[:32]
+            clarification_task_id = (
+                "task.clarification."
+                + hashlib.sha256(
+                    str(clarification_receipt["response_id"]).encode("utf-8")
+                ).hexdigest()[:32]
+            )
             try:
                 retained = self.factory.read_task(clarification_task_id)
             except KeyError:
                 retained = None
             if retained:
-                retained_links = (retained.get("realize_request") or {}).get("links", {})
-                if retained_links.get("clarification_continuation") != clarification_receipt:
+                retained_links = (retained.get("realize_request") or {}).get(
+                    "links", {}
+                )
+                if (
+                    retained_links.get("clarification_continuation")
+                    != clarification_receipt
+                ):
                     raise ValueError("Retained clarification task binding mismatch")
                 if isinstance(session, dict):
-                    session["context_packet_digest"] = retained_links.get("context_packet_digest")
+                    session["context_packet_digest"] = retained_links.get(
+                        "context_packet_digest"
+                    )
                 return {"ok": True, "duplicate": True, "task": retained}
         kind = str(session["object_type"])
         project_id = str(session["object_id"])
@@ -7209,12 +8043,19 @@ class BuilderAutomationService:
         for skill_id in existing:
             if skill_id not in companions:
                 companions.append(skill_id)
-        sparse_paths = [f"{kind}s/{project_id}/" if kind == "scenario" else f"skills/{project_id}/"]
+        sparse_paths = [
+            f"{kind}s/{project_id}/" if kind == "scenario" else f"skills/{project_id}/"
+        ]
         source_artifacts: list[tuple[str, str, Path]] = [
             (
                 kind,
                 project_id,
-                (self.dev_scenarios_root if kind == "scenario" else self.dev_skills_root) / project_id,
+                (
+                    self.dev_scenarios_root
+                    if kind == "scenario"
+                    else self.dev_skills_root
+                )
+                / project_id,
             )
         ]
         application_project_ref = self._context_project_ref(
@@ -7240,7 +8081,9 @@ class BuilderAutomationService:
         if kind == "scenario":
             for skill_id in companions:
                 sparse_paths.append(f"skills/{skill_id}/")
-                source_artifacts.append(("skill", skill_id, self.dev_skills_root / skill_id))
+                source_artifacts.append(
+                    ("skill", skill_id, self.dev_skills_root / skill_id)
+                )
         sparse_paths.append(f"docs/requirements/{project_id}/")
         attachments: list[tuple[str, Path, str]] = []
         if kind == "scenario":
@@ -7276,7 +8119,9 @@ class BuilderAutomationService:
                     )
                 )
         development_context: dict[str, Any] | None = None
-        development_session_id = str(session.get("development_session_id") or "").strip()
+        development_session_id = str(
+            session.get("development_session_id") or ""
+        ).strip()
         if development_session_id:
             development_context, development_attachments = self._development_context(
                 development_session_id,
@@ -7305,15 +8150,18 @@ class BuilderAutomationService:
             iteration_instruction=iteration_instruction,
         )
         execution_brief = (
-            json.dumps(
+            str(execution_brief_override or "").strip()
+            if str(execution_brief_override or "").strip()
+            else json.dumps(
                 accepted_prototype_validation,
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
             )
             if accepted_prototype_validation
-            else iteration_instruction
-            or str(session.get("implementation_brief") or "")
+            else str(session.get("implementation_brief") or "")
+            if canonical_brief_authority
+            else iteration_instruction or str(session.get("implementation_brief") or "")
         )
         workflow_service = self._workflow()
         workflow_state = workflow_service.describe(kind, project_id)
@@ -7341,6 +8189,7 @@ class BuilderAutomationService:
                 "constraints",
                 *required_context_facets,
             ]
+        has_iteration_instruction = bool(str(iteration_instruction or "").strip())
         context_packet = workflow_service.build_context_packet(
             kind,
             project_id,
@@ -7354,7 +8203,10 @@ class BuilderAutomationService:
                 str(session.get("brief_path") or "").strip(),
                 str(session.get("topic_id") or "").strip(),
                 *(
-                    [str(item.get("ref") or "") for item in development_context["instruction_inputs"]]
+                    [
+                        str(item.get("ref") or "")
+                        for item in development_context["instruction_inputs"]
+                    ]
                     if development_context
                     else []
                 ),
@@ -7380,6 +8232,11 @@ class BuilderAutomationService:
                     if len(_brief_summary(execution_brief)) <= 3800
                     else _workflow_request_projection(execution_brief)
                 ),
+                "issue_scope": (
+                    "change"
+                    if canonical_change_authority or not has_iteration_instruction
+                    else "current_iteration"
+                ),
             },
             run_purpose=str(session.get("run_purpose") or "iteration"),
             required_facets=required_context_facets,
@@ -7394,7 +8251,9 @@ class BuilderAutomationService:
         canonical_change_id = str(packet_change.get("change_id") or "").strip()
         session_change_set_id = str(session.get("change_set_id") or "").strip()
         if not canonical_change_id or canonical_change_id != session_change_set_id:
-            raise ValueError("Automation context packet does not match the active Builder Change")
+            raise ValueError(
+                "Automation context packet does not match the active Builder Change"
+            )
         if isinstance(session, dict):
             session["canonical_change_id"] = canonical_change_id
             session["context_packet_digest"] = context_packet.get("digest")
@@ -7448,34 +8307,45 @@ class BuilderAutomationService:
             if isinstance(context_packet.get("change"), Mapping)
             else {}
         )
-        acceptance_checks = [
-            str(criterion).strip()
-            for issue in execution_change.get("issues") or []
-            if isinstance(issue, Mapping) and issue.get("status") != "deferred"
-            and (issue.get("lane") != "prototype" or not session.get("prototype_acceptance"))
-            for criterion in issue.get("acceptance_criteria") or []
-            if str(criterion).strip()
-        ]
+        acceptance_checks = (
+            _iteration_acceptance_checks(iteration_instruction)
+            if has_iteration_instruction and not canonical_change_authority
+            else [
+                str(criterion).strip()
+                for issue in execution_change.get("issues") or []
+                if isinstance(issue, Mapping)
+                and issue.get("status") not in {"deferred", "resolved", "superseded"}
+                and (
+                    issue.get("lane") != "prototype"
+                    or not session.get("prototype_acceptance")
+                )
+                for criterion in issue.get("acceptance_criteria") or []
+                if str(criterion).strip()
+            ]
+        )
         from adaos.services.builder.prototype_stage import automation_acceptance_checks
 
         acceptance_checks.extend(
-            automation_acceptance_checks(dict(session.get("prototype_acceptance") or {}))
+            automation_acceptance_checks(
+                dict(session.get("prototype_acceptance") or {})
+            )
         )
-        is_dev_ticket_repair = bool(
-            str(
-                dict(session.get("links") or {}).get("development_ticket_id") or ""
-            ).strip()
-        ) or _brief_is_bounded_dev_ticket_repair(session.get("implementation_brief"))
-        repair_brief = self._session_repair_brief(session) if is_dev_ticket_repair else {}
+        is_dev_ticket_repair = _brief_is_bounded_dev_ticket_repair(execution_brief) or (
+            not has_iteration_instruction
+            and bool(
+                str(
+                    dict(session.get("links") or {}).get("development_ticket_id") or ""
+                ).strip()
+            )
+        )
+        repair_brief = _brief_payload(execution_brief) if is_dev_ticket_repair else {}
         repair_hints = (
             dict(repair_brief.get("repair_hints"))
             if isinstance(repair_brief.get("repair_hints"), Mapping)
             else {}
         )
         if accepted_prototype_validation:
-            repair_hints = dict(
-                accepted_prototype_validation.get("repair_hints") or {}
-            )
+            repair_hints = dict(accepted_prototype_validation.get("repair_hints") or {})
         repair_hints = _canonical_repair_hints(
             repair_hints,
             kind=kind,
@@ -7526,9 +8396,7 @@ class BuilderAutomationService:
                     "minimal_diff": True,
                     "preserve_declarative_manifests": True,
                     "repair_profile": "accepted_ui_prototype",
-                    "exact_changed_paths": list(
-                        repair_hints.get("target_files") or []
-                    ),
+                    "exact_changed_paths": list(repair_hints.get("target_files") or []),
                     "max_changed_files": 1,
                 }
             )
@@ -7561,10 +8429,14 @@ class BuilderAutomationService:
                 ]
             }
         subnet_id = _builder_subnet_id(session)
-        from adaos.services.builder.retained_resource_handoff import select_retained_handoff
+        from adaos.services.builder.retained_resource_handoff import (
+            select_retained_handoff,
+        )
 
         resource_handoff_reference = select_retained_handoff(
-            Path(self.runs_root), session, target={"type": kind, "id": project_id},
+            Path(self.runs_root),
+            session,
+            target={"type": kind, "id": project_id},
             companion_skill_ids=companions,
         )
         if request_mcp.get("enabled") is not False and subnet_id:
@@ -7586,8 +8458,14 @@ class BuilderAutomationService:
             },
             "source_conversation_id": session.get("conversation_id"),
             "artifacts": {
-                "implementation_brief": session.get("implementation_brief"),
-                "implementation_brief_path": session.get("brief_path"),
+                "implementation_brief": execution_brief,
+                "implementation_brief_path": (
+                    session.get("brief_path")
+                    if canonical_brief_authority or not has_iteration_instruction
+                    else None
+                ),
+                "base_implementation_brief": session.get("implementation_brief"),
+                "base_implementation_brief_path": session.get("brief_path"),
                 "companion_skill_ids": companions,
                 "iteration_instruction": iteration_instruction,
                 "workflow_transition": session.get("pending_workflow_transition"),
@@ -7638,7 +8516,8 @@ class BuilderAutomationService:
             "links": {
                 "automation_session_id": session.get("session_id"),
                 "prototype_resource_handoff_reference": resource_handoff_reference,
-                "clarification_continuation": copy.deepcopy(clarification_receipt) or None,
+                "clarification_continuation": copy.deepcopy(clarification_receipt)
+                or None,
                 "webspace_id": session.get("webspace_id"),
                 "iteration": session.get("iteration"),
                 "change_set_id": session.get("change_set_id"),
@@ -7650,14 +8529,17 @@ class BuilderAutomationService:
                 "compiled_context_ref": context_control["compiled_context_ref"],
                 "prototype_handoff_digest": str(
                     dict(session.get("prototype_handoff") or {}).get("digest") or ""
-                ) or None,
+                )
+                or None,
                 "prototype_acceptance_digest": str(
                     dict(session.get("prototype_acceptance") or {}).get("digest") or ""
-                ) or None,
+                )
+                or None,
                 "development_session_id": development_session_id or None,
                 "development_context_digest": str(
                     (development_context or {}).get("digest") or ""
-                ) or None,
+                )
+                or None,
                 **(
                     dict(session.get("links"))
                     if isinstance(session.get("links"), Mapping)
@@ -7682,10 +8564,17 @@ class BuilderAutomationService:
                 },
                 "provenance": [
                     {"kind": "context_plan", "ref": context_control["plan_ref"]},
-                    {"kind": "compiled_context", "ref": context_control["compiled_context_ref"]},
+                    {
+                        "kind": "compiled_context",
+                        "ref": context_control["compiled_context_ref"],
+                    },
                     {"kind": "source_snapshot", "ref": source_snapshot.get("digest")},
                 ],
-                "mock_data": {"deterministic": True, "fixture_ids": [], "seed": request_id},
+                "mock_data": {
+                    "deterministic": True,
+                    "fixture_ids": [],
+                    "seed": request_id,
+                },
                 "byte_budget": 32_768,
             },
         }
@@ -7695,7 +8584,9 @@ class BuilderAutomationService:
             and isinstance(development_context.get("execution_budget"), Mapping)
             else None
         )
-        if execution_budget is None and isinstance(session.get("execution_budget"), Mapping):
+        if execution_budget is None and isinstance(
+            session.get("execution_budget"), Mapping
+        ):
             execution_budget = session.get("execution_budget")
         if execution_budget:
             if execution_budget.get("max_wall_seconds"):
@@ -7715,7 +8606,13 @@ class BuilderAutomationService:
             request["artifacts"]["agent_profile"] = copy.deepcopy(agent_profile)
         if clarification_task_id:
             request["task_id"] = clarification_task_id
-        return self.factory.submit_realize_request(request)
+        submitted = self.factory.submit_realize_request(request)
+        if isinstance(session, dict):
+            session["last_execution_brief"] = execution_brief
+            session["last_execution_brief_path"] = request["artifacts"].get(
+                "implementation_brief_path"
+            )
+        return submitted
 
     def _launch_worker(self, session_id: str) -> None:
         if self.background:
@@ -7742,7 +8639,11 @@ class BuilderAutomationService:
         launch_path = worker_root / "launch.json"
         ready_path = worker_root / "ready.json"
         ready_path.unlink(missing_ok=True)
-        repo_python = self.repo_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        repo_python = (
+            self.repo_root
+            / ".venv"
+            / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        )
         executable = repo_python if repo_python.is_file() else Path(sys.executable)
         command = [
             str(executable),
@@ -7751,7 +8652,9 @@ class BuilderAutomationService:
             "--session-id",
             str(session_id),
         ]
-        command, priority_creationflags, resource_policy = _automation_worker_resource_policy(command)
+        command, priority_creationflags, resource_policy = (
+            _automation_worker_resource_policy(command)
+        )
         env = os.environ.copy()
         env["ADAOS_BASE_DIR"] = str(self.state_dir.parent.resolve())
         env["ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC"] = "1"
@@ -7790,7 +8693,9 @@ class BuilderAutomationService:
                 **popen_kwargs,
             )
         try:
-            process_create_time: float | None = float(psutil.Process(process.pid).create_time())
+            process_create_time: float | None = float(
+                psutil.Process(process.pid).create_time()
+            )
         except (psutil.Error, OSError):
             process_create_time = None
         launched: dict[str, Any] = {
@@ -7822,9 +8727,8 @@ class BuilderAutomationService:
                 value = json.loads(ready_path.read_text(encoding="utf-8"))
             except (OSError, TypeError, ValueError):
                 value = None
-            if (
-                isinstance(value, Mapping)
-                and str(value.get("session_id") or "") == str(session_id)
+            if isinstance(value, Mapping) and str(value.get("session_id") or "") == str(
+                session_id
             ):
                 handshake_status = str(value.get("status") or "").strip()
                 if handshake_status == "ready":
@@ -7871,9 +8775,7 @@ class BuilderAutomationService:
         handshake = ready or booting or {}
         handshake_status = "ready" if ready is not None else "booting"
         handshake_at = (
-            handshake.get("ready_at")
-            or handshake.get("recorded_at")
-            or _now_iso()
+            handshake.get("ready_at") or handshake.get("recorded_at") or _now_iso()
         )
         launched.update(
             {
@@ -7898,7 +8800,9 @@ class BuilderAutomationService:
         """
 
         token = _safe_token(session_id, fallback="automation")
-        launch_path = self.state_dir / "builder" / "automation_workers" / token / "launch.json"
+        launch_path = (
+            self.state_dir / "builder" / "automation_workers" / token / "launch.json"
+        )
         try:
             launched = json.loads(launch_path.read_text(encoding="utf-8"))
         except (OSError, TypeError, ValueError):
@@ -7914,25 +8818,36 @@ class BuilderAutomationService:
                 expected_task_id = str(
                     (submitted_session or {}).get("current_task_id") or ""
                 ).strip()
-            worker = self.worker_factory() if self.worker_factory else LocalSkillFactoryWorker(
-                state_dir=self.state_dir,
-                repo_root=self.repo_root,
-                dev_skills_root=self.dev_skills_root,
-                dev_scenarios_root=self.dev_scenarios_root,
-                runs_root=self.runs_root,
-                progress_callback=lambda task_id, status, message: self._on_worker_progress(
-                    session_id,
-                    task_id,
+            worker = (
+                self.worker_factory()
+                if self.worker_factory
+                else LocalSkillFactoryWorker(
+                    state_dir=self.state_dir,
+                    repo_root=self.repo_root,
+                    dev_skills_root=self.dev_skills_root,
+                    dev_scenarios_root=self.dev_scenarios_root,
+                    runs_root=self.runs_root,
+                    progress_callback=lambda task_id,
                     status,
-                    message,
-                ),
+                    message: self._on_worker_progress(
+                        session_id,
+                        task_id,
+                        status,
+                        message,
+                    ),
+                )
             )
-            if hasattr(worker, "progress_callback") and getattr(worker, "progress_callback", None) is None:
-                worker.progress_callback = lambda task_id, status, message: self._on_worker_progress(
-                    session_id,
-                    task_id,
-                    status,
-                    message,
+            if (
+                hasattr(worker, "progress_callback")
+                and getattr(worker, "progress_callback", None) is None
+            ):
+                worker.progress_callback = (
+                    lambda task_id, status, message: self._on_worker_progress(
+                        session_id,
+                        task_id,
+                        status,
+                        message,
+                    )
                 )
             try:
                 worker_result = worker.run_once(task_id=expected_task_id or None)
@@ -7974,7 +8889,9 @@ class BuilderAutomationService:
                 if session:
                     session = self.refresh_session(session)
                     if session.get("status") in {"failed", "cancelled", "expired"}:
-                        pending_transition = str(session.get("pending_workflow_transition") or "").strip()
+                        pending_transition = str(
+                            session.get("pending_workflow_transition") or ""
+                        ).strip()
                         session.pop("pending_workflow_transition", None)
                         self._save_session(session)
                         try:
@@ -7993,7 +8910,9 @@ class BuilderAutomationService:
                                     "terminal_status": session.get("status"),
                                     "error": (
                                         session.get("last_failure", {}).get("message")
-                                        if isinstance(session.get("last_failure"), Mapping)
+                                        if isinstance(
+                                            session.get("last_failure"), Mapping
+                                        )
                                         else "Automation worker failed"
                                     ),
                                 },
@@ -8009,7 +8928,9 @@ class BuilderAutomationService:
                     )
                     if should_finalize:
                         session["status"] = "commit_ready"
-                        session["finalizing_task_id"] = str(session.get("current_task_id") or "").strip() or None
+                        session["finalizing_task_id"] = (
+                            str(session.get("current_task_id") or "").strip() or None
+                        )
                         session["progress"] = {
                             "task_id": session.get("current_task_id"),
                             "status": "commit_ready",
@@ -8020,11 +8941,15 @@ class BuilderAutomationService:
                         self._save_session(session)
                         finalizing_projection = self.project_session(session)
             if failed_session is not None:
-                if failed_session.get("status") == "failed" and not failed_session.get("clarification"):
+                if failed_session.get("status") == "failed" and not failed_session.get(
+                    "clarification"
+                ):
                     failed_session = self._capture_worker_publication_gate_failure(
                         failed_session
                     )
-                failed_session = self._sync_linked_development_ticket_tasks(failed_session)
+                failed_session = self._sync_linked_development_ticket_tasks(
+                    failed_session
+                )
                 if self.event_sink:
                     self.event_sink(self.project_session(failed_session))
             if should_finalize and session:
@@ -8135,7 +9060,9 @@ class BuilderAutomationService:
         if not checkpoint_matches and not trial_matches:
             return None
 
-        links = current.get("links") if isinstance(current.get("links"), Mapping) else {}
+        links = (
+            current.get("links") if isinstance(current.get("links"), Mapping) else {}
+        )
         publication_project_ref = str(
             links.get("development_ticket_project_ref")
             or links.get("project_ref")
@@ -8221,9 +9148,7 @@ class BuilderAutomationService:
     ) -> None:
         now = _now_iso()
         started_at = str(
-            current.get("finalization_started_at")
-            or readiness.get("started_at")
-            or now
+            current.get("finalization_started_at") or readiness.get("started_at") or now
         )
         current["finalization_started_at"] = started_at
         readiness.update(
@@ -8372,6 +9297,38 @@ class BuilderAutomationService:
 
         scenario_id = str(current.get("object_id") or "").strip()
         workbench = BuilderWorkbenchService(state_dir=self.state_dir)
+        binding = dict(workbench.get_workspace_binding(webspace_id) or {})
+        current_target = (
+            dict(binding.get("preview_target"))
+            if isinstance(binding.get("preview_target"), Mapping)
+            else {}
+        )
+        if current_target and not self._preview_target_matches_project(
+            current_target,
+            object_type=str(current.get("object_type") or "scenario"),
+            object_id=scenario_id,
+        ):
+            raise RuntimeError(
+                "Browser feedback cannot replace a Preview selection from another project"
+            )
+        task_id = str(current.get("current_task_id") or "").strip()
+        if not task_id:
+            raise RuntimeError("Browser feedback requires an exact Automation task revision")
+        target = {
+            **current_target,
+            "schema": "adaos.builder.preview_target.v1",
+            "object_type": str(current_target.get("object_type") or "scenario"),
+            "object_id": str(current_target.get("object_id") or scenario_id),
+            "scenario_id": scenario_id,
+            "stage": "automation",
+            "revision": task_id,
+            "label": f"active: {scenario_id} @ {task_id}",
+            "follow_active": bool(current_target.get("follow_active", True)),
+        }
+        # Runtime bootstrap resolves Automation content through the persisted
+        # Preview identity. Pin the exact retained task before rebuilding so it
+        # cannot read a previous task snapshot or DEV working-tree content.
+        workbench.set_preview_target(source_webspace_id=webspace_id, target=target)
         binding = asyncio.run(
             workbench.ensure_dev_webspace(
                 webspace_id,
@@ -8408,6 +9365,26 @@ class BuilderAutomationService:
         return result
 
     @staticmethod
+    def _browser_feedback_is_repairable(receipt: Mapping[str, Any]) -> bool:
+        """Only candidate observations, never runner failures, may start Codex repair."""
+
+        if bool(receipt.get("timed_out")) or int(receipt.get("exit_code") or 0) == 124:
+            return False
+        report = (
+            receipt.get("report")
+            if isinstance(receipt.get("report"), Mapping)
+            else {}
+        )
+        samples = [
+            item for item in report.get("samples") or [] if isinstance(item, Mapping)
+        ]
+        return any(
+            str(value or "").strip()
+            for sample in samples
+            for value in sample.get("hard_failures") or []
+        )
+
+    @staticmethod
     def _browser_feedback_repair_instruction(receipt: Mapping[str, Any]) -> str:
         from adaos.services.builder.browser_feedback import browser_feedback_failures
 
@@ -8427,7 +9404,11 @@ class BuilderAutomationService:
             "Do not weaken validation or suppress runtime errors. Re-run focused checks before "
             "returning.\n\nObserved failures:\n"
             + rendered
-            + ("\n\nRead-only evidence paths:\n" + evidence_text if evidence_text else "")
+            + (
+                "\n\nRead-only evidence paths:\n" + evidence_text
+                if evidence_text
+                else ""
+            )
         )
 
     def _queue_browser_feedback_repair(
@@ -8530,7 +9511,9 @@ class BuilderAutomationService:
         preview_host_active = True
         preview_host_inactive_reason: str | None = None
         workbench: Any | None = None
-        pending_transition = str(current.get("pending_workflow_transition") or "").strip()
+        pending_transition = str(
+            current.get("pending_workflow_transition") or ""
+        ).strip()
         companion_skill_ids = self._session_changed_companion_skill_ids(session)
         session_links = (
             dict(current.get("links"))
@@ -8576,19 +9559,29 @@ class BuilderAutomationService:
                 "Recording the validated Automation source snapshot",
             ):
                 if pending_transition == "return_to_prototype":
-                    readiness["workflow_transition"] = self._workflow().snapshot_current_prototype(
-                        object_type,
-                        object_id,
-                        source_task_id=str(current.get("current_task_id") or "").strip() or None,
-                        request_text="Safe prototype derived by the built-in LLM from the Automation result",
+                    readiness["workflow_transition"] = (
+                        self._workflow().snapshot_current_prototype(
+                            object_type,
+                            object_id,
+                            source_task_id=str(
+                                current.get("current_task_id") or ""
+                            ).strip()
+                            or None,
+                            request_text="Safe prototype derived by the built-in LLM from the Automation result",
+                        )
                     )
                 else:
-                    readiness["automation_snapshot"] = self._workflow().snapshot_current_automation(
-                        object_type,
-                        object_id,
-                        task_id=str(current.get("current_task_id") or "").strip() or None,
-                        project_ref=snapshot_project_ref or None,
-                        component_refs=[f"skill:{skill_id}" for skill_id in companion_skill_ids],
+                    readiness["automation_snapshot"] = (
+                        self._workflow().snapshot_current_automation(
+                            object_type,
+                            object_id,
+                            task_id=str(current.get("current_task_id") or "").strip()
+                            or None,
+                            project_ref=snapshot_project_ref or None,
+                            component_refs=[
+                                f"skill:{skill_id}" for skill_id in companion_skill_ids
+                            ],
+                        )
                     )
             if companion_skill_ids:
                 with self._finalization_stage(
@@ -8617,11 +9610,7 @@ class BuilderAutomationService:
                     .lower()
                     not in {"0", "false", "no", "off"}
                 )
-                if (
-                    object_type == "scenario"
-                    and object_id
-                    and browser_feedback_enabled
-                ):
+                if object_type == "scenario" and object_id and browser_feedback_enabled:
                     with self._finalization_stage(
                         current,
                         readiness,
@@ -8640,17 +9629,27 @@ class BuilderAutomationService:
                         "browser_feedback",
                         "Observing the candidate in wide and compact browser layouts",
                     ):
-                        readiness["browser_feedback"] = self._browser_feedback().evaluate(
-                            scenario_id=object_id,
-                            webspace_id=str(
-                                readiness["materialization"].get("preview_webspace_id")
-                                or ""
-                            ),
-                            subnet_id=str(_builder_subnet_id(current) or ""),
-                            task_id=str(current.get("current_task_id") or current.get("change_id") or ""),
-                            source_path=self.dev_scenarios_root / object_id,
-                            context_packet_digest=str(current.get("context_packet_digest") or "")
-                            or None,
+                        readiness["browser_feedback"] = (
+                            self._browser_feedback().evaluate(
+                                scenario_id=object_id,
+                                webspace_id=str(
+                                    readiness["materialization"].get(
+                                        "preview_webspace_id"
+                                    )
+                                    or ""
+                                ),
+                                subnet_id=str(_builder_subnet_id(current) or ""),
+                                task_id=str(
+                                    current.get("current_task_id")
+                                    or current.get("change_id")
+                                    or ""
+                                ),
+                                source_path=self.dev_scenarios_root / object_id,
+                                context_packet_digest=str(
+                                    current.get("context_packet_digest") or ""
+                                )
+                                or None,
+                            )
                         )
                     feedback = readiness["browser_feedback"]
                     history = [
@@ -8661,10 +9660,15 @@ class BuilderAutomationService:
                     history.append(copy.deepcopy(dict(feedback)))
                     current["browser_feedback_history"] = history[-10:]
                     if not bool(feedback.get("ok")):
-                        if self._queue_browser_feedback_repair(current, readiness, feedback):
+                        repairable = self._browser_feedback_is_repairable(feedback)
+                        if repairable and self._queue_browser_feedback_repair(
+                            current, readiness, feedback
+                        ):
                             return
                         raise RuntimeError(
                             "Browser feedback failed after the bounded repair attempts"
+                            if repairable
+                            else "Browser feedback infrastructure failed; no UI repair was queued"
                         )
                     current.pop("pending_browser_feedback", None)
 
@@ -8682,7 +9686,8 @@ class BuilderAutomationService:
                     raise RuntimeError(
                         "Consumer acceptance failed: "
                         + "; ".join(
-                            str(item) for item in readiness["acceptance"].get("errors") or []
+                            str(item)
+                            for item in readiness["acceptance"].get("errors") or []
                         )
                     )
 
@@ -8699,7 +9704,10 @@ class BuilderAutomationService:
                 for item in previous_readiness.get("vcs_checkpoints") or []
                 if isinstance(item, Mapping) and bool(item.get("ok"))
             ]
-            if bool(current.get("reuse_confirmed_checkpoints")) and confirmed_checkpoints:
+            if (
+                bool(current.get("reuse_confirmed_checkpoints"))
+                and confirmed_checkpoints
+            ):
                 readiness["vcs_checkpoints"] = confirmed_checkpoints
             else:
                 with self._finalization_stage(
@@ -8708,7 +9716,9 @@ class BuilderAutomationService:
                     "forge_checkpoint",
                     "Creating transactional Forge checkpoints",
                 ):
-                    readiness["vcs_checkpoints"] = self._checkpoint_completed_artifacts(session)
+                    readiness["vcs_checkpoints"] = self._checkpoint_completed_artifacts(
+                        session
+                    )
             failed_checkpoints = [
                 item
                 for item in readiness["vcs_checkpoints"]
@@ -8763,7 +9773,9 @@ class BuilderAutomationService:
                     for skill_id in companion_skill_ids
                     if skill_id in by_id
                 ]
-                readiness["skill"] = readiness["skills"][0] if readiness["skills"] else None
+                readiness["skill"] = (
+                    readiness["skills"][0] if readiness["skills"] else None
+                )
 
             if snapshot_project_ref and readiness["vcs_checkpoints"]:
                 with self._finalization_stage(
@@ -8845,16 +9857,25 @@ class BuilderAutomationService:
                             wait_for_rebuild=True,
                         )
                     )
-                    runtime = binding.get("runtime") if isinstance(binding.get("runtime"), Mapping) else {}
+                    runtime = (
+                        binding.get("runtime")
+                        if isinstance(binding.get("runtime"), Mapping)
+                        else {}
+                    )
                     readiness["materialization"] = {
                         **dict(runtime),
                         "preview_webspace_id": str(
-                            binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
+                            binding.get("preview_webspace_id")
+                            or binding.get("dev_webspace_id")
+                            or ""
                         ).strip(),
                     }
                     if not bool(readiness["materialization"].get("ok", False)):
                         raise RuntimeError(
-                            str(readiness["materialization"].get("error") or "dev webspace reload failed")
+                            str(
+                                readiness["materialization"].get("error")
+                                or "dev webspace reload failed"
+                            )
                         )
 
             if pending_transition == "return_to_prototype":
@@ -8882,7 +9903,10 @@ class BuilderAutomationService:
                 current.pop("pending_workflow_transition", None)
             else:
                 workflow_projection = self._workflow().describe(object_type, object_id)
-                if str(workflow_projection.get("active_phase") or "prototype") == "prototype":
+                if (
+                    str(workflow_projection.get("active_phase") or "prototype")
+                    == "prototype"
+                ):
                     self._workflow().transition(
                         object_type,
                         object_id,
@@ -8891,12 +9915,16 @@ class BuilderAutomationService:
                         reason="reconciled a completed legacy Automation session",
                         metadata={
                             "confirmed": True,
-                            "source_prototype_revision": current.get("source_prototype_version"),
+                            "source_prototype_revision": current.get(
+                                "source_prototype_version"
+                            ),
                             "task_id": current.get("current_task_id"),
                             "change_id": current.get("change_id"),
                         },
                     )
-                    workflow_projection = self._workflow().describe(object_type, object_id)
+                    workflow_projection = self._workflow().describe(
+                        object_type, object_id
+                    )
                 workflow_automation = (
                     workflow_projection.get("automation")
                     if isinstance(workflow_projection.get("automation"), Mapping)
@@ -8915,10 +9943,14 @@ class BuilderAutomationService:
                             "task_id": current.get("current_task_id"),
                             "change_id": current.get("change_id"),
                             "run_id": current.get("change_id"),
-                            "context_packet_digest": current.get("context_packet_digest"),
+                            "context_packet_digest": current.get(
+                                "context_packet_digest"
+                            ),
                         },
                     )
-                    workflow_projection = self._workflow().describe(object_type, object_id)
+                    workflow_projection = self._workflow().describe(
+                        object_type, object_id
+                    )
                     workflow_automation = (
                         workflow_projection.get("automation")
                         if isinstance(workflow_projection.get("automation"), Mapping)
@@ -8946,7 +9978,9 @@ class BuilderAutomationService:
                             "version": self._project_version(object_type, object_id),
                             "snapshot_path": (
                                 readiness.get("automation_snapshot", {}).get("path")
-                                if isinstance(readiness.get("automation_snapshot"), Mapping)
+                                if isinstance(
+                                    readiness.get("automation_snapshot"), Mapping
+                                )
                                 else None
                             ),
                         },
@@ -8965,11 +9999,12 @@ class BuilderAutomationService:
                 # Compatibility with bindings created before Preview targets
                 # carried explicit project identity.
                 preview_matches_project = True
-            preview_binding_unchanged = self._preview_binding_unchanged(current, existing_binding)
+            preview_binding_unchanged = self._preview_binding_unchanged(
+                current, existing_binding
+            )
             preview_should_follow = bool(
                 preview_host_active
-                and
-                preview_matches_project
+                and preview_matches_project
                 and (
                     bool(preview_target.get("follow_active"))
                     or preview_binding_unchanged
@@ -8978,7 +10013,11 @@ class BuilderAutomationService:
             if object_type == "scenario" and object_id and preview_should_follow:
                 from adaos.sdk.builder import preview
 
-                target_stage = "prototype" if pending_transition == "return_to_prototype" else "automation"
+                target_stage = (
+                    "prototype"
+                    if pending_transition == "return_to_prototype"
+                    else "automation"
+                )
                 readiness["materialization"] = preview.select_target(
                     str(preview_target.get("object_type") or object_type),
                     str(preview_target.get("object_id") or object_id),
@@ -9029,7 +10068,8 @@ class BuilderAutomationService:
                     (
                         item
                         for item in readiness["vcs_checkpoints"]
-                        if str(item.get("kind") or "").strip().lower().rstrip("s") == object_type
+                        if str(item.get("kind") or "").strip().lower().rstrip("s")
+                        == object_type
                         and str(item.get("name") or "").strip() == object_id
                     ),
                     None,
@@ -9040,7 +10080,9 @@ class BuilderAutomationService:
                     )
                 if primary_checkpoint:
                     change_id = str(current.get("change_id") or "").strip()
-                    package_digest = str(primary_checkpoint.get("package_digest") or "").strip()
+                    package_digest = str(
+                        primary_checkpoint.get("package_digest") or ""
+                    ).strip()
                     source_revision = str(
                         primary_checkpoint.get("source_revision")
                         or primary_checkpoint.get("commit")
@@ -9057,9 +10099,15 @@ class BuilderAutomationService:
                         else {}
                     )
                     delivery_status = str(delivery.get("status") or "").strip()
-                    existing_package_digest = str(delivery.get("package_digest") or "").strip()
-                    existing_source_revision = str(delivery.get("source_revision") or "").strip()
-                    existing_change_id = str(delivery.get("checkpoint_change_id") or "").strip()
+                    existing_package_digest = str(
+                        delivery.get("package_digest") or ""
+                    ).strip()
+                    existing_source_revision = str(
+                        delivery.get("source_revision") or ""
+                    ).strip()
+                    existing_change_id = str(
+                        delivery.get("checkpoint_change_id") or ""
+                    ).strip()
                     exact_checkpoint_in_progress = bool(
                         delivery_status in {"checkpoint", "activating"}
                         and existing_package_digest == package_digest
@@ -9093,7 +10141,9 @@ class BuilderAutomationService:
                                 "change_id": change_id,
                                 "package_digest": package_digest,
                                 "source_revision": source_revision,
-                                "version": self._project_version(object_type, object_id),
+                                "version": self._project_version(
+                                    object_type, object_id
+                                ),
                                 "checkpoint_ref": f"{object_type}:{object_id}",
                                 "task_id": current.get("current_task_id"),
                             },
@@ -9105,11 +10155,13 @@ class BuilderAutomationService:
                         "trial_projection",
                         "Validating the immutable Project Trial candidate",
                     ):
-                        readiness["aprobation"] = self._ensure_governed_aprobation_trial(
-                            current,
-                            readiness.get("aprobation")
-                            if isinstance(readiness.get("aprobation"), Mapping)
-                            else {},
+                        readiness["aprobation"] = (
+                            self._ensure_governed_aprobation_trial(
+                                current,
+                                readiness.get("aprobation")
+                                if isinstance(readiness.get("aprobation"), Mapping)
+                                else {},
+                            )
                         )
                     readiness["resolved_publication_gate_failures"] = (
                         self._resolve_publication_gate_findings_for_trial(
@@ -9267,18 +10319,24 @@ class BuilderAutomationService:
         from adaos.services.root.service import RootDeveloperService
         from adaos.services.semver import bump_version
 
-        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        links = (
+            session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        )
         project_ref = str(
             links.get("development_ticket_project_ref")
             or links.get("project_ref")
             or ""
         ).strip()
         if not project_ref.startswith("project:"):
-            raise RuntimeError("Project composition checkpoint requires an explicit Project ref")
+            raise RuntimeError(
+                "Project composition checkpoint requires an explicit Project ref"
+            )
         project_id = project_ref.split(":", 1)[1].strip()
         change_id = str(session.get("change_id") or "").strip()
         if not project_id or not change_id:
-            raise RuntimeError("Project composition checkpoint requires Project and Change identities")
+            raise RuntimeError(
+                "Project composition checkpoint requires Project and Change identities"
+            )
 
         changed_refs = sorted(
             {
@@ -9291,7 +10349,9 @@ class BuilderAutomationService:
             }
         )
         if not changed_refs:
-            raise RuntimeError("Project composition checkpoint has no confirmed component changes")
+            raise RuntimeError(
+                "Project composition checkpoint has no confirmed component changes"
+            )
 
         journal_root = (
             self.state_dir
@@ -9322,15 +10382,21 @@ class BuilderAutomationService:
                 try:
                     loaded = json.loads(journal_path.read_text(encoding="utf-8"))
                 except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                    raise RuntimeError("Project composition checkpoint journal is unreadable") from exc
+                    raise RuntimeError(
+                        "Project composition checkpoint journal is unreadable"
+                    ) from exc
                 if not isinstance(loaded, Mapping):
-                    raise RuntimeError("Project composition checkpoint journal is invalid")
+                    raise RuntimeError(
+                        "Project composition checkpoint journal is invalid"
+                    )
                 journal = dict(loaded)
                 if (
                     str(journal.get("project_ref") or "") != project_ref
                     or str(journal.get("change_id") or "") != change_id
                 ):
-                    raise RuntimeError("Project composition checkpoint journal identity mismatch")
+                    raise RuntimeError(
+                        "Project composition checkpoint journal identity mismatch"
+                    )
 
             current_digest = str(project.get("manifest_digest") or "").strip()
             if not current_digest:
@@ -9338,7 +10404,9 @@ class BuilderAutomationService:
             if journal:
                 target_version = str(journal.get("version") or "").strip()
                 target_digest = str(journal.get("manifest_digest") or "").strip()
-                before_digest = str(journal.get("previous_manifest_digest") or "").strip()
+                before_digest = str(
+                    journal.get("previous_manifest_digest") or ""
+                ).strip()
                 if current_digest == target_digest and target_version:
                     if journal.get("status") != "applied":
                         journal["status"] = "applied"
@@ -9348,9 +10416,9 @@ class BuilderAutomationService:
                     return {**journal, "ok": True, "duplicate": True}
                 if current_digest != before_digest:
                     try:
-                        advanced = Version(str(project.get("version") or "0.0.0")) > Version(
-                            target_version
-                        )
+                        advanced = Version(
+                            str(project.get("version") or "0.0.0")
+                        ) > Version(target_version)
                     except InvalidVersion:
                         advanced = False
                     if advanced:
@@ -9368,14 +10436,18 @@ class BuilderAutomationService:
                 target_payload = self._project_manifest_payload(project)
                 target_payload["version"] = target_version
             else:
-                release_versions = RootDeveloperService().project_release_versions(project_id)
+                release_versions = RootDeveloperService().project_release_versions(
+                    project_id
+                )
                 target_version = bump_version(str(project.get("version") or "0.0.0"), 2)
                 attempts = 0
                 while target_version in release_versions:
                     target_version = bump_version(target_version, 2)
                     attempts += 1
                     if attempts > 10_000:
-                        raise RuntimeError("Cannot reserve an unused Project patch version")
+                        raise RuntimeError(
+                            "Cannot reserve an unused Project patch version"
+                        )
                 target_payload = self._project_manifest_payload(project)
                 target_payload["version"] = target_version
                 target_payload = compositions.validate(target_payload)
@@ -9385,7 +10457,8 @@ class BuilderAutomationService:
                     "status": "prepared",
                     "project_ref": project_ref,
                     "change_id": change_id,
-                    "task_id": str(session.get("current_task_id") or "").strip() or None,
+                    "task_id": str(session.get("current_task_id") or "").strip()
+                    or None,
                     "checkpointed_component_refs": changed_refs,
                     "previous_version": str(project.get("version") or ""),
                     "previous_manifest_digest": current_digest,
@@ -9410,10 +10483,16 @@ class BuilderAutomationService:
             atomic_write_json(journal_path, journal)
             return {**journal, "ok": True, "duplicate": False}
 
-    def _checkpoint_completed_artifacts(self, session: Mapping[str, Any]) -> list[dict[str, Any]]:
+    def _checkpoint_completed_artifacts(
+        self, session: Mapping[str, Any]
+    ) -> list[dict[str, Any]]:
         from adaos.services.builder.workspace import BuilderWorkspaceService
 
-        result = session.get("last_result") if isinstance(session.get("last_result"), Mapping) else {}
+        result = (
+            session.get("last_result")
+            if isinstance(session.get("last_result"), Mapping)
+            else {}
+        )
         message = " ".join(
             str(
                 result.get("summary")
@@ -9429,7 +10508,11 @@ class BuilderAutomationService:
             ("skill", skill_id)
             for skill_id in self._session_companion_skill_ids(session)
         ]
-        if object_type in {"skill", "scenario"} and object_id and (object_type, object_id) not in artifacts:
+        if (
+            object_type in {"skill", "scenario"}
+            and object_id
+            and (object_type, object_id) not in artifacts
+        ):
             artifacts.append((object_type, object_id))
 
         changed_paths_value = result.get("changed_paths")
@@ -9449,10 +10532,7 @@ class BuilderAutomationService:
                 if isinstance(provenance.get("validation_only"), Mapping)
                 else {}
             )
-            if (
-                str(result.get("execution_strategy") or "").strip()
-                == "validation_only"
-            ):
+            if str(result.get("execution_strategy") or "").strip() == "validation_only":
                 changed_paths.update(
                     str(path or "").replace("\\", "/").lstrip("./")
                     for path in validation_only.get("guarded_paths") or []
@@ -9531,14 +10611,24 @@ class BuilderAutomationService:
                     conversation_id=conversation_id,
                     thread_id=topic_id or None,
                     topic_id=topic_id or None,
-                    status="pushed" if checkpoints and all(item.get("ok") for item in checkpoints) else "checkpoint_failed",
-                    artifact_refs=[{"kind": kind, "id": artifact_id} for kind, artifact_id in artifacts],
+                    status="pushed"
+                    if checkpoints and all(item.get("ok") for item in checkpoints)
+                    else "checkpoint_failed",
+                    artifact_refs=[
+                        {"kind": kind, "id": artifact_id}
+                        for kind, artifact_id in artifacts
+                    ],
                     commit_refs=[
-                        {"kind": item.get("kind"), "id": item.get("name"), "commit": item.get("commit")}
+                        {
+                            "kind": item.get("kind"),
+                            "id": item.get("name"),
+                            "commit": item.get("commit"),
+                        }
                         for item in checkpoints
                         if item.get("commit")
                     ],
-                    request_id=str(session.get("current_task_id") or "").strip() or None,
+                    request_id=str(session.get("current_task_id") or "").strip()
+                    or None,
                     summary=message,
                     meta={
                         "automation_session_id": session.get("session_id"),
@@ -9615,7 +10705,9 @@ class BuilderAutomationService:
                 f"DEV skill {skill_id!r} prepared version {prepared.version!r}; "
                 f"expected checkpoint version {expected_version!r}"
             )
-        binding = BuilderWorkbenchService(state_dir=self.state_dir).get_workspace_binding(webspace_id)
+        binding = BuilderWorkbenchService(
+            state_dir=self.state_dir
+        ).get_workspace_binding(webspace_id)
         preview_webspace_id = str(
             binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
         ).strip()
@@ -9660,12 +10752,15 @@ class BuilderAutomationService:
 
     @classmethod
     def _session_requires_aprobation_trial(cls, session: Mapping[str, Any]) -> bool:
-        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        links = (
+            session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        )
         ticket_id = str(links.get("development_ticket_id") or "").strip()
         brief = cls._session_repair_brief(session)
         policy = brief.get("policy") if isinstance(brief.get("policy"), Mapping) else {}
         is_autonomous_ticket_repair = (
-            str(brief.get("execution_mode") or "").strip() == "surgical_dev_ticket_repair"
+            str(brief.get("execution_mode") or "").strip()
+            == "surgical_dev_ticket_repair"
         )
         if not ticket_id or policy.get("publication_required") is False:
             return False
@@ -9798,9 +10893,7 @@ class BuilderAutomationService:
             resumed_existing
             and str(activation.get("status") or "").strip() == "active"
             and trial_workspace_path.is_absolute()
-            and not (
-                trial_workspace_path / ".adaos" / "workspace.lock.json"
-            ).is_file()
+            and not (trial_workspace_path / ".adaos" / "workspace.lock.json").is_file()
         ):
             reconciled = projects.reconcile_candidate_trial(candidate_id)
             activation = (
@@ -9835,7 +10928,9 @@ class BuilderAutomationService:
             or trial_workspace_path.name != candidate_id
             or trial_workspace_path.parent.name != "trials"
         ):
-            raise RuntimeError("Builder Trial has no exact isolated Workspace activation")
+            raise RuntimeError(
+                "Builder Trial has no exact isolated Workspace activation"
+            )
 
         brief = self._session_repair_brief(session)
         issues = [
@@ -9926,7 +11021,9 @@ class BuilderAutomationService:
             return receipt
         component_update = self._record_component_update(session, receipt)
         if component_update is None:
-            raise RuntimeError("Builder Trial component update notice was not persisted")
+            raise RuntimeError(
+                "Builder Trial component update notice was not persisted"
+            )
         receipt["component_update"] = component_update
         projection = self._refresh_component_update_projection(session, receipt)
         if projection is not None:
@@ -10024,7 +11121,9 @@ class BuilderAutomationService:
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
         component_update = self._record_component_update(session, aprobation)
         if component_update is None:
-            raise RuntimeError("Builder Trial component update notice was not persisted")
+            raise RuntimeError(
+                "Builder Trial component update notice was not persisted"
+            )
         projection = self._refresh_component_update_projection(session, aprobation)
         aprobation["component_update"] = component_update
         if projection is not None:
@@ -10054,7 +11153,9 @@ class BuilderAutomationService:
         object_id = str(session.get("object_id") or "").strip()
         if object_type not in {"skill", "scenario"} or not object_id:
             return None
-        links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        links = (
+            session.get("links") if isinstance(session.get("links"), Mapping) else {}
+        )
         ticket_ids = list(
             dict.fromkeys(
                 [
@@ -10069,7 +11170,9 @@ class BuilderAutomationService:
         )
         from adaos.services.development_tickets import DevelopmentTicketService
 
-        return DevelopmentTicketService(state_dir=self.state_dir).report_publication_gate_failure(
+        return DevelopmentTicketService(
+            state_dir=self.state_dir
+        ).report_publication_gate_failure(
             component_type=object_type,
             component_id=object_id,
             gate=gate,
@@ -10080,7 +11183,8 @@ class BuilderAutomationService:
             candidate_id=candidate_id,
             task_id=str(session.get("current_task_id") or "").strip() or None,
             session_id=str(session.get("session_id") or "").strip() or None,
-            webspace_id=str(session.get("webspace_id") or "desktop").strip() or "desktop",
+            webspace_id=str(session.get("webspace_id") or "desktop").strip()
+            or "desktop",
         )
 
     def _capture_worker_publication_gate_failure(
@@ -10175,7 +11279,11 @@ class BuilderAutomationService:
         try:
             from adaos.services.component_updates import ComponentUpdateService
 
-            links = session.get("links") if isinstance(session.get("links"), Mapping) else {}
+            links = (
+                session.get("links")
+                if isinstance(session.get("links"), Mapping)
+                else {}
+            )
             ticket_ids = list(
                 dict.fromkeys(
                     [
@@ -10219,16 +11327,21 @@ class BuilderAutomationService:
         if mode != "immutable_candidate_trial_workspace":
             return None
 
-        webspace_id = str(
-            aprobation.get("webspace_id") or session.get("webspace_id") or "desktop"
-        ).strip() or "desktop"
+        webspace_id = (
+            str(
+                aprobation.get("webspace_id") or session.get("webspace_id") or "desktop"
+            ).strip()
+            or "desktop"
+        )
         trial = (
             dict(aprobation.get("trial"))
             if isinstance(aprobation.get("trial"), Mapping)
             else {}
         )
         trial_status = str(trial.get("status") or "").strip().lower()
-        trial_pending = trial_status == "trial" and not str(trial.get("decision") or "").strip()
+        trial_pending = (
+            trial_status == "trial" and not str(trial.get("decision") or "").strip()
+        )
         object_type = str(session.get("object_type") or "").strip().lower()
         object_id = str(session.get("object_id") or "").strip()
         if object_type != "scenario" or not object_id:
@@ -10273,11 +11386,15 @@ class BuilderAutomationService:
                 ],
                 "recovered": False,
                 "retryable": not ready,
-                "error": None if ready else projection.get("error") or "trial_preview_not_ready",
+                "error": None
+                if ready
+                else projection.get("error") or "trial_preview_not_ready",
             }
 
         from adaos.services.runtime_refresh import rebuild_webspace_projection_sync
-        from adaos.services.scenario.webspace_runtime import invalidate_webspace_materialization_cache
+        from adaos.services.scenario.webspace_runtime import (
+            invalidate_webspace_materialization_cache,
+        )
 
         transient_errors = {
             "stale_rebuild_superseded",
@@ -10325,7 +11442,9 @@ class BuilderAutomationService:
             if attempt >= COMPONENT_UPDATE_PROJECTION_MAX_ATTEMPTS:
                 break
             time.sleep(COMPONENT_UPDATE_PROJECTION_RETRY_SECONDS)
-        projection_ready = bool(projection.get("ok")) and materialization.get("ready") is True
+        projection_ready = (
+            bool(projection.get("ok")) and materialization.get("ready") is True
+        )
         return {
             "ok": projection_ready,
             "webspace_id": webspace_id,
@@ -10357,7 +11476,9 @@ class BuilderAutomationService:
         stop checkpointing and publication.
         """
 
-        development_session_id = str(session.get("development_session_id") or "").strip()
+        development_session_id = str(
+            session.get("development_session_id") or ""
+        ).strip()
         if not development_session_id:
             return {
                 "schema": "adaos.builder.acceptance_summary.v1",
@@ -10449,7 +11570,10 @@ class BuilderAutomationService:
             profile = str(requirement["profile"])
             provider_ref = str(requirement["provider_ref"])
             provider = admitted_context.get(provider_ref)
-            if not provider or str(provider.get("relation") or "") != "contract-consumer":
+            if (
+                not provider
+                or str(provider.get("relation") or "") != "contract-consumer"
+            ):
                 failures.append(
                     f"{requirement_id}: provider is not an admitted contract-consumer"
                 )
@@ -10460,9 +11584,13 @@ class BuilderAutomationService:
             try:
                 parameters = requirement.get("parameters") or {}
                 if not isinstance(parameters, Mapping):
-                    raise ValueError("acceptance requirement parameters must be an object")
+                    raise ValueError(
+                        "acceptance requirement parameters must be an object"
+                    )
                 protected = set(request) | {"profile"}
-                collisions = sorted(protected.intersection(str(key) for key in parameters))
+                collisions = sorted(
+                    protected.intersection(str(key) for key in parameters)
+                )
                 if collisions:
                     raise ValueError(
                         "acceptance requirement parameters cannot override the "
@@ -10481,12 +11609,18 @@ class BuilderAutomationService:
                     timeout=float(requirement.get("timeout_seconds") or 300),
                 )
                 if not isinstance(raw, Mapping):
-                    raise ValueError("acceptance provider returned a non-object receipt")
+                    raise ValueError(
+                        "acceptance provider returned a non-object receipt"
+                    )
                 value = dict(raw)
                 if value.get("schema") != "adaos.builder.acceptance_receipt.v1":
-                    raise ValueError("acceptance provider returned an incompatible receipt schema")
+                    raise ValueError(
+                        "acceptance provider returned an incompatible receipt schema"
+                    )
                 if str(value.get("profile") or "") != profile:
-                    raise ValueError("acceptance receipt profile differs from the requirement")
+                    raise ValueError(
+                        "acceptance receipt profile differs from the requirement"
+                    )
                 provider_ok = bool(value.get("ok"))
                 receipt_identity = {
                     **value,
@@ -10504,7 +11638,9 @@ class BuilderAutomationService:
                 receipts.append(receipt)
                 if required and not provider_ok:
                     details = "; ".join(str(item) for item in value.get("errors") or [])
-                    failures.append(f"{requirement_id}: {details or 'consumer acceptance failed'}")
+                    failures.append(
+                        f"{requirement_id}: {details or 'consumer acceptance failed'}"
+                    )
             except Exception as exc:
                 receipt_identity = {
                     "schema": "adaos.builder.acceptance_receipt.v1",
@@ -10551,7 +11687,9 @@ class BuilderAutomationService:
         object_id = str(current.get("object_id") or "").strip()
         webspace_id = str(current.get("webspace_id") or "desktop").strip() or "desktop"
         thread_id = str(current.get("topic_id") or "").strip() or (
-            f"prompt-project:scenario:{object_id}" if object_type == "scenario" else None
+            f"prompt-project:scenario:{object_id}"
+            if object_type == "scenario"
+            else None
         )
         meta = {
             "schema": "adaos.builder.automation_notification.v1",
@@ -10622,7 +11760,10 @@ class BuilderAutomationService:
         """Publish one conversational and subnet-wide start message per task."""
         current = dict(session)
         task_id = str(current.get("current_task_id") or "").strip()
-        if not task_id or str(current.get("started_notified_task_id") or "").strip() == task_id:
+        if (
+            not task_id
+            or str(current.get("started_notified_task_id") or "").strip() == task_id
+        ):
             return current
         object_id = str(current.get("object_id") or "").strip()
         iteration = int(current.get("iteration") or 0)
@@ -10649,11 +11790,18 @@ class BuilderAutomationService:
         """Publish one conversational and subnet-wide terminal message per task."""
         current = self._sync_linked_development_ticket_tasks(dict(session))
         task_id = str(current.get("current_task_id") or "").strip()
-        if task_id and str(current.get("completion_notified_task_id") or "").strip() == task_id:
+        if (
+            task_id
+            and str(current.get("completion_notified_task_id") or "").strip() == task_id
+        ):
             return current
 
         try:
-            result = current.get("last_result") if isinstance(current.get("last_result"), Mapping) else {}
+            result = (
+                current.get("last_result")
+                if isinstance(current.get("last_result"), Mapping)
+                else {}
+            )
             object_id = str(current.get("object_id") or "").strip()
             summary = str(result.get("summary") or "").strip()
             message = (
@@ -10672,7 +11820,9 @@ class BuilderAutomationService:
                 current["completion_notified_at"] = _now_iso()
                 self._save_session(current, emit_projection=False)
         except Exception:
-            _log.debug("failed to publish Builder completion task=%s", task_id, exc_info=True)
+            _log.debug(
+                "failed to publish Builder completion task=%s", task_id, exc_info=True
+            )
         return current
 
     def _wait_for_core_capability(
@@ -10731,7 +11881,9 @@ class BuilderAutomationService:
         session: Mapping[str, Any],
     ) -> dict[str, Any]:
         current = dict(session)
-        links = current.get("links") if isinstance(current.get("links"), Mapping) else {}
+        links = (
+            current.get("links") if isinstance(current.get("links"), Mapping) else {}
+        )
         ticket_ids = list(
             dict.fromkeys(
                 [
@@ -10832,7 +11984,9 @@ class BuilderAutomationService:
                 current["development_ticket_synced_task_ids"] = [
                     item
                     for item in ordered_task_ids
-                    if all(f"{ticket_id}:{item}" in synced_refs for ticket_id in ticket_ids)
+                    if all(
+                        f"{ticket_id}:{item}" in synced_refs for ticket_id in ticket_ids
+                    )
                 ]
                 current["development_ticket_synced_refs"] = sorted(synced_refs)
                 current["development_ticket_sync_schema"] = (
@@ -10858,7 +12012,8 @@ class BuilderAutomationService:
                     ticket_results.append(
                         {
                             "ticket_id": ticket_id,
-                            "status": str(synced_ticket.get("status") or "").strip() or None,
+                            "status": str(synced_ticket.get("status") or "").strip()
+                            or None,
                             "escalated": bool(latest_sync.get("escalated")),
                             "core_ticket_ids": core_ticket_ids,
                             "resolved": bool(
@@ -10946,10 +12101,14 @@ class BuilderAutomationService:
         )
         return snapshot
 
-    def _on_worker_progress(self, session_id: str, task_id: str, status: str, message: str) -> None:
+    def _on_worker_progress(
+        self, session_id: str, task_id: str, status: str, message: str
+    ) -> None:
         with _LOCK:
             session = self._find_session_by_id(session_id)
-            if not session or str(session.get("current_task_id") or "") != str(task_id or ""):
+            if not session or str(session.get("current_task_id") or "") != str(
+                task_id or ""
+            ):
                 return
             session["status"] = str(status or session.get("status") or "in_progress")
             session["progress"] = {
@@ -11004,14 +12163,20 @@ class BuilderAutomationService:
                 or primary_kind not in {"skill", "scenario"}
                 or not primary_id
             ):
-                raise ValueError(f"project:{project_id} has no usable primary component")
+                raise ValueError(
+                    f"project:{project_id} has no usable primary component"
+                )
             return primary_kind, _safe_token(primary_id, fallback="")
         if kind not in {"skill", "scenario"}:
             raise ValueError("object_type must be project, skill or scenario")
         return kind, project_id
 
     def _project_version(self, object_type: str, object_id: str) -> str | None:
-        parent = self.dev_scenarios_root if object_type == "scenario" else self.dev_skills_root
+        parent = (
+            self.dev_scenarios_root
+            if object_type == "scenario"
+            else self.dev_skills_root
+        )
         manifest_name = "scenario.yaml" if object_type == "scenario" else "skill.yaml"
         path = parent / object_id / manifest_name
         try:
@@ -11024,12 +12189,17 @@ class BuilderAutomationService:
 
     def _project_prototype_ref(self, object_type: str, object_id: str) -> str | None:
         try:
-            revision = self._workflow().current_prototype_revision(object_type, object_id)
+            revision = self._workflow().current_prototype_revision(
+                object_type, object_id
+            )
         except Exception:
             revision = None
         if revision and object_type == "scenario" and str(revision).isdigit():
             return f"UI {int(str(revision)):03d}"
-        return str(revision or self._project_version(object_type, object_id) or "").strip() or None
+        return (
+            str(revision or self._project_version(object_type, object_id) or "").strip()
+            or None
+        )
 
     def _session_path(self, object_type: str, object_id: str) -> Path:
         return self.root / f"{_safe_token(object_type)}.{_safe_token(object_id)}.json"
@@ -11139,7 +12309,11 @@ class BuilderAutomationService:
             "commit_hash": result.get("commit_hash"),
             "tests": tests.get("status"),
             "changed_path_count": len(
-                [item for item in result.get("changed_paths") or [] if str(item).strip()]
+                [
+                    item
+                    for item in result.get("changed_paths") or []
+                    if str(item).strip()
+                ]
             ),
             "development_escalation_count": len(
                 [
@@ -11222,9 +12396,7 @@ class BuilderAutomationService:
             task.pop("snapshot_context", None)
 
         result = (
-            dict(task.get("result"))
-            if isinstance(task.get("result"), Mapping)
-            else {}
+            dict(task.get("result")) if isinstance(task.get("result"), Mapping) else {}
         )
         if result:
             if not isinstance(result.get("provenance"), Mapping) and isinstance(
@@ -11312,10 +12484,7 @@ class BuilderAutomationService:
         if last_result:
             result_checkpoint = self._store_result_checkpoint(last_result)
             payload.update(
-                {
-                    f"last_{key}": value
-                    for key, value in result_checkpoint.items()
-                }
+                {f"last_{key}": value for key, value in result_checkpoint.items()}
             )
         if str(payload.get("last_result_ref") or "").strip():
             payload.pop("last_result", None)
@@ -11352,7 +12521,9 @@ class BuilderAutomationService:
                 readiness["workflow_checkpoint"] = checkpoint
         return readiness
 
-    def _hydrate_session_compatibility(self, session: Mapping[str, Any]) -> dict[str, Any]:
+    def _hydrate_session_compatibility(
+        self, session: Mapping[str, Any]
+    ) -> dict[str, Any]:
         payload = copy.deepcopy(dict(session))
         payload.pop("companion_skill_id", None)
         if isinstance(payload.get("task"), Mapping):
@@ -11383,7 +12554,9 @@ class BuilderAutomationService:
         emit_projection: bool = True,
     ) -> dict[str, Any]:
         payload = self._persistence_projection(session)
-        path = self._session_path(str(payload["object_type"]), str(payload["object_id"]))
+        path = self._session_path(
+            str(payload["object_type"]), str(payload["object_id"])
+        )
         compact_path = self._compact_status_path(
             str(payload["object_type"]),
             str(payload["object_id"]),

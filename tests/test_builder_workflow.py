@@ -21,7 +21,9 @@ ABI_ROOT = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi"
 def _apply_evidence(*, draft_id: str = "draft.recipes") -> dict[str, object]:
     return {
         "draft_ref": {"draft_id": draft_id, "revision": "ui:001"},
-        "validation_evidence": [{"type": "test_run", "id": "tests:passed", "status": "passed"}],
+        "validation_evidence": [
+            {"type": "test_run", "id": "tests:passed", "status": "passed"}
+        ],
         "approval": {
             "approval_id": "pa.builder.publish.1",
             "actor_id": "user:owner",
@@ -42,7 +44,9 @@ def _confirmed(metadata: dict[str, object] | None = None) -> dict[str, object]:
     return {**dict(metadata or {}), "confirmed": True}
 
 
-def test_prototype_acceptance_request_is_scoped_to_user_facing_prototype_criteria() -> None:
+def test_prototype_acceptance_request_is_scoped_to_user_facing_prototype_criteria() -> (
+    None
+):
     change = {
         "request": "Implement the application and prepare Trial.",
         "request_addenda": ["Set dryRun to true on every MCP dataSource."],
@@ -99,7 +103,9 @@ def _prepare_candidate(
             metadata=_confirmed(
                 {
                     "change_id": "checkpoint-before-trial",
-                    "package_digest": str(metadata.get("package_digest") or "sha256:" + "c" * 64),
+                    "package_digest": str(
+                        metadata.get("package_digest") or "sha256:" + "c" * 64
+                    ),
                     "source_revision": "c" * 40,
                 }
             ),
@@ -125,7 +131,9 @@ def _publish_candidate(
         "publication_started",
         metadata=_confirmed({"activity_attempt_id": "publication-attempt:test"}),
     )
-    return service.transition("scenario", "recipes", "publish", metadata=metadata)["workflow"]
+    return service.transition("scenario", "recipes", "publish", metadata=metadata)[
+        "workflow"
+    ]
 
 
 @pytest.fixture
@@ -135,7 +143,9 @@ def workflow_project(tmp_path: Path) -> tuple[BuilderWorkflowService, Path]:
     skills.mkdir()
     root = scenarios / "recipes"
     root.mkdir(parents=True)
-    (root / "scenario.yaml").write_text("id: recipes\nversion: 0.1.0\n", encoding="utf-8")
+    (root / "scenario.yaml").write_text(
+        "id: recipes\nversion: 0.1.0\n", encoding="utf-8"
+    )
     (root / "webui.json").write_text(
         json.dumps(
             {
@@ -171,9 +181,7 @@ def test_component_acceptance_resolves_owning_project_domain_packs(
         {
             "id": "applications",
             "components": {"owned": [{"ref": "scenario:recipes"}]},
-            "development": {
-                "domain_packs": ["applications.compatibility.v1"]
-            },
+            "development": {"domain_packs": ["applications.compatibility.v1"]},
         },
     )
 
@@ -192,9 +200,7 @@ def test_component_acceptance_rejects_ambiguous_project_ownership(
             {
                 "id": project_id,
                 "components": {"owned": [{"ref": "scenario:recipes"}]},
-                "development": {
-                    "domain_packs": ["applications.compatibility.v1"]
-                },
+                "development": {"domain_packs": ["applications.compatibility.v1"]},
             },
         )
 
@@ -207,7 +213,9 @@ def _write_minimal_conversational_package(root: Path) -> None:
         "id: recipes\nversion: 0.1.0\nworkflow:\n  manifest: workflow.json\nconversational:\n  manifest: conversational/manifest.yaml\n",
         encoding="utf-8",
     )
-    (root / "workflow.json").write_text(json.dumps(builder_change_definition()), encoding="utf-8")
+    (root / "workflow.json").write_text(
+        json.dumps(builder_change_definition()), encoding="utf-8"
+    )
     conv = root / "conversational"
     _write_json_yaml(
         conv / "manifest.yaml",
@@ -261,7 +269,11 @@ def _write_minimal_conversational_package(root: Path) -> None:
     )
     _write_json_yaml(
         conv / "entities.yaml",
-        {"schema": "adaos.conversational.entities.v1", "package_id": "recipes", "entities": []},
+        {
+            "schema": "adaos.conversational.entities.v1",
+            "package_id": "recipes",
+            "entities": [],
+        },
     )
     _write_json_yaml(
         conv / "examples.yaml",
@@ -282,11 +294,19 @@ def _write_minimal_conversational_package(root: Path) -> None:
     )
     _write_json_yaml(
         conv / "repair.yaml",
-        {"schema": "adaos.conversational.repair.v1", "package_id": "recipes", "policies": []},
+        {
+            "schema": "adaos.conversational.repair.v1",
+            "package_id": "recipes",
+            "policies": [],
+        },
     )
     _write_json_yaml(
         conv / "output.yaml",
-        {"schema": "adaos.conversational.output.v1", "package_id": "recipes", "outputs": []},
+        {
+            "schema": "adaos.conversational.output.v1",
+            "package_id": "recipes",
+            "outputs": [],
+        },
     )
     _write_json_yaml(
         conv / "locale.en.yaml",
@@ -299,7 +319,9 @@ def _write_minimal_conversational_package(root: Path) -> None:
     )
 
 
-def test_atomic_replace_retries_transient_windows_lock(monkeypatch, tmp_path: Path) -> None:
+def test_atomic_replace_retries_transient_windows_lock(
+    monkeypatch, tmp_path: Path
+) -> None:
     source = tmp_path / "source.json"
     target = tmp_path / "target.json"
     source.write_text("new", encoding="utf-8")
@@ -339,7 +361,9 @@ def test_workflow_migrates_legacy_state_without_mutating_it(
     assert workflow["publication"]["status"] == "published"
     assert workflow["delivery"]["status"] == "published"
     assert workflow["capabilities"]["can_publish"] is False
-    assert "workflow" not in json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
+    assert "workflow" not in json.loads(
+        (root / "prompt_state.json").read_text(encoding="utf-8")
+    )
 
 
 def test_development_summary_is_bounded_and_read_only(
@@ -428,17 +452,34 @@ def test_interaction_frame_projects_risk_actions_and_independent_context(
     )
     frame = updated["interaction_frame"]
 
-    schema = json.loads((ABI_ROOT / "builder.interaction_frame.v1.schema.json").read_text(encoding="utf-8"))
+    schema = json.loads(
+        (ABI_ROOT / "builder.interaction_frame.v1.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
     Draft202012Validator(schema).validate(frame)
     assert frame["context"]["conversation_focus"] == "change:CH-recipes-layout"
     assert frame["context"]["inspected_ref"] == "run:RUN-layout"
     assert frame["context"]["preview_target"] == "prototype:recipes:001"
-    assert all(item["expected_generation"] == frame["generation"] for item in frame["actions"])
-    assert {item["risk"] for item in frame["actions"]} >= {"read", "local_reversible", "isolated_write"}
-    assert all(item["risk_policy"]["risk_class"] == item["risk"] for item in frame["actions"])
-    assert next(
-        item for item in frame["actions"] if item["command"] == "builder.prototype.approve"
-    )["risk_policy"]["inline_callback"] == "confirm"
+    assert all(
+        item["expected_generation"] == frame["generation"] for item in frame["actions"]
+    )
+    assert {item["risk"] for item in frame["actions"]} >= {
+        "read",
+        "local_reversible",
+        "isolated_write",
+    }
+    assert all(
+        item["risk_policy"]["risk_class"] == item["risk"] for item in frame["actions"]
+    )
+    assert (
+        next(
+            item
+            for item in frame["actions"]
+            if item["command"] == "builder.prototype.approve"
+        )["risk_policy"]["inline_callback"]
+        == "confirm"
+    )
 
 
 def test_conversation_interaction_uses_localized_shared_action_registry(
@@ -457,7 +498,9 @@ def test_conversation_interaction_uses_localized_shared_action_registry(
                     "issue_id": "card-layout",
                     "title": "Уточнить интерфейс карточки",
                     "lane": "prototype",
-                    "acceptance_criteria": ["Карточка соответствует согласованному прототипу."],
+                    "acceptance_criteria": [
+                        "Карточка соответствует согласованному прототипу."
+                    ],
                 }
             ],
         },
@@ -621,7 +664,10 @@ def test_issue_split_and_merge_preserve_structural_lineage(
     assert issues["layout"]["structural_status"] == "merged"
     assert issues["save"]["superseded_by_issue_ids"] == ["form-delivery"]
     assert issues["form-delivery"]["derived_from_issue_ids"] == ["layout", "save"]
-    assert service.describe("scenario", "recipes")["change"]["issues"] == merged["change"]["issues"]
+    assert (
+        service.describe("scenario", "recipes")["change"]["issues"]
+        == merged["change"]["issues"]
+    )
 
 
 def test_context_packet_bounds_conversation_memory_and_pending_action_refs(
@@ -667,7 +713,10 @@ def test_context_packet_bounds_conversation_memory_and_pending_action_refs(
                     "seq": 1,
                     "role": "user",
                     "text": "Keep the card compact.",
-                    "source_ref": {"type": "conversation_message", "message_id": "message-1"},
+                    "source_ref": {
+                        "type": "conversation_message",
+                        "message_id": "message-1",
+                    },
                     "secret_transport_field": "must not cross the Builder boundary",
                 }
             ],
@@ -706,11 +755,18 @@ def test_context_packet_bounds_conversation_memory_and_pending_action_refs(
     assert packet["budget"]["conversation_message_count"] == 1
     assert packet["budget"]["pending_action_ref_count"] == 1
     assert packet["facets"]["workflow_definition"]["status"] == "missing"
-    assert packet["facets"]["workflow_definition"]["inspection_status"] == "not_declared"
+    assert (
+        packet["facets"]["workflow_definition"]["inspection_status"] == "not_declared"
+    )
     assert packet["facets"]["repair_context"]["active_count"] == 1
-    assert packet["facets"]["repair_context"]["tasks"][0]["signal_type"] == "test_failure"
+    assert (
+        packet["facets"]["repair_context"]["tasks"][0]["signal_type"] == "test_failure"
+    )
     assert packet["budget"]["active_repair_count"] == 1
-    assert service.describe("scenario", "recipes")["context_packet"]["digest"] == packet["digest"]
+    assert (
+        service.describe("scenario", "recipes")["context_packet"]["digest"]
+        == packet["digest"]
+    )
 
 
 def test_context_packet_surfaces_valid_conversational_static_report(
@@ -744,8 +800,14 @@ def test_context_packet_surfaces_valid_conversational_static_report(
     assert conversational_facet["valid"] is True
     assert conversational_facet["diagnostics"] == []
     assert conversational_facet["package_digest"].startswith("sha256:")
-    assert conversational_facet["static_report"]["schema"] == "adaos.workflow.static_report.v1"
-    assert conversational_facet["static_report"]["definition_digest"] == workflow_facet["definition_digest"]
+    assert (
+        conversational_facet["static_report"]["schema"]
+        == "adaos.workflow.static_report.v1"
+    )
+    assert (
+        conversational_facet["static_report"]["definition_digest"]
+        == workflow_facet["definition_digest"]
+    )
     assert conversational_facet["static_report"]["coverage"]["states_declared"]
 
 
@@ -767,7 +829,9 @@ def test_change_set_routes_interface_work_through_prototype_first(
                     "issue_id": "favorites-layout",
                     "title": "Add the favorites section to the navigation",
                     "lane": "prototype",
-                    "acceptance_criteria": ["Favorites is visible without hiding the shopping list."],
+                    "acceptance_criteria": [
+                        "Favorites is visible without hiding the shopping list."
+                    ],
                 },
                 {
                     "issue_id": "favorites-storage",
@@ -798,17 +862,49 @@ def test_change_set_routes_interface_work_through_prototype_first(
     assert approved["change_set"]["issues"][1]["status"] == "open"
 
 
-def test_specification_delta_is_canonical_scoped_and_not_implicitly_accepted(workflow_project):
+def test_specification_delta_is_canonical_scoped_and_not_implicitly_accepted(
+    workflow_project,
+):
     service, root = workflow_project
-    planned = service.transition("scenario", "recipes", "plan_change_set", metadata={
-        "change_set_id": "CS-spec", "request": "Create an editor", "source_message_ids": ["m1"],
-        "issues": [{"issue_id": "i1", "title": "Editor", "lane": "prototype", "acceptance_criteria": ["Editor visible"]}],
-    })["workflow"]
-    delta = {"operations": [{"requirement_id": "editor", "operation": "add", "stage": "prototype",
-                             "text": "Open editor", "acceptance_criteria": ["Editor visible"],
-                             "issue_ids": ["i1"], "source_message_ids": ["m1"]}]}
-    saved = service.save_specification_delta("scenario", "recipes", delta, change_id="CS-spec",
-                                              expected_generation=planned["generation"], actor="user:owner")
+    planned = service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-spec",
+            "request": "Create an editor",
+            "source_message_ids": ["m1"],
+            "issues": [
+                {
+                    "issue_id": "i1",
+                    "title": "Editor",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["Editor visible"],
+                }
+            ],
+        },
+    )["workflow"]
+    delta = {
+        "operations": [
+            {
+                "requirement_id": "editor",
+                "operation": "add",
+                "stage": "prototype",
+                "text": "Open editor",
+                "acceptance_criteria": ["Editor visible"],
+                "issue_ids": ["i1"],
+                "source_message_ids": ["m1"],
+            }
+        ]
+    }
+    saved = service.save_specification_delta(
+        "scenario",
+        "recipes",
+        delta,
+        change_id="CS-spec",
+        expected_generation=planned["generation"],
+        actor="user:owner",
+    )
     current = service.describe("scenario", "recipes")
     assert current["change"]["specification_delta"] == saved["delta"]
     assert current["specification"]["delta"]["digest"] == saved["delta"]["digest"]
@@ -816,18 +912,40 @@ def test_specification_delta_is_canonical_scoped_and_not_implicitly_accepted(wor
     packet = service.build_context_packet("scenario", "recipes", persist=False)
     assert packet["change"]["specification_delta"]["digest"] == saved["delta"]["digest"]
     with pytest.raises(BuilderWorkflowError, match="stale"):
-        service.save_specification_delta("scenario", "recipes", delta, change_id="CS-spec",
-                                         expected_generation=planned["generation"], actor="user:owner")
+        service.save_specification_delta(
+            "scenario",
+            "recipes",
+            delta,
+            change_id="CS-spec",
+            expected_generation=planned["generation"],
+            actor="user:owner",
+        )
     with pytest.raises(BuilderWorkflowError, match="another Change"):
-        service.save_specification_delta("scenario", "recipes", delta, change_id="other",
-                                         expected_generation=current["generation"], actor="user:owner")
-    approved = service.transition("scenario", "recipes", "stabilize_prototype",
-                                  metadata=_confirmed({"revision": "001"}))["workflow"]
+        service.save_specification_delta(
+            "scenario",
+            "recipes",
+            delta,
+            change_id="other",
+            expected_generation=current["generation"],
+            actor="user:owner",
+        )
+    approved = service.transition(
+        "scenario",
+        "recipes",
+        "stabilize_prototype",
+        metadata=_confirmed({"revision": "001"}),
+    )["workflow"]
     # A compatibility stabilization without an exact acceptance receipt is not spec acceptance.
     assert approved["application_specification"]["prototype"]["requirements"] == {}
     with pytest.raises(BuilderWorkflowError, match="editable Prototype"):
-        service.save_specification_delta("scenario", "recipes", delta, change_id="CS-spec",
-                                         expected_generation=approved["generation"], actor="user:owner")
+        service.save_specification_delta(
+            "scenario",
+            "recipes",
+            delta,
+            change_id="CS-spec",
+            expected_generation=approved["generation"],
+            actor="user:owner",
+        )
 
 
 def test_strict_prototype_acceptance_requires_current_behavior_and_visual_evidence(
@@ -840,16 +958,21 @@ def test_strict_prototype_acceptance_requires_current_behavior_and_visual_eviden
             "application": {
                 "desktop": {
                     "pageSchema": {
-                            "id": "recipes",
-                            "layout": {
-                                "version": 2,
-                                "pattern": "document",
-                                "density": "comfortable",
-                                "regions": [{
+                        "id": "recipes",
+                        "layout": {
+                            "version": 2,
+                            "pattern": "document",
+                            "density": "comfortable",
+                            "regions": [
+                                {
                                     "id": "main",
                                     "role": "main",
-                                    "presentation": {"wide": "pane", "compact": "stack"},
-                                }],
+                                    "presentation": {
+                                        "wide": "pane",
+                                        "compact": "stack",
+                                    },
+                                }
+                            ],
                         },
                         "widgets": [],
                     }
@@ -885,11 +1008,25 @@ def test_strict_prototype_acceptance_requires_current_behavior_and_visual_eviden
             metadata=_confirmed({"revision": "001"}),
         )
 
-    saved = service.save_specification_delta("scenario", "recipes", {"operations": [{
-        "stage": "prototype", "operation": "add", "requirement_id": "workspace.visible",
-        "text": "The workspace is visible", "acceptance_criteria": ["The workspace is visible"],
-        "issue_ids": ["prototype-layout"],
-    }]}, change_id="CH-strict-prototype", expected_generation=planned["generation"], actor="user:owner")
+    saved = service.save_specification_delta(
+        "scenario",
+        "recipes",
+        {
+            "operations": [
+                {
+                    "stage": "prototype",
+                    "operation": "add",
+                    "requirement_id": "workspace.visible",
+                    "text": "The workspace is visible",
+                    "acceptance_criteria": ["The workspace is visible"],
+                    "issue_ids": ["prototype-layout"],
+                }
+            ]
+        },
+        change_id="CH-strict-prototype",
+        expected_generation=planned["generation"],
+        actor="user:owner",
+    )
     planned = saved["workflow"]
 
     accepted = service.accept_prototype(
@@ -924,7 +1061,9 @@ def test_strict_prototype_acceptance_requires_current_behavior_and_visual_eviden
     assert workflow["prototype"]["acceptance"]["revision"] == "001"
     assert workflow["change_set"]["gate"] == "automation"
 
-    requirement = workflow["application_specification"]["prototype"]["requirements"]["workspace.visible"]
+    requirement = workflow["application_specification"]["prototype"]["requirements"][
+        "workspace.visible"
+    ]
     assert requirement["evidence_ref"] == accepted["acceptance"]["acceptance_id"]
     assert workflow["application_specification"]["automation"]["requirements"] == {}
 
@@ -975,10 +1114,18 @@ def test_strict_prototype_acceptance_requires_current_behavior_and_visual_eviden
     assert reaffirmed["workflow"]["governed"]["history"][-2]["command"] == (
         "accept_review_constraint"
     )
-    assert reaffirmed["workflow"]["governed"]["history"][-1]["command"] == "accept_prototype"
+    assert (
+        reaffirmed["workflow"]["governed"]["history"][-1]["command"]
+        == "accept_prototype"
+    )
 
     webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"] = [
-        {"id": "changed", "type": "ui.text", "area": "main", "inputs": {"text": "Changed"}}
+        {
+            "id": "changed",
+            "type": "ui.text",
+            "area": "main",
+            "inputs": {"text": "Changed"},
+        }
     ]
     (root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
     with pytest.raises(BuilderWorkflowError, match="stale"):
@@ -1014,16 +1161,21 @@ def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
                 },
                 "desktop": {
                     "pageSchema": {
-                            "id": "recipes",
-                            "layout": {
-                                "version": 2,
-                                "pattern": "document",
-                                "density": "comfortable",
-                                "regions": [{
+                        "id": "recipes",
+                        "layout": {
+                            "version": 2,
+                            "pattern": "document",
+                            "density": "comfortable",
+                            "regions": [
+                                {
                                     "id": "main",
                                     "role": "main",
-                                    "presentation": {"wide": "pane", "compact": "stack"},
-                                }],
+                                    "presentation": {
+                                        "wide": "pane",
+                                        "compact": "stack",
+                                    },
+                                }
+                            ],
                         },
                         "widgets": [],
                     }
@@ -1035,21 +1187,57 @@ def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
     if with_records:
         for name in ("entries", "categories"):
             resource_type = f"prototype.{name}"
-            webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"].append({
-                "id": name, "type": "ui.table", "area": "main",
-                "dataSource": {"kind": "resourceQuery", "resourceType": resource_type},
-                "inputs": {"columns": [{"key": "title", "label": "Title"}]},
-                "actions": [{"on": "click:edit", "type": "resourceOperation", "target": resource_type,
-                             "params": {"operation_id": "update", "record_id": "$event.id", "payload": {"title": "Edited"}}}],
-            })
-            snapshots.append({"resource_type": resource_type, "generation": 0, "record_count": 1,
-                              "records": [{"id": name, "title": name}],
-                              **{key: "sha256:" + "a" * 64 for key in ("definition_digest", "bundle_digest", "records_digest")}})
-    monkeypatch.setattr(BuilderWorkflowService, "_prototype_resource_snapshots", lambda self, **kwargs: list(snapshots))
+            webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"].append(
+                {
+                    "id": name,
+                    "type": "ui.table",
+                    "area": "main",
+                    "dataSource": {
+                        "kind": "resourceQuery",
+                        "resourceType": resource_type,
+                    },
+                    "inputs": {"columns": [{"key": "title", "label": "Title"}]},
+                    "actions": [
+                        {
+                            "on": "click:edit",
+                            "type": "resourceOperation",
+                            "target": resource_type,
+                            "params": {
+                                "operation_id": "update",
+                                "record_id": "$event.id",
+                                "payload": {"title": "Edited"},
+                            },
+                        }
+                    ],
+                }
+            )
+            snapshots.append(
+                {
+                    "resource_type": resource_type,
+                    "generation": 0,
+                    "record_count": 1,
+                    "records": [{"id": name, "title": name}],
+                    **{
+                        key: "sha256:" + "a" * 64
+                        for key in (
+                            "definition_digest",
+                            "bundle_digest",
+                            "records_digest",
+                        )
+                    },
+                }
+            )
+    monkeypatch.setattr(
+        BuilderWorkflowService,
+        "_prototype_resource_snapshots",
+        lambda self, **kwargs: list(snapshots),
+    )
     (root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
     locales = root / "assets" / "i18n"
     locales.mkdir(parents=True)
-    (locales / "en.json").write_text(json.dumps({"recipes.title": "Recipes"}), encoding="utf-8")
+    (locales / "en.json").write_text(
+        json.dumps({"recipes.title": "Recipes"}), encoding="utf-8"
+    )
     (locales / "ru.json").write_text(
         json.dumps({"recipes.title": "Рецепты"}, ensure_ascii=False),
         encoding="utf-8",
@@ -1074,14 +1262,18 @@ def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
         "plan_change_set",
         metadata={
             "change_set_id": "CH-localized-prototype",
-            "request": "List entries and edit a selected entry." if with_records else "Show the recipe workspace.",
+            "request": "List entries and edit a selected entry."
+            if with_records
+            else "Show the recipe workspace.",
             "prototype_acceptance_required": True,
             "issues": [
                 {
                     "issue_id": "localized-prototype",
                     "title": "Provide the localized prototype",
                     "lane": "prototype",
-                    "acceptance_criteria": ["English and Russian resources are present."],
+                    "acceptance_criteria": [
+                        "English and Russian resources are present."
+                    ],
                 }
             ],
         },
@@ -1133,32 +1325,73 @@ def test_prototype_acceptance_loads_and_binds_declared_locale_assets(
         service.transition("scenario", "recipes", "automation_started")
 
 
-@pytest.mark.parametrize("owner_ref,owned,accepted", [
-    ("scenario:recipes", True, True),
-    ("project:catalog", True, True),
-    ("project:catalog", False, False),
-    ("scenario:another", True, False),
-])
+@pytest.mark.parametrize(
+    "owner_ref,owned,accepted",
+    [
+        ("scenario:recipes", True, True),
+        ("project:catalog", True, True),
+        ("project:catalog", False, False),
+        ("scenario:another", True, False),
+    ],
+)
 def test_prototype_resource_snapshot_resolves_only_manifest_proven_application_ownership(
-    workflow_project, monkeypatch, owner_ref, owned, accepted,
+    workflow_project,
+    monkeypatch,
+    owner_ref,
+    owned,
+    accepted,
 ):
     from adaos.services.resources.prototype import PrototypeResourceService
 
     service, root = workflow_project
     project_root = service.dev_projects_root / "catalog"
     project_root.mkdir(parents=True)
-    (project_root / "project.yaml").write_text(json.dumps({
-        "id": "catalog", "components": {"owned": [{"ref": "scenario:recipes" if owned else "scenario:another"}],
-                                           "dependencies": [{"ref": "scenario:recipes"}]}}), encoding="utf-8")
-    monkeypatch.setattr(PrototypeResourceService, "definition", lambda self, ref: {"metadata": {"project_ref": owner_ref}})
+    (project_root / "project.yaml").write_text(
+        json.dumps(
+            {
+                "id": "catalog",
+                "components": {
+                    "owned": [
+                        {"ref": "scenario:recipes" if owned else "scenario:another"}
+                    ],
+                    "dependencies": [{"ref": "scenario:recipes"}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        PrototypeResourceService,
+        "definition",
+        lambda self, ref: {"metadata": {"project_ref": owner_ref}},
+    )
     calls = []
-    monkeypatch.setattr(PrototypeResourceService, "acceptance_snapshots", lambda self, **kwargs: calls.append(kwargs) or [])
-    inputs = dict(object_type="scenario", object_id="recipes", change_id="change", revision="001",
-                  webui={"source": {"kind": "resourceQuery", "resourceType": "prototype.example"}}, webui_digest="digest")
+    monkeypatch.setattr(
+        PrototypeResourceService,
+        "acceptance_snapshots",
+        lambda self, **kwargs: calls.append(kwargs) or [],
+    )
+    inputs = dict(
+        object_type="scenario",
+        object_id="recipes",
+        change_id="change",
+        revision="001",
+        webui={
+            "source": {"kind": "resourceQuery", "resourceType": "prototype.example"}
+        },
+        webui_digest="digest",
+    )
     if accepted:
         service._prototype_resource_snapshots(**inputs)
-        assert calls == [{"project_ref": owner_ref, "change_id": "change", "revision": "001",
-                          "webui_digest": "digest", "resource_types": ["prototype.example"]}]
+        assert calls == [
+            {
+                "project_ref": owner_ref,
+                "change_id": "change",
+                "revision": "001",
+                "webui_digest": "digest",
+                "resource_types": ["prototype.example"],
+            }
+        ]
     else:
         with pytest.raises(BuilderWorkflowError, match="owner"):
             service._prototype_resource_snapshots(**inputs)
@@ -1175,16 +1408,21 @@ def test_optional_prototype_acceptance_is_preserved_for_automation(
             "application": {
                 "desktop": {
                     "pageSchema": {
-                            "id": "recipes",
-                            "layout": {
-                                "version": 2,
-                                "pattern": "document",
-                                "density": "comfortable",
-                                "regions": [{
+                        "id": "recipes",
+                        "layout": {
+                            "version": 2,
+                            "pattern": "document",
+                            "density": "comfortable",
+                            "regions": [
+                                {
                                     "id": "main",
                                     "role": "main",
-                                    "presentation": {"wide": "pane", "compact": "stack"},
-                                }],
+                                    "presentation": {
+                                        "wide": "pane",
+                                        "compact": "stack",
+                                    },
+                                }
+                            ],
                         },
                         "widgets": [],
                     }
@@ -1457,11 +1695,120 @@ def test_large_context_packet_is_externalized_and_hydrated(
         "schema": "adaos.builder.context_packet_external.v1",
         "digest": packet["digest"],
     }
-    assert service._read_state("scenario", "recipes")["workflow"]["context_packet"] == packet
+    assert (
+        service._read_state("scenario", "recipes")["workflow"]["context_packet"]
+        == packet
+    )
 
     packet_path = service._context_packet_path("scenario", "recipes", packet["digest"])
     tampered = {**packet, "payload": "y" + packet["payload"][1:]}
     packet_path.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(BuilderWorkflowError, match="identity differs"):
+        service._read_state("scenario", "recipes")
+
+
+def test_change_run_ledger_is_externalized_and_hydrated(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    runs = [
+        {
+            "schema": "adaos.builder.run.v1",
+            "run_id": f"run-{index:03d}",
+            "status": "succeeded",
+            "evidence_refs": ["evidence:" + ("x" * 2048)],
+        }
+        for index in range(75)
+    ]
+    change = {
+        "schema": "adaos.builder.change.v1",
+        "change_id": "CH-large-run-ledger",
+        "runs": runs,
+    }
+
+    service._write_state(
+        "scenario",
+        "recipes",
+        {"workflow": {"change": change}},
+    )
+
+    persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
+    stored_change = persisted["workflow"]["change"]
+    assert stored_change["runs"] == []
+    assert stored_change["runs_external"] == {
+        "schema": "adaos.builder.change_runs_external.v1",
+        "digest": _stable_digest({"runs": runs}),
+        "count": len(runs),
+    }
+    assert (
+        service._read_state("scenario", "recipes")["workflow"]["change"]["runs"] == runs
+    )
+
+    ledger_path = service._change_run_ledger_path(
+        "scenario",
+        "recipes",
+        change["change_id"],
+    )
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ledger["runs"][0]["status"] = "failed"
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+    with pytest.raises(BuilderWorkflowError, match="identity differs"):
+        service._read_state("scenario", "recipes")
+
+
+def test_governed_ledger_is_externalized_and_hydrated(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-governed-ledger",
+            "request": "Build the accepted prototype.",
+            "source_message_ids": ["message-1"],
+            "issues": [
+                {
+                    "issue_id": "issue-governed-ledger",
+                    "title": "Preserve the governed workflow ledger.",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The ledger remains readable."],
+                }
+            ],
+        },
+    )
+    state = service._read_state("scenario", "recipes")
+    governed = state["workflow"]["governed"]
+    history = [dict(governed["history"][0]) for _ in range(120)]
+    idempotency = [dict(governed["idempotency"][0]) for _ in range(120)]
+    governed["history"] = history
+    governed["idempotency"] = idempotency
+
+    service._write_state("scenario", "recipes", state)
+
+    persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
+    workflow = persisted["workflow"]
+    assert workflow["governed"]["history"] == []
+    assert workflow["governed"]["idempotency"] == []
+    assert workflow["governed_ledger_external"] == {
+        "schema": "adaos.builder.governed_ledger_external.v1",
+        "digest": _stable_digest({"history": history, "idempotency": idempotency}),
+        "history_count": len(history),
+        "idempotency_count": len(idempotency),
+    }
+    hydrated = service._read_state("scenario", "recipes")["workflow"]["governed"]
+    assert hydrated["history"] == history
+    assert hydrated["idempotency"] == idempotency
+
+    ledger_path = service._governed_ledger_path(
+        "scenario",
+        "recipes",
+        "CH-governed-ledger",
+    )
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ledger["history"][0]["transition_id"] = "tampered"
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
     with pytest.raises(BuilderWorkflowError, match="identity differs"):
         service._read_state("scenario", "recipes")
 
@@ -1520,9 +1867,60 @@ def test_context_packet_execution_scope_excludes_unrelated_change_history(
     assert packet["execution_scope"] == {
         "source_message_ids": ["dticket.current"],
         "repair_ids": ["repair.current"],
+        "issue_scope": "change",
         "active": True,
     }
     assert packet["budget"]["issue_count"] == 1
+
+
+def test_context_packet_current_iteration_does_not_replay_change_portfolio(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-iteration",
+            "request": "Old broad request.",
+            "source_message_ids": ["message.old"],
+            "issues": [
+                {
+                    "issue_id": "CH-older:I01",
+                    "title": "Historical accepted work",
+                    "lane": "automation",
+                    "status": "resolved",
+                    "acceptance_criteria": ["Do not replay this old criterion."],
+                    "source_message_ids": ["message.old"],
+                }
+            ],
+        },
+    )
+
+    packet = service.build_context_packet(
+        "scenario",
+        "recipes",
+        execution_phase="automation",
+        execution_scope={
+            "intent": "Validate the current source only.",
+            "issue_scope": "current_iteration",
+        },
+    )
+
+    assert packet["change"]["change_id"] == "CH-iteration"
+    assert packet["change"]["intent"] == "Validate the current source only."
+    assert packet["change"]["issues"] == []
+    assert packet["change"]["source_message_ids"] == []
+    assert packet["change"]["request_addenda"] == []
+    assert packet["facets"]["constraints"]["issue_acceptance"] == []
+    assert packet["execution_scope"] == {
+        "source_message_ids": [],
+        "repair_ids": [],
+        "issue_scope": "current_iteration",
+        "active": True,
+    }
+    assert packet["budget"]["issue_count"] == 0
 
 
 def test_workflow_rejects_divergent_change_compatibility_identities(
@@ -1548,7 +1946,11 @@ def test_workflow_rejects_divergent_change_compatibility_identities(
         json.dumps(
             {
                 "workflow": {
-                    "change": {**legacy, "change_id": "CH-new", "change_set_id": "CH-new"},
+                    "change": {
+                        **legacy,
+                        "change_id": "CH-new",
+                        "change_set_id": "CH-new",
+                    },
                     "change_set": {**legacy, "change_set_id": "CH-old"},
                 }
             }
@@ -1610,7 +2012,9 @@ def test_prototype_revision_cannot_be_recorded_during_automation(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, _root = workflow_project
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario", "recipes", "automation_started", metadata={"task_id": "task.1"}
+    )
 
     with pytest.raises(BuilderWorkflowError, match="requires active prototype"):
         service.transition(
@@ -1681,7 +2085,9 @@ def test_change_set_routes_functional_work_directly_to_automation(
                 {
                     "title": "Implement store synchronization",
                     "lane": "automation",
-                    "acceptance_criteria": ["A failed request leaves the local list unchanged."],
+                    "acceptance_criteria": [
+                        "A failed request leaves the local list unchanged."
+                    ],
                 }
             ],
         },
@@ -1749,7 +2155,9 @@ def test_change_set_advances_through_automation_trial_and_publication(
                     "issue_id": "sync",
                     "title": "Implement store synchronization",
                     "lane": "automation",
-                    "acceptance_criteria": ["Synchronization is covered by an integration test."],
+                    "acceptance_criteria": [
+                        "Synchronization is covered by an integration test."
+                    ],
                 }
             ],
         },
@@ -1786,11 +2194,13 @@ def test_change_set_advances_through_automation_trial_and_publication(
         "scenario",
         "recipes",
         "checkpoint_recorded",
-        metadata=_confirmed({
-            "change_id": "checkpoint-sync",
-            "package_digest": "sha256:" + "1" * 64,
-            "source_revision": "a" * 40,
-        }),
+        metadata=_confirmed(
+            {
+                "change_id": "checkpoint-sync",
+                "package_digest": "sha256:" + "1" * 64,
+                "source_revision": "a" * 40,
+            }
+        ),
     )["workflow"]
     assert checkpointed["change_set"]["status"] == "checkpointed"
     assert "checkpoint-sync" in checkpointed["change_set"]["member_change_ids"]
@@ -1806,7 +2216,9 @@ def test_change_set_advances_through_automation_trial_and_publication(
     assert trial["change_set"]["status"] == "trial"
     Draft202012Validator(
         json.loads(
-            (ABI_ROOT / "builder.process_projection.v1.schema.json").read_text(encoding="utf-8")
+            (ABI_ROOT / "builder.process_projection.v1.schema.json").read_text(
+                encoding="utf-8"
+            )
         )
     ).validate(trial["process"])
     trial_preview = next(
@@ -1882,7 +2294,11 @@ def test_change_set_advances_through_automation_trial_and_publication(
         "recipes",
         {
             "kind": "stable",
-            "result_ref": {"kind": "release", "id": "scenario:recipes", "version": "0.2.0"},
+            "result_ref": {
+                "kind": "release",
+                "id": "scenario:recipes",
+                "version": "0.2.0",
+            },
             "target": {"webspace_id": "desktop", "space_kind": "workspace"},
             "scenario_id": "recipes",
         },
@@ -1891,22 +2307,50 @@ def test_change_set_advances_through_automation_trial_and_publication(
     placed_frame = service.interaction_frame("scenario", "recipes", locale="ru")
     assert placed["project"]["stable_placement_ref"]
     assert placed_frame["actions"][0]["command"] == "builder.publication.open"
-    assert "builder.preview.link" not in {item["command"] for item in placed_frame["actions"]}
+    assert "builder.preview.link" not in {
+        item["command"] for item in placed_frame["actions"]
+    }
     assert any(item["kind"] == "placement" for item in placed["process"]["nodes"])
 
 
-@pytest.mark.parametrize("changed", [None, "candidate", "digest", "target", "runtime", "activation", "safety", "status"])
+@pytest.mark.parametrize(
+    "changed",
+    [
+        None,
+        "candidate",
+        "digest",
+        "target",
+        "runtime",
+        "activation",
+        "safety",
+        "status",
+    ],
+)
 @pytest.mark.parametrize("data_mode", ["empty", "snapshot"])
-def test_placement_replay_is_noop_only_for_exact_result(workflow_project, changed, data_mode):
+def test_placement_replay_is_noop_only_for_exact_result(
+    workflow_project, changed, data_mode
+):
     service, root = workflow_project
     generation = service.describe("scenario", "recipes")["generation"]
     placement = {
-        "kind": "trial", "result_ref": {"kind": "candidate", "id": "candidate-a", "digest": "sha256:" + "a" * 64},
+        "kind": "trial",
+        "result_ref": {
+            "kind": "candidate",
+            "id": "candidate-a",
+            "digest": "sha256:" + "a" * 64,
+        },
         "target": {"webspace_id": "desktop-dev", "space_kind": "development"},
-        "runtime_binding": {"kind": "isolated_trial_workspace", "path": "trials/candidate-a"},
-        "trial_activation_ref": "activation-a", "safety": {"status": "verified"}, "data_mode": data_mode,
+        "runtime_binding": {
+            "kind": "isolated_trial_workspace",
+            "path": "trials/candidate-a",
+        },
+        "trial_activation_ref": "activation-a",
+        "safety": {"status": "verified"},
+        "data_mode": data_mode,
     }
-    first = service.record_project_placement("scenario", "recipes", placement, expected_generation=generation)
+    first = service.record_project_placement(
+        "scenario", "recipes", placement, expected_generation=generation
+    )
     persisted = (root / "prompt_state.json").read_bytes()
     events = []
     service.event_sink = events.append
@@ -1925,11 +2369,17 @@ def test_placement_replay_is_noop_only_for_exact_result(workflow_project, change
     elif changed == "status":
         placement["status"] = "detached"
     if changed:
-        with pytest.raises(BuilderWorkflowError, match="stale Builder workflow generation"):
-            service.record_project_placement("scenario", "recipes", placement, expected_generation=generation)
+        with pytest.raises(
+            BuilderWorkflowError, match="stale Builder workflow generation"
+        ):
+            service.record_project_placement(
+                "scenario", "recipes", placement, expected_generation=generation
+            )
     else:
         placement["updated_at"] = "2026-09-15T00:00:00+00:00"
-        replay = service.record_project_placement("scenario", "recipes", placement, expected_generation=generation)
+        replay = service.record_project_placement(
+            "scenario", "recipes", placement, expected_generation=generation
+        )
         assert replay["duplicate"] is True
         assert replay["placement"] == first["placement"]
         assert replay["workflow"]["generation"] == first["workflow"]["generation"]
@@ -1959,7 +2409,10 @@ def test_builder_text_continuation_is_durable_and_generation_bound(
         "expected_generation": 0,
         "workflow_generation": 0,
     }
-    assert interaction["prompt"] == "Опишите, что нужно изменить. Строитель разложит запрос на Issues и Change."
+    assert (
+        interaction["prompt"]
+        == "Опишите, что нужно изменить. Строитель разложит запрос на Issues и Change."
+    )
 
 
 def test_active_change_set_requires_explicit_supersession(
@@ -1975,7 +2428,11 @@ def test_active_change_set_requires_explicit_supersession(
         "scenario",
         "recipes",
         "plan_change_set",
-        metadata={"change_set_id": "CS-1", "request": "First change", "issues": [issue]},
+        metadata={
+            "change_set_id": "CS-1",
+            "request": "First change",
+            "issues": [issue],
+        },
     )
     first_packet = service.build_context_packet("scenario", "recipes", persist=True)
 
@@ -1984,7 +2441,11 @@ def test_active_change_set_requires_explicit_supersession(
             "scenario",
             "recipes",
             "plan_change_set",
-            metadata={"change_set_id": "CS-2", "request": "Second change", "issues": [issue]},
+            metadata={
+                "change_set_id": "CS-2",
+                "request": "Second change",
+                "issues": [issue],
+            },
         )
 
     transition = service.transition(
@@ -2033,9 +2494,14 @@ def test_followup_request_extends_active_change_set_and_invalidates_trial(
         },
     )
     service.transition(
-        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata=_confirmed({"task_id": "task.1"}),
     )
-    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"}
+    )
     _prepare_candidate(
         service,
         {
@@ -2059,7 +2525,9 @@ def test_followup_request_extends_active_change_set_and_invalidates_trial(
                     "issue_id": "sync-status-layout",
                     "title": "Show synchronization status",
                     "lane": "prototype",
-                    "acceptance_criteria": ["Every shopping item shows its synchronization state."],
+                    "acceptance_criteria": [
+                        "Every shopping item shows its synchronization state."
+                    ],
                 }
             ],
         },
@@ -2084,7 +2552,9 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
         "scenario",
         "recipes",
         "automation_started",
-        metadata=_confirmed({"source_prototype_revision": "UI 001", "task_id": "task.1"}),
+        metadata=_confirmed(
+            {"source_prototype_revision": "UI 001", "task_id": "task.1"}
+        ),
     )["workflow"]
     assert handed_off["active_phase"] == "automation"
     assert handed_off["prototype"]["status"] == "frozen"
@@ -2154,7 +2624,11 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
     assert release_record["approval"]["actor_id"] == "user:owner"
     assert release_record["activation"]["runtime_slot"] == "B"
     Draft202012Validator(
-        json.loads((ABI_ROOT / "builder.applied_release.v1.schema.json").read_text(encoding="utf-8"))
+        json.loads(
+            (ABI_ROOT / "builder.applied_release.v1.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
     ).validate(release_record)
 
     persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
@@ -2177,7 +2651,9 @@ def test_invalid_cross_phase_transition_is_rejected(
     service, _root = workflow_project
 
     with pytest.raises(BuilderWorkflowError, match="requires active automation"):
-        service.transition("scenario", "recipes", "publish", metadata={"version": "0.1.1"})
+        service.transition(
+            "scenario", "recipes", "publish", metadata={"version": "0.1.1"}
+        )
 
 
 def test_unknown_trial_outcome_is_not_projected_as_retryable_before_reconciliation(
@@ -2337,7 +2813,9 @@ def test_unknown_publication_requires_explicit_evidenced_reconciliation(
                     "title": "Publish the verified recipe change",
                     "lane": "automation",
                     "status": "resolved",
-                    "acceptance_criteria": ["The accepted candidate is published once."],
+                    "acceptance_criteria": [
+                        "The accepted candidate is published once."
+                    ],
                 }
             ],
         },
@@ -2439,7 +2917,9 @@ def test_new_automation_iteration_reopens_a_terminal_result(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, _root = workflow_project
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario", "recipes", "automation_started", metadata={"task_id": "task.1"}
+    )
     service.transition(
         "scenario",
         "recipes",
@@ -2465,14 +2945,21 @@ def test_return_to_prototype_uses_a_new_immutable_revision(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, root = workflow_project
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario", "recipes", "automation_started", metadata={"task_id": "task.1"}
+    )
     service.transition(
         "scenario",
         "recipes",
         "automation_completed",
         metadata={"task_id": "task.1", "snapshot_path": "retained/automation"},
     )
-    service.transition("scenario", "recipes", "request_return_to_prototype", metadata={"task_id": "task.2"})
+    service.transition(
+        "scenario",
+        "recipes",
+        "request_return_to_prototype",
+        metadata={"task_id": "task.2"},
+    )
 
     snapshot = service.snapshot_current_prototype(
         "scenario",
@@ -2488,7 +2975,9 @@ def test_return_to_prototype_uses_a_new_immutable_revision(
 
     assert snapshot["revision"] == "002"
     assert (root / "ui_revisions" / "002.json").is_file()
-    assert (root / "ui_revisions" / "current.txt").read_text(encoding="utf-8").strip() == "002"
+    assert (root / "ui_revisions" / "current.txt").read_text(
+        encoding="utf-8"
+    ).strip() == "002"
     assert returned["active_phase"] == "prototype"
     assert returned["prototype"]["status"] == "working"
     assert returned["automation"]["status"] == "frozen"
@@ -2501,7 +2990,10 @@ def test_return_to_prototype_marks_checkpoint_delivery_stale(
 ) -> None:
     service, _root = workflow_project
     service.transition(
-        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata=_confirmed({"task_id": "task.1"}),
     )
     service.transition(
         "scenario",
@@ -2535,14 +3027,21 @@ def test_failed_prototype_adaptation_restores_completed_automation(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, _root = workflow_project
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario", "recipes", "automation_started", metadata={"task_id": "task.1"}
+    )
     service.transition(
         "scenario",
         "recipes",
         "automation_completed",
         metadata={"task_id": "task.1", "snapshot_path": "retained/automation"},
     )
-    service.transition("scenario", "recipes", "request_return_to_prototype", metadata={"task_id": "task.2"})
+    service.transition(
+        "scenario",
+        "recipes",
+        "request_return_to_prototype",
+        metadata={"task_id": "task.2"},
+    )
 
     recovered = service.transition(
         "scenario",
@@ -2565,7 +3064,10 @@ def test_checkpoint_reconciliation_reenters_failed_automation_without_new_iterat
 ) -> None:
     service, _root = workflow_project
     started = service.transition(
-        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata=_confirmed({"task_id": "task.1"}),
     )["workflow"]
     service.transition(
         "scenario",
@@ -2594,9 +3096,14 @@ def test_new_automation_work_invalidates_an_unpublished_candidate(
 ) -> None:
     service, _root = workflow_project
     service.transition(
-        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata=_confirmed({"task_id": "task.1"}),
     )
-    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"}
+    )
     _prepare_candidate(
         service,
         {
@@ -2654,9 +3161,14 @@ def test_checkpoint_discards_candidate_stale_only_because_automation_changed(
 ) -> None:
     service, _root = workflow_project
     service.transition(
-        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata=_confirmed({"task_id": "task.1"}),
     )
-    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"}
+    )
     _prepare_candidate(
         service,
         {
@@ -2671,7 +3183,9 @@ def test_checkpoint_discards_candidate_stale_only_because_automation_changed(
         "automation_iteration_started",
         metadata={"task_id": "task.2"},
     )
-    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.2"})
+    service.transition(
+        "scenario", "recipes", "automation_completed", metadata={"task_id": "task.2"}
+    )
 
     checkpoint = service.transition(
         "scenario",
@@ -2705,7 +3219,9 @@ def test_checkpoint_rejects_same_artifact_version_with_different_bytes(
             "source_revision": "a" * 40,
         },
     )
-    with pytest.raises(BuilderWorkflowError, match="artifact version already maps to different bytes"):
+    with pytest.raises(
+        BuilderWorkflowError, match="artifact version already maps to different bytes"
+    ):
         service.transition(
             "scenario",
             "recipes",
@@ -2766,7 +3282,9 @@ def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(
         "scenario",
         "recipes",
         "automation_started",
-        metadata=_confirmed({"task_id": "task.initial", "source_prototype_revision": "001"}),
+        metadata=_confirmed(
+            {"task_id": "task.initial", "source_prototype_revision": "001"}
+        ),
     )
     service.transition(
         "scenario",
@@ -2830,14 +3348,18 @@ def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(
 
     assert checkpoint["delivery"]["status"] == "checkpoint"
     assert checkpoint["delivery"]["replaces_candidate_id"] == "candidate-stale"
-    assert checkpoint["delivery"]["rebase_plan"]["target_base_release"] == "recipes@0.1.1"
+    assert (
+        checkpoint["delivery"]["rebase_plan"]["target_base_release"] == "recipes@0.1.1"
+    )
 
 
 def test_archived_project_cannot_transition(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, root = workflow_project
-    (root / "prompt_state.json").write_text(json.dumps({"archived": True}), encoding="utf-8")
+    (root / "prompt_state.json").write_text(
+        json.dumps({"archived": True}), encoding="utf-8"
+    )
 
     with pytest.raises(BuilderWorkflowError, match="archived projects"):
         service.transition("scenario", "recipes", "stabilize_prototype")
@@ -2850,17 +3372,32 @@ def test_only_latest_automation_snapshot_is_retained(
 
     first = service.snapshot_current_automation("scenario", "recipes", task_id="task.1")
     first_path = Path(first["path"])
-    assert json.loads((first_path / "snapshot.json").read_text(encoding="utf-8"))["task_id"] == "task.1"
+    assert (
+        json.loads((first_path / "snapshot.json").read_text(encoding="utf-8"))[
+            "task_id"
+        ]
+        == "task.1"
+    )
 
     webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
     webui["ui"]["application"]["desktop"]["pageSchema"]["title"] = "Automated v2"
     (root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
-    second = service.snapshot_current_automation("scenario", "recipes", task_id="task.2")
+    second = service.snapshot_current_automation(
+        "scenario", "recipes", task_id="task.2"
+    )
 
     assert second["path"] == first["path"]
-    assert json.loads((first_path / "snapshot.json").read_text(encoding="utf-8"))["task_id"] == "task.2"
+    assert (
+        json.loads((first_path / "snapshot.json").read_text(encoding="utf-8"))[
+            "task_id"
+        ]
+        == "task.2"
+    )
     retained = json.loads((first_path / "webui.json").read_text(encoding="utf-8"))
-    assert retained["ui"]["application"]["desktop"]["pageSchema"]["title"] == "Automated v2"
+    assert (
+        retained["ui"]["application"]["desktop"]["pageSchema"]["title"]
+        == "Automated v2"
+    )
     assert not first_path.with_name(".automation.previous").exists()
 
 
@@ -2941,5 +3478,7 @@ def test_automation_snapshot_rejects_descriptorless_scenario_without_owned_ui(
         state_dir=tmp_path / "state",
     )
 
-    with pytest.raises(BuilderWorkflowError, match="owned components provide webui.json"):
+    with pytest.raises(
+        BuilderWorkflowError, match="owned components provide webui.json"
+    ):
         service.snapshot_current_automation("scenario", "empty")

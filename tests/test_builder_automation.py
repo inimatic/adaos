@@ -110,22 +110,38 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
     scenario.mkdir(parents=True)
     dev_skills.mkdir(parents=True)
     (scenario / "scenario.yaml").write_text(
-        yaml.safe_dump({"id": "recipes", "version": "0.1.0", "depends": []}, sort_keys=False),
+        yaml.safe_dump(
+            {"id": "recipes", "version": "0.1.0", "depends": []}, sort_keys=False
+        ),
         encoding="utf-8",
     )
-    (scenario / "webui.json").write_text(json.dumps({"schema": "adaos.webui.v1", "ui": {}}), encoding="utf-8")
+    (scenario / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {}}), encoding="utf-8"
+    )
     _write_project_manifest(tmp_path / "dev")
 
     class _DeveloperService:
         def create_skill(self, name: str, template: str | None = None):
-            source = repo_root / "src" / "adaos" / "skills_templates" / str(template or "skill_default")
+            source = (
+                repo_root
+                / "src"
+                / "adaos"
+                / "skills_templates"
+                / str(template or "skill_default")
+            )
             target = dev_skills / name
             shutil.copytree(source, target)
             _rewrite_skill_template_identity(target, name)
             return SimpleNamespace(path=target, name=name)
 
         def create_scenario(self, name: str, template: str | None = None):
-            source = repo_root / "src" / "adaos" / "scenario_templates" / str(template or "scenario_default")
+            source = (
+                repo_root
+                / "src"
+                / "adaos"
+                / "scenario_templates"
+                / str(template or "scenario_default")
+            )
             target = dev_scenarios / name
             shutil.copytree(source, target)
             return SimpleNamespace(path=target, name=name)
@@ -143,12 +159,18 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
 
     def fake_codex(*, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:  # noqa: ARG001
         handler = workspace / "skills" / "recipes_skill" / "handlers" / "main.py"
-        target = handler if handler.is_file() else workspace / "scenarios" / "recipes" / "webui.json"
+        target = (
+            handler
+            if handler.is_file()
+            else workspace / "scenarios" / "recipes" / "webui.json"
+        )
         target.write_text(
             target.read_text(encoding="utf-8") + "\n",
             encoding="utf-8",
         )
-        return CodexRunResult(returncode=0, final_message="Automation iteration completed.")
+        return CodexRunResult(
+            returncode=0, final_message="Automation iteration completed."
+        )
 
     def worker_factory() -> LocalSkillFactoryWorker:
         return LocalSkillFactoryWorker(
@@ -174,12 +196,19 @@ def _service(tmp_path: Path) -> BuilderAutomationService:
     # Automation tests start from an explicitly accepted legacy prototype.
     # Strict evidence admission is exercised separately by the workflow tests.
     service._workflow().snapshot_current_prototype("scenario", "recipes")
-    service._workflow().transition("scenario", "recipes", "stabilize_prototype",
-        metadata={"confirmed": True, "revision": "001"}, actor="test.owner")
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "stabilize_prototype",
+        metadata={"confirmed": True, "revision": "001"},
+        actor="test.owner",
+    )
     return service
 
 
-def test_automation_resolves_project_to_its_primary_component(tmp_path, monkeypatch) -> None:
+def test_automation_resolves_project_to_its_primary_component(
+    tmp_path, monkeypatch
+) -> None:
     from adaos.sdk.developer import compositions
 
     service = _service(tmp_path)
@@ -200,7 +229,9 @@ def test_automation_resolves_project_to_its_primary_component(tmp_path, monkeypa
     assert service._project_ref("project", "recipes_app") == ("scenario", "recipes")
 
 
-def test_current_workflow_head_exposes_bounded_change_message_ownership(tmp_path) -> None:
+def test_current_workflow_head_exposes_bounded_change_message_ownership(
+    tmp_path,
+) -> None:
     service = _service(tmp_path)
 
     class _Workflow:
@@ -230,7 +261,9 @@ def test_current_workflow_head_exposes_bounded_change_message_ownership(tmp_path
     assert len(head["source_message_ids"]) == 32
 
 
-def test_automation_attaches_created_components_to_project_authority(monkeypatch) -> None:
+def test_automation_attaches_created_components_to_project_authority(
+    monkeypatch,
+) -> None:
     from adaos.sdk.developer import compositions
 
     calls: list[tuple[str, str]] = []
@@ -252,7 +285,11 @@ def test_automation_attaches_created_components_to_project_authority(monkeypatch
 
     result = BuilderAutomationService._ensure_project_component_ownership(
         links={"project_ref": "project:recipes_app"},
-        component_refs=["scenario:recipes", "skill:recipes_skill", "skill:recipes_skill"],
+        component_refs=[
+            "scenario:recipes",
+            "skill:recipes_skill",
+            "skill:recipes_skill",
+        ],
     )
 
     assert calls == [
@@ -346,8 +383,9 @@ def test_completed_builder_context_restores_from_cold_service(tmp_path: Path) ->
     assert restored_control["project_ref"] == "project:recipe_suite"
     assert restored_control["plan_ref"] == control["plan_ref"]
     assert restored_control["compiled_context_ref"] == control["compiled_context_ref"]
-    assert restored_service._contexts().get_plan(control["plan_id"])["plan_ref"] == (
-        control["plan_ref"]
+    assert (
+        restored_service._contexts().get_plan(control["plan_id"])["plan_ref"]
+        == (control["plan_ref"])
     )
     assert restored_inspection == first_inspection
     assert restored_inspection["receipt_count"] == 1
@@ -378,9 +416,9 @@ def test_completed_builder_context_restores_from_cold_service(tmp_path: Path) ->
         if restored_service._contexts().get_capsule(ref)["kind"] == "project"
     )
     assert continued_project_capsule != first_project_capsule
-    assert continued_control["project_context_digest"] != control[
-        "project_context_digest"
-    ]
+    assert (
+        continued_control["project_context_digest"] != control["project_context_digest"]
+    )
     first_task_capsule = next(
         ref
         for ref in control["capsule_refs"]
@@ -393,9 +431,12 @@ def test_completed_builder_context_restores_from_cold_service(tmp_path: Path) ->
     )
     assert continued_task_capsule != first_task_capsule
     assert continued_control["run_ref"] != control["run_ref"]
-    assert restored_service._contexts().inspect(continued_control["run_ref"])[
-        "receipt_count"
-    ] == 1
+    assert (
+        restored_service._contexts().inspect(continued_control["run_ref"])[
+            "receipt_count"
+        ]
+        == 1
+    )
 
 
 def test_related_runs_reuse_project_capsule_and_isolate_task_overlay(
@@ -469,7 +510,9 @@ def test_related_runs_reuse_project_capsule_and_isolate_task_overlay(
     assert binding["revision"] == 1
 
 
-def test_session_persists_workflow_and_request_once_by_content_address(tmp_path: Path) -> None:
+def test_session_persists_workflow_and_request_once_by_content_address(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     request = {
         "schema": "adaos.skill_factory.realize_request.v1",
@@ -557,7 +600,9 @@ def test_session_persists_workflow_and_request_once_by_content_address(tmp_path:
     assert restored["task"]["result"] == result
     assert restored["task"]["provenance"] == provenance
     assert restored["last_result"] == result
-    assert restored["completion_readiness"]["workflow_checkpoint"]["workflow"] == workflow
+    assert (
+        restored["completion_readiness"]["workflow_checkpoint"]["workflow"] == workflow
+    )
 
 
 def test_compact_status_omits_private_session_payload_and_stays_bounded(
@@ -664,8 +709,13 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
         "model_projection",
     }
     assert receipt["tool_boundary_count"] == 1
-    project_capsules = service._contexts().list_capsules(subject_ref="project:recipe_suite")
-    assert project_capsules[0]["subject_refs"] == ["project:recipe_suite", "scenario:recipes"]
+    project_capsules = service._contexts().list_capsules(
+        subject_ref="project:recipe_suite"
+    )
+    assert project_capsules[0]["subject_refs"] == [
+        "project:recipe_suite",
+        "scenario:recipes",
+    ]
     compact = service.compact_session(started["session"])
     assert compact["links"]["development_ticket_project_ref"] == "project:recipe_suite"
     prompt = (
@@ -841,7 +891,9 @@ def test_explicit_context_budget_is_a_hard_limit_with_diagnostics() -> None:
     assert "omitted_required=capsule:required-task" in message
 
 
-def test_deterministic_execution_context_budget_is_independent_of_model_budget() -> None:
+def test_deterministic_execution_context_budget_is_independent_of_model_budget() -> (
+    None
+):
     execution_budget = {
         "max_model_tokens": 4_000,
         "token_budget_metric": "fresh_plus_output",
@@ -858,7 +910,9 @@ def test_deterministic_execution_context_budget_is_independent_of_model_budget()
     ) == (8_000, 8_000, True)
 
 
-def test_unqualified_dev_ticket_defaults_to_project_batch_repair(tmp_path: Path) -> None:
+def test_unqualified_dev_ticket_defaults_to_project_batch_repair(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
 
     started = service.start_from_execute(
@@ -939,9 +993,10 @@ def test_dev_ticket_repair_canonicalizes_component_relative_structured_paths(
         expected_path
     ]
     assert artifacts["repair_hints"]["target_files"] == [expected_path]
-    assert artifacts["repair_hints"]["structured_edits"]["operations"][0][
-        "path"
-    ] == expected_path
+    assert (
+        artifacts["repair_hints"]["structured_edits"]["operations"][0]["path"]
+        == expected_path
+    )
 
 
 def test_structured_edit_brief_does_not_require_external_ticket_link(
@@ -986,12 +1041,17 @@ def test_structured_edit_brief_does_not_require_external_ticket_link(
     assert task["realize_request"]["constraints"]["exact_changed_paths"] == [
         "scenarios/recipes/scenario.yaml"
     ]
-    assert task["realize_request"]["artifacts"]["repair_hints"][
-        "structured_edits"
-    ]["operations"][0]["path"] == "scenarios/recipes/scenario.yaml"
+    assert (
+        task["realize_request"]["artifacts"]["repair_hints"]["structured_edits"][
+            "operations"
+        ][0]["path"]
+        == "scenarios/recipes/scenario.yaml"
+    )
 
 
-def test_large_dev_ticket_brief_uses_bounded_workflow_projection(tmp_path: Path) -> None:
+def test_large_dev_ticket_brief_uses_bounded_workflow_projection(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     brief_payload = {
         "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
@@ -1001,9 +1061,16 @@ def test_large_dev_ticket_brief_uses_bounded_workflow_projection(tmp_path: Path)
         "component_ref": "scenario:recipes.controls",
         "repair_hints": {
             "profile": "surgical_ui",
-            "target_files": [f"scenarios/recipes/path-{index}.json" for index in range(30)],
-            "target_refs": [f"view:recipes.section-{index}.title" for index in range(30)],
-            "acceptance_checks": ["The exact heading is changed and behavior is preserved. " * 12] * 12,
+            "target_files": [
+                f"scenarios/recipes/path-{index}.json" for index in range(30)
+            ],
+            "target_refs": [
+                f"view:recipes.section-{index}.title" for index in range(30)
+            ],
+            "acceptance_checks": [
+                "The exact heading is changed and behavior is preserved. " * 12
+            ]
+            * 12,
         },
         "guardrails": ["Do not change unrelated behavior. " * 20] * 20,
     }
@@ -1029,22 +1096,36 @@ def test_large_dev_ticket_brief_uses_bounded_workflow_projection(tmp_path: Path)
     assert projected["brief_digest"].startswith("sha256:")
 
 
-def test_long_plain_brief_keeps_all_instructions_outside_bounded_scope(tmp_path: Path, monkeypatch) -> None:
+def test_long_plain_brief_keeps_all_instructions_outside_bounded_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     monkeypatch.setattr(BuilderAutomationService, "_launch_worker", lambda *args: None)
-    brief = "Implement the accepted interface.\n" + "Preserve existing behavior and verify it.\n" * 140 + "FINAL_REQUIREMENT_DO_NOT_DROP"
-    result = service.start_from_execute(object_type="scenario", object_id="recipes", implementation_brief=brief)
+    brief = (
+        "Implement the accepted interface.\n"
+        + "Preserve existing behavior and verify it.\n" * 140
+        + "FINAL_REQUIREMENT_DO_NOT_DROP"
+    )
+    result = service.start_from_execute(
+        object_type="scenario", object_id="recipes", implementation_brief=brief
+    )
     assert result["ok"]
     assert result["session"]["implementation_brief"] == brief
-    task = next(item for item in service.factory.snapshot(include_tasks=True)["tasks"]
-                if item["task_id"] == result["session"]["current_task_id"])
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == result["session"]["current_task_id"]
+    )
     request = service._contexts().get_artifact(task["realize_request_ref"])
     assert request["source"]["text"] == brief
     assert request["artifacts"]["implementation_brief"] == brief
     projected = json.loads(automation_module._workflow_request_projection(brief))
     assert len(automation_module._workflow_request_projection(brief)) < 4000
     assert projected["summary_only"] is True
-    assert projected["brief_digest"] == "sha256:" + hashlib.sha256(brief.encode()).hexdigest()
+    assert (
+        projected["brief_digest"]
+        == "sha256:" + hashlib.sha256(brief.encode()).hexdigest()
+    )
 
 
 def test_terminal_skill_candidate_runtime_release_is_exact_and_idempotent(
@@ -1239,7 +1320,9 @@ def test_candidate_runtime_release_rejects_unsafe_lifecycle_state(
         )
 
 
-def test_automation_materializes_governed_development_session_inputs(tmp_path: Path) -> None:
+def test_automation_materializes_governed_development_session_inputs(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     artifact_root = tmp_path / "admitted-artifacts"
     artifact_root.mkdir()
@@ -1342,12 +1425,20 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
     assert receipt["agent_profile"]["reasoning_effort"] == "high"
     assert receipt["artifact_inputs"][0]["path"].startswith(".adaos_context/")
     assert receipt["instruction_inputs"][0]["content_digest"] == review_digest
-    assert task["realize_request"]["links"]["development_context_digest"] == receipt["digest"]
+    assert (
+        task["realize_request"]["links"]["development_context_digest"]
+        == receipt["digest"]
+    )
     assert task["timeout_seconds"] == 7200
     assert task["max_attempts"] == 1
-    assert task["realize_request"]["artifacts"]["execution_budget"]["budget_view"] == "fixed_downstream"
+    assert (
+        task["realize_request"]["artifacts"]["execution_budget"]["budget_view"]
+        == "fixed_downstream"
+    )
     assert task["realize_request"]["artifacts"]["agent_profile"]["model"] == "gpt-5.4"
-    plan = service._contexts().get_plan(started["session"]["context_control"]["plan_id"])
+    plan = service._contexts().get_plan(
+        started["session"]["context_control"]["plan_id"]
+    )
     assert "project:recipe_program" in plan["subject_refs"]
     assert f"development-session:{session_id}" in plan["subject_refs"]
     assert "project:recipes" not in plan["subject_refs"]
@@ -1378,7 +1469,10 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
         tmp_path / "runs" / started["session"]["current_task_id"] / "input" / "task.md"
     ).read_text(encoding="utf-8")
     assert "Governed Development Session inputs" in prompt
-    assert ".adaos_context/dev_recipes_calibration/instructions/reviewed_prose.md" in prompt
+    assert (
+        ".adaos_context/dev_recipes_calibration/instructions/reviewed_prose.md"
+        in prompt
+    )
 
 
 def test_terminal_followup_rebinds_to_new_digest_verified_development_session(
@@ -1479,23 +1573,30 @@ def test_terminal_followup_rebinds_to_new_digest_verified_development_session(
     session = followed["session"]
     assert session["development_session_id"] == second_id
     assert json.loads(session["implementation_brief"])["digest"] == second_digest
-    assert session["development_session_history"][-1]["development_session_id"] == first_id
+    assert (
+        session["development_session_history"][-1]["development_session_id"] == first_id
+    )
     task = next(
         item
         for item in service.factory.snapshot(include_tasks=True)["tasks"]
         if item["task_id"] == session["current_task_id"]
     )
     assert task["realize_request"]["links"]["development_session_id"] == second_id
-    assert _realize_content_artifact(service, task, "development_context")[
-        "session_id"
-    ] == second_id
     assert (
-        json.loads(task["realize_request"]["artifacts"]["implementation_brief"])["digest"]
+        _realize_content_artifact(service, task, "development_context")["session_id"]
+        == second_id
+    )
+    assert (
+        json.loads(task["realize_request"]["artifacts"]["implementation_brief"])[
+            "digest"
+        ]
         == second_digest
     )
 
 
-def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Path) -> None:
+def test_automation_projects_declared_and_observed_execution_budget(
+    tmp_path: Path,
+) -> None:
     run_root = tmp_path / "run"
     runtime_root = run_root / "runtime"
     runtime_root.mkdir(parents=True)
@@ -1563,7 +1664,9 @@ def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Pa
     assert projected["created_at"] == "2026-08-18T00:00:00Z"
 
 
-def test_automation_budget_projection_marks_legacy_max_tokens_overrun(tmp_path: Path) -> None:
+def test_automation_budget_projection_marks_legacy_max_tokens_overrun(
+    tmp_path: Path,
+) -> None:
     run_root = tmp_path / "run"
     runtime_root = run_root / "runtime"
     runtime_root.mkdir(parents=True)
@@ -1604,7 +1707,9 @@ def test_automation_budget_projection_marks_legacy_max_tokens_overrun(tmp_path: 
     assert projected["budget_usage"]["overrun_tokens"] == 800
 
 
-def test_automation_budget_projection_uses_fresh_plus_output_metric(tmp_path: Path) -> None:
+def test_automation_budget_projection_uses_fresh_plus_output_metric(
+    tmp_path: Path,
+) -> None:
     run_root = tmp_path / "run"
     runtime_root = run_root / "runtime"
     runtime_root.mkdir(parents=True)
@@ -1654,7 +1759,9 @@ def test_automation_budget_projection_uses_fresh_plus_output_metric(tmp_path: Pa
     assert projected["budget_usage"]["billable_status"] == "within_budget"
 
 
-def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Path) -> None:
+def test_terminal_codex_usage_is_reported_once_with_provider_counts(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     contexts = service._contexts()
     capsule = contexts.register_capsule(
@@ -1696,7 +1803,8 @@ def test_terminal_codex_usage_is_reported_once_with_provider_counts(tmp_path: Pa
     runtime_root = run_root / "runtime"
     runtime_root.mkdir(parents=True)
     (runtime_root / "codex-execution-profile.json").write_text(
-        json.dumps({"model": "gpt-5.4", "model_source": "explicit_cli"}), encoding="utf-8"
+        json.dumps({"model": "gpt-5.4", "model_source": "explicit_cli"}),
+        encoding="utf-8",
     )
     journal = runtime_root / "codex-events.jsonl"
     journal.write_text(
@@ -1862,7 +1970,9 @@ def test_compact_persisted_status_retains_budget_trial_and_unique_usage(
         service._compact_status_path("skill", "demo").read_text(encoding="utf-8")
     )
 
-    assert summary["automation"]["budget_usage"]["declared"]["max_model_tokens"] == 4_000
+    assert (
+        summary["automation"]["budget_usage"]["declared"]["max_model_tokens"] == 4_000
+    )
     assert summary["automation"]["budget_usage"]["observed"]["model_tokens"] == 0
     assert summary["automation"]["budget_usage"]["status"] == "not_applicable"
     assert summary["automation"]["budget_usage"]["billable_status"] == "not_applicable"
@@ -1877,9 +1987,13 @@ def test_compact_persisted_status_retains_budget_trial_and_unique_usage(
     assert summary["session"]["usage"]["receipt_count"] == 1
 
 
-def test_terminal_codex_usage_missing_journal_is_unavailable_not_zero(tmp_path: Path) -> None:
+def test_terminal_codex_usage_missing_journal_is_unavailable_not_zero(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
-    service.codex_usage_reporter = lambda _event: pytest.fail("empty usage must not be reported")
+    service.codex_usage_reporter = lambda _event: pytest.fail(
+        "empty usage must not be reported"
+    )
     session = {
         "session_id": "automation.skill.direction",
         "object_type": "skill",
@@ -1944,7 +2058,9 @@ def test_terminal_codex_usage_marks_preserved_candidate_validation_as_exact_zero
     assert result["updated_at"]
 
 
-def test_terminal_codex_usage_marks_structured_edits_as_exact_zero(tmp_path: Path) -> None:
+def test_terminal_codex_usage_marks_structured_edits_as_exact_zero(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     calls: list[dict] = []
     service.codex_usage_reporter = lambda event: (
@@ -1987,7 +2103,9 @@ def test_terminal_codex_usage_marks_structured_edits_as_exact_zero(tmp_path: Pat
     assert calls[0]["project_id"] == "demo"
 
 
-def test_terminal_codex_usage_marks_validation_only_as_exact_zero(tmp_path: Path) -> None:
+def test_terminal_codex_usage_marks_validation_only_as_exact_zero(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     calls: list[dict] = []
     service.codex_usage_reporter = lambda event: (
@@ -2049,9 +2167,12 @@ def test_structured_edit_brief_supersedes_failed_model_continuation(
 
     assert _brief_has_structured_edits(brief) is True
     assert _brief_has_structured_edits("Implement the requested change.") is False
-    assert _brief_has_structured_edits(
-        json.dumps({"repair_hints": {"structured_edits": {"operations": []}}})
-    ) is False
+    assert (
+        _brief_has_structured_edits(
+            json.dumps({"repair_hints": {"structured_edits": {"operations": []}}})
+        )
+        is False
+    )
 
     service = _service(tmp_path)
     monkeypatch.setattr(
@@ -2059,15 +2180,40 @@ def test_structured_edit_brief_supersedes_failed_model_continuation(
         "_budget_continuation_checkpoint",
         lambda _service, _session: {"mode": "validate_preserved_candidate"},
     )
-    assert service._qualified_continuation_checkpoint(
-        {"implementation_brief": brief}
-    ) is None
+    assert (
+        service._qualified_continuation_checkpoint({"implementation_brief": brief})
+        is None
+    )
     assert service._qualified_continuation_checkpoint(
         {"implementation_brief": "Implement the requested change."}
     ) == {"mode": "validate_preserved_candidate"}
 
+    assert service._qualified_continuation_checkpoint(
+        {
+            "implementation_brief": brief,
+            "last_execution_brief": "Implement the current Applications phase.",
+        }
+    ) == {"mode": "validate_preserved_candidate"}
 
-def test_structured_edit_context_projection_keeps_authority_without_prompt_payload() -> None:
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_budget_continuation_checkpoint",
+        lambda _service, _session: {
+            "mode": "validate_preserved_candidate",
+            "reason": "validation_scope_requalified_after_guard",
+        },
+    )
+    assert service._qualified_continuation_checkpoint(
+        {"implementation_brief": brief, "last_execution_brief": brief}
+    ) == {
+        "mode": "validate_preserved_candidate",
+        "reason": "validation_scope_requalified_after_guard",
+    }
+
+
+def test_structured_edit_context_projection_keeps_authority_without_prompt_payload() -> (
+    None
+):
     brief = json.dumps(
         {
             "ticket_id": "dticket.demo",
@@ -2107,17 +2253,36 @@ def test_structured_edit_context_projection_keeps_authority_without_prompt_paylo
     assert projection["authority"]["execution_strategy"] == "structured_edits"
     assert "large_payload" not in projection
     assert len(json.dumps(projection).encode("utf-8")) < 2_000
-    assert _context_projection_brief(
-        {"implementation_brief": brief},
-        "Resume the requalified repair from its candidate.",
-    ) == brief
-    assert _context_projection_brief(
-        {"implementation_brief": "General project brief."},
-        "Apply the next iteration.",
-    ) == "Apply the next iteration."
+    assert (
+        _context_projection_brief(
+            {"implementation_brief": brief},
+            "Resume the requalified repair from its candidate.",
+        )
+        == "Resume the requalified repair from its candidate."
+    )
+    assert (
+        _context_projection_brief(
+            {"implementation_brief": "General project brief."},
+            "Apply the next iteration.",
+        )
+        == "Apply the next iteration."
+    )
 
 
-def test_validation_only_context_projection_keeps_hash_guard_without_prompt_payload() -> None:
+def test_canonical_repair_path_preserves_project_owned_paths() -> None:
+    assert (
+        automation_module._canonical_repair_path(
+            "projects/web_desktop/tests/test_contract.py",
+            kind="scenario",
+            object_id="web_desktop",
+        )
+        == "projects/web_desktop/tests/test_contract.py"
+    )
+
+
+def test_validation_only_context_projection_keeps_hash_guard_without_prompt_payload() -> (
+    None
+):
     brief = json.dumps(
         {
             "ticket_id": "dticket.validation",
@@ -2152,13 +2317,83 @@ def test_validation_only_context_projection_keeps_hash_guard_without_prompt_payl
     assert projection["repair"]["source_precondition_count"] == 1
     assert projection["repair"]["operation_count"] == 0
     assert "large_payload" not in projection
-    assert _context_projection_brief(
-        {"implementation_brief": brief},
-        "Do more work.",
-    ) == brief
+    assert (
+        _context_projection_brief(
+            {"implementation_brief": brief},
+            "Do more work.",
+        )
+        == "Do more work."
+    )
 
 
-def test_validation_only_continuation_keeps_no_model_context_semantics(
+def test_followup_does_not_replay_one_shot_structured_repair_constraints(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+    stale_brief = json.dumps(
+        {
+            "schema": "adaos.dev_ticket.autonomous_repair_brief.v1",
+            "ticket_id": "dticket.stale",
+            "repair_hints": {
+                "profile": "surgical_data",
+                "target_files": ["skills/recipes_skill/skill.yaml"],
+                "max_changed_files": 1,
+                "structured_edits": {
+                    "schema": "adaos.builder.structured_edits.v1",
+                    "operations": [
+                        {
+                            "op": "replace_text",
+                            "path": "skills/recipes_skill/skill.yaml",
+                            "old": "dependencies: []",
+                            "new": "dependencies: []",
+                            "expected_count": 1,
+                        }
+                    ],
+                },
+            },
+        }
+    )
+    session = service.get_session("scenario", "recipes")
+    assert session is not None
+    session["implementation_brief"] = stale_brief
+    session["brief_path"] = "artifact://brief/stale"
+    session["links"] = {"development_ticket_id": "dticket.stale"}
+    service._save_session(session)
+
+    instruction = "Replace prototype records with authoritative service-backed data."
+    followed = service.submit_turn(
+        text=instruction,
+        object_type="scenario",
+        object_id="recipes",
+        webspace_id="prompt-dev",
+    )
+
+    task = service.factory.read_task(followed["session"]["current_task_id"])
+    request = task["realize_request"]
+    assert request["source"]["text"] == instruction
+    assert request["artifacts"]["implementation_brief"] == instruction
+    assert request["artifacts"]["base_implementation_brief"] == stale_brief
+    assert request["artifacts"]["implementation_brief_path"] is None
+    assert request["artifacts"]["base_implementation_brief_path"] == (
+        "artifact://brief/stale"
+    )
+    assert request["artifacts"]["repair_hints"] == {
+        "source_preconditions": [],
+        "target_files": [],
+    }
+    assert "structured_edits" not in request["artifacts"]["repair_hints"]
+    assert "mode" not in request["constraints"]
+    assert "exact_changed_paths" not in request["constraints"]
+    assert task["result"]["execution_strategy"] == "codex"
+
+
+def test_validation_only_followup_does_not_reuse_one_shot_context_semantics(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
@@ -2188,7 +2423,7 @@ def test_validation_only_continuation_keeps_no_model_context_semantics(
         object_id="recipes",
         implementation_brief=brief,
         links={"development_ticket_id": "dticket.validation-continuation"},
-        execution_budget={"max_context_tokens": 8_000, "max_model_tokens": 4_000},
+        execution_budget={"max_context_tokens": 40_000, "max_model_tokens": 40_000},
     )
 
     service.submit_turn(
@@ -2199,13 +2434,13 @@ def test_validation_only_continuation_keeps_no_model_context_semantics(
 
     current = service.get_session("scenario", "recipes")
     assert current is not None
-    assert current["context_control"]["model_call_expected"] is False
+    assert current["context_control"]["model_call_expected"] is True
     assert current["context_control"]["context_budget_source"] == "explicit"
-    assert current["context_control"]["required_estimated_tokens"] < 4_000
+    assert current["context_control"]["required_estimated_tokens"] < 40_000
     task = service.factory.read_task(str(current["current_task_id"]))
     assert task["status"] == "completed"
     result = service._contexts().get_artifact(str(task["result_ref"]))
-    assert result["execution_strategy"] == "validation_only"
+    assert result["execution_strategy"] == "codex"
 
 
 def test_validation_only_budget_projection_is_not_applicable() -> None:
@@ -2246,6 +2481,16 @@ def test_validation_only_budget_projection_is_not_applicable() -> None:
             "ValueError: repair requires successful Root MCP evidence for "
             "adaos_task_root:an admitted tool on the admitted target",
             "trusted_root_mcp_validation_retry",
+        ),
+        (
+            "ValueError: large declarative manifest rewrite is not admitted for "
+            "this bounded Builder task: scenarios/demo/webui.json (+40/-200)",
+            "manifest_scope_requalified_after_guard",
+        ),
+        (
+            "ValueError: validation-only repair requires source preconditions "
+            "for every exact path",
+            "validation_scope_requalified_after_guard",
         ),
     ],
 )
@@ -2730,7 +2975,9 @@ def test_structured_mcp_retry_recovers_checkpoint_from_task_history(
     assert checkpoint["reason"] == "deterministic_validation_failure"
 
 
-@pytest.mark.parametrize("reason", ["deterministic_validation_failure", "development_feedback_requalified"])
+@pytest.mark.parametrize(
+    "reason", ["deterministic_validation_failure", "development_feedback_requalified"]
+)
 def test_project_validation_failure_preserves_candidate_for_structured_repair(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2746,7 +2993,9 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
         (run_root / "runtime" / "codex-final.md").write_text(
             '```adaos-development-feedback\n{"schema":"adaos.development_feedback_output.v1",'
             '"items":[{"category":"validation_gap","summary":"Browser not checked",'
-            '"blocking":false,"target_refs":["adaos.sdk.access.require"]}]}\n```', encoding="utf-8")
+            '"blocking":false,"target_refs":["adaos.sdk.access.require"]}]}\n```',
+            encoding="utf-8",
+        )
     continuation_contract = automation_module._continuation_contract()
     (run_root / "input" / "assignment.json").write_text(
         json.dumps(
@@ -2765,11 +3014,13 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
             "failure_history": [
                 {
                     "failure_id": "failure.validation",
-                    "stage": "development_feedback" if reason == "development_feedback_requalified" else "deterministic_validation",
+                    "stage": "development_feedback"
+                    if reason == "development_feedback_requalified"
+                    else "deterministic_validation",
                     "message": (
                         "ValueError: development feedback target_refs are invalid"
-                        if reason == "development_feedback_requalified" else
-                        "RuntimeError: Generated project validation failed: "
+                        if reason == "development_feedback_requalified"
+                        else "RuntimeError: Generated project validation failed: "
                         "skills/demo/skill.yaml: data_routes.budget_missing"
                     ),
                 }
@@ -2782,9 +3033,7 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
         lambda _run_root: True,
     )
 
-    checkpoint = service._budget_continuation_checkpoint(
-        {"current_task_id": task_id}
-    )
+    checkpoint = service._budget_continuation_checkpoint({"current_task_id": task_id})
 
     assert checkpoint is not None
     assert checkpoint["source_task_id"] == task_id
@@ -2809,13 +3058,14 @@ def test_publication_gate_reuses_related_failed_task_candidate_across_sessions(
                     "target": {"type": "skill", "id": "demo_metrics_skill"},
                     "artifacts": {"continuation_contract": continuation_contract},
                     "constraints": {
-                        "exact_changed_paths": [
-                            "skills/demo_metrics_skill/skill.yaml"
-                        ]
+                        "exact_changed_paths": ["skills/demo_metrics_skill/skill.yaml"]
                     },
                     "links": {
                         "development_ticket_id": "dticket.parent",
-                        "development_ticket_history_ids": ["dticket.user", "dticket.parent"],
+                        "development_ticket_history_ids": [
+                            "dticket.user",
+                            "dticket.parent",
+                        ],
                     },
                 }
             }
@@ -3142,13 +3392,20 @@ def test_terminal_codex_usage_reports_live_budget_estimate(tmp_path: Path) -> No
     calls: list[dict] = []
     service.codex_usage_reporter = lambda event: (
         calls.append(dict(event))
-        or {"ok": True, "duplicate": False, "event": {"event_id": "codex_usage_estimated"}}
+        or {
+            "ok": True,
+            "duplicate": False,
+            "event": {"event_id": "codex_usage_estimated"},
+        }
     )
     run_root = tmp_path / "run"
     runtime_root = run_root / "runtime"
     runtime_root.mkdir(parents=True)
     journal = runtime_root / "codex-events.jsonl"
-    journal.write_text('{"type":"item.completed","item":{"type":"command_execution"}}\n', encoding="utf-8")
+    journal.write_text(
+        '{"type":"item.completed","item":{"type":"command_execution"}}\n',
+        encoding="utf-8",
+    )
     (runtime_root / "codex-token-budget.json").write_text(
         json.dumps(
             {
@@ -3192,6 +3449,8 @@ def test_followup_turn_can_replace_bounded_execution_budget(tmp_path: Path) -> N
             "schema": "adaos.builder.execution_budget.v1",
             "source": "test.initial",
             "max_model_tokens": 120000,
+            "max_billable_tokens": 2000000,
+            "token_budget_metric": "fresh_plus_output",
             "max_wall_seconds": 1200,
         },
     )
@@ -3203,31 +3462,83 @@ def test_followup_turn_can_replace_bounded_execution_budget(tmp_path: Path) -> N
         execution_budget={
             "source": "test.continuation",
             "max_model_tokens": 200000,
+            "token_budget_metric": "fresh_plus_output",
             "max_wall_seconds": 1800,
         },
     )
 
     session = followed["session"]
     assert session["execution_budget"]["max_model_tokens"] == 200000
+    assert session["execution_budget"]["max_billable_tokens"] == 1600000
     assert session["execution_budget_history"][-1]["max_model_tokens"] == 120000
+    assert session["execution_budget_history"][-1]["max_billable_tokens"] == 2000000
     task = next(
         item
         for item in service.factory.snapshot(include_tasks=True)["tasks"]
         if item["task_id"] == session["current_task_id"]
     )
-    assert task["realize_request"]["artifacts"]["execution_budget"]["max_model_tokens"] == 200000
+    assert (
+        task["realize_request"]["artifacts"]["execution_budget"]["max_model_tokens"]
+        == 200000
+    )
+    assert (
+        task["realize_request"]["artifacts"]["execution_budget"]
+        ["max_billable_tokens"]
+        == 1600000
+    )
+    assert task["realize_request"]["artifacts"]["context_projection"]["change"][
+        "issues"
+    ] == []
+
+
+def test_followup_acceptance_uses_current_explicit_requirements(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+    )
+
+    followed = service.submit_turn(
+        text=(
+            "Validate the existing implementation.\n\n"
+            "Acceptance requirements:\n"
+            "1. Search uses the admitted provider.\n"
+            "2. Empty results remain visible.\n\n"
+            "Do not publish."
+        ),
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == followed["session"]["current_task_id"]
+    )
+    checks = task["realize_request"]["acceptance"]["checks"]
+    assert "Search uses the admitted provider." in checks
+    assert "Empty results remain visible." in checks
+    assert all("old" not in item.lower() for item in checks)
 
 
 def test_session_read_waits_for_the_same_mutation_lock_as_the_writer(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
-    from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+    from adaos.services.artifact_pipeline.storage import (
+        atomic_write_json,
+        mutation_lock,
+    )
 
     service = _service(tmp_path)
     path = service._session_path("scenario", "recipes")
     started = Event()
-    session = {"session_id": "automation.scenario.recipes", "object_type": "scenario",
-               "object_id": "recipes", "status": "failed"}
+    session = {
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "status": "failed",
+    }
 
     def read():
         started.set()
@@ -3255,9 +3566,19 @@ def test_retry_failed_reuses_governed_request_and_refreshes_prototype_acceptance
         "status": "failed",
         "prototype_acceptance": {"acceptance_id": "old"},
         "implementation_brief": "Implement the accepted recipe prototype.",
+        "current_task_id": "task.failed",
         "updated_at": "2026-09-04T00:00:00+00:00",
     }
     service._save_session(session)
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "realize_request": {
+                "artifacts": {
+                    "implementation_brief": "Implement the exact failed follow-up."
+                }
+            }
+        }
+    )
     refreshed_acceptance = {"acceptance_id": "current", "decision": "accepted"}
     monkeypatch.setattr(
         BuilderAutomationService,
@@ -3297,19 +3618,49 @@ def test_retry_failed_reuses_governed_request_and_refreshes_prototype_acceptance
     assert service.get_session("scenario", "recipes")["prototype_acceptance"] == (
         refreshed_acceptance
     )
+    assert service.get_session("scenario", "recipes")["last_execution_brief"] == (
+        "Implement the exact failed follow-up."
+    )
 
 
-@pytest.mark.parametrize("expected_id,iteration", [("other", 2), ("automation.scenario.recipes", 1),
-                                                  (None, 2), ("automation.scenario.recipes", True)])
-def test_followup_rejects_stale_or_partial_iteration_preconditions(tmp_path, monkeypatch, expected_id, iteration):
+@pytest.mark.parametrize(
+    "expected_id,iteration",
+    [
+        ("other", 2),
+        ("automation.scenario.recipes", 1),
+        (None, 2),
+        ("automation.scenario.recipes", True),
+    ],
+)
+def test_followup_rejects_stale_or_partial_iteration_preconditions(
+    tmp_path, monkeypatch, expected_id, iteration
+):
     service = _service(tmp_path)
-    service._save_session({"session_id": "automation.scenario.recipes", "object_type": "scenario",
-                          "object_id": "recipes", "status": "failed", "iteration": 2})
-    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
-    monkeypatch.setattr(BuilderAutomationService, "_submit", lambda *a, **kw: pytest.fail("must not submit"))
+    service._save_session(
+        {
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "status": "failed",
+            "iteration": 2,
+        }
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_submit",
+        lambda *a, **kw: pytest.fail("must not submit"),
+    )
     with pytest.raises(ValueError, match="expected session iteration"):
-        service.submit_turn(text="Correction", object_type="scenario", object_id="recipes",
-                            expected_session_id=expected_id, expected_iteration=iteration)
+        service.submit_turn(
+            text="Correction",
+            object_type="scenario",
+            object_id="recipes",
+            expected_session_id=expected_id,
+            expected_iteration=iteration,
+        )
     assert service.get_session("scenario", "recipes")["iteration"] == 2
 
 
@@ -3431,7 +3782,11 @@ def test_retry_after_reaccepting_same_change_reenters_automation(
     retained = service.get_session("scenario", "recipes")
     assert retained["iteration"] == 2
     assert "finalization_started_at" not in retained
-    expected_profile = {**new_profile, "provider": "openai-codex-cli"} if replace_profile else old_profile
+    expected_profile = (
+        {**new_profile, "provider": "openai-codex-cli"}
+        if replace_profile
+        else old_profile
+    )
     assert retained["agent_profile"] == expected_profile
     history = retained.get("agent_profile_history") or []
     assert len(history) == int(replace_profile)
@@ -3492,7 +3847,9 @@ def test_retry_replays_its_queued_task_without_creating_a_duplicate(
     assert launched == ["automation.scenario.recipes"]
 
 
-def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:
+def test_background_automation_launches_durable_worker_process(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     service.background = True
     monkeypatch.delenv("ADAOS_BUILDER_AUTOMATION_RESOURCE_PRIORITY", raising=False)
@@ -3531,7 +3888,9 @@ def test_background_automation_launches_durable_worker_process(tmp_path: Path, m
     assert result["repo_root"] == str(service.repo_root.resolve())
     assert result["executable"]
     assert launched[0][0][-2:] == ["--session-id", "automation.scenario.recipes"]
-    assert launched[0][1]["env"]["ADAOS_BASE_DIR"] == str(service.state_dir.parent.resolve())
+    assert launched[0][1]["env"]["ADAOS_BASE_DIR"] == str(
+        service.state_dir.parent.resolve()
+    )
     launch = json.loads(
         (
             service.state_dir
@@ -3554,7 +3913,9 @@ def test_background_automation_launches_durable_worker_process(tmp_path: Path, m
             assert launch["resource_policy"]["job_breakaway"] is True
 
 
-def test_background_automation_accepts_booting_handshake(tmp_path: Path, monkeypatch) -> None:
+def test_background_automation_accepts_booting_handshake(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     service.background = True
     worker_root = (
@@ -3589,7 +3950,9 @@ def test_background_automation_accepts_booting_handshake(tmp_path: Path, monkeyp
     assert result["booting_at"] == "2026-09-03T00:00:00+00:00"
 
 
-def test_background_automation_does_not_relaunch_active_worker(tmp_path: Path, monkeypatch) -> None:
+def test_background_automation_does_not_relaunch_active_worker(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     service.background = True
     monkeypatch.setattr(
@@ -3639,11 +4002,18 @@ def test_background_automation_rejects_worker_without_ready_handshake(
 
 def test_automation_worker_uses_background_priority_on_windows(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_BUILDER_AUTOMATION_RESOURCE_PRIORITY", raising=False)
-    monkeypatch.setattr(automation_module.subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x4000, raising=False)
+    monkeypatch.setattr(
+        automation_module.subprocess,
+        "BELOW_NORMAL_PRIORITY_CLASS",
+        0x4000,
+        raising=False,
+    )
 
-    command, creationflags, policy = automation_module._automation_worker_resource_policy(
-        ["python", "-m", "worker"],
-        platform_name="nt",
+    command, creationflags, policy = (
+        automation_module._automation_worker_resource_policy(
+            ["python", "-m", "worker"],
+            platform_name="nt",
+        )
     )
 
     assert command == ["python", "-m", "worker"]
@@ -3660,9 +4030,11 @@ def test_automation_worker_uses_nice_and_idle_io_on_linux(monkeypatch) -> None:
         lambda name: f"/usr/bin/{name}" if name in {"nice", "ionice"} else None,
     )
 
-    command, creationflags, policy = automation_module._automation_worker_resource_policy(
-        ["python", "-m", "worker"],
-        platform_name="posix",
+    command, creationflags, policy = (
+        automation_module._automation_worker_resource_policy(
+            ["python", "-m", "worker"],
+            platform_name="posix",
+        )
     )
 
     assert command == [
@@ -3681,7 +4053,9 @@ def test_automation_worker_uses_nice_and_idle_io_on_linux(monkeypatch) -> None:
     assert policy["io_priority"] == "idle"
 
 
-def test_automation_rejects_unvalidated_prototype_handoff_before_mutation(tmp_path: Path) -> None:
+def test_automation_rejects_unvalidated_prototype_handoff_before_mutation(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     with pytest.raises(ValueError, match="invalid prototype handoff"):
         service.start_from_execute(
@@ -3693,7 +4067,9 @@ def test_automation_rejects_unvalidated_prototype_handoff_before_mutation(tmp_pa
     assert service.get_session("scenario", "recipes") is None
 
 
-def test_automation_worker_executes_its_submitted_task_not_an_older_queue_item(tmp_path: Path) -> None:
+def test_automation_worker_executes_its_submitted_task_not_an_older_queue_item(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     older = service.factory.submit_realize_request(
         {
@@ -3721,7 +4097,9 @@ def test_automation_worker_executes_its_submitted_task_not_an_older_queue_item(t
     assert tasks[submitted_task_id]["status"] == "completed"
 
 
-def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_path: Path) -> None:
+def test_automation_carries_active_change_set_into_isolated_codex_request(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     service._workflow().transition(
         "scenario",
@@ -3770,7 +4148,10 @@ def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_pa
     assert packet["facets"]["execution_authority"]["phase"] == "automation"
     assert packet["facets"]["execution_authority"]["observed_phase"] == "prototype"
     assert packet["facets"]["data_policy"]["execution_mode"] == "implemented_resources"
-    assert packet["facets"]["data_policy"]["local_release_lifecycle"]["manifest_field"] == "skill.yaml:data_lifecycle"
+    assert (
+        packet["facets"]["data_policy"]["local_release_lifecycle"]["manifest_field"]
+        == "skill.yaml:data_lifecycle"
+    )
     assert started["session"]["canonical_change_id"] == "CS-recipes-store-sync"
     assert started["session"]["context_packet_digest"] == packet["digest"]
     serialized_packet = json.dumps(packet, ensure_ascii=False).lower()
@@ -3780,7 +4161,9 @@ def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_pa
         in request["acceptance"]["checks"]
     )
     workflow = service._workflow().describe("scenario", "recipes")
-    assert started["session"]["change_id"] in workflow["change_set"]["member_change_ids"]
+    assert (
+        started["session"]["change_id"] in workflow["change_set"]["member_change_ids"]
+    )
     automation_run = next(
         item
         for item in workflow["change"]["runs"]
@@ -3791,7 +4174,9 @@ def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_pa
     assert automation_run["activity"] == "automation_started"
 
 
-def test_automation_rejects_change_set_before_prototype_approval(tmp_path: Path) -> None:
+def test_automation_rejects_change_set_before_prototype_approval(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     service._workflow().transition(
         "scenario",
@@ -3889,9 +4274,7 @@ def test_dev_ticket_followup_extends_active_trial_batch(tmp_path: Path) -> None:
     )
     assert followup["lane"] == "automation"
     assert followup["source_message_ids"] == ["dticket.followup"]
-    assert started["session"]["links"]["development_ticket_ids"] == [
-        "dticket.followup"
-    ]
+    assert started["session"]["links"]["development_ticket_ids"] == ["dticket.followup"]
     assert "dticket.followup" in projected["change_set"]["source_message_ids"]
     assert projected["change_set"]["request_addenda"][-1] == (
         "Rename the visible metrics heading."
@@ -3907,7 +4290,9 @@ def test_dev_ticket_followup_extends_active_trial_batch(tmp_path: Path) -> None:
     ]
 
 
-def test_followup_recovers_stale_trial_preparation_without_candidate(tmp_path: Path) -> None:
+def test_followup_recovers_stale_trial_preparation_without_candidate(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
         object_type="scenario",
@@ -3949,7 +4334,9 @@ def test_followup_recovers_stale_trial_preparation_without_candidate(tmp_path: P
     )
     state_path = workflow._state_path("scenario", "recipes")
     persisted = json.loads(state_path.read_text(encoding="utf-8"))
-    persisted["workflow"]["delivery"]["activation_started_at"] = "2000-01-01T00:00:00+00:00"
+    persisted["workflow"]["delivery"]["activation_started_at"] = (
+        "2000-01-01T00:00:00+00:00"
+    )
     state_path.write_text(json.dumps(persisted), encoding="utf-8")
 
     result = service.start_followup_dev_ticket_repair(
@@ -4027,7 +4414,9 @@ def test_followup_does_not_interrupt_active_trial_preparation(tmp_path: Path) ->
     )
 
 
-def test_reopened_dev_ticket_adds_a_revision_to_active_trial_batch(tmp_path: Path) -> None:
+def test_reopened_dev_ticket_adds_a_revision_to_active_trial_batch(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     workflow = service._workflow()
     workflow.transition(
@@ -4102,7 +4491,9 @@ def test_reopened_dev_ticket_adds_a_revision_to_active_trial_batch(tmp_path: Pat
     assert started["session"]["current_task_id"] != "task.first"
 
 
-def test_scenario_automation_uses_project_owned_skill_as_companion(tmp_path: Path) -> None:
+def test_scenario_automation_uses_project_owned_skill_as_companion(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     _write_project_manifest(
         service.dev_scenarios_root.parent,
@@ -4149,24 +4540,24 @@ def test_accepted_literal_ui_prototype_is_validated_without_codex(
             "application": {
                 "desktop": {
                     "pageSchema": {
-                            "id": "board",
-                            "layout": {
-                                "version": 2,
-                                "pattern": "task-flow",
-                                "density": "comfortable",
-                                "contentWidth": "fluid",
-                                "scroll": "page",
-                                "regions": [
-                                    {
-                                        "id": "main",
-                                        "role": "main",
-                                        "presentation": {
-                                            "wide": "pane",
-                                            "compact": "stack",
-                                        },
-                                    }
-                                ],
-                            },
+                        "id": "board",
+                        "layout": {
+                            "version": 2,
+                            "pattern": "task-flow",
+                            "density": "comfortable",
+                            "contentWidth": "fluid",
+                            "scroll": "page",
+                            "regions": [
+                                {
+                                    "id": "main",
+                                    "role": "main",
+                                    "presentation": {
+                                        "wide": "pane",
+                                        "compact": "stack",
+                                    },
+                                }
+                            ],
+                        },
                         "widgets": [
                             {
                                 "id": "tasks",
@@ -4222,9 +4613,9 @@ def test_accepted_literal_ui_prototype_is_validated_without_codex(
     assert task["realize_request"]["constraints"]["mode"] == (
         "accepted_prototype_validation"
     )
-    assert task["realize_request"]["artifacts"]["repair_hints"][
-        "validation_only"
-    ] is True
+    assert (
+        task["realize_request"]["artifacts"]["repair_hints"]["validation_only"] is True
+    )
     assert task["result"]["execution_strategy"] == "validation_only"
     assert task["result"]["no_source_change"] is True
     assert json.loads(source.read_text(encoding="utf-8")) == webui
@@ -4281,9 +4672,15 @@ def test_writable_resource_prototype_materializes_project_owned_provider_skill(
         }
     }
     if semantic:
-        acceptance = {"prototype_resources": [{"resource_type": "prototype.entries"},
-                                              {"resource_type": "prototype.locale_dictionaries"}],
-                      "deterministic_evaluation": {"qualification": {"requirements": {"prototype_resource": True}}}}
+        acceptance = {
+            "prototype_resources": [
+                {"resource_type": "prototype.entries"},
+                {"resource_type": "prototype.locale_dictionaries"},
+            ],
+            "deterministic_evaluation": {
+                "qualification": {"requirements": {"prototype_resource": True}}
+            },
+        }
     monkeypatch.setattr(
         type(service._workflow()),
         "require_current_prototype_acceptance",
@@ -4323,17 +4720,22 @@ def test_writable_resource_prototype_materializes_project_owned_provider_skill(
     brief = "Implement the accepted writable recipe board."
     assert started["session"]["implementation_brief"] == brief
     for name in ("skill.yaml", "builder.draft.json"):
-        metadata = (service.dev_skills_root / "recipes_skill" / name).read_text(encoding="utf-8")
+        metadata = (service.dev_skills_root / "recipes_skill" / name).read_text(
+            encoding="utf-8"
+        )
         assert brief not in metadata
         assert "project:recipes" in metadata
 
 
 def test_locale_evidence_alone_does_not_require_a_resource_provider():
-    assert not BuilderAutomationService._prototype_requires_resource_provider({
-        "prototype_resources": [{"resource_type": "prototype.locale_dictionaries"}]})
+    assert not BuilderAutomationService._prototype_requires_resource_provider(
+        {"prototype_resources": [{"resource_type": "prototype.locale_dictionaries"}]}
+    )
 
 
-def test_persisted_automation_state_drops_singular_companion_alias(tmp_path: Path) -> None:
+def test_persisted_automation_state_drops_singular_companion_alias(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     session = {
         "schema": "adaos.builder.automation_session.v1",
@@ -4353,7 +4755,9 @@ def test_persisted_automation_state_drops_singular_companion_alias(tmp_path: Pat
     assert persisted["companion_skill_ids"] == []
 
 
-def test_scenario_automation_ignores_unowned_snapshot_companions(tmp_path: Path) -> None:
+def test_scenario_automation_ignores_unowned_snapshot_companions(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     snapshot = (
         service.state_dir
@@ -4437,13 +4841,11 @@ def test_scenario_automation_keeps_published_companions_outside_project_envelope
     )
     assert attachment["target_path"] == "scenarios/recipes/.builder_current_publication"
     task_prompt = (
-        tmp_path
-        / "runs"
-        / started["session"]["current_task_id"]
-        / "input"
-        / "task.md"
+        tmp_path / "runs" / started["session"]["current_task_id"] / "input" / "task.md"
     ).read_text(encoding="utf-8")
-    assert "immutable reference for established capabilities and bindings" in task_prompt
+    assert (
+        "immutable reference for established capabilities and bindings" in task_prompt
+    )
     assert "accepted Prototype, not that older publication" in task_prompt
     assert "without restoring the older UI" in task_prompt
     assert not (
@@ -4460,7 +4862,9 @@ def test_scenario_automation_keeps_installed_only_skill_outside_mutable_envelope
     workspace_skill = Path(service.workspace_service.skills_root) / "voice_chat_skill"
     workspace_skill.mkdir(parents=True)
     (workspace_skill / "skill.yaml").write_text(
-        yaml.safe_dump({"name": "voice_chat_skill", "version": "1.0.0"}, sort_keys=False),
+        yaml.safe_dump(
+            {"name": "voice_chat_skill", "version": "1.0.0"}, sort_keys=False
+        ),
         encoding="utf-8",
     )
     _write_project_manifest(
@@ -4482,7 +4886,9 @@ def test_scenario_automation_keeps_installed_only_skill_outside_mutable_envelope
     )
 
     assert started["session"]["companion_skill_ids"] == ["recipes_skill"]
-    assert task["realize_request"]["artifacts"]["companion_skill_ids"] == ["recipes_skill"]
+    assert task["realize_request"]["artifacts"]["companion_skill_ids"] == [
+        "recipes_skill"
+    ]
     assert "skills/voice_chat_skill/" not in task["forge"]["sparse_paths"]
     assert not (service.dev_skills_root / "voice_chat_skill").exists()
 
@@ -4581,7 +4987,9 @@ def test_automation_followup_rejects_transport_corrupted_text_before_iteration(
     assert current["change_id"] == started["session"]["change_id"]
 
 
-def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path) -> None:
+def test_completed_automation_routes_chat_to_next_codex_iteration(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     started = service.start_from_execute(
         object_type="scenario",
@@ -4590,7 +4998,9 @@ def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path
         webspace_id="prompt-dev",
     )
 
-    turn = service.submit_turn(text="Add filtering by cooking time.", webspace_id="prompt-dev")
+    turn = service.submit_turn(
+        text="Add filtering by cooking time.", webspace_id="prompt-dev"
+    )
 
     assert turn["handled"] is True
     assert turn["status"] == "automation_queued"
@@ -4608,7 +5018,9 @@ def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path
     assert workflow["history"][-1]["action"] == "automation_iteration_started"
 
 
-def test_completed_automation_rebinds_to_approved_successor_change(tmp_path: Path) -> None:
+def test_completed_automation_rebinds_to_approved_successor_change(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     first_change_id = "CS-recipes-initial"
     second_change_id = "CS-recipes-reviewed-repair"
@@ -4681,9 +5093,12 @@ def test_completed_automation_rebinds_to_approved_successor_change(tmp_path: Pat
     request = task["realize_request"]
     assert request["links"]["change_set_id"] == second_change_id
     assert request["links"]["canonical_change_id"] == second_change_id
-    assert _realize_content_artifact(service, task, "context_packet")["change"][
-        "change_id"
-    ] == second_change_id
+    assert (
+        _realize_content_artifact(service, task, "context_packet")["change"][
+            "change_id"
+        ]
+        == second_change_id
+    )
     assert request["artifacts"]["change_set"]["issues"][0]["issue_id"] == "input-policy"
 
 
@@ -4718,9 +5133,10 @@ def test_fresh_change_replaces_terminal_session_from_canonical_ready_state(
         change_set_id=first_change_id,
     )
     assert first["session"]["status"] == "queued"
-    assert service.status(object_type="scenario", object_id="recipes")["session"][
-        "status"
-    ] == "completed"
+    assert (
+        service.status(object_type="scenario", object_id="recipes")["session"]["status"]
+        == "completed"
+    )
     service._workflow().transition(
         "scenario",
         "recipes",
@@ -4741,7 +5157,9 @@ def test_fresh_change_replaces_terminal_session_from_canonical_ready_state(
                     "issue_id": "successor-contract",
                     "title": "Implement the accepted successor contract",
                     "lane": "automation",
-                    "acceptance_criteria": ["The successor contract passes verification."],
+                    "acceptance_criteria": [
+                        "The successor contract passes verification."
+                    ],
                 }
             ],
         },
@@ -4782,12 +5200,15 @@ def test_fresh_change_replaces_terminal_session_from_canonical_ready_state(
         "automation_completed",
         metadata={"task_id": "task.successor", "version": "0.1.2"},
     )
-    assert service._workflow().describe("scenario", "recipes")["governed"][
-        "state"
-    ] == "verification"
+    assert (
+        service._workflow().describe("scenario", "recipes")["governed"]["state"]
+        == "verification"
+    )
 
 
-def test_followup_invalidates_checkpoint_before_queueing_next_iteration(tmp_path: Path) -> None:
+def test_followup_invalidates_checkpoint_before_queueing_next_iteration(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
         object_type="scenario",
@@ -4826,7 +5247,9 @@ def test_followup_invalidates_checkpoint_before_queueing_next_iteration(tmp_path
     assert workflow["delivery"]["stale_reason"] == "automation_iteration_requested"
 
 
-def test_duplicate_queued_start_relaunches_orphaned_worker(tmp_path: Path, monkeypatch) -> None:
+def test_duplicate_queued_start_relaunches_orphaned_worker(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     session = {
         "schema": "adaos.builder.automation_session.v1",
@@ -4862,12 +5285,15 @@ def test_duplicate_queued_start_relaunches_orphaned_worker(tmp_path: Path, monke
     assert launched == ["automation.scenario.recipes"]
     assert result["session"]["conversation_id"] == "conv.builder.recipes"
     assert result["session"]["workflow_start_reconciled_at"]
-    assert service._workflow().describe("scenario", "recipes")["governed"][
-        "state"
-    ] == "automation_waiting"
+    assert (
+        service._workflow().describe("scenario", "recipes")["governed"]["state"]
+        == "automation_waiting"
+    )
 
 
-def test_followup_backfills_conversation_before_terminal_notification(tmp_path: Path, monkeypatch) -> None:
+def test_followup_backfills_conversation_before_terminal_notification(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
         object_type="scenario",
@@ -4924,8 +5350,13 @@ def test_followup_turn_clears_stale_terminal_projection(tmp_path: Path) -> None:
     assert "completion_readiness" not in turn["session"]
     assert turn["session"]["completion_history"][0]["completed_at"] == "before"
     with pytest.raises(ValueError, match="expected session iteration"):
-        service.submit_turn(text="Duplicate correction", object_type="scenario", object_id="recipes",
-                            expected_session_id=previous["session_id"], expected_iteration=previous["iteration"])
+        service.submit_turn(
+            text="Duplicate correction",
+            object_type="scenario",
+            object_id="recipes",
+            expected_session_id=previous["session_id"],
+            expected_iteration=previous["iteration"],
+        )
 
 
 def test_automation_projection_is_render_safe_and_abi_valid(tmp_path: Path) -> None:
@@ -4952,7 +5383,13 @@ def test_automation_projection_is_render_safe_and_abi_valid(tmp_path: Path) -> N
     assert projection["result_branch"] == result["session"]["last_result"]["branch"]
     assert projection["steps"][-1]["state"] == "completed"
 
-    schema_path = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi" / "builder.automation_projection.v1.schema.json"
+    schema_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "adaos"
+        / "abi"
+        / "builder.automation_projection.v1.schema.json"
+    )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     Draft202012Validator(schema).validate(projection)
 
@@ -4965,7 +5402,9 @@ def test_empty_projection_disables_automation_input() -> None:
     assert projection["project"] is None
 
 
-def test_failed_projection_exposes_actionable_diagnostics_and_retry(tmp_path: Path) -> None:
+def test_failed_projection_exposes_actionable_diagnostics_and_retry(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     session = {
         "session_id": "automation.scenario.builder",
@@ -5000,7 +5439,9 @@ def test_failed_projection_exposes_actionable_diagnostics_and_retry(tmp_path: Pa
     assert all("_path" not in key for key in projection["evidence"])
 
 
-def test_projection_event_is_not_reemitted_for_unchanged_status_reads(tmp_path: Path) -> None:
+def test_projection_event_is_not_reemitted_for_unchanged_status_reads(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     events: list[dict] = []
     service.event_sink = lambda payload: events.append(dict(payload))
@@ -5098,7 +5539,9 @@ def test_refresh_recovers_terminal_orphan_once_and_finalizes_without_rerunning_c
         completed.pop("finalizing_task_id", None)
         _service._save_session(completed)
 
-    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
 
     refreshed = service.refresh_session(session)
 
@@ -5150,7 +5593,9 @@ def test_refresh_resumes_detached_completed_task_finalization(
         completed.pop("finalizing_task_id", None)
         _service._save_session(completed)
 
-    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
 
     refreshed = service.refresh_session(session)
 
@@ -5210,7 +5655,9 @@ def test_refresh_defers_finalization_while_detached_worker_owner_is_active(
     monkeypatch.setattr(
         LocalSkillFactoryWorker,
         "_process_owner_is_active",
-        staticmethod(lambda value: value["pid"] == 4242 and value["create_time"] == 1234.5),
+        staticmethod(
+            lambda value: value["pid"] == 4242 and value["create_time"] == 1234.5
+        ),
     )
     finalized: list[dict] = []
     monkeypatch.setattr(
@@ -5276,7 +5723,9 @@ def test_refresh_never_projects_factory_completion_as_terminal_before_finalizati
     assert projection["busy"] is True
 
 
-def test_projection_backfills_missing_conversation_before_notification(tmp_path: Path, monkeypatch) -> None:
+def test_projection_backfills_missing_conversation_before_notification(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
         object_type="scenario",
@@ -5301,7 +5750,10 @@ def test_projection_backfills_missing_conversation_before_notification(tmp_path:
 
     assert result["ok"] is True
     assert notified == ["conv.builder.recipes"]
-    assert service.get_session("scenario", "recipes")["conversation_id"] == "conv.builder.recipes"
+    assert (
+        service.get_session("scenario", "recipes")["conversation_id"]
+        == "conv.builder.recipes"
+    )
 
 
 def test_refresh_preserves_finalization_progress_after_worker_completion(
@@ -5379,7 +5831,9 @@ def test_finalization_stage_projects_durable_substage_and_heartbeat(
     assert persisted["progress"]["stage"] == "activation"
     assert persisted["progress"]["heartbeat"] >= 1
     assert persisted["completion_readiness"]["stage"] == "activation"
-    assert any((event.get("progress") or {}).get("heartbeat", 0) >= 1 for event in events)
+    assert any(
+        (event.get("progress") or {}).get("heartbeat", 0) >= 1 for event in events
+    )
 
 
 def test_refresh_preserves_terminal_orchestration_progress_after_worker_completion(
@@ -5391,9 +5845,7 @@ def test_refresh_preserves_terminal_orchestration_progress_after_worker_completi
             "task_id": "task.1",
             "status": "completed",
             "updated_at": "2026-07-18T00:00:00+00:00",
-            "progress": [
-                {"status": "commit_ready", "message": "worker commit"}
-            ],
+            "progress": [{"status": "commit_ready", "message": "worker commit"}],
         }
     )
 
@@ -5422,7 +5874,10 @@ def test_refresh_preserves_terminal_orchestration_progress_after_worker_completi
 
     assert refreshed["status"] == "completed"
     assert refreshed["progress"]["status"] == "completed"
-    assert refreshed["progress"]["message"] == "Automation result activated and checkpointed"
+    assert (
+        refreshed["progress"]["message"]
+        == "Automation result activated and checkpointed"
+    )
     assert refreshed["updated_at"] == "2026-07-18T00:01:00+00:00"
 
 
@@ -5450,9 +5905,7 @@ def test_session_store_rejects_stale_commit_ready_after_terminal_readiness(
             "ok": True,
             "task_id": "task.1",
             "completed_at": "2026-08-18T02:40:45+00:00",
-            "vcs_checkpoints": [
-                {"ok": True, "kind": "scenario", "name": "recipes"}
-            ],
+            "vcs_checkpoints": [{"ok": True, "kind": "scenario", "name": "recipes"}],
         },
     }
     completed.pop("finalizing_task_id")
@@ -5467,7 +5920,9 @@ def test_session_store_rejects_stale_commit_ready_after_terminal_readiness(
     assert stale_projection["status"] == "completed"
 
 
-def test_session_store_allows_first_finalization_of_validated_task(tmp_path: Path) -> None:
+def test_session_store_allows_first_finalization_of_validated_task(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     validated = {
         "schema": "adaos.builder.automation_session.v1",
@@ -5496,7 +5951,9 @@ def test_session_store_allows_first_finalization_of_validated_task(tmp_path: Pat
     assert persisted["finalizing_task_id"] == "task.1"
 
 
-def test_refresh_reconciles_legacy_false_positive_checkpoint_completion(tmp_path: Path) -> None:
+def test_refresh_reconciles_legacy_false_positive_checkpoint_completion(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     service.factory = SimpleNamespace(
         read_task=lambda _task_id: {
@@ -5529,7 +5986,9 @@ def test_refresh_reconciles_legacy_false_positive_checkpoint_completion(tmp_path
     assert refreshed["last_failure"]["stage"] == "forge_checkpoint"
 
 
-def test_refresh_reconciles_completed_task_with_failed_live_readiness(tmp_path: Path) -> None:
+def test_refresh_reconciles_completed_task_with_failed_live_readiness(
+    tmp_path: Path,
+) -> None:
     service = _service(tmp_path)
     service.factory = SimpleNamespace(
         read_task=lambda _task_id: {
@@ -5551,7 +6010,9 @@ def test_refresh_reconciles_completed_task_with_failed_live_readiness(tmp_path: 
                 "ok": False,
                 "task_id": "task.1",
                 "error": "ValueError: automation Preview is not available",
-                "vcs_checkpoints": [{"ok": True, "kind": "scenario", "name": "recipes"}],
+                "vcs_checkpoints": [
+                    {"ok": True, "kind": "scenario", "name": "recipes"}
+                ],
             },
         }
     )
@@ -5562,7 +6023,9 @@ def test_refresh_reconciles_completed_task_with_failed_live_readiness(tmp_path: 
     assert "Preview is not available" in refreshed["last_failure"]["message"]
 
 
-def test_completed_session_publishes_one_terminal_chat_message(tmp_path: Path, monkeypatch) -> None:
+def test_completed_session_publishes_one_terminal_chat_message(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     published: list[dict] = []
     events: list[object] = []
@@ -5577,7 +6040,8 @@ def test_completed_session_publishes_one_terminal_chat_message(tmp_path: Path, m
     )
     monkeypatch.setattr(
         "adaos.services.conversation_response.materialize_response",
-        lambda response, **kwargs: published.append({"response": response, **kwargs}) or {"ok": True},
+        lambda response, **kwargs: published.append({"response": response, **kwargs})
+        or {"ok": True},
     )
     session = {
         "schema": "adaos.builder.automation_session.v1",
@@ -5596,14 +6060,19 @@ def test_completed_session_publishes_one_terminal_chat_message(tmp_path: Path, m
     assert len(published) == 1
     assert "Builder завершил доработку recipes" in published[0]["response"]["message"]
     assert published[0]["thread_id"] == "prompt-project:scenario:recipes"
-    assert published[0]["meta"]["response_idempotency_key"] == "builder-automation:completed:task.1"
+    assert (
+        published[0]["meta"]["response_idempotency_key"]
+        == "builder-automation:completed:task.1"
+    )
     assert len(events) == 1
     assert events[0].type == "ui.notify"
     assert events[0].payload["_meta"]["notification_scope"] == "subnet"
     assert second["completion_notified_task_id"] == "task.1"
 
 
-def test_started_session_broadcasts_once_without_conversation(tmp_path: Path, monkeypatch) -> None:
+def test_started_session_broadcasts_once_without_conversation(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     events: list[object] = []
 
@@ -5635,7 +6104,9 @@ def test_started_session_broadcasts_once_without_conversation(tmp_path: Path, mo
     assert second["started_notified_task_id"] == "task.start.1"
 
 
-def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, monkeypatch) -> None:
+def test_finalize_prepares_materialized_runtime_then_notifies(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     service.materialize_on_completion = True
     calls: list[str] = []
@@ -5662,7 +6133,7 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
                 "commit": "forge-1",
                 "package_digest": "sha256:" + "1" * 64,
                 "source_revision": "forge-1",
-            }
+            },
         ],
     )
     monkeypatch.setattr(
@@ -5684,6 +6155,21 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
         def __init__(self, **kwargs):  # noqa: ARG002
             pass
 
+        def get_workspace_binding(self, source_webspace_id):  # noqa: ARG002
+            return {
+                "preview_target": {
+                    "object_type": "scenario",
+                        "object_id": "recipes",
+                        "stage": "automation",
+                        "revision": "task.previous",
+                        "follow_active": False,
+                }
+            }
+
+        def set_preview_target(self, **kwargs):  # noqa: ANN003
+            calls.append(f"pin:{kwargs['target']['revision']}")
+            return {"preview_target": kwargs["target"]}
+
         async def ensure_dev_webspace(self, source_webspace_id, **kwargs):  # noqa: ARG002
             calls.append("ensure")
             return {
@@ -5696,9 +6182,15 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
             calls.append("browser_feedback")
             return {"ok": True, "status": "passed", "task_id": kwargs["task_id"]}
 
-    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
     service.browser_feedback_service = FakeBrowserFeedback()
-    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_notify_completed_session",
@@ -5720,21 +6212,33 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
 
     assert calls == [
         "activate:recipes_skill:candidate:True",
+        "pin:task.1",
         "ensure",
         "browser_feedback",
         "checkpoint",
         "activate:recipes_skill:0.1.1:False",
         "notify",
-    ]
+    ], saved[-1].get("last_failure")
     assert saved[-1]["completion_readiness"]["ok"] is True
-    assert saved[-1]["completion_readiness"]["materialization"]["preview_webspace_id"] == "desktop-dev"
+    assert (
+        saved[-1]["completion_readiness"]["materialization"]["preview_webspace_id"]
+        == "desktop-dev"
+    )
     assert saved[-1]["completion_readiness"]["task_id"] == "task.1"
-    assert saved[-1]["completion_readiness"]["vcs_checkpoints"][1]["commit"] == "forge-1"
-    assert saved[-1]["completion_readiness"]["candidate_skills"][0]["version"] == "0.1.0"
-    assert saved[-1]["completion_readiness"]["checkpoint_skills"][0]["version"] == "0.1.1"
+    assert (
+        saved[-1]["completion_readiness"]["vcs_checkpoints"][1]["commit"] == "forge-1"
+    )
+    assert (
+        saved[-1]["completion_readiness"]["candidate_skills"][0]["version"] == "0.1.0"
+    )
+    assert (
+        saved[-1]["completion_readiness"]["checkpoint_skills"][0]["version"] == "0.1.1"
+    )
     assert saved[-1]["completion_readiness"]["skills"][0]["version"] == "0.1.1"
     assert (
-        saved[-1]["completion_readiness"]["workflow_checkpoint"]["workflow"]["delivery"]["status"]
+        saved[-1]["completion_readiness"]["workflow_checkpoint"]["workflow"][
+            "delivery"
+        ]["status"]
         == "checkpoint"
     )
     assert saved[-1]["status"] == "completed"
@@ -5807,8 +6311,14 @@ def test_finalize_activates_isolated_trial_after_checkpoint(
                 "runtime": {"ok": True, "webspace_id": "desktop-dev"},
             }
 
-    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
-    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_notify_completed_session",
@@ -5944,13 +6454,9 @@ def test_project_composition_checkpoint_rejects_foreign_component(
         service._ensure_project_composition_checkpoint(
             {
                 "change_id": "builder_change.demo",
-                "links": {
-                    "development_ticket_project_ref": "project:recipes_project"
-                },
+                "links": {"development_ticket_project_ref": "project:recipes_project"},
             },
-            checkpoints=[
-                {"ok": True, "kind": "skill", "name": "foreign_skill"}
-            ],
+            checkpoints=[{"ok": True, "kind": "skill", "name": "foreign_skill"}],
         )
 
 
@@ -6335,9 +6841,7 @@ def test_project_trial_idempotency_includes_composition_identity(
         checkpoint_epoch="2026-09-02T12:00:00+00:00",
     )
 
-    assert key.startswith(
-        "dev-ticket-trial:task.demo:bbbbbbbbbbbbbbbbbbbbbbbb:epoch:"
-    )
+    assert key.startswith("dev-ticket-trial:task.demo:bbbbbbbbbbbbbbbbbbbbbbbb:epoch:")
     assert key.endswith(":project:aaaaaaaaaaaaaaaaaaaaaaaa")
 
 
@@ -6626,7 +7130,12 @@ def test_completed_session_reconciles_retryable_component_update_projection(
     assert aprobation["component_update"]["notice_id"] == "cupdate.demo"
     assert aprobation["component_update_projection"]["ok"] is True
     persisted = service.get_session("skill", "demo_metrics_skill")
-    assert persisted["completion_readiness"]["aprobation"]["component_update_projection"]["ok"] is True
+    assert (
+        persisted["completion_readiness"]["aprobation"]["component_update_projection"][
+            "ok"
+        ]
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -6682,7 +7191,9 @@ def test_aprobation_decision_rejects_stale_reviewed_candidate(
     monkeypatch.setattr(
         lifecycle,
         "decide_trial",
-        lambda *args, **kwargs: pytest.fail("stale decisions must have no side effects"),
+        lambda *args, **kwargs: pytest.fail(
+            "stale decisions must have no side effects"
+        ),
     )
 
     with pytest.raises(ValueError, match=message):
@@ -6823,11 +7334,17 @@ def test_accepting_aprobation_publishes_and_closes_resolved_ticket(
     assert result["decision"] == "accept"
     assert calls == ["publish", "project"]
     assert result["tickets"][0]["status"] == "closed"
-    assert result["closed_publication_gate_failures"][0]["ticket_id"] == gate_failure["ticket_id"]
+    assert (
+        result["closed_publication_gate_failures"][0]["ticket_id"]
+        == gate_failure["ticket_id"]
+    )
     assert result["closed_publication_gate_failures"][0]["status"] == "closed"
     assert tickets.get_ticket(ticket["ticket_id"])["verification"]["kind"] == "verified"
     persisted = service.get_session("skill", "demo_metrics_skill")
-    assert persisted["completion_readiness"]["aprobation"]["trial"]["status"] == "published"
+    assert (
+        persisted["completion_readiness"]["aprobation"]["trial"]["status"]
+        == "published"
+    )
 
 
 def test_accepting_aprobation_resumes_an_already_accepted_unknown_publication(
@@ -7167,8 +7684,9 @@ def test_revising_aprobation_rolls_back_and_reopens_ticket(
     assert result["tickets"][0]["comments"][-1]["body"] == (
         "Refresh must stay visible on a narrow screen."
     )
-    assert result["reopened_publication_gate_failures"][0]["ticket_id"] == (
-        gate_failure["ticket_id"]
+    assert (
+        result["reopened_publication_gate_failures"][0]["ticket_id"]
+        == (gate_failure["ticket_id"])
     )
     assert tickets.get_ticket(gate_failure["ticket_id"])["status"] == "accepted"
     feedback = DevelopmentFeedbackService(state_dir=service.state_dir).list(
@@ -7196,9 +7714,10 @@ def test_revising_aprobation_rolls_back_and_reopens_ticket(
         for item in result["tickets"][0]["evidence_refs"]
     )
     persisted = service.get_session("skill", "demo_metrics_skill")
-    assert persisted["completion_readiness"]["aprobation"][
-        "development_feedback_ref"
-    ] == feedback[0]["feedback_id"]
+    assert (
+        persisted["completion_readiness"]["aprobation"]["development_feedback_ref"]
+        == feedback[0]["feedback_id"]
+    )
 
 
 def test_aprobation_trial_requires_exact_isolated_activation() -> None:
@@ -7336,9 +7855,10 @@ def test_completed_workflow_reconciliation_backfills_aprobation_trial(
     )
 
     assert reconciled["completion_readiness"]["aprobation"]["ok"] is True
-    assert reconciled["completion_readiness"]["project_composition_checkpoint"][
-        "version"
-    ] == "0.4.2"
+    assert (
+        reconciled["completion_readiness"]["project_composition_checkpoint"]["version"]
+        == "0.4.2"
+    )
     assert saved[-1]["status"] == "completed"
     assert saved[-1]["updated_at"] != "2026-08-31T12:00:00+00:00"
 
@@ -7380,7 +7900,9 @@ def test_completed_trial_reconciliation_recovers_missing_trial_receipt(
     monkeypatch.setattr(
         BuilderAutomationService,
         "_ensure_project_composition_checkpoint",
-        lambda *args, **kwargs: pytest.fail("an existing Trial must not create a new Project checkpoint"),
+        lambda *args, **kwargs: pytest.fail(
+            "an existing Trial must not create a new Project checkpoint"
+        ),
     )
 
     def project_trial(self, session, receipt, **kwargs):  # noqa: ARG001
@@ -7450,9 +7972,10 @@ def test_completed_trial_reconciliation_recovers_missing_trial_receipt(
     assert reconciled["completion_readiness"]["workflow_reconciliation"]["status"] == (
         "existing_trial_workspace_recovered"
     )
-    assert reconciled["completion_readiness"]["workflow_reconciliation"][
-        "candidate_id"
-    ] == candidate_id
+    assert (
+        reconciled["completion_readiness"]["workflow_reconciliation"]["candidate_id"]
+        == candidate_id
+    )
     assert saved[-1]["status"] == "completed"
 
 
@@ -7690,8 +8213,12 @@ def test_failed_worker_synchronizes_linked_dev_ticket(
         "refresh_session",
         lambda self, session: dict(failed),
     )
-    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: None)
-    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService, "_save_session", lambda self, value: None
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService, "_workflow", lambda self: FakeWorkflow()
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_sync_linked_development_ticket_tasks",
@@ -7723,10 +8250,17 @@ def test_failed_worker_synchronizes_linked_dev_ticket(
 
 
 @pytest.mark.parametrize("status", ["cancelled", "expired"])
-def test_terminal_worker_releases_workflow_without_publication_failure(tmp_path, monkeypatch, status):
+def test_terminal_worker_releases_workflow_without_publication_failure(
+    tmp_path, monkeypatch, status
+):
     service = _service(tmp_path)
-    session = {"session_id": "automation.skill.demo_metrics_skill", "object_type": "skill",
-               "object_id": "demo_metrics_skill", "status": status, "current_task_id": "task.stopped"}
+    session = {
+        "session_id": "automation.skill.demo_metrics_skill",
+        "object_type": "skill",
+        "object_id": "demo_metrics_skill",
+        "status": status,
+        "current_task_id": "task.stopped",
+    }
     transitions, synced = [], []
 
     class Worker:
@@ -7738,14 +8272,24 @@ def test_terminal_worker_releases_workflow_without_publication_failure(tmp_path,
             transitions.append((args, kwargs))
 
     service.worker_factory = Worker
-    monkeypatch.setattr(BuilderAutomationService, "_find_session_by_id", lambda *a: dict(session))
-    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda *a: dict(session))
+    monkeypatch.setattr(
+        BuilderAutomationService, "_find_session_by_id", lambda *a: dict(session)
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda *a: dict(session)
+    )
     monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda *a: None)
     monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda *a: Workflow())
-    monkeypatch.setattr(BuilderAutomationService, "_capture_worker_publication_gate_failure",
-                        lambda *a: pytest.fail("Cancellation is not a publication defect"))
-    monkeypatch.setattr(BuilderAutomationService, "_sync_linked_development_ticket_tasks",
-                        lambda self, value: synced.append(value) or value)
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_capture_worker_publication_gate_failure",
+        lambda *a: pytest.fail("Cancellation is not a publication defect"),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_sync_linked_development_ticket_tasks",
+        lambda self, value: synced.append(value) or value,
+    )
     service._run_worker(session["session_id"])
     assert len(transitions) == 1
     assert transitions[0][0][-1] == "automation_failed"
@@ -7799,8 +8343,12 @@ def test_worker_crash_fails_factory_task_and_synchronizes_ticket(
         "refresh_session",
         lambda self, value: dict(session),
     )
-    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: None)
-    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService, "_save_session", lambda self, value: None
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService, "_workflow", lambda self: FakeWorkflow()
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_sync_linked_development_ticket_tasks",
@@ -7847,7 +8395,9 @@ def test_finalize_reconciles_exact_canonical_checkpoint_without_replay(
                 },
             }
 
-    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService, "_workflow", lambda self: FakeWorkflow()
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_checkpoint_completed_artifacts",
@@ -7908,7 +8458,9 @@ def test_finalize_reenters_failed_workflow_for_checkpoint_reconciliation(
             transitions.append((event, dict(kwargs.get("metadata") or {})))
             return {"workflow": {"delivery": {"status": "checkpoint"}}}
 
-    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService, "_workflow", lambda self: FakeWorkflow()
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_checkpoint_completed_artifacts",
@@ -7929,9 +8481,19 @@ def test_finalize_reenters_failed_workflow_for_checkpoint_reconciliation(
         "_prepare_and_activate_dev_skill",
         lambda self, skill_id, **kwargs: {"ok": True, "id": skill_id},
     )
-    monkeypatch.setattr(BuilderAutomationService, "_project_version", lambda *args: "0.1.1")
-    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
-    monkeypatch.setattr(BuilderAutomationService, "_notify_completed_session", lambda self, value: dict(value))
+    monkeypatch.setattr(
+        BuilderAutomationService, "_project_version", lambda *args: "0.1.1"
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_notify_completed_session",
+        lambda self, value: dict(value),
+    )
 
     service._finalize_completed_session(
         {
@@ -8018,15 +8580,27 @@ def test_finalize_follows_completed_automation_only_when_preview_choice_is_uncha
         def transition(self, *args, **kwargs):  # noqa: ARG002
             return {"delivery": {"status": "checkpoint"}}
 
-    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
     monkeypatch.setattr(
         "adaos.sdk.builder.preview.select_target",
         lambda *args, **kwargs: preview_calls.append(dict(kwargs))
         or {"ok": True, "preview_webspace_id": "desktop-dev"},
     )
-    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
-    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
-    monkeypatch.setattr(BuilderAutomationService, "_notify_completed_session", lambda self, value: dict(value))
+    monkeypatch.setattr(
+        BuilderAutomationService, "_workflow", lambda self: FakeWorkflow()
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_notify_completed_session",
+        lambda self, value: dict(value),
+    )
 
     service._finalize_completed_session(
         {
@@ -8048,7 +8622,10 @@ def test_finalize_follows_completed_automation_only_when_preview_choice_is_uncha
     if preview_calls:
         assert preview_calls[0]["stage"] == "automation"
         assert preview_calls[0]["follow_active"] is True
-    assert saved[-1]["completion_readiness"]["preview_transition"]["status"] == expected_transition
+    assert (
+        saved[-1]["completion_readiness"]["preview_transition"]["status"]
+        == expected_transition
+    )
     assert saved[-1]["status"] == "completed"
 
 
@@ -8108,12 +8685,16 @@ def test_finalize_preserves_checkpoint_when_builder_host_becomes_inactive(
         def transition(self, *args, **kwargs):  # noqa: ARG002
             return {"workflow": {"delivery": {"status": "checkpoint"}}}
 
-    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
     monkeypatch.setattr(
         "adaos.sdk.builder.preview.select_target",
         lambda *args, **kwargs: preview_calls.append(dict(kwargs)) or {"ok": True},
     )
-    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService, "_workflow", lambda self: FakeWorkflow()
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_save_session",
@@ -8177,7 +8758,20 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
             pass
 
         def get_workspace_binding(self, source_webspace_id):  # noqa: ARG002
-            return {"preview_webspace_id": "desktop-dev"}
+            return {
+                "preview_webspace_id": "desktop-dev",
+                "preview_target": {
+                    "object_type": "scenario",
+                    "object_id": "recipes",
+                    "stage": "automation",
+                    "revision": "task.previous",
+                    "follow_active": True,
+                },
+            }
+
+        def set_preview_target(self, **kwargs):  # noqa: ANN003
+            calls.append(f"pin:{kwargs['target']['revision']}")
+            return {"preview_target": kwargs["target"]}
 
         def resolve_builder_context(self, source_webspace_id):  # noqa: ARG002
             raise ValueError("Builder is not active in Webspace 'desktop'")
@@ -8208,7 +8802,9 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
         "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
     )
     service.browser_feedback_service = FakeBrowserFeedback()
-    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService, "_workflow", lambda self: FakeWorkflow()
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_save_session",
@@ -8233,9 +8829,43 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
     )
 
     readiness = saved[-1]["completion_readiness"]
-    assert calls == ["materialize", "browser_feedback"]
+    assert calls == ["pin:task.1", "materialize", "browser_feedback"]
     assert readiness["browser_feedback"]["status"] == "passed"
     assert readiness["materialization"]["source"] == "candidate_browser_feedback"
+
+
+def test_browser_feedback_timeout_is_not_sent_to_codex_repair() -> None:
+    assert (
+        BuilderAutomationService._browser_feedback_is_repairable(
+            {
+                "ok": False,
+                "timed_out": True,
+                "exit_code": 124,
+                "report": {
+                    "passed": False,
+                    "samples": [],
+                    "failure": "browser_feedback_timeout",
+                },
+            }
+        )
+        is False
+    )
+    assert (
+        BuilderAutomationService._browser_feedback_is_repairable(
+            {
+                "ok": False,
+                "timed_out": False,
+                "exit_code": 1,
+                "report": {
+                    "passed": False,
+                    "samples": [
+                        {"layout": "compact", "hard_failures": ["horizontal overflow"]}
+                    ],
+                },
+            }
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -8263,9 +8893,15 @@ def test_finalize_records_live_readiness_failure_without_success_chat(
     monkeypatch.setattr(
         BuilderAutomationService,
         "_prepare_and_activate_dev_skill",
-        lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError(failure_message)),
+        lambda self, *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError(failure_message)
+        ),
     )
-    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_notify_completed_session",
@@ -8341,9 +8977,13 @@ def test_prepare_dev_runtime_runs_slot_shaped_tests_before_activation(
     monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: fake_ctx)
     monkeypatch.setattr("adaos.adapters.db.SqliteSkillRegistry", lambda sql: object())
     monkeypatch.setattr("adaos.services.skill.manager.SkillManager", FakeManager)
-    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
 
-    result = service._prepare_and_activate_dev_skill("research_skill", webspace_id="builder")
+    result = service._prepare_and_activate_dev_skill(
+        "research_skill", webspace_id="builder"
+    )
 
     assert result["ok"] is True
     assert calls == [
@@ -8361,6 +9001,7 @@ def test_finalize_stops_before_checkpoint_when_consumer_acceptance_fails(
     service = _service(tmp_path)
     saved: list[dict] = []
     checkpoints: list[str] = []
+
     class FakeWorkflow:
         def snapshot_current_automation(self, *args, **kwargs):  # noqa: ARG002
             return {"path": "automation/task.1"}
@@ -8368,11 +9009,17 @@ def test_finalize_stops_before_checkpoint_when_consumer_acceptance_fails(
         def transition(self, *args, **kwargs):  # noqa: ARG002
             return {"ok": True}
 
-    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService, "_workflow", lambda self: FakeWorkflow()
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_prepare_and_activate_dev_skill",
-        lambda self, skill_id, **kwargs: {"ok": True, "id": skill_id, "version": "0.1.0"},
+        lambda self, skill_id, **kwargs: {
+            "ok": True,
+            "id": skill_id,
+            "version": "0.1.0",
+        },
     )
     monkeypatch.setattr(
         BuilderAutomationService,
@@ -8533,7 +9180,9 @@ def test_finalize_compensates_failed_follow_active_preview_after_workflow_comple
             transitions.append(event)
             return {"active_phase": "automation"}
 
-    monkeypatch.setattr("adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench)
+    monkeypatch.setattr(
+        "adaos.services.builder.workbench.BuilderWorkbenchService", FakeWorkbench
+    )
     monkeypatch.setattr(
         "adaos.sdk.builder.preview.select_target",
         lambda *args, **kwargs: {  # noqa: ARG005
@@ -8542,8 +9191,14 @@ def test_finalize_compensates_failed_follow_active_preview_after_workflow_comple
             "error_detail": "ValueError: invalid runtime projection",
         },
     )
-    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
-    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        BuilderAutomationService, "_workflow", lambda self: FakeWorkflow()
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_notify_completed_session",
@@ -8563,13 +9218,18 @@ def test_finalize_compensates_failed_follow_active_preview_after_workflow_comple
 
     assert saved[-1]["status"] == "failed"
     assert saved[-1]["completion_readiness"]["ok"] is False
-    assert saved[-1]["completion_readiness"]["materialization"]["error"] == "webspace_rebuild_failed"
+    assert (
+        saved[-1]["completion_readiness"]["materialization"]["error"]
+        == "webspace_rebuild_failed"
+    )
     assert "invalid runtime projection" in saved[-1]["last_failure"]["message"]
     assert transitions == ["automation_completed", "automation_failed"]
     assert notified == []
 
 
-def test_finalize_fails_when_forge_checkpoint_is_not_confirmed(tmp_path: Path, monkeypatch) -> None:
+def test_finalize_fails_when_forge_checkpoint_is_not_confirmed(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     monkeypatch.setenv("ADAOS_BUILDER_BROWSER_FEEDBACK", "0")
     saved: list[dict] = []
@@ -8586,7 +9246,11 @@ def test_finalize_fails_when_forge_checkpoint_is_not_confirmed(tmp_path: Path, m
         "_prepare_and_activate_dev_skill",
         lambda self, skill_id, **kwargs: activations.append(skill_id) or {"ok": True},
     )
-    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_save_session",
+        lambda self, value: saved.append(dict(value)),
+    )
 
     service._finalize_completed_session(
         {
@@ -8606,7 +9270,9 @@ def test_finalize_fails_when_forge_checkpoint_is_not_confirmed(tmp_path: Path, m
     assert activations == ["recipes_skill"]
 
 
-def test_explicit_checkpoint_reconciliation_does_not_rerun_codex(tmp_path: Path, monkeypatch) -> None:
+def test_explicit_checkpoint_reconciliation_does_not_rerun_codex(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
         object_type="scenario",
@@ -8622,7 +9288,12 @@ def test_explicit_checkpoint_reconciliation_does_not_rerun_codex(tmp_path: Path,
         "ok": False,
         "task_id": failed["current_task_id"],
         "vcs_checkpoints": [
-            {"ok": False, "kind": "skill", "name": "recipes_skill", "error": "preflight"},
+            {
+                "ok": False,
+                "kind": "skill",
+                "name": "recipes_skill",
+                "error": "preflight",
+            },
             {"ok": False, "kind": "scenario", "name": "recipes", "error": "preflight"},
         ],
     }
@@ -8636,20 +9307,28 @@ def test_explicit_checkpoint_reconciliation_does_not_rerun_codex(tmp_path: Path,
         completed["status"] = "completed"
         _service._save_session(completed)
 
-    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_submit",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Codex must not be submitted")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Codex must not be submitted")
+        ),
     )
 
     result = service.reconcile_checkpoint(object_type="scenario", object_id="recipes")
 
     assert result["ok"] is True
-    assert result["change_id"] != previous_change_id
+    assert result["change_id"] == previous_change_id
     assert finalized[0]["status"] == "commit_ready"
     assert finalized[0]["current_task_id"] == failed["current_task_id"]
-    assert finalized[0]["reconciliation_history"][-1]["previous_change_id"] == previous_change_id
+    assert finalized[0]["reconciliation_history"][-1]["mode"] == "retry_exact"
+    assert (
+        finalized[0]["reconciliation_history"][-1]["previous_change_id"]
+        == previous_change_id
+    )
 
 
 def test_checkpoint_repackage_advances_only_project_composition_without_codex(
@@ -8705,7 +9384,9 @@ def test_checkpoint_repackage_advances_only_project_composition_without_codex(
         @staticmethod
         def transition(_kind, _object_id, action, **kwargs):
             transitions.append((action, dict(kwargs)))
-            return {"workflow": {"delivery": {"status": "checkpoint", "version": "0.3.8"}}}
+            return {
+                "workflow": {"delivery": {"status": "checkpoint", "version": "0.3.8"}}
+            }
 
     monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: _Workflow())
     monkeypatch.setattr(
@@ -8788,11 +9469,15 @@ def test_checkpoint_reconciliation_reuses_change_id_for_partially_committed_pair
         completed["status"] = "completed"
         _service._save_session(completed)
 
-    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_submit",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Codex must not be submitted")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Codex must not be submitted")
+        ),
     )
 
     result = service.reconcile_checkpoint(object_type="scenario", object_id="recipes")
@@ -8802,7 +9487,16 @@ def test_checkpoint_reconciliation_reuses_change_id_for_partially_committed_pair
     assert finalized[0]["reconciliation_history"][-1]["mode"] == "resume_partial"
 
 
-@pytest.mark.parametrize("failure_stage,readiness_stage", [("live_readiness", "materialization"), ("activation", "activation"), ("tests", "activation")])
+@pytest.mark.parametrize(
+    "failure_stage,readiness_stage",
+    [
+        ("live_readiness", "materialization"),
+        ("candidate_materialization", "candidate_materialization"),
+        ("browser_feedback", "browser_feedback"),
+        ("activation", "activation"),
+        ("tests", "activation"),
+    ],
+)
 def test_validated_result_recovery_reuses_completed_task_after_live_readiness_failure(
     tmp_path: Path,
     monkeypatch,
@@ -8815,7 +9509,11 @@ def test_validated_result_recovery_reuses_completed_task_after_live_readiness_fa
         "object_id": "recipes",
         "current_task_id": "task.1",
         "status": "failed",
-        "task": {"task_id": "task.1", "status": "completed", "result": {"summary": "ready"}},
+        "task": {
+            "task_id": "task.1",
+            "status": "completed",
+            "result": {"summary": "ready"},
+        },
         "last_result": {"summary": "ready"},
         "last_failure": {"stage": failure_stage, "message": "preview failed"},
         "completion_readiness": {
@@ -8828,7 +9526,9 @@ def test_validated_result_recovery_reuses_completed_task_after_live_readiness_fa
     service._save_session(session)
     finalized: list[dict] = []
 
-    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
 
     def finalize(_service, value):
         finalized.append(dict(value))
@@ -8837,10 +9537,16 @@ def test_validated_result_recovery_reuses_completed_task_after_live_readiness_fa
         completed.pop("reuse_confirmed_checkpoints", None)
         _service._save_session(completed)
 
-    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
-    service.worker_factory = lambda: (_ for _ in ()).throw(AssertionError("worker must not run"))
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not run")
+    )
 
-    result = service.recover_validated_result(object_type="scenario", object_id="recipes")
+    result = service.recover_validated_result(
+        object_type="scenario", object_id="recipes"
+    )
 
     assert result["ok"] is True
     assert result["worker"]["reused_validated_result"] is True
@@ -8879,7 +9585,9 @@ def test_validated_result_recovery_records_missing_workflow_checkpoint_without_r
     service._save_session(session)
     finalized: list[dict] = []
 
-    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
 
     def finalize(_service, value):
         finalized.append(dict(value))
@@ -8888,10 +9596,16 @@ def test_validated_result_recovery_records_missing_workflow_checkpoint_without_r
         completed.pop("reuse_confirmed_checkpoints", None)
         _service._save_session(completed)
 
-    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
-    service.worker_factory = lambda: (_ for _ in ()).throw(AssertionError("worker must not run"))
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not run")
+    )
 
-    result = service.recover_validated_result(object_type="scenario", object_id="recipes")
+    result = service.recover_validated_result(
+        object_type="scenario", object_id="recipes"
+    )
 
     assert result["ok"] is True
     assert result["worker"]["reused_validated_result"] is True
@@ -9001,7 +9715,9 @@ def test_validated_result_recovery_resumes_interrupted_finalization_without_code
     service._save_session(session)
     finalized: list[dict] = []
 
-    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
 
     def finalize(_service, value):
         finalized.append(dict(value))
@@ -9010,8 +9726,12 @@ def test_validated_result_recovery_resumes_interrupted_finalization_without_code
         completed.pop("reuse_confirmed_checkpoints", None)
         _service._save_session(completed)
 
-    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
-    service.worker_factory = lambda: (_ for _ in ()).throw(AssertionError("worker must not run"))
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not run")
+    )
 
     result = service.recover_validated_result(
         object_type="scenario",
@@ -9057,7 +9777,9 @@ def test_validated_result_recovery_rebinds_checkpoint_after_unknown_trial_reconc
     service._save_session(session)
     finalized: list[dict] = []
 
-    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "_workflow",
@@ -9083,8 +9805,12 @@ def test_validated_result_recovery_rebinds_checkpoint_after_unknown_trial_reconc
         completed.pop("rebind_confirmed_checkpoint", None)
         _service._save_session(completed)
 
-    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
-    service.worker_factory = lambda: (_ for _ in ()).throw(AssertionError("worker must not run"))
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not run")
+    )
 
     result = service.recover_validated_result(
         object_type="skill",
@@ -9164,7 +9890,9 @@ def test_refresh_reports_structured_edit_zero_usage_on_first_terminal_projection
             "provenance": {"execution_strategy": "structured_edits"},
         },
     }
-    monkeypatch.setattr(type(service.factory), "read_task", lambda _self, _task_id: task)
+    monkeypatch.setattr(
+        type(service.factory), "read_task", lambda _self, _task_id: task
+    )
 
     refreshed = service.refresh_session(session)
 
@@ -9192,7 +9920,9 @@ def test_validated_result_recovery_finalizes_recovered_workflow_transition(
     }
     service._save_session(session)
     finalized: list[dict] = []
-    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
 
     def finalize(_service, value):
         finalized.append(dict(value))
@@ -9201,10 +9931,16 @@ def test_validated_result_recovery_finalizes_recovered_workflow_transition(
         completed.pop("pending_workflow_transition", None)
         _service._save_session(completed)
 
-    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
-    service.worker_factory = lambda: (_ for _ in ()).throw(AssertionError("worker must not run"))
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not run")
+    )
 
-    result = service.recover_validated_result(object_type="scenario", object_id="recipes")
+    result = service.recover_validated_result(
+        object_type="scenario", object_id="recipes"
+    )
 
     assert result["ok"] is True
     assert result["worker"]["recovery_stage"] == "workflow_transition"
@@ -9227,7 +9963,9 @@ def test_validated_result_recovery_finalizes_externally_repaired_task(
     }
     service._save_session(session)
     finalized: list[dict] = []
-    monkeypatch.setattr(BuilderAutomationService, "refresh_session", lambda self, value: dict(value))
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
 
     def finalize(_service, value):
         finalized.append(dict(value))
@@ -9235,8 +9973,12 @@ def test_validated_result_recovery_finalizes_externally_repaired_task(
         completed["status"] = "completed"
         _service._save_session(completed)
 
-    monkeypatch.setattr(BuilderAutomationService, "_finalize_completed_session", finalize)
-    service.worker_factory = lambda: (_ for _ in ()).throw(AssertionError("worker must not rerun"))
+    monkeypatch.setattr(
+        BuilderAutomationService, "_finalize_completed_session", finalize
+    )
+    service.worker_factory = lambda: (_ for _ in ()).throw(
+        AssertionError("worker must not rerun")
+    )
 
     result = service.recover_validated_result(
         object_type="skill",
@@ -9250,7 +9992,9 @@ def test_validated_result_recovery_finalizes_externally_repaired_task(
     assert "reuse_confirmed_checkpoints" not in finalized[0]
 
 
-def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary(tmp_path: Path, monkeypatch) -> None:
+def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     calls: list[dict] = []
 
@@ -9261,7 +10005,12 @@ def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary
 
         def checkpoint_artifact(self, **kwargs):
             calls.append(dict(kwargs))
-            return {"ok": True, "kind": kwargs["kind"], "name": kwargs["artifact_id"], "commit": f"{kwargs['kind']}-sha"}
+            return {
+                "ok": True,
+                "kind": kwargs["kind"],
+                "name": kwargs["artifact_id"],
+                "commit": f"{kwargs['kind']}-sha",
+            }
 
     import adaos.services.builder.workspace as workspace
 
@@ -9297,7 +10046,9 @@ def test_automation_checkpoints_scenario_and_companion_skill_with_result_summary
     assert [item["commit"] for item in checkpoints] == ["skill-sha", "scenario-sha"]
 
 
-def test_automation_does_not_checkpoint_unchanged_companion_skill(tmp_path: Path, monkeypatch) -> None:
+def test_automation_does_not_checkpoint_unchanged_companion_skill(
+    tmp_path: Path, monkeypatch
+) -> None:
     service = _service(tmp_path)
     calls: list[dict] = []
 

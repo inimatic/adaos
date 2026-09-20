@@ -17,6 +17,8 @@ const client = String(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100
 const sourceDigest = String(process.env.ADAOS_E2E_SOURCE_DIGEST || '').trim()
 const spaceKind = String(process.env.ADAOS_E2E_SPACE_KIND || 'development').trim()
 const timeoutMs = Number(process.env.ADAOS_E2E_TIMEOUT_MS || 90_000)
+const startupTimeoutMs = Math.min(timeoutMs, 90_000)
+const interactionTimeoutMs = Math.min(timeoutMs, 10_000)
 const commandSequence = String(process.env.ADAOS_E2E_COMMAND_SEQUENCE || '').split(',')
   .map(value => value.trim()).filter(Boolean).map(value => {
     const [command, option] = value.split(':', 2).map(part => part.trim())
@@ -59,12 +61,78 @@ const blockingTextPatterns = [
   /showing the last successful data while the source reconnects/i,
 ]
 
+const pendingDataStates = new Set(['idle', 'loading', 'refreshing'])
+const nonAuthoritativeDataStates = new Set(['stale', 'unavailable', 'error'])
+const runtimeDataKinds = new Set(['skill', 'api', 'mcp', 'resourceQuery'])
+
+async function waitForAuthoritativeData(page, sample, checkpoint) {
+  const settleTimeoutMs = Math.min(timeoutMs, checkpoint === 'initial' ? 30_000 : 12_000)
+  try {
+    await page.waitForFunction(({ pending, runtime }) => {
+      const visible = element => {
+        const style = getComputedStyle(element)
+        return element.getClientRects().length > 0
+          && style.visibility !== 'hidden'
+          && style.display !== 'none'
+      }
+      const widgets = [...document.querySelectorAll('[data-webui-data-state]')].filter(visible)
+      return widgets.every(element => {
+        const state = String(element.getAttribute('data-webui-data-state') || 'idle')
+        const kind = String(element.getAttribute('data-webui-data-kind') || '')
+        const hasValue = element.getAttribute('data-webui-data-has-value') === 'true'
+        return !pending.includes(state) && !(runtime.includes(kind) && state === 'ready' && !hasValue)
+      })
+    }, { pending: [...pendingDataStates], runtime: [...runtimeDataKinds] }, { timeout: settleTimeoutMs })
+  } catch {
+    // Record the concrete widget states below instead of losing the useful evidence
+    // behind a generic Playwright timeout.
+  }
+
+  const states = await page.evaluate(() => {
+    const visible = element => {
+      const style = getComputedStyle(element)
+      return element.getClientRects().length > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+    }
+    return [...document.querySelectorAll('[data-webui-data-state]')]
+      .filter(visible)
+      .map(element => ({
+        id: element.getAttribute('data-webui-widget-id') || 'unknown',
+        kind: element.getAttribute('data-webui-data-kind') || 'unknown',
+        state: element.getAttribute('data-webui-data-state') || 'idle',
+        has_value: element.getAttribute('data-webui-data-has-value'),
+      }))
+  })
+  const pending = states.filter(item => pendingDataStates.has(item.state)
+    || (runtimeDataKinds.has(item.kind) && item.state === 'ready' && item.has_value !== 'true'))
+  const nonAuthoritative = states.filter(item => nonAuthoritativeDataStates.has(item.state))
+  sample.checks.push({
+    kind: 'authoritative-data-settlement',
+    checkpoint,
+    widgets: states.length,
+    states,
+  })
+  if (pending.length) {
+    sample.hard_failures.push(
+      `Data did not settle at ${checkpoint}: ${pending.map(item => `${item.id}=${item.state}`).join(', ')}`,
+    )
+  }
+  if (nonAuthoritative.length) {
+    sample.hard_failures.push(
+      `Data is not authoritative at ${checkpoint}: ${nonAuthoritative.map(item => `${item.id}=${item.state}`).join(', ')}`,
+    )
+  }
+  return pending.length === 0 && nonAuthoritative.length === 0
+}
+
 try {
   const layouts = {
     wide: { width: 1440, height: 1000 },
     compact: { width: 390, height: 844 },
   }
   for (const [layout, viewport] of Object.entries(layouts)) {
+    console.error(`[builder-browser-feedback] ${layout}:context:start`)
     const context = await browser.newContext({ viewport })
     await context.addInitScript(({ hub, token, subnet, webspace }) => {
       window.__ADAOS_DEBUG__ = true
@@ -85,8 +153,8 @@ try {
     }, { hub, token, subnet, webspace })
 
     const page = await context.newPage()
-    page.setDefaultTimeout(timeoutMs)
-    page.setDefaultNavigationTimeout(timeoutMs)
+    page.setDefaultTimeout(interactionTimeoutMs)
+    page.setDefaultNavigationTimeout(startupTimeoutMs)
     const sample = {
       layout,
       viewport,
@@ -111,29 +179,45 @@ try {
         url: response.url(),
       })
     })
+    page.on('requestfailed', request => {
+      sample.request_failures.push({
+        method: request.method(),
+        status: 0,
+        url: request.url(),
+        error: request.failure()?.errorText || 'request_failed',
+      })
+    })
 
     try {
+      console.error(`[builder-browser-feedback] ${layout}:navigation:start`)
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
       await page.waitForFunction(expected => {
         const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
         return sync?.materializationReady && sync.materialization?.currentScenario === expected
-      }, scenario, { timeout: timeoutMs })
+      }, scenario, { timeout: startupTimeoutMs })
       await page.waitForFunction(() => {
         return [...document.querySelectorAll('[data-webui-widget-id]')]
           .some(element => element.getClientRects().length > 0)
-      }, undefined, { timeout: timeoutMs })
+      }, undefined, { timeout: startupTimeoutMs })
+      console.error(`[builder-browser-feedback] ${layout}:authoritative:initial`)
+      let authoritativeDataSettled = await waitForAuthoritativeData(page, sample, 'initial')
       await page.screenshot({ path: path.join(output, `${layout}-initial.png`), fullPage: true })
+      console.error(`[builder-browser-feedback] ${layout}:initial:captured`)
 
       for (const step of commandSequence) {
         const command = page.locator(`[data-command-id="${step.command}"]`).filter({ visible: true }).first()
-        await command.waitFor({ state: 'visible', timeout: timeoutMs })
-        await command.click()
+        await command.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+        await command.click({ timeout: interactionTimeoutMs })
         if (step.option) {
           const option = page.locator(`[data-command-option="${step.option}"]`).filter({ visible: true }).first()
-          await option.waitFor({ state: 'visible', timeout: timeoutMs })
-          await option.click()
+          await option.waitFor({ state: 'visible', timeout: interactionTimeoutMs })
+          await option.click({ timeout: interactionTimeoutMs })
         }
-        await page.waitForTimeout(350)
+        authoritativeDataSettled = await waitForAuthoritativeData(
+          page,
+          sample,
+          `command:${step.command}`,
+        ) && authoritativeDataSettled
         sample.checks.push({ kind: 'command-sequence', command: step.command, option: step.option })
         const activeModal = page.locator('ion-modal.show-modal').last()
         if (await activeModal.count()) {
@@ -189,7 +273,7 @@ try {
           for (let triggerIndex = 0; triggerIndex < compactTriggerCount; triggerIndex += 1) {
             const trigger = compactTriggers.nth(triggerIndex)
             if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
-              await trigger.click()
+              await trigger.click({ timeout: interactionTimeoutMs })
               await page.waitForTimeout(250)
             }
             const openRegion = interactionRoot.locator('ada-layout-region.is-open').first()
@@ -203,14 +287,14 @@ try {
             }
             const close = openRegion.locator('.layout-region__header button').first()
             if (await close.count()) {
-              await close.click()
+              await close.click({ timeout: interactionTimeoutMs })
               await page.waitForTimeout(150)
               if ((await trigger.getAttribute('aria-expanded')) !== 'false') {
                 sample.hard_failures.push(`Compact disclosure ${triggerIndex + 1} did not close`)
               } else if (!(await trigger.evaluate(element => element === document.activeElement))) {
                 sample.hard_failures.push(`Compact disclosure ${triggerIndex + 1} did not restore trigger focus`)
               } else {
-                await trigger.click()
+                await trigger.click({ timeout: interactionTimeoutMs })
                 await page.waitForTimeout(150)
                 if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
                   sample.hard_failures.push(`Compact disclosure ${triggerIndex + 1} did not reopen`)
@@ -238,7 +322,7 @@ try {
               break
             }
             if (triggerIndex < compactTriggerCount - 1 && await close.count()) {
-              await reopened.locator('.layout-region__header button').first().click()
+              await reopened.locator('.layout-region__header button').first().click({ timeout: interactionTimeoutMs })
               await page.waitForTimeout(150)
             } else {
               compactSelectionRegion = reopened
@@ -261,52 +345,78 @@ try {
       for (let index = 0; index < selectableCount; index += 1) {
         const item = selectableItems.nth(index)
         if (!(await item.isVisible())) continue
-        await item.focus()
-        await item.click()
-        await page.waitForTimeout(500)
+        console.error(`[builder-browser-feedback] ${layout}:selection:${index + 1}:start`)
+        try {
+          await item.focus({ timeout: interactionTimeoutMs })
+          await item.click({ timeout: interactionTimeoutMs })
+        } catch (error) {
+          sample.hard_failures.push(
+            `Primary selection could not be activated: ${String(error?.message || error)}`,
+          )
+          console.error(`[builder-browser-feedback] ${layout}:selection:${index + 1}:failed`)
+          break
+        }
+        authoritativeDataSettled = await waitForAuthoritativeData(
+          page,
+          sample,
+          'primary-selection',
+        ) && authoritativeDataSettled
         sample.checks.push({ kind: 'primary-selection', count: selectableCount })
         await page.screenshot({ path: path.join(output, `${layout}-selection.png`), fullPage: true })
+        console.error(`[builder-browser-feedback] ${layout}:selection:${index + 1}:captured`)
         break
       }
 
-      const semanticTabs = interactionRoot.locator(
-        '[data-webui-widget-type="navigation.tabs"] [role="tablist"] [role="tab"]',
-      )
+      const semanticTabList = interactionRoot.locator(
+        '[data-webui-widget-type="navigation.tabs"] [role="tablist"]',
+      ).filter({ visible: true }).first()
+      const semanticTabs = semanticTabList.locator('[role="tab"]')
       const tabCount = await semanticTabs.count()
+      const tabDescriptors = []
       for (let index = 0; index < Math.min(tabCount, 12); index += 1) {
         const tab = semanticTabs.nth(index)
         if (!(await tab.isVisible())) continue
-        if (await tab.isDisabled() || (await tab.getAttribute('aria-disabled')) === 'true') continue
-        const handle = await tab.elementHandle()
-        if (!handle) continue
-        const descriptor = await handle.evaluate(element => ({
+        const descriptor = await tab.evaluate(element => ({
           controls: element.getAttribute('aria-controls'),
           id: element.id,
-          listIndex: [...document.querySelectorAll('[data-webui-widget-type="navigation.tabs"] [role="tablist"]')]
-            .indexOf(element.closest('[role="tablist"]')),
           text: String(element.textContent || '').replace(/\s+/g, ' ').trim(),
         }))
-        await handle.focus()
-        await handle.press('Enter')
-        await page.waitForTimeout(350)
-        const selected = await page.evaluate(({ controls, id, listIndex, text }) => {
-          const list = document.querySelectorAll(
-            '[data-webui-widget-type="navigation.tabs"] [role="tablist"]',
-          )[listIndex]
-          const tabs = list ? [...list.querySelectorAll('[role="tab"]')] : []
-          const current = tabs.find(element => (id && element.id === id)
-            || (controls && element.getAttribute('aria-controls') === controls)
-            || String(element.textContent || '').replace(/\s+/g, ' ').trim() === text)
-          return current?.getAttribute('aria-selected') || null
-        }, descriptor)
+        tabDescriptors.push({ ...descriptor, index })
+      }
+      for (let index = 0; index < tabDescriptors.length; index += 1) {
+        const descriptor = tabDescriptors[index]
+        const stableTab = semanticTabList.locator('[role="tab"]').nth(descriptor.index)
+        if (!(await stableTab.count()) || !(await stableTab.isVisible())) continue
+        if (await stableTab.isDisabled() || (await stableTab.getAttribute('aria-disabled')) === 'true') continue
+        const handle = await stableTab.elementHandle()
+        if (!handle) continue
+        console.error(`[builder-browser-feedback] ${layout}:tab:${index + 1}:start`)
+        try {
+          await handle.focus()
+          await handle.press('Enter', { timeout: interactionTimeoutMs })
+        } catch (error) {
+          sample.hard_failures.push(
+            `Semantic tab ${index + 1} could not be activated: ${String(error?.message || error)}`,
+          )
+          console.error(`[builder-browser-feedback] ${layout}:tab:${index + 1}:failed`)
+          continue
+        }
+        authoritativeDataSettled = await waitForAuthoritativeData(
+          page,
+          sample,
+          `tab:${index + 1}`,
+        ) && authoritativeDataSettled
+        const selected = await stableTab.getAttribute('aria-selected')
         if (selected !== 'true') {
           sample.hard_failures.push(`Semantic tab ${index + 1} did not become selected`)
         }
         if (index < 6) {
           await page.screenshot({ path: path.join(output, `${layout}-tab-${index + 1}.png`), fullPage: true })
         }
+        console.error(`[builder-browser-feedback] ${layout}:tab:${index + 1}:captured`)
       }
       if (tabCount) sample.checks.push({ kind: 'semantic-tabs', count: tabCount })
+      sample.authoritative_data_settled = authoritativeDataSettled
 
       const diagnostics = await page.evaluate(patternSources => {
         const visible = element => {
@@ -347,11 +457,15 @@ try {
           .filter(visible)
           .map(element => {
             const box = element.getBoundingClientRect()
+            const gridBox = element.closest('.desktop-grid')?.getBoundingClientRect()
             return {
               id: element.getAttribute('data-region-id'),
               role: element.getAttribute('data-region-role'),
+              compact_presentation: element.getAttribute('data-compact-presentation'),
               top: box.top,
               bottom: box.bottom,
+              width: box.width,
+              grid_width: gridBox?.width || null,
             }
           })
         const toolbar = visibleRegions.find(region => region.role === 'toolbar')
@@ -406,6 +520,18 @@ try {
           `Page overflows horizontally: ${diagnostics.document_width}px > ${diagnostics.viewport_width}px`,
         )
       }
+      if (layout === 'compact') {
+        const underfilled = diagnostics.visible_regions.filter(region => (
+          region.compact_presentation === 'stack'
+          && region.grid_width
+          && region.width < region.grid_width * 0.8
+        ))
+        if (underfilled.length) {
+          sample.hard_failures.push(
+            `Compact stack regions do not fill the layout column: ${underfilled.map(region => region.id || region.role).join(', ')}`,
+          )
+        }
+      }
       for (const pattern of diagnostics.blocking_text) {
         sample.hard_failures.push(`Blocking runtime message is visible: ${pattern}`)
       }
@@ -434,6 +560,7 @@ try {
         sample.hard_failures.push('Semantic toolbar is rendered after the primary content region')
       }
       await page.screenshot({ path: path.join(output, `${layout}.png`), fullPage: true })
+      console.error(`[builder-browser-feedback] ${layout}:complete`)
     } catch (error) {
       sample.hard_failures.push(String(error?.message || error))
       try {
@@ -462,10 +589,18 @@ for (const sample of report.samples) {
     const expectedAuthProbe = failure.status === 401
       && target.pathname === '/api/node/status'
       && target.searchParams.get('profile') === 'probe'
-    if (expectedDevBootstrapMiss || expectedAuthProbe) {
+    const browserCancelledRequest = failure.status === 0 && failure.error === 'net::ERR_ABORTED'
+    const optionalLoopbackDiscoveryProbe = failure.status === 0
+      && target.pathname === '/api/ping'
+      && ['127.0.0.1', 'localhost'].includes(target.hostname)
+    if (expectedDevBootstrapMiss || expectedAuthProbe || browserCancelledRequest || optionalLoopbackDiscoveryProbe) {
       sample.warnings.push(`Expected local bootstrap probe: HTTP ${failure.status} ${failure.method} ${failure.url}`)
     } else {
-      sample.hard_failures.push(`HTTP ${failure.status} ${failure.method} ${failure.url}`)
+      sample.hard_failures.push(
+        failure.status
+          ? `HTTP ${failure.status} ${failure.method} ${failure.url}`
+          : `Request failed ${failure.method} ${failure.url}: ${failure.error || 'unknown error'}`,
+      )
     }
   }
 }

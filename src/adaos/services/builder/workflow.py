@@ -77,7 +77,9 @@ from adaos.services.builder.surface import (
 )
 from adaos.services.builder.specification import specification_projection
 from adaos.services.builder.specification_delta import (
-    apply_delta, normalize_specification, prepare_delta,
+    apply_delta,
+    normalize_specification,
+    prepare_delta,
 )
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.workflow_artifacts import (
@@ -138,6 +140,8 @@ _MAX_STATE_BYTES = 512 * 1024
 _MAX_INLINE_STATE_BYTES = 384 * 1024
 _MAX_PORTFOLIO_RECORD_BYTES = 512 * 1024
 _MAX_CONTEXT_PACKET_BYTES = 512 * 1024
+_MAX_CHANGE_RUN_LEDGER_BYTES = 2 * 1024 * 1024
+_MAX_GOVERNED_LEDGER_BYTES = 2 * 1024 * 1024
 _MAX_HISTORY = 50
 _MAX_CHANGE_ISSUES = 50
 _MAX_CHANGE_RUNS = 100
@@ -256,7 +260,9 @@ def _load_builder_skill_definition(
     if artifact is None:
         raise WorkflowArtifactError("builder_skill must reference workflow.json")
     if artifact.compiled.workflow_type != "builder.change":
-        raise WorkflowArtifactError("builder_skill workflow_type must be builder.change")
+        raise WorkflowArtifactError(
+            "builder_skill workflow_type must be builder.change"
+        )
     binding = platform_workflow_adapter_registry().bind(artifact.compiled)
     return (
         artifact.compiled,
@@ -292,7 +298,11 @@ def _kind(value: Any) -> str:
 
 def _project_id(value: Any) -> str:
     token = str(value or "").strip()
-    if not token or token in {".", ".."} or any(char in token for char in ("/", "\\", "\0")):
+    if (
+        not token
+        or token in {".", ".."}
+        or any(char in token for char in ("/", "\\", "\0"))
+    ):
         raise BuilderWorkflowError("object_id is required and must be a project id")
     return token
 
@@ -355,26 +365,44 @@ def resolve_prototype_resource_owner(
     from adaos.services.resources.prototype import PrototypeResourceConflict
 
     owners = {
-        str(_mapping(_mapping(resources.definition(ref)).get("metadata")).get("project_ref") or "")
+        str(
+            _mapping(_mapping(resources.definition(ref)).get("metadata")).get(
+                "project_ref"
+            )
+            or ""
+        )
         for ref in resource_types
     }
     if len(owners) != 1:
-        raise PrototypeResourceConflict("prototype resources must share one declared owner")
+        raise PrototypeResourceConflict(
+            "prototype resources must share one declared owner"
+        )
     owner_ref = owners.pop()
     if owner_ref == component_ref:
         return owner_ref
     if component_ref.startswith("project:") or not owner_ref.startswith("project:"):
-        raise PrototypeResourceConflict("prototype resource owner does not match the workflow target")
+        raise PrototypeResourceConflict(
+            "prototype resource owner does not match the workflow target"
+        )
     owner_id = _project_id(owner_ref.partition(":")[2])
     try:
         manifest = yaml.safe_load(
-            (dev_projects_root / owner_id / "project.yaml").read_text(encoding="utf-8-sig")
+            (dev_projects_root / owner_id / "project.yaml").read_text(
+                encoding="utf-8-sig"
+            )
         )
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        raise PrototypeResourceConflict("prototype resource owner manifest is unavailable") from exc
-    if (not isinstance(manifest, Mapping) or str(manifest.get("id") or "") != owner_id
-            or component_ref not in _project_component_refs_from_manifest(manifest)):
-        raise PrototypeResourceConflict("prototype resource owner does not own the workflow component")
+        raise PrototypeResourceConflict(
+            "prototype resource owner manifest is unavailable"
+        ) from exc
+    if (
+        not isinstance(manifest, Mapping)
+        or str(manifest.get("id") or "") != owner_id
+        or component_ref not in _project_component_refs_from_manifest(manifest)
+    ):
+        raise PrototypeResourceConflict(
+            "prototype resource owner does not own the workflow component"
+        )
     return owner_ref
 
 
@@ -406,7 +434,9 @@ def _default_project_entrypoint(manifest: Mapping[str, Any]) -> dict[str, Any] |
     ]
     if not entrypoints:
         return None
-    return next((item for item in entrypoints if item.get("default") is True), entrypoints[0])
+    return next(
+        (item for item in entrypoints if item.get("default") is True), entrypoints[0]
+    )
 
 
 def _scenario_id_from_ref(value: Any) -> str | None:
@@ -450,11 +480,19 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
         raise BuilderWorkflowError("change set issues must be objects")
     issue_id = str(value.get("issue_id") or value.get("id") or f"I{index:03d}").strip()
     if not issue_id or len(issue_id) > 80:
-        raise BuilderWorkflowError("change set issue_id is required and must be at most 80 characters")
-    title = _bounded_text(value.get("title") or value.get("summary"), field="change set issue title", max_length=240)
+        raise BuilderWorkflowError(
+            "change set issue_id is required and must be at most 80 characters"
+        )
+    title = _bounded_text(
+        value.get("title") or value.get("summary"),
+        field="change set issue title",
+        max_length=240,
+    )
     lane = str(value.get("lane") or value.get("target_phase") or "").strip().lower()
     if lane not in _ISSUE_LANES:
-        raise BuilderWorkflowError("change set issue lane must be prototype or automation")
+        raise BuilderWorkflowError(
+            "change set issue lane must be prototype or automation"
+        )
     status = str(value.get("status") or "open").strip().lower()
     if status not in _ISSUE_STATES:
         raise BuilderWorkflowError(
@@ -464,16 +502,22 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
     if isinstance(raw_criteria, str):
         raw_criteria = [raw_criteria]
     if not isinstance(raw_criteria, (list, tuple)):
-        raise BuilderWorkflowError("change set issue acceptance_criteria must be a list")
+        raise BuilderWorkflowError(
+            "change set issue acceptance_criteria must be a list"
+        )
     criteria = [
         _bounded_text(item, field="acceptance criterion", max_length=500)
         for item in raw_criteria[:20]
     ]
     if not criteria:
-        raise BuilderWorkflowError("every change set issue requires acceptance_criteria")
+        raise BuilderWorkflowError(
+            "every change set issue requires acceptance_criteria"
+        )
     structural_status = str(value.get("structural_status") or "active").strip().lower()
     if structural_status not in {"active", "split", "merged"}:
-        raise BuilderWorkflowError("issue structural_status must be active, split, or merged")
+        raise BuilderWorkflowError(
+            "issue structural_status must be active, split, or merged"
+        )
     return {
         "issue_id": issue_id,
         "title": title,
@@ -519,7 +563,10 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
 
 
 def _normalize_change_set(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, Mapping) or not str(value.get("change_set_id") or "").strip():
+    if (
+        not isinstance(value, Mapping)
+        or not str(value.get("change_set_id") or "").strip()
+    ):
         return None
     issues: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -532,8 +579,19 @@ def _normalize_change_set(value: Any) -> dict[str, Any] | None:
         issues.append(issue)
     route = str(value.get("route") or "").strip().lower()
     if route not in {"prototype_first", "automation_direct"}:
-        route = "prototype_first" if any(item["lane"] == "prototype" for item in issues) else "automation_direct"
-    gate = str(value.get("gate") or ("prototype" if route == "prototype_first" else "automation")).strip().lower()
+        route = (
+            "prototype_first"
+            if any(item["lane"] == "prototype" for item in issues)
+            else "automation_direct"
+        )
+    gate = (
+        str(
+            value.get("gate")
+            or ("prototype" if route == "prototype_first" else "automation")
+        )
+        .strip()
+        .lower()
+    )
     if gate not in {"prototype", "automation", "trial", "publication", "complete"}:
         gate = "prototype" if route == "prototype_first" else "automation"
     status = str(value.get("status") or "planned").strip().lower()
@@ -550,7 +608,9 @@ def _normalize_change_set(value: Any) -> dict[str, Any] | None:
     return {
         "schema": BUILDER_CHANGE_SET_SCHEMA,
         "change_set_id": change_set_id,
-        "request": _bounded_text(value.get("request"), field="change set request", max_length=4000),
+        "request": _bounded_text(
+            value.get("request"), field="change set request", max_length=4000
+        ),
         "request_addenda": [
             _bounded_text(item, field="change set request addendum", max_length=4000)
             for item in value.get("request_addenda") or []
@@ -568,7 +628,9 @@ def _normalize_change_set(value: Any) -> dict[str, Any] | None:
         "created_at": str(value.get("created_at") or "").strip() or None,
         "updated_at": str(value.get("updated_at") or "").strip() or None,
         "supersedes_change_set_id": str(
-            value.get("supersedes_change_set_id") or value.get("supersedes_change_id") or ""
+            value.get("supersedes_change_set_id")
+            or value.get("supersedes_change_id")
+            or ""
         ).strip()
         or None,
     }
@@ -579,20 +641,33 @@ def _normalize_run(value: Any, *, change_id: str) -> dict[str, Any]:
         raise BuilderWorkflowError("change runs must be objects")
     run_id = str(value.get("run_id") or value.get("id") or "").strip()
     if not run_id or len(run_id) > 160:
-        raise BuilderWorkflowError("run_id is required and must be at most 160 characters")
+        raise BuilderWorkflowError(
+            "run_id is required and must be at most 160 characters"
+        )
     linked_change_id = str(value.get("change_id") or change_id).strip()
     if linked_change_id != change_id:
         raise BuilderWorkflowError("run change_id does not match its Change")
     status = str(value.get("status") or "succeeded").strip().lower()
-    if status not in {"queued", "running", "succeeded", "failed", "cancelled", "superseded"}:
+    if status not in {
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "superseded",
+    }:
         raise BuilderWorkflowError("invalid Builder Run status")
     purpose = str(value.get("purpose") or "iteration").strip().lower()
     if purpose not in {"iteration", "experiment", "evaluation", "recovery"}:
         raise BuilderWorkflowError("invalid Builder Run purpose")
-    adoption_status = str(
-        value.get("adoption_status")
-        or ("pending" if purpose == "experiment" else "not_applicable")
-    ).strip().lower()
+    adoption_status = (
+        str(
+            value.get("adoption_status")
+            or ("pending" if purpose == "experiment" else "not_applicable")
+        )
+        .strip()
+        .lower()
+    )
     if adoption_status not in {"not_applicable", "pending", "adopted", "discarded"}:
         raise BuilderWorkflowError("invalid Builder Run adoption status")
     if purpose != "experiment" and adoption_status != "not_applicable":
@@ -607,21 +682,37 @@ def _normalize_run(value: Any, *, change_id: str) -> dict[str, Any]:
                 workflow_metrics,
             )
         except ValueError as exc:
-            raise BuilderWorkflowError(f"invalid Builder Run workflow_metrics: {exc}") from exc
+            raise BuilderWorkflowError(
+                f"invalid Builder Run workflow_metrics: {exc}"
+            ) from exc
     return {
         "schema": BUILDER_RUN_SCHEMA,
         "run_id": run_id,
         "change_id": change_id,
         "activity": str(value.get("activity") or "workflow").strip() or "workflow",
-        "executor": str(value.get("executor") or "builder.workflow").strip() or "builder.workflow",
+        "executor": str(value.get("executor") or "builder.workflow").strip()
+        or "builder.workflow",
         "purpose": purpose,
         "adoption_status": adoption_status,
         "status": status,
-        "context_packet_digest": str(value.get("context_packet_digest") or "").strip() or None,
+        "context_packet_digest": str(value.get("context_packet_digest") or "").strip()
+        or None,
         "environment_ref": str(value.get("environment_ref") or "").strip() or None,
-        "input_refs": [str(item).strip() for item in value.get("input_refs") or [] if str(item).strip()][-100:],
-        "output_refs": [str(item).strip() for item in value.get("output_refs") or [] if str(item).strip()][-100:],
-        "evidence_refs": [str(item).strip() for item in value.get("evidence_refs") or [] if str(item).strip()][-100:],
+        "input_refs": [
+            str(item).strip()
+            for item in value.get("input_refs") or []
+            if str(item).strip()
+        ][-100:],
+        "output_refs": [
+            str(item).strip()
+            for item in value.get("output_refs") or []
+            if str(item).strip()
+        ][-100:],
+        "evidence_refs": [
+            str(item).strip()
+            for item in value.get("evidence_refs") or []
+            if str(item).strip()
+        ][-100:],
         "workflow_metrics": copy.deepcopy(dict(workflow_metrics or {})) or None,
         "started_at": str(value.get("started_at") or "").strip() or None,
         "completed_at": str(value.get("completed_at") or "").strip() or None,
@@ -634,10 +725,14 @@ def _normalize_acceptance_constraint(value: Any, *, change_id: str) -> dict[str,
         raise BuilderWorkflowError("acceptance constraints must be objects")
     constraint_id = str(value.get("constraint_id") or "").strip()
     if not constraint_id or len(constraint_id) > 160:
-        raise BuilderWorkflowError("acceptance constraint_id is required and must be at most 160 characters")
+        raise BuilderWorkflowError(
+            "acceptance constraint_id is required and must be at most 160 characters"
+        )
     linked_change_id = str(value.get("change_id") or "").strip()
     if linked_change_id != change_id:
-        raise BuilderWorkflowError("acceptance constraint change_id does not match its Change")
+        raise BuilderWorkflowError(
+            "acceptance constraint change_id does not match its Change"
+        )
     review_id = str(value.get("review_id") or "").strip()
     project_ref = str(value.get("project_ref") or "").strip()
     artifact_ref = str(value.get("artifact_ref") or "").strip()
@@ -649,17 +744,30 @@ def _normalize_acceptance_constraint(value: Any, *, change_id: str) -> dict[str,
     if not review_id or len(review_id) > 160:
         raise BuilderWorkflowError("acceptance constraint review_id is required")
     if not project_ref.startswith("scenario:") or len(project_ref) > 300:
-        raise BuilderWorkflowError("acceptance constraint project_ref must identify a scenario")
+        raise BuilderWorkflowError(
+            "acceptance constraint project_ref must identify a scenario"
+        )
     if not artifact_ref or len(artifact_ref) > 300:
         raise BuilderWorkflowError("acceptance constraint artifact_ref is required")
     if not target_ref.startswith(("widget:", "field:")) or len(target_ref) > 300:
-        raise BuilderWorkflowError("acceptance constraint target_ref must identify a widget or field")
-    if kind not in {"present", "label_equals", "property_equals", "visible", "order_before", "data_mode"}:
+        raise BuilderWorkflowError(
+            "acceptance constraint target_ref must identify a widget or field"
+        )
+    if kind not in {
+        "present",
+        "label_equals",
+        "property_equals",
+        "visible",
+        "order_before",
+        "data_mode",
+    }:
         raise BuilderWorkflowError("invalid acceptance constraint kind")
     if status not in {"active", "satisfied", "violated", "unverifiable", "superseded"}:
         raise BuilderWorkflowError("invalid acceptance constraint status")
     if not source_revision or len(source_revision) > 80 or not created_at:
-        raise BuilderWorkflowError("acceptance constraint source revision and created_at are required")
+        raise BuilderWorkflowError(
+            "acceptance constraint source revision and created_at are required"
+        )
     return {
         "schema": "adaos.builder.acceptance_constraint.v1",
         "constraint_id": constraint_id,
@@ -672,7 +780,9 @@ def _normalize_acceptance_constraint(value: Any, *, change_id: str) -> dict[str,
         "expected": copy.deepcopy(value.get("expected")),
         "source_revision": source_revision,
         "status": status,
-        "last_evaluation": copy.deepcopy(value.get("last_evaluation")) if isinstance(value.get("last_evaluation"), Mapping) else None,
+        "last_evaluation": copy.deepcopy(value.get("last_evaluation"))
+        if isinstance(value.get("last_evaluation"), Mapping)
+        else None,
         "created_at": created_at,
         "updated_at": str(value.get("updated_at") or "").strip() or None,
         "superseded_reason": str(value.get("superseded_reason") or "").strip() or None,
@@ -686,7 +796,9 @@ def _normalize_change(value: Any) -> dict[str, Any] | None:
         return None
     change_id = str(value.get("change_id") or legacy["change_set_id"]).strip()
     if change_id != legacy["change_set_id"]:
-        raise BuilderWorkflowError("change_id and change_set_id must identify the same Change")
+        raise BuilderWorkflowError(
+            "change_id and change_set_id must identify the same Change"
+        )
     runs: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in value.get("runs") or []:
@@ -701,7 +813,9 @@ def _normalize_change(value: Any) -> dict[str, Any] | None:
         constraint = _normalize_acceptance_constraint(item, change_id=change_id)
         constraint_id = constraint["constraint_id"]
         if constraint_id in seen_constraints:
-            raise BuilderWorkflowError(f"duplicate acceptance constraint id: {constraint_id}")
+            raise BuilderWorkflowError(
+                f"duplicate acceptance constraint id: {constraint_id}"
+            )
         seen_constraints.add(constraint_id)
         constraints.append(constraint)
     if len(constraints) > _MAX_ACCEPTANCE_CONSTRAINTS:
@@ -714,7 +828,9 @@ def _normalize_change(value: Any) -> dict[str, Any] | None:
         "change_id": change_id,
         "change_set_id": change_id,
         "project_ref": str(value.get("project_ref") or "").strip() or None,
-        "base_ref": copy.deepcopy(value.get("base_ref")) if isinstance(value.get("base_ref"), Mapping) else None,
+        "base_ref": copy.deepcopy(value.get("base_ref"))
+        if isinstance(value.get("base_ref"), Mapping)
+        else None,
         "base_generation": max(0, int(value.get("base_generation") or 0)),
         "affected_refs": list(
             dict.fromkeys(
@@ -726,27 +842,38 @@ def _normalize_change(value: Any) -> dict[str, Any] | None:
         "runs": runs[-_MAX_CHANGE_RUNS:],
         "acceptance_constraints": constraints,
         "specification_delta": copy.deepcopy(dict(value["specification_delta"]))
-        if isinstance(value.get("specification_delta"), Mapping) else None,
-        "context_packet_digest": str(value.get("context_packet_digest") or "").strip() or None,
+        if isinstance(value.get("specification_delta"), Mapping)
+        else None,
+        "context_packet_digest": str(value.get("context_packet_digest") or "").strip()
+        or None,
         "teacher_candidate_refs": [
             copy.deepcopy(dict(item))
             for item in value.get("teacher_candidate_refs") or []
             if isinstance(item, Mapping)
         ][-100:],
-        "promotion_privacy_scope": str(value.get("promotion_privacy_scope") or "").strip() or None,
+        "promotion_privacy_scope": str(
+            value.get("promotion_privacy_scope") or ""
+        ).strip()
+        or None,
         "supersedes_change_id": str(
-            value.get("supersedes_change_id") or value.get("supersedes_change_set_id") or ""
+            value.get("supersedes_change_id")
+            or value.get("supersedes_change_set_id")
+            or ""
         ).strip()
         or None,
     }
 
 
-def _change_set_compatibility(change: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _change_set_compatibility(
+    change: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
     if not isinstance(change, Mapping):
         return None
     value = copy.deepcopy(dict(change))
     value["schema"] = BUILDER_CHANGE_SET_SCHEMA
-    value["change_set_id"] = str(value.get("change_id") or value.get("change_set_id") or "").strip()
+    value["change_set_id"] = str(
+        value.get("change_id") or value.get("change_set_id") or ""
+    ).strip()
     value.pop("change_id", None)
     value.pop("runs", None)
     value.pop("acceptance_constraints", None)
@@ -757,14 +884,21 @@ def _change_set_compatibility(change: Mapping[str, Any] | None) -> dict[str, Any
     value.pop("base_ref", None)
     value.pop("base_generation", None)
     value.pop("affected_refs", None)
-    value["supersedes_change_set_id"] = str(
-        value.pop("supersedes_change_id", None) or value.get("supersedes_change_set_id") or ""
-    ).strip() or None
+    value["supersedes_change_set_id"] = (
+        str(
+            value.pop("supersedes_change_id", None)
+            or value.get("supersedes_change_set_id")
+            or ""
+        ).strip()
+        or None
+    )
     return value
 
 
 def _stable_digest(value: Mapping[str, Any]) -> str:
-    raw = json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    raw = json.dumps(
+        dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
 
@@ -785,7 +919,9 @@ def _load_bounded_project_json(
     try:
         candidate.relative_to(project_root)
     except ValueError as exc:
-        raise BuilderWorkflowError(f"{label} artifact must stay inside the project") from exc
+        raise BuilderWorkflowError(
+            f"{label} artifact must stay inside the project"
+        ) from exc
     if not candidate.is_file():
         raise BuilderWorkflowError(f"{label} artifact is missing: {token}")
     raw = candidate.read_bytes()
@@ -794,7 +930,9 @@ def _load_bounded_project_json(
     try:
         value = json.loads(raw.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise BuilderWorkflowError(f"{label} artifact is not valid UTF-8 JSON: {token}") from exc
+        raise BuilderWorkflowError(
+            f"{label} artifact is not valid UTF-8 JSON: {token}"
+        ) from exc
     if not isinstance(value, Mapping):
         raise BuilderWorkflowError(f"{label} artifact must contain one JSON object")
     return dict(value), {
@@ -852,14 +990,23 @@ def _finite_float(value: Any) -> float:
         parsed = float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
-    return parsed if parsed == parsed and parsed not in {float("inf"), float("-inf")} else 0.0
+    return (
+        parsed
+        if parsed == parsed and parsed not in {float("inf"), float("-inf")}
+        else 0.0
+    )
 
 
 def _bounded_conversation_context(value: Any) -> dict[str, Any] | None:
     if value in (None, {}):
         return None
-    if not isinstance(value, Mapping) or str(value.get("schema") or "").strip() != "adaos.context.packet.v1":
-        raise BuilderWorkflowError("conversation_context must use adaos.context.packet.v1")
+    if (
+        not isinstance(value, Mapping)
+        or str(value.get("schema") or "").strip() != "adaos.context.packet.v1"
+    ):
+        raise BuilderWorkflowError(
+            "conversation_context must use adaos.context.packet.v1"
+        )
 
     messages: list[dict[str, Any]] = []
     for item in list(value.get("messages") or [])[-12:]:
@@ -879,7 +1026,9 @@ def _bounded_conversation_context(value: Any) -> dict[str, Any] | None:
                 keys=("type", "kind", "conversation_id", "message_id", "seq"),
             ),
         }
-        messages.append({key: nested for key, nested in message.items() if nested not in (None, "")})
+        messages.append(
+            {key: nested for key, nested in message.items() if nested not in (None, "")}
+        )
 
     segments: list[dict[str, Any]] = []
     for item in list(value.get("segments") or [])[-8:]:
@@ -894,10 +1043,19 @@ def _bounded_conversation_context(value: Any) -> dict[str, Any] | None:
             "trust_boundary": "retrieved_untrusted_evidence",
             "source_ref": _bounded_ref(
                 item.get("source_ref"),
-                keys=("type", "segment_id", "conversation_id", "thread_id", "start_seq", "end_seq"),
+                keys=(
+                    "type",
+                    "segment_id",
+                    "conversation_id",
+                    "thread_id",
+                    "start_seq",
+                    "end_seq",
+                ),
             ),
         }
-        segments.append({key: nested for key, nested in segment.items() if nested not in (None, "")})
+        segments.append(
+            {key: nested for key, nested in segment.items() if nested not in (None, "")}
+        )
 
     memory: list[dict[str, Any]] = []
     for item in list(value.get("memory") or [])[-12:]:
@@ -909,7 +1067,9 @@ def _bounded_conversation_context(value: Any) -> dict[str, Any] | None:
             "owner": str(item.get("owner") or "").strip()[:160],
             "key": str(item.get("key") or "").strip()[:160] or None,
             "text": str(item.get("text") or "")[:1000],
-            "confidence": item.get("confidence") if isinstance(item.get("confidence"), (int, float)) else None,
+            "confidence": item.get("confidence")
+            if isinstance(item.get("confidence"), (int, float))
+            else None,
             "consent_state": str(item.get("consent_state") or "").strip()[:80] or None,
             "visibility": str(item.get("visibility") or "").strip()[:80] or None,
             "trust_boundary": "retrieved_untrusted_evidence",
@@ -918,17 +1078,33 @@ def _bounded_conversation_context(value: Any) -> dict[str, Any] | None:
                 keys=("type", "memory_id", "scope", "owner", "source_ref"),
             ),
         }
-        memory.append({key: nested for key, nested in memory_item.items() if nested not in (None, "")})
+        memory.append(
+            {
+                key: nested
+                for key, nested in memory_item.items()
+                if nested not in (None, "")
+            }
+        )
 
-    diagnostics = value.get("diagnostics") if isinstance(value.get("diagnostics"), Mapping) else {}
-    fallback_refs = [str(item).strip()[:160] for item in diagnostics.get("fallbacks") or [] if str(item).strip()][:20]
+    diagnostics = (
+        value.get("diagnostics")
+        if isinstance(value.get("diagnostics"), Mapping)
+        else {}
+    )
+    fallback_refs = [
+        str(item).strip()[:160]
+        for item in diagnostics.get("fallbacks") or []
+        if str(item).strip()
+    ][:20]
     return {
         "schema": "adaos.context.packet.v1",
-        "conversation_id": str(value.get("conversation_id") or "").strip()[:300] or None,
+        "conversation_id": str(value.get("conversation_id") or "").strip()[:300]
+        or None,
         "thread_id": str(value.get("thread_id") or "").strip()[:300] or None,
         "topic_id": str(value.get("topic_id") or "").strip()[:300] or None,
         "channel_id": str(value.get("channel_id") or "").strip()[:80] or None,
-        "requester_owner": str(value.get("requester_owner") or "").strip()[:160] or None,
+        "requester_owner": str(value.get("requester_owner") or "").strip()[:160]
+        or None,
         "messages": messages,
         "segments": segments,
         "memory": memory,
@@ -958,7 +1134,15 @@ def _bounded_pending_action_refs(values: Any) -> list[dict[str, Any]]:
             "webspace_id": str(item.get("webspace_id") or "").strip()[:160] or None,
             "domain_ref": _bounded_ref(
                 item.get("domain_ref"),
-                keys=("type", "kind", "id", "object_type", "object_id", "change_id", "run_id"),
+                keys=(
+                    "type",
+                    "kind",
+                    "id",
+                    "object_type",
+                    "object_id",
+                    "change_id",
+                    "run_id",
+                ),
             ),
             "allowed_actions": [
                 str(value).strip()[:80]
@@ -967,16 +1151,22 @@ def _bounded_pending_action_refs(values: Any) -> list[dict[str, Any]]:
             ][:20],
             "expires_at": str(item.get("expires_at") or "").strip()[:80] or None,
         }
-        refs.append({key: value for key, value in ref.items() if value not in (None, "", [])})
+        refs.append(
+            {key: value for key, value in ref.items() if value not in (None, "", [])}
+        )
     return refs
 
 
-def _semantic_target_context(webui: Mapping[str, Any], refs: list[str]) -> dict[str, Any]:
+def _semantic_target_context(
+    webui: Mapping[str, Any], refs: list[str]
+) -> dict[str, Any]:
     """Resolve stable UI refs with parent/sibling/order evidence, without text guessing."""
 
     matches: dict[str, list[dict[str, Any]]] = {ref: [] for ref in refs}
 
-    def visit(value: Any, *, parent_ref: str | None = None, siblings: list[Any] | None = None) -> None:
+    def visit(
+        value: Any, *, parent_ref: str | None = None, siblings: list[Any] | None = None
+    ) -> None:
         if isinstance(value, list):
             sibling_ids = [
                 str(item.get("id") or "").strip()
@@ -989,7 +1179,9 @@ def _semantic_target_context(webui: Mapping[str, Any], refs: list[str]) -> dict[
         if not isinstance(value, Mapping):
             return
         item_id = str(value.get("id") or "").strip()
-        candidate_refs = {f"widget:{item_id}", f"surface:{item_id}"} if item_id else set()
+        candidate_refs = (
+            {f"widget:{item_id}", f"surface:{item_id}"} if item_id else set()
+        )
         for ref in refs:
             parts = ref.split(":")
             if ref in candidate_refs or (
@@ -1017,7 +1209,9 @@ def _semantic_target_context(webui: Mapping[str, Any], refs: list[str]) -> dict[
                         "target_ref": ref,
                         "parent_ref": parent_ref,
                         "siblings": list(siblings or []),
-                        "order": (siblings or []).index(item_id) if item_id in (siblings or []) else None,
+                        "order": (siblings or []).index(item_id)
+                        if item_id in (siblings or [])
+                        else None,
                         "fragment": fragment,
                     }
                 )
@@ -1034,7 +1228,11 @@ def _semantic_target_context(webui: Mapping[str, Any], refs: list[str]) -> dict[
         "resolved": resolved,
         "missing_refs": missing,
         "ambiguous_refs": ambiguous,
-        "status": "ambiguous" if ambiguous else "missing" if missing or not refs else "present",
+        "status": "ambiguous"
+        if ambiguous
+        else "missing"
+        if missing or not refs
+        else "present",
     }
 
 
@@ -1118,7 +1316,12 @@ class BuilderWorkflowService:
         try:
             from adaos.services.eventbus import emit
 
-            emit(get_ctx().bus, BUILDER_WORKFLOW_EVENT, dict(projection), source="builder.workflow")
+            emit(
+                get_ctx().bus,
+                BUILDER_WORKFLOW_EVENT,
+                dict(projection),
+                source="builder.workflow",
+            )
         except Exception:
             return
 
@@ -1135,14 +1338,14 @@ class BuilderWorkflowService:
         if kind == "project":
             root = Path(self.dev_projects_root) / project_id
         else:
-            root = (self.dev_scenarios_root if kind == "scenario" else self.dev_skills_root) / project_id
+            root = (
+                self.dev_scenarios_root if kind == "scenario" else self.dev_skills_root
+            ) / project_id
         if not root.is_dir():
             raise FileNotFoundError(f"DEV {kind} project not found: {project_id}")
         return root
 
-    def _target_domain_packs(
-        self, object_type: str, object_id: str
-    ) -> tuple[str, ...]:
+    def _target_domain_packs(self, object_type: str, object_id: str) -> tuple[str, ...]:
         """Resolve Project-owned UI policy for a Project or owned component."""
 
         kind = _kind(object_type)
@@ -1161,9 +1364,9 @@ class BuilderWorkflowService:
             if not manifest_path.is_file():
                 continue
             try:
-                manifest = yaml.safe_load(
-                    manifest_path.read_text(encoding="utf-8-sig")
-                ) or {}
+                manifest = (
+                    yaml.safe_load(manifest_path.read_text(encoding="utf-8-sig")) or {}
+                )
             except (OSError, ValueError, yaml.YAMLError) as exc:
                 raise BuilderWorkflowError(
                     f"cannot resolve Builder domain packs from {manifest_path}"
@@ -1173,8 +1376,9 @@ class BuilderWorkflowService:
             manifest_id = str(manifest.get("id") or "").strip()
             if manifest_id != root.name:
                 continue
-            if kind == "project" or component_ref in _project_component_refs_from_manifest(
-                manifest
+            if (
+                kind == "project"
+                or component_ref in _project_component_refs_from_manifest(manifest)
             ):
                 owners.append(manifest)
         if len(owners) > 1:
@@ -1218,7 +1422,9 @@ class BuilderWorkflowService:
                 self._definition_binding = copy.deepcopy(binding)
             return compiled
         except (OSError, WorkflowArtifactError) as exc:
-            raise BuilderWorkflowError(f"invalid declarative Builder workflow: {exc}") from exc
+            raise BuilderWorkflowError(
+                f"invalid declarative Builder workflow: {exc}"
+            ) from exc
 
     def _active_builder_definition(self) -> CompiledWorkflowDefinition:
         if self.workspace_root is None:
@@ -1236,7 +1442,11 @@ class BuilderWorkflowService:
         except (OSError, ValueError, ArtifactReleaseContractError) as exc:
             raise BuilderWorkflowError(f"invalid active WorkspaceLock: {exc}") from exc
         package = next(
-            (item for item in workspace_lock.components if item.key == "skill:builder_skill"),
+            (
+                item
+                for item in workspace_lock.components
+                if item.key == "skill:builder_skill"
+            ),
             None,
         )
         if package is None:
@@ -1254,7 +1464,9 @@ class BuilderWorkflowService:
         relative = package.materialization_path or "skills/builder_skill"
         skill_root = (self.workspace_root / relative).resolve()
         if self.workspace_root not in skill_root.parents:
-            raise BuilderWorkflowError("active Builder materialization escapes Workspace")
+            raise BuilderWorkflowError(
+                "active Builder materialization escapes Workspace"
+            )
         try:
             artifact = load_manifest_bound_workflow(
                 skill_root,
@@ -1283,7 +1495,9 @@ class BuilderWorkflowService:
         try:
             binding = platform_workflow_adapter_registry().bind(
                 artifact.compiled,
-                expected_locks=(item.to_dict() for item in package.workflow_adapter_locks),
+                expected_locks=(
+                    item.to_dict() for item in package.workflow_adapter_locks
+                ),
             )
         except WorkflowAdapterRegistryError as exc:
             raise BuilderWorkflowError(
@@ -1296,9 +1510,7 @@ class BuilderWorkflowService:
         self._active_package_digest = package.digest
         self._active_binding_digest = package.workflow_binding_digest
         self._definition_digest = artifact.definition_digest
-        self._definition_validation_report = copy.deepcopy(
-            artifact.validation_report
-        )
+        self._definition_validation_report = copy.deepcopy(artifact.validation_report)
         self._definition_binding = copy.deepcopy(binding)
         return artifact.compiled
 
@@ -1366,11 +1578,20 @@ class BuilderWorkflowService:
                 )
             elif kind == "scenario":
                 try:
-                    manifest = yaml.safe_load(
-                        (root / manifest_name).read_text(encoding="utf-8")
-                    ) or {}
-                    legacy = manifest.get("workflow") if isinstance(manifest, Mapping) else None
-                    if isinstance(legacy, Mapping) and isinstance(legacy.get("states"), Mapping):
+                    manifest = (
+                        yaml.safe_load(
+                            (root / manifest_name).read_text(encoding="utf-8")
+                        )
+                        or {}
+                    )
+                    legacy = (
+                        manifest.get("workflow")
+                        if isinstance(manifest, Mapping)
+                        else None
+                    )
+                    if isinstance(legacy, Mapping) and isinstance(
+                        legacy.get("states"), Mapping
+                    ):
                         translated = translate_legacy_scenario_workflow(
                             legacy,
                             scenario_id=object_id,
@@ -1395,7 +1616,12 @@ class BuilderWorkflowService:
                             "validation": None,
                             "binding": None,
                         }
-                except (OSError, UnicodeError, yaml.YAMLError, LegacyWorkflowTranslationError) as exc:
+                except (
+                    OSError,
+                    UnicodeError,
+                    yaml.YAMLError,
+                    LegacyWorkflowTranslationError,
+                ) as exc:
                     project = {
                         "schema": "adaos.workflow.inspection.v1",
                         "source": f"{object_id}/{manifest_name}#workflow",
@@ -1442,8 +1668,10 @@ class BuilderWorkflowService:
         digest: str,
     ) -> Path:
         token = str(digest or "").strip().lower()
-        if not token.startswith("sha256:") or len(token) != 71 or any(
-            char not in "0123456789abcdef" for char in token[7:]
+        if (
+            not token.startswith("sha256:")
+            or len(token) != 71
+            or any(char not in "0123456789abcdef" for char in token[7:])
         ):
             raise BuilderWorkflowError("Builder context packet digest is invalid")
         return (
@@ -1454,6 +1682,228 @@ class BuilderWorkflowService:
             / _project_id(object_id)
             / f"{token[7:]}.json"
         )
+
+    def _change_run_ledger_path(
+        self,
+        object_type: str,
+        object_id: str,
+        change_id: str,
+    ) -> Path:
+        token = str(change_id or "").strip()
+        if not token:
+            raise BuilderWorkflowError("Builder Change run ledger requires change_id")
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        return (
+            Path(self.state_dir)
+            / "builder"
+            / "change_runs"
+            / _kind(object_type)
+            / _project_id(object_id)
+            / f"{digest}.json"
+        )
+
+    def _governed_ledger_path(
+        self,
+        object_type: str,
+        object_id: str,
+        change_id: str,
+    ) -> Path:
+        token = str(change_id or "").strip()
+        if not token:
+            raise BuilderWorkflowError("Builder governed ledger requires change_id")
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        return (
+            Path(self.state_dir)
+            / "builder"
+            / "governed_ledgers"
+            / _kind(object_type)
+            / _project_id(object_id)
+            / f"{digest}.json"
+        )
+
+    def _load_external_governed_ledger(
+        self,
+        object_type: str,
+        object_id: str,
+        record: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        projected = copy.deepcopy(dict(record))
+        external = _mapping(projected.get("governed_ledger_external"))
+        if external.get("schema") != "adaos.builder.governed_ledger_external.v1":
+            return projected
+        change = _mapping(projected.get("change") or projected.get("change_set"))
+        change_id = str(
+            projected.get("change_id")
+            or change.get("change_id")
+            or change.get("change_set_id")
+            or ""
+        ).strip()
+        governed = _mapping(projected.get("governed"))
+        instance_id = str(governed.get("instance_id") or "").strip()
+        path = self._governed_ledger_path(object_type, object_id, change_id)
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError as exc:
+            raise BuilderWorkflowError("Builder governed ledger is missing") from exc
+        if len(raw) > _MAX_GOVERNED_LEDGER_BYTES:
+            raise BuilderWorkflowError("Builder governed ledger exceeds the bounded size")
+        try:
+            value = json.loads(raw.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BuilderWorkflowError("Builder governed ledger is invalid") from exc
+        if (
+            not isinstance(value, Mapping)
+            or value.get("schema") != "adaos.builder.governed_ledger.v1"
+            or str(value.get("change_id") or "").strip() != change_id
+            or (
+                instance_id
+                and str(value.get("instance_id") or "").strip() != instance_id
+            )
+            or not isinstance(value.get("history"), list)
+            or not isinstance(value.get("idempotency"), list)
+        ):
+            raise BuilderWorkflowError("Builder governed ledger is invalid")
+        history = copy.deepcopy(list(value["history"]))
+        idempotency = copy.deepcopy(list(value["idempotency"]))
+        identity = {"history": history, "idempotency": idempotency}
+        if (
+            str(external.get("digest") or "").strip().lower()
+            != _stable_digest(identity)
+            or int(external.get("history_count") or -1) != len(history)
+            or int(external.get("idempotency_count") or -1) != len(idempotency)
+        ):
+            raise BuilderWorkflowError(
+                "Builder governed ledger identity differs from its reference"
+            )
+        governed["history"] = history
+        governed["idempotency"] = idempotency
+        projected["governed"] = governed
+        projected.pop("governed_ledger_external", None)
+        return projected
+
+    def _externalize_governed_ledger(
+        self,
+        object_type: str,
+        object_id: str,
+        record: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        projected = copy.deepcopy(dict(record))
+        change = _mapping(projected.get("change") or projected.get("change_set"))
+        change_id = str(
+            projected.get("change_id")
+            or change.get("change_id")
+            or change.get("change_set_id")
+            or ""
+        ).strip()
+        governed = _mapping(projected.get("governed"))
+        history = copy.deepcopy(list(governed.get("history") or []))
+        idempotency = copy.deepcopy(list(governed.get("idempotency") or []))
+        if not change_id or not governed or (not history and not idempotency):
+            projected.pop("governed_ledger_external", None)
+            return projected
+        instance_id = str(governed.get("instance_id") or "").strip()
+        identity = {"history": history, "idempotency": idempotency}
+        value = {
+            "schema": "adaos.builder.governed_ledger.v1",
+            "change_id": change_id,
+            "instance_id": instance_id,
+            **identity,
+        }
+        raw = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        if len(raw) > _MAX_GOVERNED_LEDGER_BYTES:
+            raise BuilderWorkflowError("Builder governed ledger exceeds the bounded size")
+        path = self._governed_ledger_path(object_type, object_id, change_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.tmp")
+        temporary.write_bytes(raw)
+        _replace_path(temporary, path)
+        governed["history"] = []
+        governed["idempotency"] = []
+        projected["governed"] = governed
+        projected["governed_ledger_external"] = {
+            "schema": "adaos.builder.governed_ledger_external.v1",
+            "digest": _stable_digest(identity),
+            "history_count": len(history),
+            "idempotency_count": len(idempotency),
+        }
+        return projected
+
+    def _load_external_change_runs(
+        self,
+        object_type: str,
+        object_id: str,
+        change: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        projected = copy.deepcopy(dict(change))
+        external = _mapping(projected.get("runs_external"))
+        if external.get("schema") != "adaos.builder.change_runs_external.v1":
+            return projected
+        change_id = str(projected.get("change_id") or "").strip()
+        path = self._change_run_ledger_path(object_type, object_id, change_id)
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError as exc:
+            raise BuilderWorkflowError("Builder Change run ledger is missing") from exc
+        if len(raw) > _MAX_CHANGE_RUN_LEDGER_BYTES:
+            raise BuilderWorkflowError(
+                "Builder Change run ledger exceeds the bounded size"
+            )
+        try:
+            value = json.loads(raw.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BuilderWorkflowError("Builder Change run ledger is invalid") from exc
+        if (
+            not isinstance(value, Mapping)
+            or value.get("schema") != "adaos.builder.change_runs.v1"
+            or str(value.get("change_id") or "").strip() != change_id
+            or not isinstance(value.get("runs"), list)
+        ):
+            raise BuilderWorkflowError("Builder Change run ledger is invalid")
+        runs = copy.deepcopy(list(value["runs"]))
+        digest = _stable_digest({"runs": runs})
+        if str(external.get("digest") or "").strip().lower() != digest or int(
+            external.get("count") or -1
+        ) != len(runs):
+            raise BuilderWorkflowError(
+                "Builder Change run ledger identity differs from its reference"
+            )
+        projected["runs"] = runs
+        return projected
+
+    def _externalize_change_runs(
+        self,
+        object_type: str,
+        object_id: str,
+        change: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        projected = copy.deepcopy(dict(change))
+        runs = copy.deepcopy(list(projected.get("runs") or []))
+        change_id = str(projected.get("change_id") or "").strip()
+        if not change_id or not runs:
+            projected.pop("runs_external", None)
+            return projected
+        value = {
+            "schema": "adaos.builder.change_runs.v1",
+            "change_id": change_id,
+            "runs": runs,
+        }
+        raw = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        if len(raw) > _MAX_CHANGE_RUN_LEDGER_BYTES:
+            raise BuilderWorkflowError(
+                "Builder Change run ledger exceeds the bounded size"
+            )
+        path = self._change_run_ledger_path(object_type, object_id, change_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.tmp")
+        temporary.write_bytes(raw)
+        _replace_path(temporary, path)
+        projected["runs"] = []
+        projected["runs_external"] = {
+            "schema": "adaos.builder.change_runs_external.v1",
+            "digest": _stable_digest({"runs": runs}),
+            "count": len(runs),
+        }
+        return projected
 
     def _load_external_context_packet(
         self,
@@ -1471,19 +1921,26 @@ class BuilderWorkflowService:
         except FileNotFoundError as exc:
             raise BuilderWorkflowError("Builder context packet is missing") from exc
         if len(raw) > _MAX_CONTEXT_PACKET_BYTES:
-            raise BuilderWorkflowError("Builder context packet exceeds the bounded size")
+            raise BuilderWorkflowError(
+                "Builder context packet exceeds the bounded size"
+            )
         try:
             value = json.loads(raw.decode("utf-8-sig"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise BuilderWorkflowError("Builder context packet is invalid") from exc
-        if not isinstance(value, Mapping) or value.get("schema") != BUILDER_CONTEXT_PACKET_SCHEMA:
+        if (
+            not isinstance(value, Mapping)
+            or value.get("schema") != BUILDER_CONTEXT_PACKET_SCHEMA
+        ):
             raise BuilderWorkflowError("Builder context packet is invalid")
         supplied_digest = str(value.get("digest") or "").strip().lower()
         unsigned = dict(value)
         unsigned.pop("digest", None)
         unsigned.pop("built_at", None)
         if supplied_digest != digest or _stable_digest(unsigned) != digest:
-            raise BuilderWorkflowError("Builder context packet identity differs from its reference")
+            raise BuilderWorkflowError(
+                "Builder context packet identity differs from its reference"
+            )
         return dict(value)
 
     def _portfolio_record_path(
@@ -1529,11 +1986,24 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(
                     f"Builder portfolio record is invalid: {change_id}"
                 ) from exc
-            if not isinstance(value, Mapping) or str(value.get("change_id") or "").strip() != change_id:
+            if (
+                not isinstance(value, Mapping)
+                or str(value.get("change_id") or "").strip() != change_id
+            ):
                 raise BuilderWorkflowError(
                     f"Builder portfolio record identity differs from its index: {change_id}"
                 )
             record = dict(value)
+            record = self._load_external_change_runs(
+                object_type,
+                object_id,
+                record,
+            )
+            record = self._load_external_governed_ledger(
+                object_type,
+                object_id,
+                record,
+            )
             external_context = self._load_external_context_packet(
                 object_type,
                 object_id,
@@ -1558,9 +2028,13 @@ class BuilderWorkflowService:
             return projected
         digest = str(context_packet.get("digest") or "").strip().lower()
         path = self._context_packet_path(object_type, object_id, digest)
-        raw = (json.dumps(context_packet, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        raw = (json.dumps(context_packet, ensure_ascii=False, indent=2) + "\n").encode(
+            "utf-8"
+        )
         if len(raw) > _MAX_CONTEXT_PACKET_BYTES:
-            raise BuilderWorkflowError("Builder context packet exceeds the bounded size")
+            raise BuilderWorkflowError(
+                "Builder context packet exceeds the bounded size"
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.tmp")
         temporary.write_bytes(raw)
@@ -1588,6 +2062,16 @@ class BuilderWorkflowService:
                 object_id,
                 record,
             )
+            persisted_record = self._externalize_change_runs(
+                object_type,
+                object_id,
+                persisted_record,
+            )
+            persisted_record = self._externalize_governed_ledger(
+                object_type,
+                object_id,
+                persisted_record,
+            )
             raw = (
                 json.dumps(persisted_record, ensure_ascii=False, indent=2) + "\n"
             ).encode("utf-8")
@@ -1614,13 +2098,18 @@ class BuilderWorkflowService:
         external_context = _mapping(workflow.get("context_packet_external"))
         if context_packet and (
             estimated > _MAX_INLINE_STATE_BYTES
-            or external_context.get("schema") == "adaos.builder.context_packet_external.v1"
+            or external_context.get("schema")
+            == "adaos.builder.context_packet_external.v1"
         ):
             digest = str(context_packet.get("digest") or "").strip().lower()
             path = self._context_packet_path(object_type, object_id, digest)
-            raw = (json.dumps(context_packet, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            raw = (
+                json.dumps(context_packet, ensure_ascii=False, indent=2) + "\n"
+            ).encode("utf-8")
             if len(raw) > _MAX_CONTEXT_PACKET_BYTES:
-                raise BuilderWorkflowError("Builder context packet exceeds the bounded size")
+                raise BuilderWorkflowError(
+                    "Builder context packet exceeds the bounded size"
+                )
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_name(f".{path.name}.tmp")
             temporary.write_bytes(raw)
@@ -1637,6 +2126,20 @@ class BuilderWorkflowService:
         if isinstance(workflow.get("change"), Mapping):
             workflow.pop("change_set", None)
         payload["workflow"] = workflow
+        if isinstance(workflow.get("change"), Mapping):
+            workflow["change"] = self._externalize_change_runs(
+                object_type,
+                object_id,
+                workflow["change"],
+            )
+            payload["workflow"] = workflow
+        if isinstance(workflow.get("governed"), Mapping):
+            workflow = self._externalize_governed_ledger(
+                object_type,
+                object_id,
+                workflow,
+            )
+            payload["workflow"] = workflow
         return payload
 
     def _read_state(self, object_type: str, object_id: str) -> dict[str, Any]:
@@ -1645,13 +2148,28 @@ class BuilderWorkflowService:
             return {}
         try:
             if path.stat().st_size > _MAX_STATE_BYTES:
-                raise BuilderWorkflowError("prompt context exceeds the bounded state size")
+                raise BuilderWorkflowError(
+                    "prompt context exceeds the bounded state size"
+                )
             value = json.loads(path.read_text(encoding="utf-8-sig"))
         except json.JSONDecodeError as exc:
             raise BuilderWorkflowError(f"invalid prompt_state.json: {exc}") from exc
         state = dict(value) if isinstance(value, Mapping) else {}
         workflow = _mapping(state.get("workflow"))
-        external_context = self._load_external_context_packet(object_type, object_id, workflow)
+        if isinstance(workflow.get("change"), Mapping):
+            workflow["change"] = self._load_external_change_runs(
+                object_type,
+                object_id,
+                workflow["change"],
+            )
+        workflow = self._load_external_governed_ledger(
+            object_type,
+            object_id,
+            workflow,
+        )
+        external_context = self._load_external_context_packet(
+            object_type, object_id, workflow
+        )
         if external_context is not None:
             workflow["context_packet"] = external_context
         external = self._load_external_portfolio(object_type, object_id, workflow)
@@ -1661,7 +2179,9 @@ class BuilderWorkflowService:
         state["workflow"] = workflow
         return state
 
-    def _write_state(self, object_type: str, object_id: str, state: Mapping[str, Any]) -> None:
+    def _write_state(
+        self, object_type: str, object_id: str, state: Mapping[str, Any]
+    ) -> None:
         path = self._state_path(object_type, object_id)
         payload = self._externalize_portfolio(object_type, object_id, state)
         raw = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -1675,7 +2195,9 @@ class BuilderWorkflowService:
         token = str(checkpoint_id or "").strip().lower()
         if len(token) != 64 or any(char not in "0123456789abcdef" for char in token):
             raise BuilderWorkflowError("Builder migration checkpoint id is invalid")
-        return Path(self.state_dir) / "builder" / "workflow_migrations" / f"{token}.json"
+        return (
+            Path(self.state_dir) / "builder" / "workflow_migrations" / f"{token}.json"
+        )
 
     def migrate_in_flight_instance(
         self,
@@ -1711,7 +2233,9 @@ class BuilderWorkflowService:
         workflow = _mapping(state.get("workflow"))
         current = _mapping(workflow.get("governed"))
         if not current:
-            raise BuilderWorkflowError("Builder project has no in-flight governed instance")
+            raise BuilderWorkflowError(
+                "Builder project has no in-flight governed instance"
+            )
         checkpoint_id = hashlib.sha256(
             canonical_workflow_bytes(
                 {
@@ -1768,7 +2292,9 @@ class BuilderWorkflowService:
                 now=now,
             )
         except (ValueError, TypeError) as exc:
-            raise BuilderWorkflowError(f"Builder workflow migration rejected: {exc}") from exc
+            raise BuilderWorkflowError(
+                f"Builder workflow migration rejected: {exc}"
+            ) from exc
         checkpoint = {
             "schema": "adaos.builder.workflow_migration_checkpoint.v1",
             "checkpoint_id": checkpoint_id,
@@ -1809,7 +2335,9 @@ class BuilderWorkflowService:
         try:
             checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            raise BuilderWorkflowError(f"cannot read Builder migration checkpoint: {exc}") from exc
+            raise BuilderWorkflowError(
+                f"cannot read Builder migration checkpoint: {exc}"
+            ) from exc
         kind = _kind(checkpoint.get("object_type"))
         project_id = _project_id(checkpoint.get("object_id"))
         state = self._read_state(kind, project_id)
@@ -1822,7 +2350,9 @@ class BuilderWorkflowService:
         if current == before:
             if not checkpoint.get("rolled_back_at"):
                 checkpoint["rolled_back_at"] = now or _now()
-                checkpoint_tmp = checkpoint_path.with_name(f".{checkpoint_path.name}.tmp")
+                checkpoint_tmp = checkpoint_path.with_name(
+                    f".{checkpoint_path.name}.tmp"
+                )
                 checkpoint_tmp.write_text(
                     json.dumps(checkpoint, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
@@ -1863,9 +2393,15 @@ class BuilderWorkflowService:
             value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
         except (OSError, ValueError, yaml.YAMLError):
             return None
-        return str(value.get("version") or "").strip() or None if isinstance(value, Mapping) else None
+        return (
+            str(value.get("version") or "").strip() or None
+            if isinstance(value, Mapping)
+            else None
+        )
 
-    def _project_manifest_metadata(self, object_type: str, object_id: str) -> dict[str, Any]:
+    def _project_manifest_metadata(
+        self, object_type: str, object_id: str
+    ) -> dict[str, Any]:
         kind = _kind(object_type)
         root = self.project_root(kind, object_id)
         path = root / _manifest_name(kind)
@@ -1880,13 +2416,18 @@ class BuilderWorkflowService:
             object_id=object_id,
         )
 
-    def _project_presentation(self, object_type: str, object_id: str) -> dict[str, Any] | None:
+    def _project_presentation(
+        self, object_type: str, object_id: str
+    ) -> dict[str, Any] | None:
         kind = _kind(object_type)
         if kind != "project":
             return None
         root = self.project_root(kind, object_id)
         try:
-            manifest = yaml.safe_load((root / "project.yaml").read_text(encoding="utf-8-sig")) or {}
+            manifest = (
+                yaml.safe_load((root / "project.yaml").read_text(encoding="utf-8-sig"))
+                or {}
+            )
         except (OSError, ValueError, yaml.YAMLError):
             return None
         if not isinstance(manifest, Mapping):
@@ -1902,7 +2443,9 @@ class BuilderWorkflowService:
             **dict(entrypoint),
         }
 
-    def current_prototype_revision(self, object_type: str, object_id: str) -> str | None:
+    def current_prototype_revision(
+        self, object_type: str, object_id: str
+    ) -> str | None:
         kind = _kind(object_type)
         if kind == "project":
             presentation = self._project_presentation(kind, object_id)
@@ -1937,12 +2480,18 @@ class BuilderWorkflowService:
         try:
             webui = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise BuilderWorkflowError(f"cannot accept prototype webui.json: {exc}") from exc
+            raise BuilderWorkflowError(
+                f"cannot accept prototype webui.json: {exc}"
+            ) from exc
         if not isinstance(webui, Mapping):
-            raise BuilderWorkflowError("cannot accept prototype: webui.json must be an object")
+            raise BuilderWorkflowError(
+                "cannot accept prototype: webui.json must be an object"
+            )
         revision = str(self.current_prototype_revision(kind, project_id) or "").strip()
         if not revision:
-            raise BuilderWorkflowError("cannot accept prototype without an immutable UI revision")
+            raise BuilderWorkflowError(
+                "cannot accept prototype without an immutable UI revision"
+            )
         from adaos.services.resources.prototype import prototype_webui_digest
 
         normalized = copy.deepcopy(dict(webui))
@@ -1975,7 +2524,9 @@ class BuilderWorkflowService:
         root = self._prototype_source_root(object_type, object_id).resolve()
         dictionaries: dict[str, dict[str, str]] = {}
         definitions: list[dict[str, str]] = []
-        for resource_id, raw in sorted(resources.items(), key=lambda item: str(item[0])):
+        for resource_id, raw in sorted(
+            resources.items(), key=lambda item: str(item[0])
+        ):
             resource = _mapping(raw)
             if str(resource.get("role") or "").strip().lower() != "i18n":
                 continue
@@ -2043,7 +2594,10 @@ class BuilderWorkflowService:
             if isinstance(value, Mapping):
                 if str(value.get("kind") or "").strip() == "resourceQuery":
                     resource_type = str(value.get("resourceType") or "").strip()
-                    if resource_type.startswith("prototype.") and resource_type not in found:
+                    if (
+                        resource_type.startswith("prototype.")
+                        and resource_type not in found
+                    ):
                         found.append(resource_type)
                 for nested in value.values():
                     visit(nested)
@@ -2076,8 +2630,10 @@ class BuilderWorkflowService:
             resources = PrototypeResourceService()
             component_ref = f"{_kind(object_type)}:{_project_id(object_id)}"
             owner_ref = resolve_prototype_resource_owner(
-                resources, resource_types,
-                component_ref=component_ref, dev_projects_root=self.dev_projects_root,
+                resources,
+                resource_types,
+                component_ref=component_ref,
+                dev_projects_root=self.dev_projects_root,
             )
             return resources.acceptance_snapshots(
                 project_ref=owner_ref,
@@ -2087,7 +2643,9 @@ class BuilderWorkflowService:
                 resource_types=resource_types,
             )
         except (ValueError, PrototypeResourceConflict) as exc:
-            raise BuilderWorkflowError(f"cannot accept prototype resource state: {exc}") from exc
+            raise BuilderWorkflowError(
+                f"cannot accept prototype resource state: {exc}"
+            ) from exc
 
     @staticmethod
     def _prototype_resource_evidence(
@@ -2130,7 +2688,8 @@ class BuilderWorkflowService:
             issue
             for issue in change.get("issues") or []
             if isinstance(issue, Mapping)
-            and str(issue.get("structural_status") or "active").strip().lower() == "active"
+            and str(issue.get("structural_status") or "active").strip().lower()
+            == "active"
             and str(issue.get("status") or "open").strip().lower() != "deferred"
         ]
         for issue in active_issues:
@@ -2170,12 +2729,16 @@ class BuilderWorkflowService:
         from adaos.services.builder.prototype_acceptance import (
             admit_prototype_acceptance,
         )
-        from adaos.services.builder.prototype_stage import prototype_automation_requirements
+        from adaos.services.builder.prototype_stage import (
+            prototype_automation_requirements,
+        )
 
         change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
         if change is None:
             raise BuilderWorkflowError("prototype acceptance requires an active Change")
-        webui, revision, webui_digest = self._prototype_webui_snapshot(object_type, object_id)
+        webui, revision, webui_digest = self._prototype_webui_snapshot(
+            object_type, object_id
+        )
         snapshots = self._prototype_resource_snapshots(
             object_type=object_type,
             object_id=object_id,
@@ -2189,8 +2752,10 @@ class BuilderWorkflowService:
         )
         if locale_snapshot is not None:
             snapshots.append(locale_snapshot)
-        acceptance = value if isinstance(value, Mapping) else _mapping(
-            _mapping(workflow.get("prototype")).get("acceptance")
+        acceptance = (
+            value
+            if isinstance(value, Mapping)
+            else _mapping(_mapping(workflow.get("prototype")).get("acceptance"))
         )
         if not acceptance:
             raise BuilderWorkflowError("Prototype acceptance evidence is required")
@@ -2227,7 +2792,9 @@ class BuilderWorkflowService:
         change = _normalize_change(current.get("change") or current.get("change_set"))
         if change is None:
             raise BuilderWorkflowError("prototype acceptance requires an active Change")
-        webui, revision, webui_digest = self._prototype_webui_snapshot(object_type, object_id)
+        webui, revision, webui_digest = self._prototype_webui_snapshot(
+            object_type, object_id
+        )
         resource_snapshots = self._prototype_resource_snapshots(
             object_type=object_type,
             object_id=object_id,
@@ -2272,7 +2839,9 @@ class BuilderWorkflowService:
                 else self._target_domain_packs(object_type, object_id)
             ),
         )
-        governed_state = str(_mapping(current.get("governed")).get("state") or "").strip()
+        governed_state = str(
+            _mapping(current.get("governed")).get("state") or ""
+        ).strip()
         if governed_state == "automation_ready":
             reopened = self.transition(
                 object_type,
@@ -2314,13 +2883,17 @@ class BuilderWorkflowService:
         acceptance = _mapping(prototype.get("acceptance"))
         acceptance_required = bool(prototype.get("acceptance_required"))
         if not prototype.get("head_revision") or not bool(prototype.get("stable")):
-            raise BuilderWorkflowError("A Prototype revision must be accepted before Automation starts")
+            raise BuilderWorkflowError(
+                "A Prototype revision must be accepted before Automation starts"
+            )
         if not acceptance and not acceptance_required:
             return None
         if not acceptance:
             raise BuilderWorkflowError("Prototype acceptance evidence is required")
         if not bool(prototype.get("stable")):
-            raise BuilderWorkflowError("Prototype must be accepted before Automation starts")
+            raise BuilderWorkflowError(
+                "Prototype must be accepted before Automation starts"
+            )
         active_phase = str(current.get("active_phase") or "").strip().lower()
         automation = _mapping(current.get("automation"))
         if active_phase == "automation" and str(
@@ -2333,9 +2906,13 @@ class BuilderWorkflowService:
                 admit_prototype_acceptance,
             )
 
-            change = _normalize_change(current.get("change") or current.get("change_set"))
+            change = _normalize_change(
+                current.get("change") or current.get("change_set")
+            )
             if change is None:
-                raise BuilderWorkflowError("prototype acceptance requires an active Change")
+                raise BuilderWorkflowError(
+                    "prototype acceptance requires an active Change"
+                )
             return admit_prototype_acceptance(
                 acceptance,
                 expected_project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
@@ -2359,7 +2936,9 @@ class BuilderWorkflowService:
     ) -> dict[str, Any]:
         raw = _mapping(state.get("workflow"))
         legacy_state = str(state.get("workflow_state") or "prototype").strip().lower()
-        active_phase = str(raw.get("active_phase") or _legacy_phase(legacy_state)).strip().lower()
+        active_phase = (
+            str(raw.get("active_phase") or _legacy_phase(legacy_state)).strip().lower()
+        )
         if active_phase not in {"prototype", "automation"}:
             active_phase = "prototype"
 
@@ -2370,21 +2949,42 @@ class BuilderWorkflowService:
         raw_change = raw.get("change")
         raw_change_set = raw.get("change_set")
         if isinstance(raw_change, Mapping) and isinstance(raw_change_set, Mapping):
-            change_id = str(raw_change.get("change_id") or raw_change.get("change_set_id") or "").strip()
-            change_set_id = str(raw_change_set.get("change_set_id") or raw_change_set.get("change_id") or "").strip()
+            change_id = str(
+                raw_change.get("change_id") or raw_change.get("change_set_id") or ""
+            ).strip()
+            change_set_id = str(
+                raw_change_set.get("change_set_id")
+                or raw_change_set.get("change_id")
+                or ""
+            ).strip()
             if change_id and change_set_id and change_id != change_set_id:
-                raise BuilderWorkflowError("workflow change and change_set identities diverge")
-        change = _normalize_change(raw_change if isinstance(raw_change, Mapping) else raw_change_set)
+                raise BuilderWorkflowError(
+                    "workflow change and change_set identities diverge"
+                )
+        change = _normalize_change(
+            raw_change if isinstance(raw_change, Mapping) else raw_change_set
+        )
         if change:
-            change["project_ref"] = change.get("project_ref") or f"{_kind(object_type)}:{_project_id(object_id)}"
+            change["project_ref"] = (
+                change.get("project_ref")
+                or f"{_kind(object_type)}:{_project_id(object_id)}"
+            )
             if not change.get("supersedes_change_id"):
                 for event in reversed(raw.get("history") or []):
-                    if not isinstance(event, Mapping) or event.get("action") != "plan_change_set":
+                    if (
+                        not isinstance(event, Mapping)
+                        or event.get("action") != "plan_change_set"
+                    ):
                         continue
                     event_metadata = _mapping(event.get("metadata"))
-                    if str(event_metadata.get("change_set_id") or "") != change["change_id"]:
+                    if (
+                        str(event_metadata.get("change_set_id") or "")
+                        != change["change_id"]
+                    ):
                         continue
-                    supersedes = str(event_metadata.get("supersedes_change_set_id") or "").strip()
+                    supersedes = str(
+                        event_metadata.get("supersedes_change_set_id") or ""
+                    ).strip()
                     if supersedes:
                         change["supersedes_change_id"] = supersedes
                     break
@@ -2393,8 +2993,12 @@ class BuilderWorkflowService:
         prototype.setdefault("head_revision", current_revision)
         if _kind(object_type) == "scenario" and active_phase == "prototype":
             prototype["head_revision"] = current_revision
-        prototype.setdefault("status", "working" if active_phase == "prototype" else "frozen")
-        prototype.setdefault("stable", legacy_state in {"prototype_stable", "automation", "publication"})
+        prototype.setdefault(
+            "status", "working" if active_phase == "prototype" else "frozen"
+        )
+        prototype.setdefault(
+            "stable", legacy_state in {"prototype_stable", "automation", "publication"}
+        )
         prototype.setdefault("acceptance_required", False)
         prototype.setdefault("acceptance", None)
 
@@ -2406,11 +3010,15 @@ class BuilderWorkflowService:
             else:
                 automation["status"] = "not_started"
         automation.setdefault("iteration", 0)
-        automation.setdefault("source_prototype_revision", prototype.get("head_revision"))
+        automation.setdefault(
+            "source_prototype_revision", prototype.get("head_revision")
+        )
         if not str(automation.get("snapshot_task_id") or "").strip():
             snapshot_path = Path(str(automation.get("snapshot_path") or "").strip())
             try:
-                snapshot = json.loads((snapshot_path / "snapshot.json").read_text(encoding="utf-8-sig"))
+                snapshot = json.loads(
+                    (snapshot_path / "snapshot.json").read_text(encoding="utf-8-sig")
+                )
             except (OSError, ValueError, json.JSONDecodeError):
                 snapshot = {}
             if isinstance(snapshot, Mapping):
@@ -2419,7 +3027,9 @@ class BuilderWorkflowService:
                     automation["snapshot_task_id"] = snapshot_task_id
 
         if "status" not in publication:
-            publication["status"] = "published" if legacy_state == "publication" else "not_started"
+            publication["status"] = (
+                "published" if legacy_state == "publication" else "not_started"
+            )
         publication.setdefault("current_version", None)
         publication.setdefault("published_at", None)
 
@@ -2448,7 +3058,9 @@ class BuilderWorkflowService:
             "change": change,
             "change_set": change_set,
             "context_packet": _mapping(raw.get("context_packet")) or None,
-            "application_specification": normalize_specification(raw.get("application_specification")),
+            "application_specification": normalize_specification(
+                raw.get("application_specification")
+            ),
             "reviews": [
                 copy.deepcopy(dict(item))
                 for item in raw.get("reviews") or []
@@ -2457,7 +3069,11 @@ class BuilderWorkflowService:
             "interaction": {
                 "conversation_focus": str(
                     _mapping(raw.get("interaction")).get("conversation_focus")
-                    or (f"change:{change['change_id']}" if change else f"{_kind(object_type)}:{_project_id(object_id)}")
+                    or (
+                        f"change:{change['change_id']}"
+                        if change
+                        else f"{_kind(object_type)}:{_project_id(object_id)}"
+                    )
                 ).strip(),
                 "inspected_ref": str(
                     _mapping(raw.get("interaction")).get("inspected_ref") or ""
@@ -2475,7 +3091,10 @@ class BuilderWorkflowService:
                 for item in raw.get("history") or []
                 if isinstance(item, Mapping)
             ][-_MAX_HISTORY:],
-            "updated_at": str(raw.get("updated_at") or state.get("updated_at") or "").strip() or None,
+            "updated_at": str(
+                raw.get("updated_at") or state.get("updated_at") or ""
+            ).strip()
+            or None,
         }
         definition = self._governed_definition()
         normalized["governed"] = governed_instance(
@@ -2500,11 +3119,14 @@ class BuilderWorkflowService:
             normalized["presentation"] = presentation
         if _kind(object_type) == "project":
             try:
-                manifest = yaml.safe_load(
-                    (self.project_root(object_type, object_id) / "project.yaml").read_text(
-                        encoding="utf-8-sig"
+                manifest = (
+                    yaml.safe_load(
+                        (
+                            self.project_root(object_type, object_id) / "project.yaml"
+                        ).read_text(encoding="utf-8-sig")
                     )
-                ) or {}
+                    or {}
+                )
             except (OSError, ValueError, yaml.YAMLError):
                 manifest = {}
             if isinstance(manifest, Mapping):
@@ -2558,19 +3180,26 @@ class BuilderWorkflowService:
         return normalized
 
     @staticmethod
-    def _capabilities(workflow: Mapping[str, Any], *, archived: bool, object_type: str) -> dict[str, bool]:
+    def _capabilities(
+        workflow: Mapping[str, Any], *, archived: bool, object_type: str
+    ) -> dict[str, bool]:
         active = str(workflow.get("active_phase") or "prototype")
         automation = _mapping(workflow.get("automation"))
         automation_status = str(automation.get("status") or "not_started")
-        delivery_status = str(_mapping(workflow.get("delivery")).get("status") or "idle")
+        delivery_status = str(
+            _mapping(workflow.get("delivery")).get("status") or "idle"
+        )
         retained_automation = bool(str(automation.get("snapshot_path") or "").strip())
         change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
         change_set_status = str((change or {}).get("status") or "")
         automation_previewable = automation_status == "completed" or (
-            retained_automation and automation_status in {"adapting", "failed", "frozen"}
+            retained_automation
+            and automation_status in {"adapting", "failed", "frozen"}
         )
         mutable = not archived
-        strict_acceptance = bool(_mapping(workflow.get("prototype")).get("acceptance_required"))
+        strict_acceptance = bool(
+            _mapping(workflow.get("prototype")).get("acceptance_required")
+        )
         accepted_prototype = bool(_mapping(workflow.get("prototype")).get("acceptance"))
         return {
             "can_edit_prototype": mutable and active == "prototype",
@@ -2578,8 +3207,12 @@ class BuilderWorkflowService:
             "can_handoff_to_automation": mutable
             and active == "prototype"
             and (not strict_acceptance or accepted_prototype),
-            "can_edit_automation": mutable and active == "automation" and automation_status != "adapting",
-            "can_return_to_prototype": mutable and active == "automation" and automation_status == "completed",
+            "can_edit_automation": mutable
+            and active == "automation"
+            and automation_status != "adapting",
+            "can_return_to_prototype": mutable
+            and active == "automation"
+            and automation_status == "completed",
             "can_prepare_candidate": mutable
             and active == "automation"
             and automation_status == "completed"
@@ -2590,7 +3223,8 @@ class BuilderWorkflowService:
             and automation_status == "completed"
             and delivery_status == "accepted",
             "can_preview_prototype": object_type in {"project", "scenario"},
-            "can_preview_automation": object_type == "scenario" and automation_previewable,
+            "can_preview_automation": object_type == "scenario"
+            and automation_previewable,
             "can_preview_trial": False,
             "can_preview_publication": False,
             "can_plan_change_set": mutable
@@ -2605,13 +3239,17 @@ class BuilderWorkflowService:
         project_id = _project_id(object_id)
         with _LOCK:
             state = self._read_state(kind, project_id)
-            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            workflow = self._normalized_workflow(
+                state, object_type=kind, object_id=project_id
+            )
         projection = {
             **copy.deepcopy(workflow),
             "object_type": kind,
             "object_id": project_id,
             "archived": bool(state.get("archived")),
-            "capabilities": self._capabilities(workflow, archived=bool(state.get("archived")), object_type=kind),
+            "capabilities": self._capabilities(
+                workflow, archived=bool(state.get("archived")), object_type=kind
+            ),
         }
         description = workflow_description(
             workflow,
@@ -2660,7 +3298,9 @@ class BuilderWorkflowService:
     @staticmethod
     def _compact_explanation(projection: Mapping[str, Any]) -> dict[str, Any]:
         description = _mapping(projection.get("workflow_description"))
-        change = _normalize_change(projection.get("change") or projection.get("change_set"))
+        change = _normalize_change(
+            projection.get("change") or projection.get("change_set")
+        )
         process = _mapping(projection.get("process"))
         state = str(description.get("state") or "ready")
         blockers = [
@@ -2678,7 +3318,8 @@ class BuilderWorkflowService:
         ]
         project_commands = [
             str(item.get("command") or "")
-            for item in _mapping(projection.get("project_summary")).get("commands") or []
+            for item in _mapping(projection.get("project_summary")).get("commands")
+            or []
             if isinstance(item, Mapping)
             and str(item.get("command") or "").strip() == "builder.change.plan"
         ]
@@ -2694,11 +3335,15 @@ class BuilderWorkflowService:
         ]
         stable_placement = active_project_placement(placements, kind="stable")
         installed = _mapping(project.get("installed_release_ref"))
-        project_title = str(identity.get("title") or projection.get("object_id") or "Project")
+        project_title = str(
+            identity.get("title") or projection.get("object_id") or "Project"
+        )
         published_version = str(publication.get("current_version") or "").strip()
         if state == "published":
             release_label = published_version or "current"
-            summary = f'Version {release_label} of "{project_title}" is published to stable.'
+            summary = (
+                f'Version {release_label} of "{project_title}" is published to stable.'
+            )
             installation_text = (
                 "Installed in Workspace."
                 if installed
@@ -2711,7 +3356,9 @@ class BuilderWorkflowService:
             )
             reason = f"{installation_text} {placement_text}"
             next_commands = [
-                "builder.publication.open" if stable_placement else "builder.publication.place",
+                "builder.publication.open"
+                if stable_placement
+                else "builder.publication.place",
                 "builder.process.inspect",
                 "builder.change.plan",
                 "builder.project.list",
@@ -2723,11 +3370,19 @@ class BuilderWorkflowService:
         else:
             summary = f"Change {change['change_id']} is in {state}."
             reason = "No active blocker."
-        if state != "published" and progress.get("waiting") and progress.get("wait_explanation"):
+        if (
+            state != "published"
+            and progress.get("waiting")
+            and progress.get("wait_explanation")
+        ):
             reason = str(progress["wait_explanation"])
         elif state != "published" and blockers:
             reason = "; ".join(item["reason_code"] for item in blockers[:3])
-        next_text = ", ".join(next_commands[:4]) if next_commands else "wait for input or inspect the process"
+        next_text = (
+            ", ".join(next_commands[:4])
+            if next_commands
+            else "wait for input or inspect the process"
+        )
         return {
             "schema": "adaos.builder.compact_workflow_explanation.v1",
             "project_ref": f"{projection.get('object_type')}:{projection.get('object_id')}",
@@ -2778,7 +3433,10 @@ class BuilderWorkflowService:
             "verification": {"en": "Verification", "ru": "Проверка"},
             "trial": {"en": "Trial", "ru": "Апробация"},
             "publication": {"en": "Stable release", "ru": "Стабильная версия"},
-            "workspace_installation": {"en": "Workspace installation", "ru": "Установка в Workspace"},
+            "workspace_installation": {
+                "en": "Workspace installation",
+                "ru": "Установка в Workspace",
+            },
             "placement": {"en": "Webspace placement", "ru": "Размещение в Webspace"},
         }
         status_labels = {
@@ -2795,7 +3453,11 @@ class BuilderWorkflowService:
             "failed": {"en": "failed", "ru": "ошибка"},
             "rejected": {"en": "changes requested", "ru": "нужна доработка"},
         }
-        nodes = [dict(item) for item in process.get("nodes") or [] if isinstance(item, Mapping)]
+        nodes = [
+            dict(item)
+            for item in process.get("nodes") or []
+            if isinstance(item, Mapping)
+        ]
         lines = [
             (
                 f"Project: {identity.get('title') or object_id}"
@@ -2838,14 +3500,14 @@ class BuilderWorkflowService:
         workflow_state = str(process.get("workflow_state") or "ready")
         compact = self._compact_explanation(projection)
         next_commands = [
-            str(item) for item in compact.get("next_commands") or [] if str(item).strip()
+            str(item)
+            for item in compact.get("next_commands") or []
+            if str(item).strip()
         ]
         if next_commands:
             primary = builder_action_label(next_commands[0], locale=selected_locale)
             lines.append(
-                f"Next: {primary}"
-                if selected_locale == "en"
-                else f"Дальше: {primary}"
+                f"Next: {primary}" if selected_locale == "en" else f"Дальше: {primary}"
             )
         elif compact.get("reason"):
             lines.append(str(compact.get("reason")))
@@ -2862,7 +3524,11 @@ class BuilderWorkflowService:
     @staticmethod
     def _project_summary(workflow: Mapping[str, Any]) -> dict[str, Any]:
         project = _mapping(workflow.get("project"))
-        changes = [dict(item) for item in project.get("changes") or [] if isinstance(item, Mapping)]
+        changes = [
+            dict(item)
+            for item in project.get("changes") or []
+            if isinstance(item, Mapping)
+        ]
         open_changes = [
             item
             for item in changes
@@ -2876,9 +3542,13 @@ class BuilderWorkflowService:
         ]
         commands: list[dict[str, Any]] = []
         if bool(project.get("archived")):
-            commands.append({"command": "builder.project.restore", "risk": "local_reversible"})
+            commands.append(
+                {"command": "builder.project.restore", "risk": "local_reversible"}
+            )
         else:
-            commands.append({"command": "builder.change.plan", "risk": "local_reversible"})
+            commands.append(
+                {"command": "builder.change.plan", "risk": "local_reversible"}
+            )
             if changes:
                 commands.append(
                     {
@@ -2895,7 +3565,9 @@ class BuilderWorkflowService:
                         "change_ids": stale,
                     }
                 )
-            commands.append({"command": "builder.project.archive", "risk": "destructive"})
+            commands.append(
+                {"command": "builder.project.archive", "risk": "destructive"}
+            )
         return {
             "schema": "adaos.builder.project_summary.v1",
             "project_ref": project.get("project_ref"),
@@ -2905,7 +3577,9 @@ class BuilderWorkflowService:
                 1 for item in open_changes if item.get("mutation_status") == "active"
             ),
             "unknown_outcome_count": sum(
-                1 for item in open_changes if item.get("mutation_status") == "outcome_unknown"
+                1
+                for item in open_changes
+                if item.get("mutation_status") == "outcome_unknown"
             ),
             "conflict_count": len(project.get("conflicts") or []),
             "stale_change_ids": stale,
@@ -2932,11 +3606,13 @@ class BuilderWorkflowService:
         context_id = str(command_context_id or "default").strip() or "default"
         with _LOCK:
             state = self._read_state(kind, project_id)
-            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            workflow = self._normalized_workflow(
+                state, object_type=kind, object_id=project_id
+            )
             project = _mapping(workflow.get("project"))
-            if expected_view_generation is not None and int(project.get("view_generation") or 0) != int(
-                expected_view_generation
-            ):
+            if expected_view_generation is not None and int(
+                project.get("view_generation") or 0
+            ) != int(expected_view_generation):
                 raise BuilderWorkflowError("stale Builder project view generation")
             try:
                 project = set_focus(project, context_id, target_id)
@@ -2946,7 +3622,9 @@ class BuilderWorkflowService:
             if context_id == "default":
                 record = portfolio.get(target_id)
                 if not isinstance(record, Mapping):
-                    raise BuilderWorkflowError(f"Builder Change state is unavailable: {target_id}")
+                    raise BuilderWorkflowError(
+                        f"Builder Change state is unavailable: {target_id}"
+                    )
                 restore_compatibility_record(workflow, record)
                 interaction = _mapping(workflow.get("interaction"))
                 interaction["conversation_focus"] = f"change:{target_id}"
@@ -2977,7 +3655,9 @@ class BuilderWorkflowService:
         target_id = str(change_id or "").strip()
         with _LOCK:
             state = self._read_state(kind, project_id)
-            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            workflow = self._normalized_workflow(
+                state, object_type=kind, object_id=project_id
+            )
             try:
                 project = rebase_project_change(
                     _mapping(workflow.get("project")),
@@ -2987,7 +3667,9 @@ class BuilderWorkflowService:
                 )
             except BuilderProjectError as exc:
                 raise BuilderWorkflowError(str(exc)) from exc
-            current = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+            current = _normalize_change(
+                workflow.get("change") or workflow.get("change_set")
+            )
             summary = next(
                 (
                     item
@@ -2996,7 +3678,11 @@ class BuilderWorkflowService:
                 ),
                 None,
             )
-            if current and current.get("change_id") == target_id and isinstance(summary, Mapping):
+            if (
+                current
+                and current.get("change_id") == target_id
+                and isinstance(summary, Mapping)
+            ):
                 current["base_generation"] = int(summary.get("base_generation") or 0)
                 workflow["change"] = current
                 workflow["change_set"] = _change_set_compatibility(current)
@@ -3026,7 +3712,9 @@ class BuilderWorkflowService:
         project_id = _project_id(object_id)
         with _LOCK:
             state = self._read_state(kind, project_id)
-            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            workflow = self._normalized_workflow(
+                state, object_type=kind, object_id=project_id
+            )
             try:
                 project = set_dependencies(
                     _mapping(workflow.get("project")),
@@ -3058,7 +3746,9 @@ class BuilderWorkflowService:
         project_id = _project_id(object_id)
         with _LOCK:
             state = self._read_state(kind, project_id)
-            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            workflow = self._normalized_workflow(
+                state, object_type=kind, object_id=project_id
+            )
             binding = _mapping(workflow.get("data_binding"))
             if int(binding.get("generation") or 0) != int(expected_binding_generation):
                 raise BuilderWorkflowError("stale Builder binding generation")
@@ -3074,26 +3764,47 @@ class BuilderWorkflowService:
         return {"ok": True, "workflow": self.describe(kind, project_id)}
 
     def save_specification_delta(
-        self, object_type: str, object_id: str, value: Mapping[str, Any], *,
-        change_id: str, expected_generation: int, actor: str,
+        self,
+        object_type: str,
+        object_id: str,
+        value: Mapping[str, Any],
+        *,
+        change_id: str,
+        expected_generation: int,
+        actor: str,
     ) -> dict[str, Any]:
         """Update the active editable Change's requirement delta without accepting it."""
         kind, project_id = _kind(object_type), _project_id(object_id)
         with _LOCK:
             state = self._read_state(kind, project_id)
-            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            workflow = self._normalized_workflow(
+                state, object_type=kind, object_id=project_id
+            )
             if state.get("archived"):
-                raise BuilderWorkflowError("archived projects cannot edit specification")
+                raise BuilderWorkflowError(
+                    "archived projects cannot edit specification"
+                )
             if int(workflow["generation"]) != int(expected_generation):
                 raise BuilderWorkflowError("stale Builder workflow generation")
             change = _normalize_change(workflow.get("change"))
             if not change or change["change_id"] != change_id:
-                raise BuilderWorkflowError("Specification delta belongs to another Change")
-            if (workflow["active_phase"] != "prototype" or workflow["prototype"].get("stable")
-                    or change["status"] in _CHANGE_SET_TERMINAL_STATES):
-                raise BuilderWorkflowError("Return to editable Prototype scope before changing requirements")
+                raise BuilderWorkflowError(
+                    "Specification delta belongs to another Change"
+                )
+            if (
+                workflow["active_phase"] != "prototype"
+                or workflow["prototype"].get("stable")
+                or change["status"] in _CHANGE_SET_TERMINAL_STATES
+            ):
+                raise BuilderWorkflowError(
+                    "Return to editable Prototype scope before changing requirements"
+                )
             try:
-                delta = prepare_delta(value, change=change, specification=workflow["application_specification"])
+                delta = prepare_delta(
+                    value,
+                    change=change,
+                    specification=workflow["application_specification"],
+                )
             except ValueError as exc:
                 raise BuilderWorkflowError(str(exc)) from exc
             previous = _mapping(change.get("specification_delta"))
@@ -3107,11 +3818,17 @@ class BuilderWorkflowService:
             workflow["prototype"]["acceptance"] = None
             workflow["generation"] += 1
             workflow["updated_at"] = change["updated_at"]
-            workflow["history"] = [*workflow["history"], {
-                "generation": workflow["generation"], "action": "specification_delta_saved",
-                "actor": actor, "at": change["updated_at"], "change_id": change_id,
-                "metadata": {"delta_digest": delta["digest"]},
-            }][-_MAX_HISTORY:]
+            workflow["history"] = [
+                *workflow["history"],
+                {
+                    "generation": workflow["generation"],
+                    "action": "specification_delta_saved",
+                    "actor": actor,
+                    "at": change["updated_at"],
+                    "change_id": change_id,
+                    "metadata": {"delta_digest": delta["digest"]},
+                },
+            ][-_MAX_HISTORY:]
             state["workflow"] = workflow
             state["updated_at"] = workflow["updated_at"]
             self._write_state(kind, project_id, state)
@@ -3134,7 +3851,9 @@ class BuilderWorkflowService:
         project_id = _project_id(object_id)
         with _LOCK:
             state = self._read_state(kind, project_id)
-            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            workflow = self._normalized_workflow(
+                state, object_type=kind, object_id=project_id
+            )
             project = _mapping(workflow.get("project"))
             try:
                 normalized = normalize_project_placement(
@@ -3145,15 +3864,28 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(str(exc)) from exc
             # A retained activation can be observed twice. Only an exact
             # placement replay may survive stale generation, without a write.
-            identity = {key: value for key, value in normalized.items()
-                        if key not in {"created_at", "updated_at"}}
+            identity = {
+                key: value
+                for key, value in normalized.items()
+                if key not in {"created_at", "updated_at"}
+            }
             for item in project.get("placements") or []:
-                if (isinstance(item, Mapping)
-                        and int(expected_generation) <= int(workflow.get("generation") or 0)
-                        and {key: value for key, value in item.items()
-                             if key not in {"created_at", "updated_at"}} == identity):
-                    return {"ok": True, "duplicate": True, "placement": copy.deepcopy(dict(item)),
-                            "workflow": self.describe(kind, project_id)}
+                if (
+                    isinstance(item, Mapping)
+                    and int(expected_generation) <= int(workflow.get("generation") or 0)
+                    and {
+                        key: value
+                        for key, value in item.items()
+                        if key not in {"created_at", "updated_at"}
+                    }
+                    == identity
+                ):
+                    return {
+                        "ok": True,
+                        "duplicate": True,
+                        "placement": copy.deepcopy(dict(item)),
+                        "workflow": self.describe(kind, project_id),
+                    }
             if int(workflow.get("generation") or 0) != int(expected_generation):
                 raise BuilderWorkflowError("stale Builder workflow generation")
             placements = [
@@ -3203,7 +3935,11 @@ class BuilderWorkflowService:
         projection = self.describe(object_type, object_id)
         project = _mapping(projection.get("project"))
         placement = active_project_placement(
-            [dict(item) for item in project.get("placements") or [] if isinstance(item, Mapping)],
+            [
+                dict(item)
+                for item in project.get("placements") or []
+                if isinstance(item, Mapping)
+            ],
             kind=kind,
         )
         if placement is None:
@@ -3211,15 +3947,20 @@ class BuilderWorkflowService:
         target = _mapping(placement.get("target"))
         runtime_scope = navigation.runtime_scope()
         zone = str(target.get("zone") or runtime_scope.get("zone") or "").strip()
-        subnet_id = str(target.get("subnet_id") or runtime_scope.get("subnet_id") or "").strip()
+        subnet_id = str(
+            target.get("subnet_id") or runtime_scope.get("subnet_id") or ""
+        ).strip()
         if not zone or not subnet_id:
-            raise BuilderWorkflowError("ProjectPlacement navigation requires zone and subnet identity")
+            raise BuilderWorkflowError(
+                "ProjectPlacement navigation requires zone and subnet identity"
+            )
         destination = navigation.webspace_destination(
             zone=zone,
             subnet_id=subnet_id,
             webspace_id=str(target.get("webspace_id") or ""),
             space_kind="workspace",
-            expected_scenario_id=str(placement.get("scenario_id") or object_id).strip() or None,
+            expected_scenario_id=str(placement.get("scenario_id") or object_id).strip()
+            or None,
         )
         return {
             "schema": "adaos.builder.placement_navigation.v1",
@@ -3246,7 +3987,9 @@ class BuilderWorkflowService:
         project_id = _project_id(object_id)
         with _LOCK:
             state = self._read_state(kind, project_id)
-            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            workflow = self._normalized_workflow(
+                state, object_type=kind, object_id=project_id
+            )
             binding = _mapping(workflow.get("data_binding"))
             if int(binding.get("generation") or 0) != int(expected_binding_generation):
                 raise BuilderWorkflowError("stale Builder binding generation")
@@ -3260,8 +4003,13 @@ class BuilderWorkflowService:
                 )
             except BuilderDataModeError as exc:
                 raise BuilderWorkflowError(str(exc)) from exc
-            if _mapping(workflow.get("prototype")).get("head_revision") != revision_before:
-                raise BuilderWorkflowError("binding selection must not rewrite the Prototype Revision")
+            if (
+                _mapping(workflow.get("prototype")).get("head_revision")
+                != revision_before
+            ):
+                raise BuilderWorkflowError(
+                    "binding selection must not rewrite the Prototype Revision"
+                )
             workflow["generation"] = int(workflow.get("generation") or 0) + 1
             workflow["updated_at"] = workflow["data_binding"]["updated_at"]
             state["workflow"] = workflow
@@ -3283,7 +4031,11 @@ class BuilderWorkflowService:
         publication = _mapping(workflow.get("publication"))
         project = _mapping(workflow.get("project"))
         description = _mapping(workflow.get("workflow_description"))
-        state = str(description.get("state") or _mapping(workflow.get("governed")).get("state") or "ready")
+        state = str(
+            description.get("state")
+            or _mapping(workflow.get("governed")).get("state")
+            or "ready"
+        )
         nodes: list[dict[str, Any]] = []
         if change:
             change_ref = f"change:{change['change_id']}"
@@ -3339,7 +4091,9 @@ class BuilderWorkflowService:
             parent_ref = prototype_ref
         automation_status = str(automation.get("status") or "not_started")
         automation_ref = f"automation:{object_id}:{automation.get('snapshot_task_id') or automation.get('head_task_id') or 'current'}"
-        if automation_status != "not_started" or str(change.get("route") if change else "") in {"automation_direct", "implementation_direct"}:
+        if automation_status != "not_started" or str(
+            change.get("route") if change else ""
+        ) in {"automation_direct", "implementation_direct"}:
             nodes.append(
                 {
                     "ref": automation_ref,
@@ -3348,7 +4102,9 @@ class BuilderWorkflowService:
                     "label": f"Automation {automation.get('result_version') or automation.get('iteration') or 'current'}",
                     "status": automation_status,
                     "source_ref": prototype_ref if object_type == "scenario" else None,
-                    "preview": f"active:{object_id}:current" if automation_status in {"completed", "frozen", "adapting"} else None,
+                    "preview": f"active:{object_id}:current"
+                    if automation_status in {"completed", "frozen", "adapting"}
+                    else None,
                 }
             )
             parent_ref = automation_ref
@@ -3394,7 +4150,8 @@ class BuilderWorkflowService:
                     "parent_ref": parent_ref,
                     "label": f"Trial {delivery.get('candidate_id') or ''}".strip(),
                     "status": trial_status,
-                    "candidate_digest": delivery.get("package_digest") or delivery.get("release_digest"),
+                    "candidate_digest": delivery.get("package_digest")
+                    or delivery.get("release_digest"),
                     "preview": (
                         f"trial:{object_id}:{delivery.get('version') or delivery.get('candidate_id')}"
                         if object_type == "scenario" and delivery.get("candidate_id")
@@ -3404,11 +4161,17 @@ class BuilderWorkflowService:
             )
             parent_ref = trial_ref
             trial_placement = active_project_placement(
-                [dict(item) for item in project.get("placements") or [] if isinstance(item, Mapping)],
+                [
+                    dict(item)
+                    for item in project.get("placements") or []
+                    if isinstance(item, Mapping)
+                ],
                 kind="trial",
             )
             if trial_placement:
-                trial_webspace = str(_mapping(trial_placement.get("target")).get("webspace_id") or "")
+                trial_webspace = str(
+                    _mapping(trial_placement.get("target")).get("webspace_id") or ""
+                )
                 trial_placement_ref = f"placement:{trial_placement['placement_id']}"
                 nodes.append(
                     {
@@ -3450,11 +4213,17 @@ class BuilderWorkflowService:
             else:
                 placement_parent = publication_ref
             stable_placement = active_project_placement(
-                [dict(item) for item in project.get("placements") or [] if isinstance(item, Mapping)],
+                [
+                    dict(item)
+                    for item in project.get("placements") or []
+                    if isinstance(item, Mapping)
+                ],
                 kind="stable",
             )
             if stable_placement:
-                webspace_id = str(_mapping(stable_placement.get("target")).get("webspace_id") or "")
+                webspace_id = str(
+                    _mapping(stable_placement.get("target")).get("webspace_id") or ""
+                )
                 nodes.append(
                     {
                         "ref": f"placement:{stable_placement['placement_id']}",
@@ -3475,14 +4244,22 @@ class BuilderWorkflowService:
             "schema": "adaos.builder.process_projection.v1",
             "project_ref": project_ref,
             "workflow_state": state,
-            "generation": int(description.get("generation") or _mapping(workflow.get("governed")).get("generation") or 0),
+            "generation": int(
+                description.get("generation")
+                or _mapping(workflow.get("governed")).get("generation")
+                or 0
+            ),
             "nodes": nodes,
             "conversation_focus": interaction.get("conversation_focus"),
             "inspected_ref": interaction.get("inspected_ref"),
             "preview_target": interaction.get("preview_target"),
-            "data_mode": str(_mapping(workflow.get("data_binding")).get("selected_mode") or "mock"),
+            "data_mode": str(
+                _mapping(workflow.get("data_binding")).get("selected_mode") or "mock"
+            ),
             "preview_options": preview_options,
-            "allowed_commands": copy.deepcopy(description.get("allowed_commands") or []),
+            "allowed_commands": copy.deepcopy(
+                description.get("allowed_commands") or []
+            ),
             "blockers": copy.deepcopy(description.get("blockers") or []),
         }
 
@@ -3499,9 +4276,13 @@ class BuilderWorkflowService:
         generation = int(projection.get("generation") or 0)
         project_ref = f"{projection['object_type']}:{projection['object_id']}"
         interaction = _mapping(projection.get("interaction"))
-        change = _normalize_change(projection.get("change") or projection.get("change_set"))
+        change = _normalize_change(
+            projection.get("change") or projection.get("change_set")
+        )
         active_phase = str(projection.get("active_phase") or "prototype")
-        delivery_status = str(_mapping(projection.get("delivery")).get("status") or "idle")
+        delivery_status = str(
+            _mapping(projection.get("delivery")).get("status") or "idle"
+        )
         automation_status = str(
             _mapping(projection.get("automation")).get("status") or "not_started"
         )
@@ -3554,7 +4335,9 @@ class BuilderWorkflowService:
             if workflow_command and workflow_command not in canonical_actions:
                 return
             canonical = canonical_actions.get(str(workflow_command or ""))
-            canonical_risk = str(_mapping((canonical or {}).get("risk")).get("class") or risk)
+            canonical_risk = str(
+                _mapping((canonical or {}).get("risk")).get("class") or risk
+            )
             translated_label = builder_action_label(
                 command,
                 locale=selected_locale,
@@ -3570,10 +4353,13 @@ class BuilderWorkflowService:
                     presentation=presentation,
                     fallback=fallback,
                     workflow_command=workflow_command,
-                    workflow_generation=canonical_generation if workflow_command else None,
+                    workflow_generation=canonical_generation
+                    if workflow_command
+                    else None,
                     label_ref=builder_action_label_ref(command),
                 )
             )
+
         change_ref = f"change:{change['change_id']}" if change else project_ref
         candidate = _mapping(projection.get("delivery"))
         candidate_id = str(candidate.get("candidate_id") or "").strip()
@@ -3591,21 +4377,96 @@ class BuilderWorkflowService:
         # exclusively from WorkflowDescription.allowed_commands, including
         # role policy, guards, generation, and executor readiness.
         canonical_surface = {
-            "plan_prototype_change": ("builder.change.plan", "Plan change", "local_reversible", project_ref),
-            "plan_automation_change": ("builder.change.plan", "Plan change", "local_reversible", project_ref),
-            "extend_with_prototype_issues": ("builder.change.extend", "Add requirement", "local_reversible", change_ref),
-            "extend_with_automation_issues": ("builder.change.extend", "Add requirement", "local_reversible", change_ref),
-            "record_prototype_revision": ("builder.prototype.edit", "Correct prototype", "local_reversible", change_ref),
-            "revise_prototype": ("builder.prototype.edit", "Correct prototype", "local_reversible", change_ref),
-            "accept_prototype": ("builder.prototype.approve", "Approve prototype", "isolated_write", change_ref),
-            "start_automation": ("builder.implementation.start", "Start implementation", "isolated_write", change_ref),
-            "retry_automation": ("builder.implementation.iterate", "Continue implementation", "isolated_write", change_ref),
-            "request_prototype_derivation": ("builder.prototype.derive", "Return result to prototype", "isolated_write", change_ref),
-            "accept_verification": ("builder.verification.accept", "Accept verification", "isolated_write", change_ref),
-            "start_trial": ("builder.trial.prepare", "Start trial", "trial_activation", change_ref),
-            "accept_trial": ("builder.trial.accept", "Accept trial", "workspace_activation", candidate_ref),
-            "reject_trial": ("builder.trial.reject", "Request changes", "local_reversible", candidate_ref),
-            "begin_publication": ("builder.publication.publish", "Begin publication", "publication", candidate_ref),
+            "plan_prototype_change": (
+                "builder.change.plan",
+                "Plan change",
+                "local_reversible",
+                project_ref,
+            ),
+            "plan_automation_change": (
+                "builder.change.plan",
+                "Plan change",
+                "local_reversible",
+                project_ref,
+            ),
+            "extend_with_prototype_issues": (
+                "builder.change.extend",
+                "Add requirement",
+                "local_reversible",
+                change_ref,
+            ),
+            "extend_with_automation_issues": (
+                "builder.change.extend",
+                "Add requirement",
+                "local_reversible",
+                change_ref,
+            ),
+            "record_prototype_revision": (
+                "builder.prototype.edit",
+                "Correct prototype",
+                "local_reversible",
+                change_ref,
+            ),
+            "revise_prototype": (
+                "builder.prototype.edit",
+                "Correct prototype",
+                "local_reversible",
+                change_ref,
+            ),
+            "accept_prototype": (
+                "builder.prototype.approve",
+                "Approve prototype",
+                "isolated_write",
+                change_ref,
+            ),
+            "start_automation": (
+                "builder.implementation.start",
+                "Start implementation",
+                "isolated_write",
+                change_ref,
+            ),
+            "retry_automation": (
+                "builder.implementation.iterate",
+                "Continue implementation",
+                "isolated_write",
+                change_ref,
+            ),
+            "request_prototype_derivation": (
+                "builder.prototype.derive",
+                "Return result to prototype",
+                "isolated_write",
+                change_ref,
+            ),
+            "accept_verification": (
+                "builder.verification.accept",
+                "Accept verification",
+                "isolated_write",
+                change_ref,
+            ),
+            "start_trial": (
+                "builder.trial.prepare",
+                "Start trial",
+                "trial_activation",
+                change_ref,
+            ),
+            "accept_trial": (
+                "builder.trial.accept",
+                "Accept trial",
+                "workspace_activation",
+                candidate_ref,
+            ),
+            "reject_trial": (
+                "builder.trial.reject",
+                "Request changes",
+                "local_reversible",
+                candidate_ref,
+            ),
+            "begin_publication": (
+                "builder.publication.publish",
+                "Begin publication",
+                "publication",
+                candidate_ref,
+            ),
         }
         seen_surface_commands: set[str] = set()
         for canonical in canonical_action_list:
@@ -3616,7 +4477,10 @@ class BuilderWorkflowService:
             surface_command, label, risk, target = surface
             # A published result starts a fresh Change; it must not expose a
             # stale lifecycle continuation as though publication were Preview.
-            if workflow_state == "published" and surface_command == "builder.change.plan":
+            if (
+                workflow_state == "published"
+                and surface_command == "builder.change.plan"
+            ):
                 continue
             if surface_command in seen_surface_commands:
                 continue
@@ -3635,13 +4499,16 @@ class BuilderWorkflowService:
         # transition appear ready.
         project_commands = [
             _mapping(item)
-            for item in _mapping(projection.get("project_summary")).get("commands") or []
+            for item in _mapping(projection.get("project_summary")).get("commands")
+            or []
             if isinstance(item, Mapping)
         ]
         if (
             workflow_state != "published"
-            and
-            any(str(item.get("command") or "") == "builder.change.plan" for item in project_commands)
+            and any(
+                str(item.get("command") or "") == "builder.change.plan"
+                for item in project_commands
+            )
             and "builder.change.plan" not in seen_surface_commands
         ):
             add_action(
@@ -3653,7 +4520,9 @@ class BuilderWorkflowService:
 
         project = _mapping(projection.get("project"))
         project_placements = [
-            dict(item) for item in project.get("placements") or [] if isinstance(item, Mapping)
+            dict(item)
+            for item in project.get("placements") or []
+            if isinstance(item, Mapping)
         ]
         stable_placement = active_project_placement(project_placements, kind="stable")
         trial_placement = active_project_placement(project_placements, kind="trial")
@@ -3732,11 +4601,17 @@ class BuilderWorkflowService:
                 "local_reversible",
                 target_ref=project_ref,
             )
-        add_action("builder.project.list", "Show projects", "read", target_ref=project_ref)
+        add_action(
+            "builder.project.list", "Show projects", "read", target_ref=project_ref
+        )
         if workflow_state == "published" and actions:
-            actions[-1]["label"] = "Сменить проект" if selected_locale == "ru" else "Change project"
+            actions[-1]["label"] = (
+                "Сменить проект" if selected_locale == "ru" else "Change project"
+            )
         if workflow_state != "published":
-            add_action("builder.preview.link", "Preview link", "read", target_ref=project_ref)
+            add_action(
+                "builder.preview.link", "Preview link", "read", target_ref=project_ref
+            )
         add_action("builder.help", "Help", "read", target_ref=project_ref)
 
         views = [
@@ -3765,7 +4640,10 @@ class BuilderWorkflowService:
                 "gate": change.get("gate") if change else None,
                 "implementation": automation_status,
                 "delivery": delivery_status,
-                "data_mode": str(_mapping(projection.get("data_binding")).get("selected_mode") or "mock"),
+                "data_mode": str(
+                    _mapping(projection.get("data_binding")).get("selected_mode")
+                    or "mock"
+                ),
                 "workflow_state": workflow_state,
                 "reason": compact_explanation["reason"],
                 "next_commands": compact_explanation["next_commands"],
@@ -3881,7 +4759,9 @@ class BuilderWorkflowService:
             metadata={
                 "domain": "builder",
                 "project_ref": f"{projection['object_type']}:{projection['object_id']}",
-                "process_generation": _mapping(projection.get("process")).get("generation"),
+                "process_generation": _mapping(projection.get("process")).get(
+                    "generation"
+                ),
                 "workflow_type": str(governed.get("workflow_type") or "builder.change"),
                 "surface_commands": {
                     str(item["action_id"]): str(
@@ -3890,7 +4770,8 @@ class BuilderWorkflowService:
                                 source.get("command")
                                 for source in frame.get("actions") or []
                                 if isinstance(source, Mapping)
-                                and str(source.get("label_ref") or "") == str(item.get("label_ref") or "")
+                                and str(source.get("label_ref") or "")
+                                == str(item.get("label_ref") or "")
                             ),
                             item["command"],
                         )
@@ -3925,12 +4806,19 @@ class BuilderWorkflowService:
             "builder.publication.place",
         }
         if command not in input_commands:
-            raise BuilderWorkflowError(f"Builder command does not accept conversational input: {command}")
+            raise BuilderWorkflowError(
+                f"Builder command does not accept conversational input: {command}"
+            )
         projection = self.describe(object_type, object_id)
         selected_locale = normalize_builder_locale(locale)
         frame = self.interaction_frame(object_type, object_id, locale=selected_locale)
-        if not any(str(item.get("command") or "") == command for item in frame.get("actions") or []):
-            raise BuilderWorkflowError(f"Builder command is not available in the current state: {command}")
+        if not any(
+            str(item.get("command") or "") == command
+            for item in frame.get("actions") or []
+        ):
+            raise BuilderWorkflowError(
+                f"Builder command is not available in the current state: {command}"
+            )
         governed = _mapping(projection.get("governed"))
         workflow_ref = {
             "schema": "adaos.workflow.ref.v1",
@@ -3981,7 +4869,9 @@ class BuilderWorkflowService:
         try:
             invocation = prepare_interaction_invocation(response)
         except ValueError as exc:
-            raise BuilderWorkflowError(f"Builder interaction invocation is invalid: {exc}") from exc
+            raise BuilderWorkflowError(
+                f"Builder interaction invocation is invalid: {exc}"
+            ) from exc
         return self._invoke_prepared_command(
             object_type,
             object_id,
@@ -4008,8 +4898,12 @@ class BuilderWorkflowService:
         command_projection = next(
             (
                 _mapping(item)
-                for item in _mapping(current.get("workflow_description")).get("allowed_commands") or []
-                if isinstance(item, Mapping) and str(item.get("command") or "") == str(command)
+                for item in _mapping(current.get("workflow_description")).get(
+                    "allowed_commands"
+                )
+                or []
+                if isinstance(item, Mapping)
+                and str(item.get("command") or "") == str(command)
             ),
             {},
         )
@@ -4017,8 +4911,12 @@ class BuilderWorkflowService:
             blocked = next(
                 (
                     _mapping(item)
-                    for item in _mapping(current.get("workflow_description")).get("blocked_commands") or []
-                    if isinstance(item, Mapping) and str(item.get("command") or "") == str(command)
+                    for item in _mapping(current.get("workflow_description")).get(
+                        "blocked_commands"
+                    )
+                    or []
+                    if isinstance(item, Mapping)
+                    and str(item.get("command") or "") == str(command)
                 ),
                 {},
             )
@@ -4078,7 +4976,9 @@ class BuilderWorkflowService:
                 object_type,
                 object_id,
                 actor=actor,
-                idempotency_key=str(command_record.get("idempotency_key") or "").strip(),
+                idempotency_key=str(
+                    command_record.get("idempotency_key") or ""
+                ).strip(),
                 input_value=_mapping(command_record.get("input")),
                 metadata={
                     **dict(metadata or {}),
@@ -4092,14 +4992,20 @@ class BuilderWorkflowService:
             return output
         action = legacy_action_for_command(command)
         if action is None:
-            raise BuilderWorkflowError(f"Builder command has no compatibility activity adapter: {command}")
+            raise BuilderWorkflowError(
+                f"Builder command has no compatibility activity adapter: {command}"
+            )
         current = self.describe(object_type, object_id)
         canonical = _mapping(current.get("governed"))
         instance_ref = _mapping(command_record.get("instance_ref"))
         if str(instance_ref.get("id") or "") != str(canonical.get("instance_id") or ""):
-            raise BuilderWorkflowError("Builder command targets another workflow instance")
+            raise BuilderWorkflowError(
+                "Builder command targets another workflow instance"
+            )
         if str(command_record.get("actor_ref", {}).get("id") or "") != str(actor or ""):
-            raise BuilderWorkflowError("Builder command actor differs from the verified caller")
+            raise BuilderWorkflowError(
+                "Builder command actor differs from the verified caller"
+            )
         expected = int(command_record.get("expected_generation") or 0)
         if int(canonical.get("generation") or 0) != expected:
             raise BuilderWorkflowError(
@@ -4111,7 +5017,9 @@ class BuilderWorkflowService:
             **_mapping(command_record.get("input")),
             "idempotency_key": str(command_record.get("idempotency_key") or "").strip(),
             "workflow_invocation_id": invocation.get("invocation_id"),
-            "interaction_response_id": _mapping(invocation.get("response_ref")).get("id"),
+            "interaction_response_id": _mapping(invocation.get("response_ref")).get(
+                "id"
+            ),
         }
         result = self.transition(
             object_type,
@@ -4140,12 +5048,16 @@ class BuilderWorkflowService:
                 f"unsupported Builder interaction fields: {', '.join(sorted(unknown))}"
             )
         if not updates:
-            raise BuilderWorkflowError("at least one Builder interaction field is required")
+            raise BuilderWorkflowError(
+                "at least one Builder interaction field is required"
+            )
         kind = _kind(object_type)
         project_id = _project_id(object_id)
         with _LOCK:
             state = self._read_state(kind, project_id)
-            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            workflow = self._normalized_workflow(
+                state, object_type=kind, object_id=project_id
+            )
             current_generation = int(workflow.get("generation") or 0)
             if current_generation != int(expected_generation):
                 raise BuilderWorkflowError(
@@ -4171,10 +5083,14 @@ class BuilderWorkflowService:
                     )
                 except ValueError as exc:
                     raise BuilderWorkflowError(str(exc)) from exc
-                portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+                portfolio = normalize_portfolio(
+                    workflow.get("change_portfolio"), workflow
+                )
                 record = portfolio.get(change_id)
                 if not isinstance(record, Mapping):
-                    raise BuilderWorkflowError(f"Builder Change state is unavailable: {change_id}")
+                    raise BuilderWorkflowError(
+                        f"Builder Change state is unavailable: {change_id}"
+                    )
                 restore_compatibility_record(workflow, record)
                 workflow["change_portfolio"] = portfolio
             workflow["generation"] = current_generation + 1
@@ -4185,7 +5101,11 @@ class BuilderWorkflowService:
         projection = self.describe(kind, project_id)
         if callable(self.event_sink):
             self.event_sink(projection)
-        return {"ok": True, "workflow": projection, "interaction_frame": self.interaction_frame(kind, project_id)}
+        return {
+            "ok": True,
+            "workflow": projection,
+            "interaction_frame": self.interaction_frame(kind, project_id),
+        }
 
     def transition(
         self,
@@ -4207,14 +5127,22 @@ class BuilderWorkflowService:
             state = self._read_state(kind, project_id)
             if bool(state.get("archived")):
                 raise BuilderWorkflowError("archived projects cannot change workflow")
-            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
-            originating_change_id = str(details.get("originating_change_id") or "").strip()
+            workflow = self._normalized_workflow(
+                state, object_type=kind, object_id=project_id
+            )
+            originating_change_id = str(
+                details.get("originating_change_id") or ""
+            ).strip()
             scoped_original_record: dict[str, Any] | None = None
             if originating_change_id and action_token != "plan_change_set":
-                current = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+                current = _normalize_change(
+                    workflow.get("change") or workflow.get("change_set")
+                )
                 current_id = str((current or {}).get("change_id") or "")
                 if current_id != originating_change_id:
-                    portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+                    portfolio = normalize_portfolio(
+                        workflow.get("change_portfolio"), workflow
+                    )
                     target_record = portfolio.get(originating_change_id)
                     if not isinstance(target_record, Mapping):
                         raise BuilderWorkflowError(
@@ -4223,14 +5151,21 @@ class BuilderWorkflowService:
                     scoped_original_record = capture_compatibility_record(workflow)
                     restore_compatibility_record(workflow, target_record)
                     workflow["change_portfolio"] = portfolio
-            parallel_plan = bool(details.get("parallel")) and action_token == "plan_change_set"
-            current_change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+            parallel_plan = (
+                bool(details.get("parallel")) and action_token == "plan_change_set"
+            )
+            current_change = _normalize_change(
+                workflow.get("change") or workflow.get("change_set")
+            )
             if (
                 parallel_plan
                 and current_change
-                and str(current_change.get("status") or "") not in _CHANGE_SET_TERMINAL_STATES
+                and str(current_change.get("status") or "")
+                not in _CHANGE_SET_TERMINAL_STATES
             ):
-                portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+                portfolio = normalize_portfolio(
+                    workflow.get("change_portfolio"), workflow
+                )
                 current_record = capture_compatibility_record(workflow)
                 if current_record:
                     portfolio[current_record["change_id"]] = current_record
@@ -4250,12 +5185,14 @@ class BuilderWorkflowService:
                 workflow["automation"] = {
                     "status": "not_started",
                     "iteration": 0,
-                    "source_prototype_revision": _mapping(workflow.get("prototype")).get(
-                        "head_revision"
-                    ),
+                    "source_prototype_revision": _mapping(
+                        workflow.get("prototype")
+                    ).get("head_revision"),
                 }
                 workflow["delivery"] = {"status": "idle"}
-            if expected_generation is not None and int(workflow.get("generation") or 0) != int(expected_generation):
+            if expected_generation is not None and int(
+                workflow.get("generation") or 0
+            ) != int(expected_generation):
                 raise BuilderWorkflowError(
                     f"stale Builder action generation: expected {expected_generation}, "
                     f"current {int(workflow.get('generation') or 0)}"
@@ -4271,21 +5208,25 @@ class BuilderWorkflowService:
                     )
                 if bool(_mapping(workflow.get("prototype")).get("acceptance_required")):
                     self._admit_current_prototype_acceptance(kind, project_id, workflow)
-            if (
-                action_token == "stabilize_prototype"
-                and bool(_mapping(workflow.get("prototype")).get("acceptance_required"))
+            if action_token == "stabilize_prototype" and bool(
+                _mapping(workflow.get("prototype")).get("acceptance_required")
             ):
                 details["acceptance"] = self._admit_current_prototype_acceptance(
                     kind,
                     project_id,
                     workflow,
-                    details.get("acceptance") if isinstance(details.get("acceptance"), Mapping) else None,
+                    details.get("acceptance")
+                    if isinstance(details.get("acceptance"), Mapping)
+                    else None,
                 )
             mutation_started = False
             mutation_change_id = str(
-                (_normalize_change(workflow.get("change") or workflow.get("change_set")) or {}).get(
-                    "change_id"
-                )
+                (
+                    _normalize_change(
+                        workflow.get("change") or workflow.get("change_set")
+                    )
+                    or {}
+                ).get("change_id")
                 or ""
             )
             if mutation_change_id and action_token in {
@@ -4297,12 +5238,15 @@ class BuilderWorkflowService:
                     (
                         item
                         for item in project.get("changes") or []
-                        if isinstance(item, Mapping) and item.get("change_id") == mutation_change_id
+                        if isinstance(item, Mapping)
+                        and item.get("change_id") == mutation_change_id
                     ),
                     None,
                 )
                 if not isinstance(summary, Mapping):
-                    raise BuilderWorkflowError("Builder Project does not contain the focused Change")
+                    raise BuilderWorkflowError(
+                        "Builder Project does not contain the focused Change"
+                    )
                 try:
                     workflow["project"] = begin_mutation(
                         project,
@@ -4325,15 +5269,24 @@ class BuilderWorkflowService:
             specification_merge = None
             specification_change = _normalize_change(workflow.get("change")) or {}
             delta = _mapping(specification_change.get("specification_delta"))
-            accepted_stage = {"stabilize_prototype": "prototype", "checkpoint_recorded": "automation"}.get(action_token)
+            accepted_stage = {
+                "stabilize_prototype": "prototype",
+                "checkpoint_recorded": "automation",
+            }.get(action_token)
             if delta and accepted_stage:
-                acceptance_ref = str(_mapping(details.get("acceptance")).get("acceptance_id") or "")
+                acceptance_ref = str(
+                    _mapping(details.get("acceptance")).get("acceptance_id") or ""
+                )
                 if accepted_stage == "automation" and details.get("package_digest"):
                     acceptance_ref = f"checkpoint:{details.get('change_id')}:{details['package_digest']}"
                 if acceptance_ref:
                     try:
-                        specification_merge = apply_delta(workflow["application_specification"], delta,
-                                                          stage=accepted_stage, evidence_ref=acceptance_ref)
+                        specification_merge = apply_delta(
+                            workflow["application_specification"],
+                            delta,
+                            stage=accepted_stage,
+                            evidence_ref=acceptance_ref,
+                        )
                     except ValueError as exc:
                         raise BuilderWorkflowError(str(exc)) from exc
             before = {
@@ -4346,7 +5299,11 @@ class BuilderWorkflowService:
                 "change_set_gate": (workflow.get("change_set") or {}).get("gate"),
             }
             governed_decision = None
-            if action_token == "plan_change_set" or workflow.get("change") or workflow.get("change_set"):
+            if (
+                action_token == "plan_change_set"
+                or workflow.get("change")
+                or workflow.get("change_set")
+            ):
                 definition = self._governed_definition()
                 governed_decision = admit_legacy_transition(
                     workflow,
@@ -4361,7 +5318,9 @@ class BuilderWorkflowService:
                     package_digest=self._active_package_digest,
                     binding_digest=self._active_binding_digest,
                 )
-                if governed_decision is not None and not bool(governed_decision.get("accepted")):
+                if governed_decision is not None and not bool(
+                    governed_decision.get("accepted")
+                ):
                     raise BuilderWorkflowError(
                         "canonical Builder transition rejected: "
                         f"{governed_decision.get('reason_code') or 'transition_not_allowed'}"
@@ -4405,7 +5364,9 @@ class BuilderWorkflowService:
                 project_ref=f"{kind}:{project_id}",
             )
             if specification_merge:
-                workflow["application_specification"], merged_delta = specification_merge
+                workflow["application_specification"], merged_delta = (
+                    specification_merge
+                )
                 workflow["change"]["specification_delta"] = merged_delta
                 workflow["change_set"] = _change_set_compatibility(workflow["change"])
             portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
@@ -4423,13 +5384,19 @@ class BuilderWorkflowService:
                 now=changed_at,
             )
             project["generation"] = int(previous_project.get("generation") or 0) + 1
-            current_after = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+            current_after = _normalize_change(
+                workflow.get("change") or workflow.get("change_set")
+            )
             if current_after:
                 focus = _mapping(project.get("focus_by_context"))
                 focus["default"] = current_after["change_id"]
                 project["focus_by_context"] = focus
             finish_policy = _PROJECT_MUTATION_FINISH_ACTIONS.get(action_token)
-            if mutation_change_id and (finish_policy is not None or mutation_started and action_token in _PROJECT_ATOMIC_MUTATION_ACTIONS):
+            if mutation_change_id and (
+                finish_policy is not None
+                or mutation_started
+                and action_token in _PROJECT_ATOMIC_MUTATION_ACTIONS
+            ):
                 outcome_unknown, advance_base = finish_policy or (False, True)
                 try:
                     project = finish_mutation(
@@ -4448,7 +5415,8 @@ class BuilderWorkflowService:
                     (
                         item
                         for item in project.get("changes") or []
-                        if isinstance(item, Mapping) and item.get("change_id") == mutation_change_id
+                        if isinstance(item, Mapping)
+                        and item.get("change_id") == mutation_change_id
                     ),
                     None,
                 )
@@ -4460,7 +5428,9 @@ class BuilderWorkflowService:
                         target_summary.get("affected_refs") or []
                     )
                     workflow["change"] = current_change_value
-                    workflow["change_set"] = _change_set_compatibility(current_change_value)
+                    workflow["change_set"] = _change_set_compatibility(
+                        current_change_value
+                    )
                     workflow["change_portfolio"] = normalize_portfolio(
                         workflow.get("change_portfolio"), workflow
                     )
@@ -4496,7 +5466,9 @@ class BuilderWorkflowService:
                     "canonical": {
                         "command": governed_decision.get("command"),
                         "transition_id": governed_decision.get("transition_id"),
-                        "generation": _mapping(governed_decision.get("after")).get("generation"),
+                        "generation": _mapping(governed_decision.get("after")).get(
+                            "generation"
+                        ),
                     }
                     if governed_decision is not None
                     else None,
@@ -4504,7 +5476,9 @@ class BuilderWorkflowService:
             )
             workflow["history"] = history[-_MAX_HISTORY:]
             if scoped_original_record is not None:
-                portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
+                portfolio = normalize_portfolio(
+                    workflow.get("change_portfolio"), workflow
+                )
                 restore_compatibility_record(workflow, scoped_original_record)
                 workflow["change_portfolio"] = portfolio
                 focus = _mapping(project.get("focus_by_context"))
@@ -4521,7 +5495,9 @@ class BuilderWorkflowService:
             "object_type": kind,
             "object_id": project_id,
             "archived": False,
-            "capabilities": self._capabilities(workflow, archived=False, object_type=kind),
+            "capabilities": self._capabilities(
+                workflow, archived=False, object_type=kind
+            ),
         }
         projection["workflow_description"] = description_with_executor_readiness(
             workflow_description(
@@ -4623,15 +5599,26 @@ class BuilderWorkflowService:
         if not run_id:
             run_id = f"{change_id}:run:{int(workflow.get('generation') or 0):04d}"
         failure = action.endswith("_failed") or action in {"candidate_rejected"}
-        running = action.endswith("_started") or action in {"request_return_to_prototype"}
+        running = action.endswith("_started") or action in {
+            "request_return_to_prototype"
+        }
         status = "failed" if failure else ("running" if running else "succeeded")
         purpose = str(metadata.get("purpose") or "").strip().lower()
         if not purpose:
-            if action in {"review_constraints_evaluated", "candidate_prepared", "candidate_accepted", "candidate_rejected"}:
+            if action in {
+                "review_constraints_evaluated",
+                "candidate_prepared",
+                "candidate_accepted",
+                "candidate_rejected",
+            }:
                 purpose = "evaluation"
             elif action in {"return_to_prototype_failed"}:
                 purpose = "recovery"
-            elif action in {"prototype_experiment_recorded", "adopt_experiment", "discard_experiment"}:
+            elif action in {
+                "prototype_experiment_recorded",
+                "adopt_experiment",
+                "discard_experiment",
+            }:
                 purpose = "experiment"
             else:
                 purpose = "iteration"
@@ -4647,7 +5634,11 @@ class BuilderWorkflowService:
                 adoption_status = adoption_status or "pending"
         else:
             adoption_status = "not_applicable"
-        context_packet = workflow.get("context_packet") if isinstance(workflow.get("context_packet"), Mapping) else {}
+        context_packet = (
+            workflow.get("context_packet")
+            if isinstance(workflow.get("context_packet"), Mapping)
+            else {}
+        )
         supplied_metrics = metadata.get("workflow_metrics")
         if supplied_metrics is not None and not isinstance(supplied_metrics, Mapping):
             raise BuilderWorkflowError("workflow_metrics must be an object")
@@ -4687,10 +5678,13 @@ class BuilderWorkflowService:
             "adoption_status": adoption_status,
             "status": status,
             "context_packet_digest": str(
-                metadata.get("context_packet_digest") or context_packet.get("digest") or ""
+                metadata.get("context_packet_digest")
+                or context_packet.get("digest")
+                or ""
             ).strip()
             or None,
-            "environment_ref": str(metadata.get("environment_ref") or "").strip() or None,
+            "environment_ref": str(metadata.get("environment_ref") or "").strip()
+            or None,
             "input_refs": [
                 str(item).strip()
                 for item in metadata.get("input_refs")
@@ -4721,9 +5715,14 @@ class BuilderWorkflowService:
             existing.update(run)
             existing["started_at"] = original_started_at or changed_at
         change["runs"] = runs[-_MAX_CHANGE_RUNS:]
-        change["context_packet_digest"] = str(
-            context_packet.get("digest") or change.get("context_packet_digest") or ""
-        ).strip() or None
+        change["context_packet_digest"] = (
+            str(
+                context_packet.get("digest")
+                or change.get("context_packet_digest")
+                or ""
+            ).strip()
+            or None
+        )
         workflow["change"] = _normalize_change(change)
         workflow["change_set"] = _change_set_compatibility(workflow["change"])
 
@@ -4736,7 +5735,9 @@ class BuilderWorkflowService:
         allowed_paths: list[str] | tuple[str, ...] | None = None,
         instruction_refs: list[str] | tuple[str, ...] | None = None,
         conversation_context: Mapping[str, Any] | None = None,
-        pending_action_refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None = None,
+        pending_action_refs: list[Mapping[str, Any]]
+        | tuple[Mapping[str, Any], ...]
+        | None = None,
         execution_scope: Mapping[str, Any] | None = None,
         execution_phase: str | None = None,
         run_purpose: str = "iteration",
@@ -4750,14 +5751,20 @@ class BuilderWorkflowService:
         project_id = _project_id(object_id)
         with _LOCK:
             state = self._read_state(kind, project_id)
-            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            workflow = self._normalized_workflow(
+                state, object_type=kind, object_id=project_id
+            )
             observed_phase = str(workflow.get("active_phase") or "prototype")
             phase = execution_phase if execution_phase is not None else observed_phase
             if phase not in {"prototype", "automation"}:
                 raise BuilderWorkflowError("invalid execution context phase")
-            change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+            change = _normalize_change(
+                workflow.get("change") or workflow.get("change_set")
+            )
             if change is None:
-                raise BuilderWorkflowError("an active Change is required to build a context packet")
+                raise BuilderWorkflowError(
+                    "an active Change is required to build a context packet"
+                )
             root = self.project_root(kind, project_id)
             manifest_name = (
                 "project.yaml"
@@ -4771,7 +5778,9 @@ class BuilderWorkflowService:
             try:
                 manifest = yaml.safe_load(manifest_raw.decode("utf-8-sig")) or {}
             except (UnicodeDecodeError, yaml.YAMLError) as exc:
-                raise BuilderWorkflowError(f"cannot build context from {manifest_name}: {exc}") from exc
+                raise BuilderWorkflowError(
+                    f"cannot build context from {manifest_name}: {exc}"
+                ) from exc
             if not isinstance(manifest, Mapping):
                 manifest = {}
             dependencies: list[str] = []
@@ -4779,8 +5788,16 @@ class BuilderWorkflowService:
                 token = str(item).strip()
                 if token and token not in dependencies:
                     dependencies.append(token)
-            runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), Mapping) else {}
-            skills = runtime.get("skills") if isinstance(runtime.get("skills"), Mapping) else {}
+            runtime = (
+                manifest.get("runtime")
+                if isinstance(manifest.get("runtime"), Mapping)
+                else {}
+            )
+            skills = (
+                runtime.get("skills")
+                if isinstance(runtime.get("skills"), Mapping)
+                else {}
+            )
             for item in skills.get("required") or []:
                 token = str(item).strip()
                 if token and token not in dependencies:
@@ -4798,7 +5815,8 @@ class BuilderWorkflowService:
                         dependencies.append(token)
             selected_paths = [
                 str(item).replace("\\", "/").strip().lstrip("/")
-                for item in allowed_paths or [manifest_name, "prompt_state.json", "webui.json"]
+                for item in allowed_paths
+                or [manifest_name, "prompt_state.json", "webui.json"]
                 if str(item).strip()
             ]
             selected_paths = list(dict.fromkeys(selected_paths))[:200]
@@ -4832,12 +5850,20 @@ class BuilderWorkflowService:
                     field="execution scope intent",
                     max_length=4000,
                 )
+            issue_scope = str(scope.get("issue_scope") or "change").strip().lower()
+            if issue_scope not in {"change", "current_iteration"}:
+                raise BuilderWorkflowError("invalid Builder execution issue scope")
             all_issues = [
                 copy.deepcopy(dict(item))
                 for item in change.get("issues") or []
                 if isinstance(item, Mapping)
             ]
-            if scoped_source_ids:
+            if issue_scope == "current_iteration":
+                # A chat follow-up is a task overlay, not another replay of the
+                # accumulated Change portfolio. Its instruction and acceptance
+                # checks are carried separately by Automation.
+                scoped_issues = []
+            elif scoped_source_ids:
                 scoped_source_set = set(scoped_source_ids)
                 scoped_issues = [
                     item
@@ -4871,7 +5897,10 @@ class BuilderWorkflowService:
                 )
             )
             for constraint in change.get("acceptance_constraints") or []:
-                if isinstance(constraint, Mapping) and str(constraint.get("status") or "") != "superseded":
+                if (
+                    isinstance(constraint, Mapping)
+                    and str(constraint.get("status") or "") != "superseded"
+                ):
                     ref = str(constraint.get("target_ref") or "").strip()
                     if ref and ref not in semantic_refs:
                         semantic_refs.append(ref)
@@ -4895,7 +5924,9 @@ class BuilderWorkflowService:
                 try:
                     webui_raw = webui_path.read_bytes()
                     webui_value = json.loads(webui_raw.decode("utf-8-sig"))
-                    webui = dict(webui_value) if isinstance(webui_value, Mapping) else {}
+                    webui = (
+                        dict(webui_value) if isinstance(webui_value, Mapping) else {}
+                    )
                     webui_digest = f"sha256:{hashlib.sha256(webui_raw).hexdigest()}"
                 except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                     webui = {}
@@ -4905,7 +5936,9 @@ class BuilderWorkflowService:
                 "issue_acceptance": [
                     {
                         "issue_id": item.get("issue_id"),
-                        "criteria": copy.deepcopy(item.get("acceptance_criteria") or []),
+                        "criteria": copy.deepcopy(
+                            item.get("acceptance_criteria") or []
+                        ),
                     }
                     for item in scoped_issues
                     if isinstance(item, Mapping)
@@ -4913,7 +5946,9 @@ class BuilderWorkflowService:
                 "acceptance_constraints": copy.deepcopy(
                     change.get("acceptance_constraints") or []
                 ),
-                "active_review_refs": [f"review:{item['review_id']}" for item in active_reviews],
+                "active_review_refs": [
+                    f"review:{item['review_id']}" for item in active_reviews
+                ],
             }
             data_binding = copy.deepcopy(_mapping(workflow.get("data_binding")))
             data_policy = {
@@ -4924,13 +5959,21 @@ class BuilderWorkflowService:
                 "implementation_mapping": implementation_mapping_report(data_binding),
             }
             if phase == "automation":
-                from adaos.services.applications.data_lifecycle import automation_data_contract
+                from adaos.services.applications.data_lifecycle import (
+                    automation_data_contract,
+                )
 
                 data_policy = {
                     "status": "present",
                     "execution_mode": "implemented_resources",
-                    "prototype_binding": {key: data_policy[key] for key in
-                                          ("selected_profile_id", "selected_mode", "implementation_mapping")},
+                    "prototype_binding": {
+                        key: data_policy[key]
+                        for key in (
+                            "selected_profile_id",
+                            "selected_mode",
+                            "implementation_mapping",
+                        )
+                    },
                     "local_release_lifecycle": automation_data_contract(),
                 }
             workflow_inspection = _mapping(
@@ -4982,7 +6025,9 @@ class BuilderWorkflowService:
                     "definition_schema_ref": "abi:workflow.definition.v1.schema.json",
                     "definition_path": "workflow.json",
                     "definition_authority": "component_root_workflow_json_only",
-                    "abi_schemas": [dict(item) for item in workflow_abi_schema_records()],
+                    "abi_schemas": [
+                        dict(item) for item in workflow_abi_schema_records()
+                    ],
                     "adapter_catalog": workflow_adapter_catalog,
                     "adapter_catalog_digest": _stable_digest(
                         {"adapter_catalog": workflow_adapter_catalog}
@@ -5007,9 +6052,15 @@ class BuilderWorkflowService:
                     "report_digest": _stable_digest(static_review),
                     "definition_digest": static_review["definition_digest"],
                     "state_count": static_review["definition_review"]["state_count"],
-                    "transition_count": static_review["definition_review"]["transition_count"],
-                    "command_count": static_review["definition_review"]["command_count"],
-                    "conformance_case_count": static_review["conformance"]["case_count"],
+                    "transition_count": static_review["definition_review"][
+                        "transition_count"
+                    ],
+                    "command_count": static_review["definition_review"][
+                        "command_count"
+                    ],
+                    "conformance_case_count": static_review["conformance"][
+                        "case_count"
+                    ],
                     "statechart_edge_count": len(static_review["statechart"]["edges"]),
                     "coverage": copy.deepcopy(static_review["coverage"]),
                 }
@@ -5043,7 +6094,9 @@ class BuilderWorkflowService:
                 from adaos.services.builder.prototype_handoff import (
                     REQUIRED_REPRESENTATIVE_STATES,
                 )
-                from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
+                from adaos.services.builder.prototype_runtime import (
+                    PrototypeDataRuntime,
+                )
 
                 executable_prototype["status"] = "ambiguous"
                 prototype_values: dict[str, dict[str, Any]] = {}
@@ -5075,7 +6128,9 @@ class BuilderWorkflowService:
                 data_definition = prototype_values.get("data")
                 if data_definition is not None:
                     try:
-                        prototype_data_runtime = PrototypeDataRuntime.start(data_definition)
+                        prototype_data_runtime = PrototypeDataRuntime.start(
+                            data_definition
+                        )
                     except Exception as exc:
                         diagnostics.append(
                             {
@@ -5085,8 +6140,12 @@ class BuilderWorkflowService:
                             }
                         )
                     else:
-                        executable_prototype["data_definition"] = copy.deepcopy(data_definition)
-                        executable_prototype["data_mode"] = prototype_data_runtime.definition["mode"]
+                        executable_prototype["data_definition"] = copy.deepcopy(
+                            data_definition
+                        )
+                        executable_prototype["data_mode"] = (
+                            prototype_data_runtime.definition["mode"]
+                        )
                         executable_prototype["activity_requirements"].extend(
                             prototype_data_runtime.activity_requirements()
                         )
@@ -5111,10 +6170,13 @@ class BuilderWorkflowService:
                             }
                         )
                     else:
-                        executable_prototype["binding_profile"] = copy.deepcopy(binding_profile)
+                        executable_prototype["binding_profile"] = copy.deepcopy(
+                            binding_profile
+                        )
                         implementation_mappings = [
                             dict(item)
-                            for item in binding_profile.get("implementation_mappings") or []
+                            for item in binding_profile.get("implementation_mappings")
+                            or []
                             if isinstance(item, Mapping)
                         ]
                         missing_mappings = [
@@ -5157,14 +6219,18 @@ class BuilderWorkflowService:
                                 }
                             )
                         else:
-                            executable_prototype["workflow_slice"] = copy.deepcopy(workflow_slice)
+                            executable_prototype["workflow_slice"] = copy.deepcopy(
+                                workflow_slice
+                            )
                             executable_prototype["workflow_validation"] = {
                                 key: copy.deepcopy(value)
                                 for key, value in prototype_workflow_report.items()
                                 if key != "candidate_patch"
                             }
                             executable_prototype["activity_requirements"].extend(
-                                copy.deepcopy(workflow_slice.get("activity_requirements") or [])
+                                copy.deepcopy(
+                                    workflow_slice.get("activity_requirements") or []
+                                )
                             )
 
                 representative_state_set = prototype_values.get("representative_states")
@@ -5187,13 +6253,16 @@ class BuilderWorkflowService:
                         for item in representative_states
                         if isinstance(item, Mapping)
                     }
-                    missing_states = sorted(REQUIRED_REPRESENTATIVE_STATES - supplied_states)
+                    missing_states = sorted(
+                        REQUIRED_REPRESENTATIVE_STATES - supplied_states
+                    )
                     if missing_states:
                         diagnostics.append(
                             {
                                 "code": "prototype.representative_states.incomplete",
                                 "severity": "error",
-                                "message": "missing representative states: " + ", ".join(missing_states),
+                                "message": "missing representative states: "
+                                + ", ".join(missing_states),
                             }
                         )
                     executable_prototype["representative_states"] = copy.deepcopy(
@@ -5216,7 +6285,9 @@ class BuilderWorkflowService:
                         continue
                     target_ref = str(constraint.get("target_ref") or "").strip()
                     if target_ref:
-                        acceptance_by_target.setdefault(target_ref, []).append(constraint)
+                        acceptance_by_target.setdefault(target_ref, []).append(
+                            constraint
+                        )
                 for target_ref in semantic_refs:
                     if not target_ref.startswith(("widget:", "field:")):
                         continue
@@ -5237,13 +6308,17 @@ class BuilderWorkflowService:
                             }
                         )
                     else:
-                        executable_prototype["composition_slices"].append(composition_slice)
+                        executable_prototype["composition_slices"].append(
+                            composition_slice
+                        )
 
                 executable_prototype["activity_requirements"] = copy.deepcopy(
                     executable_prototype["activity_requirements"][:100]
                 )
                 executable_prototype["diagnostics"] = diagnostics[:50]
-                executable_prototype["status"] = "ambiguous" if diagnostics else "present"
+                executable_prototype["status"] = (
+                    "ambiguous" if diagnostics else "present"
+                )
             conversational_definition: dict[str, Any] = {
                 "status": "missing",
                 "manifest_ref": "conversational/manifest.yaml",
@@ -5262,9 +6337,12 @@ class BuilderWorkflowService:
                     if not dependency_manifest.is_file():
                         continue
                     try:
-                        dependency_payload = yaml.safe_load(
-                            dependency_manifest.read_text(encoding="utf-8-sig")
-                        ) or {}
+                        dependency_payload = (
+                            yaml.safe_load(
+                                dependency_manifest.read_text(encoding="utf-8-sig")
+                            )
+                            or {}
+                        )
                     except (OSError, UnicodeDecodeError, yaml.YAMLError):
                         continue
                     if not isinstance(dependency_payload, Mapping):
@@ -5272,7 +6350,8 @@ class BuilderWorkflowService:
                     operations = [
                         str(item.get("name") or "").strip()
                         for item in dependency_payload.get("tools") or []
-                        if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+                        if isinstance(item, Mapping)
+                        and str(item.get("name") or "").strip()
                     ]
                     exports = (
                         dependency_payload.get("exports")
@@ -5280,9 +6359,13 @@ class BuilderWorkflowService:
                         else {}
                     )
                     operations.extend(
-                        str(item.get("name") if isinstance(item, Mapping) else item).strip()
+                        str(
+                            item.get("name") if isinstance(item, Mapping) else item
+                        ).strip()
                         for item in dict(exports).get("tools") or []
-                        if str(item.get("name") if isinstance(item, Mapping) else item).strip()
+                        if str(
+                            item.get("name") if isinstance(item, Mapping) else item
+                        ).strip()
                     )
                     operation_catalog[dependency] = tuple(sorted(set(operations)))
                 try:
@@ -5311,10 +6394,14 @@ class BuilderWorkflowService:
                     static_report = conversational_result.static_report
                     conversational_definition.update(
                         {
-                            "status": "present" if conversational_result.valid else "ambiguous",
+                            "status": "present"
+                            if conversational_result.valid
+                            else "ambiguous",
                             "package_digest": validation_report.get("package_digest"),
                             "valid": conversational_result.valid,
-                            "metrics": copy.deepcopy(validation_report.get("metrics") or {}),
+                            "metrics": copy.deepcopy(
+                                validation_report.get("metrics") or {}
+                            ),
                             "diagnostics": copy.deepcopy(
                                 list(validation_report.get("diagnostics") or [])[:50]
                             ),
@@ -5333,8 +6420,12 @@ class BuilderWorkflowService:
                             else {
                                 "schema": static_report.get("schema"),
                                 "report_digest": _stable_digest(static_report),
-                                "definition_digest": static_report.get("definition_digest"),
-                                "coverage": copy.deepcopy(static_report.get("coverage") or {}),
+                                "definition_digest": static_report.get(
+                                    "definition_digest"
+                                ),
+                                "coverage": copy.deepcopy(
+                                    static_report.get("coverage") or {}
+                                ),
                             },
                         }
                     )
@@ -5411,55 +6502,82 @@ class BuilderWorkflowService:
                     "object_type": kind,
                     "object_id": project_id,
                     "manifest_ref": manifest_name,
-                    "manifest_version": str(manifest.get("version") or "").strip() or None,
+                    "manifest_version": str(manifest.get("version") or "").strip()
+                    or None,
                     "manifest_digest": f"sha256:{hashlib.sha256(manifest_raw).hexdigest()}",
-                    "application_project_ref": str(application_project_ref or "").strip() or None,
+                    "application_project_ref": str(
+                        application_project_ref or ""
+                    ).strip()
+                    or None,
                 },
                 "change": {
                     "change_id": change["change_id"],
                     "intent": scoped_intent or change.get("request"),
                     "request_addenda": (
                         []
-                        if scoped_source_ids
+                        if scoped_source_ids or issue_scope == "current_iteration"
                         else copy.deepcopy(change.get("request_addenda") or [])
                     ),
                     "route": change.get("route"),
                     "gate": change.get("gate"),
                     "status": change.get("status"),
                     "issues": scoped_issues,
-                    "specification_delta": copy.deepcopy(change.get("specification_delta")),
-                    "acceptance_constraints": copy.deepcopy(change.get("acceptance_constraints") or []),
+                    "specification_delta": copy.deepcopy(
+                        change.get("specification_delta")
+                    ),
+                    "acceptance_constraints": copy.deepcopy(
+                        change.get("acceptance_constraints") or []
+                    ),
                     "reviews": active_reviews,
                     "source_message_ids": (
                         scoped_source_ids
-                        if scoped_source_ids
+                        if scoped_source_ids or issue_scope == "current_iteration"
                         else copy.deepcopy(change.get("source_message_ids") or [])
                     ),
-                    "teacher_candidate_refs": copy.deepcopy(change.get("teacher_candidate_refs") or []),
+                    "teacher_candidate_refs": copy.deepcopy(
+                        change.get("teacher_candidate_refs") or []
+                    ),
                     "promotion_privacy_scope": change.get("promotion_privacy_scope"),
                 },
                 "base": {
-                    "application_specification": copy.deepcopy(workflow["application_specification"]),
+                    "application_specification": copy.deepcopy(
+                        workflow["application_specification"]
+                    ),
                     "source": copy.deepcopy(change.get("base_ref")),
-                    "release": copy.deepcopy(_mapping(workflow.get("delivery")).get("base_release")),
-                    "release_digest": _mapping(workflow.get("delivery")).get("base_release_digest"),
+                    "release": copy.deepcopy(
+                        _mapping(workflow.get("delivery")).get("base_release")
+                    ),
+                    "release_digest": _mapping(workflow.get("delivery")).get(
+                        "base_release_digest"
+                    ),
                 },
                 "artifacts": {
                     "prototype": copy.deepcopy(_mapping(workflow.get("prototype"))),
-                    "implementation": copy.deepcopy(_mapping(workflow.get("automation"))),
+                    "implementation": copy.deepcopy(
+                        _mapping(workflow.get("automation"))
+                    ),
                     "trial": copy.deepcopy(_mapping(workflow.get("delivery"))),
                     "publication": copy.deepcopy(_mapping(workflow.get("publication"))),
                 },
                 "dependencies": dependencies[:200],
                 "allowed_paths": selected_paths,
-                "instruction_refs": [str(item).strip() for item in instruction_refs or [] if str(item).strip()][:100],
+                "instruction_refs": [
+                    str(item).strip()
+                    for item in instruction_refs or []
+                    if str(item).strip()
+                ][:100],
                 "previous_run": previous_run,
                 "conversation": bounded_conversation,
                 "pending_actions": bounded_pending_actions,
                 "execution_scope": {
                     "source_message_ids": scoped_source_ids,
                     "repair_ids": scoped_repair_ids,
-                    "active": bool(scoped_source_ids or scoped_repair_ids),
+                    "issue_scope": issue_scope,
+                    "active": bool(
+                        scoped_source_ids
+                        or scoped_repair_ids
+                        or issue_scope == "current_iteration"
+                    ),
                 },
                 "run": {"purpose": purpose},
                 "facets": facets,
@@ -5467,14 +6585,22 @@ class BuilderWorkflowService:
                 "budget": {
                     "max_state_bytes": _MAX_STATE_BYTES,
                     "issue_count": len(scoped_issues),
-                    "acceptance_constraint_count": len(change.get("acceptance_constraints") or []),
+                    "acceptance_constraint_count": len(
+                        change.get("acceptance_constraints") or []
+                    ),
                     "run_count": len(change.get("runs") or []),
                     "source_message_ref_count": len(
                         scoped_source_ids or change.get("source_message_ids") or []
                     ),
-                    "conversation_message_count": len((bounded_conversation or {}).get("messages") or []),
-                    "conversation_segment_count": len((bounded_conversation or {}).get("segments") or []),
-                    "memory_item_count": len((bounded_conversation or {}).get("memory") or []),
+                    "conversation_message_count": len(
+                        (bounded_conversation or {}).get("messages") or []
+                    ),
+                    "conversation_segment_count": len(
+                        (bounded_conversation or {}).get("segments") or []
+                    ),
+                    "memory_item_count": len(
+                        (bounded_conversation or {}).get("memory") or []
+                    ),
                     "pending_action_ref_count": len(bounded_pending_actions),
                     "active_review_count": len(active_reviews),
                     "active_repair_count": int(repair_context.get("active_count") or 0),
@@ -5505,7 +6631,9 @@ class BuilderWorkflowService:
     def _require_active(workflow: Mapping[str, Any], phase: str, action: str) -> None:
         active = str(workflow.get("active_phase") or "prototype")
         if active != phase:
-            raise BuilderWorkflowError(f"{action} requires active {phase}; active phase is {active}")
+            raise BuilderWorkflowError(
+                f"{action} requires active {phase}; active phase is {active}"
+            )
 
     def _apply_transition(
         self,
@@ -5529,12 +6657,16 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError("an active change set is required")
             expected = str(change_set_id or current.get("change_set_id") or "").strip()
             if expected != str(current.get("change_set_id") or ""):
-                raise BuilderWorkflowError("change set identity does not match the active change set")
+                raise BuilderWorkflowError(
+                    "change set identity does not match the active change set"
+                )
             if str(current.get("status") or "") in _CHANGE_SET_TERMINAL_STATES:
                 raise BuilderWorkflowError("the active change set is already terminal")
             return current
 
-        def update_change_set(*, status: str | None = None, gate: str | None = None) -> None:
+        def update_change_set(
+            *, status: str | None = None, gate: str | None = None
+        ) -> None:
             current = workflow.get("change_set")
             if not isinstance(current, dict):
                 return
@@ -5560,7 +6692,9 @@ class BuilderWorkflowService:
             current["updated_at"] = changed_at
 
         def canonical_change() -> dict[str, Any]:
-            current = require_change_set(metadata.get("change_id") or metadata.get("change_set_id"))
+            current = require_change_set(
+                metadata.get("change_id") or metadata.get("change_set_id")
+            )
             existing = _normalize_change(workflow.get("change"))
             if existing is not None:
                 return existing
@@ -5581,7 +6715,11 @@ class BuilderWorkflowService:
             return created
 
         def invalidate_delivery(reason: str) -> None:
-            if str(delivery.get("status") or "idle") in {"checkpoint", "trial", "accepted"}:
+            if str(delivery.get("status") or "idle") in {
+                "checkpoint",
+                "trial",
+                "accepted",
+            }:
                 delivery.update(
                     {
                         "status": "stale",
@@ -5589,6 +6727,7 @@ class BuilderWorkflowService:
                         "stale_at": changed_at,
                     }
                 )
+
         if action == "plan_change_set":
             change_set_id = str(metadata.get("change_set_id") or "").strip()
             if not change_set_id:
@@ -5599,7 +6738,10 @@ class BuilderWorkflowService:
                 if isinstance(existing, Mapping)
                 else ""
             ).strip()
-            if isinstance(existing, Mapping) and str(existing.get("status") or "") not in _CHANGE_SET_TERMINAL_STATES:
+            if (
+                isinstance(existing, Mapping)
+                and str(existing.get("status") or "") not in _CHANGE_SET_TERMINAL_STATES
+            ):
                 supersedes = str(metadata.get("supersedes_change_set_id") or "").strip()
                 if supersedes != str(existing.get("change_set_id") or ""):
                     raise BuilderWorkflowError(
@@ -5608,15 +6750,26 @@ class BuilderWorkflowService:
             raw_issues = metadata.get("issues")
             if not isinstance(raw_issues, (list, tuple)) or not raw_issues:
                 raise BuilderWorkflowError("change set requires at least one issue")
-            _reject_transport_corruption(metadata.get("request"), field="change set request")
+            _reject_transport_corruption(
+                metadata.get("request"), field="change set request"
+            )
             _reject_transport_corruption(raw_issues, field="change set issues")
             if len(raw_issues) > _MAX_CHANGE_ISSUES:
-                raise BuilderWorkflowError(f"change set supports at most {_MAX_CHANGE_ISSUES} issues")
-            issues = [_normalize_issue(item, index=index) for index, item in enumerate(raw_issues, start=1)]
+                raise BuilderWorkflowError(
+                    f"change set supports at most {_MAX_CHANGE_ISSUES} issues"
+                )
+            issues = [
+                _normalize_issue(item, index=index)
+                for index, item in enumerate(raw_issues, start=1)
+            ]
             issue_ids = [item["issue_id"] for item in issues]
             if len(set(issue_ids)) != len(issue_ids):
                 raise BuilderWorkflowError("change set issue_ids must be unique")
-            route = "prototype_first" if any(item["lane"] == "prototype" for item in issues) else "automation_direct"
+            route = (
+                "prototype_first"
+                if any(item["lane"] == "prototype" for item in issues)
+                else "automation_direct"
+            )
             gate = "prototype" if route == "prototype_first" else "automation"
             if existing_change_set_id != change_set_id:
                 # A Project may retain a completed/published Automation as
@@ -5630,7 +6783,9 @@ class BuilderWorkflowService:
             workflow["change_set"] = {
                 "schema": BUILDER_CHANGE_SET_SCHEMA,
                 "change_set_id": change_set_id,
-                "request": _bounded_text(metadata.get("request"), field="change set request", max_length=4000),
+                "request": _bounded_text(
+                    metadata.get("request"), field="change set request", max_length=4000
+                ),
                 "request_addenda": [],
                 "route": route,
                 "gate": gate,
@@ -5663,14 +6818,20 @@ class BuilderWorkflowService:
             current = require_change_set(metadata.get("change_set_id"))
             raw_issues = metadata.get("issues")
             if not isinstance(raw_issues, (list, tuple)) or not raw_issues:
-                raise BuilderWorkflowError("change set extension requires at least one issue")
-            _reject_transport_corruption(metadata.get("request"), field="change set request addendum")
+                raise BuilderWorkflowError(
+                    "change set extension requires at least one issue"
+                )
+            _reject_transport_corruption(
+                metadata.get("request"), field="change set request addendum"
+            )
             _reject_transport_corruption(raw_issues, field="change set issues")
             existing_issues = [
                 item for item in current.get("issues") or [] if isinstance(item, dict)
             ]
             if len(existing_issues) + len(raw_issues) > _MAX_CHANGE_ISSUES:
-                raise BuilderWorkflowError(f"change set supports at most {_MAX_CHANGE_ISSUES} issues")
+                raise BuilderWorkflowError(
+                    f"change set supports at most {_MAX_CHANGE_ISSUES} issues"
+                )
             known_ids = {str(item.get("issue_id") or "") for item in existing_issues}
             additions: list[dict[str, Any]] = []
             for index, item in enumerate(raw_issues, start=len(existing_issues) + 1):
@@ -5730,7 +6891,11 @@ class BuilderWorkflowService:
                     "change set issue status must be open, in_progress, resolved, or deferred"
                 )
             issue = next(
-                (item for item in current.get("issues") or [] if item.get("issue_id") == issue_id),
+                (
+                    item
+                    for item in current.get("issues") or []
+                    if item.get("issue_id") == issue_id
+                ),
                 None,
             )
             if not isinstance(issue, dict):
@@ -5741,13 +6906,19 @@ class BuilderWorkflowService:
                 update_change_set(status="changes_requested", gate="prototype")
                 invalidate_delivery("prototype_issue_reopened")
             else:
-                update_change_set(status="in_progress" if status == "in_progress" else None)
+                update_change_set(
+                    status="in_progress" if status == "in_progress" else None
+                )
             return
         if action == "change_issue_split":
             current = require_change_set(metadata.get("change_set_id"))
             issue_id = str(metadata.get("issue_id") or "").strip()
             source = next(
-                (item for item in current.get("issues") or [] if item.get("issue_id") == issue_id),
+                (
+                    item
+                    for item in current.get("issues") or []
+                    if item.get("issue_id") == issue_id
+                ),
                 None,
             )
             if not isinstance(source, dict):
@@ -5756,16 +6927,24 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError("only an active issue can be split")
             raw_children = metadata.get("issues")
             if not isinstance(raw_children, (list, tuple)) or len(raw_children) < 2:
-                raise BuilderWorkflowError("issue split requires at least two replacement issues")
-            existing = [item for item in current.get("issues") or [] if isinstance(item, dict)]
+                raise BuilderWorkflowError(
+                    "issue split requires at least two replacement issues"
+                )
+            existing = [
+                item for item in current.get("issues") or [] if isinstance(item, dict)
+            ]
             if len(existing) + len(raw_children) > _MAX_CHANGE_ISSUES:
-                raise BuilderWorkflowError(f"change set supports at most {_MAX_CHANGE_ISSUES} issues")
+                raise BuilderWorkflowError(
+                    f"change set supports at most {_MAX_CHANGE_ISSUES} issues"
+                )
             known = {str(item.get("issue_id") or "") for item in existing}
             children: list[dict[str, Any]] = []
             for index, raw in enumerate(raw_children, start=len(existing) + 1):
                 child = _normalize_issue(raw, index=index)
                 if child["issue_id"] in known:
-                    raise BuilderWorkflowError(f"duplicate change set issue_id: {child['issue_id']}")
+                    raise BuilderWorkflowError(
+                        f"duplicate change set issue_id: {child['issue_id']}"
+                    )
                 known.add(child["issue_id"])
                 child["derived_from_issue_ids"] = [issue_id]
                 children.append(child)
@@ -5797,8 +6976,12 @@ class BuilderWorkflowService:
                 )
             )
             if len(issue_ids) < 2:
-                raise BuilderWorkflowError("issue merge requires at least two source issues")
-            existing = [item for item in current.get("issues") or [] if isinstance(item, dict)]
+                raise BuilderWorkflowError(
+                    "issue merge requires at least two source issues"
+                )
+            existing = [
+                item for item in current.get("issues") or [] if isinstance(item, dict)
+            ]
             sources = [item for item in existing if item.get("issue_id") in issue_ids]
             if len(sources) != len(issue_ids):
                 raise BuilderWorkflowError("issue merge contains an unknown issue_id")
@@ -5806,7 +6989,9 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError("only active issues can be merged")
             merged = _normalize_issue(metadata.get("issue"), index=len(existing) + 1)
             if any(item.get("issue_id") == merged["issue_id"] for item in existing):
-                raise BuilderWorkflowError(f"duplicate change set issue_id: {merged['issue_id']}")
+                raise BuilderWorkflowError(
+                    f"duplicate change set issue_id: {merged['issue_id']}"
+                )
             merged["derived_from_issue_ids"] = issue_ids
             for source in sources:
                 source["status"] = "deferred"
@@ -5835,7 +7020,10 @@ class BuilderWorkflowService:
                 change_id=current_change["change_id"],
             )
             constraints = list(current_change.get("acceptance_constraints") or [])
-            if any(item.get("constraint_id") == constraint["constraint_id"] for item in constraints):
+            if any(
+                item.get("constraint_id") == constraint["constraint_id"]
+                for item in constraints
+            ):
                 raise BuilderWorkflowError(
                     f"acceptance constraint already exists: {constraint['constraint_id']}"
                 )
@@ -5854,19 +7042,26 @@ class BuilderWorkflowService:
             current_change = canonical_change()
             evaluations = metadata.get("evaluations")
             if not isinstance(evaluations, (list, tuple)) or not evaluations:
-                raise BuilderWorkflowError("Review constraint evaluation requires results")
+                raise BuilderWorkflowError(
+                    "Review constraint evaluation requires results"
+                )
             by_id = {
                 str(item.get("constraint_id") or "").strip(): dict(item)
                 for item in evaluations
-                if isinstance(item, Mapping) and str(item.get("constraint_id") or "").strip()
+                if isinstance(item, Mapping)
+                and str(item.get("constraint_id") or "").strip()
             }
             if not by_id:
-                raise BuilderWorkflowError("Review constraint evaluation requires identified results")
+                raise BuilderWorkflowError(
+                    "Review constraint evaluation requires identified results"
+                )
             constraints = list(current_change.get("acceptance_constraints") or [])
             known = {str(item.get("constraint_id") or "") for item in constraints}
             unknown = sorted(set(by_id) - known)
             if unknown:
-                raise BuilderWorkflowError(f"unknown acceptance constraint: {unknown[0]}")
+                raise BuilderWorkflowError(
+                    f"unknown acceptance constraint: {unknown[0]}"
+                )
             any_violation = False
             for constraint in constraints:
                 evaluation = by_id.get(str(constraint.get("constraint_id") or ""))
@@ -5874,7 +7069,9 @@ class BuilderWorkflowService:
                     continue
                 status = str(evaluation.get("status") or "").strip().lower()
                 if status not in {"satisfied", "violated", "unverifiable"}:
-                    raise BuilderWorkflowError("invalid acceptance constraint evaluation status")
+                    raise BuilderWorkflowError(
+                        "invalid acceptance constraint evaluation status"
+                    )
                 constraint["status"] = status
                 constraint["last_evaluation"] = copy.deepcopy(evaluation)
                 constraint["updated_at"] = changed_at
@@ -5889,7 +7086,9 @@ class BuilderWorkflowService:
             current_change = canonical_change()
             constraint_id = str(metadata.get("constraint_id") or "").strip()
             reason = _bounded_text(
-                metadata.get("reason"), field="constraint supersede reason", max_length=2000
+                metadata.get("reason"),
+                field="constraint supersede reason",
+                max_length=2000,
             )
             constraint = next(
                 (
@@ -5900,24 +7099,32 @@ class BuilderWorkflowService:
                 None,
             )
             if not isinstance(constraint, dict):
-                raise BuilderWorkflowError(f"unknown acceptance constraint: {constraint_id}")
+                raise BuilderWorkflowError(
+                    f"unknown acceptance constraint: {constraint_id}"
+                )
             if str(constraint.get("status") or "") == "superseded":
-                raise BuilderWorkflowError("acceptance constraint is already superseded")
+                raise BuilderWorkflowError(
+                    "acceptance constraint is already superseded"
+                )
             constraint["status"] = "superseded"
             constraint["updated_at"] = changed_at
             constraint["superseded_reason"] = reason
-            constraint["superseded_by_ref"] = str(
-                metadata.get("superseded_by_ref") or ""
-            ).strip() or None
+            constraint["superseded_by_ref"] = (
+                str(metadata.get("superseded_by_ref") or "").strip() or None
+            )
             workflow["change"] = current_change
             return
         if action == "prototype_revision_recorded":
             self._require_active(workflow, "prototype", action)
             revision = str(metadata.get("revision") or "").strip()
             if not revision:
-                raise BuilderWorkflowError("Prototype revision recording requires revision")
+                raise BuilderWorkflowError(
+                    "Prototype revision recording requires revision"
+                )
             if _kind(str(metadata.get("object_type") or "scenario")) != "scenario":
-                raise BuilderWorkflowError("Prototype revisions are supported only for scenarios")
+                raise BuilderWorkflowError(
+                    "Prototype revisions are supported only for scenarios"
+                )
             prototype.update(
                 {
                     "status": "working",
@@ -5938,19 +7145,27 @@ class BuilderWorkflowService:
             revision = str(metadata.get("revision") or "").strip()
             experiment_id = str(metadata.get("experiment_id") or "").strip()
             if not revision or not experiment_id:
-                raise BuilderWorkflowError("Prototype experiment requires experiment_id and revision")
+                raise BuilderWorkflowError(
+                    "Prototype experiment requires experiment_id and revision"
+                )
             experiments = [
-                dict(item) for item in prototype.get("experiments") or [] if isinstance(item, Mapping)
+                dict(item)
+                for item in prototype.get("experiments") or []
+                if isinstance(item, Mapping)
             ]
             if any(item.get("experiment_id") == experiment_id for item in experiments):
-                raise BuilderWorkflowError(f"Prototype experiment already exists: {experiment_id}")
+                raise BuilderWorkflowError(
+                    f"Prototype experiment already exists: {experiment_id}"
+                )
             experiments.append(
                 {
                     "experiment_id": experiment_id,
                     "revision": revision,
                     "status": "pending",
                     "base_revision": str(
-                        metadata.get("base_revision") or prototype.get("head_revision") or ""
+                        metadata.get("base_revision")
+                        or prototype.get("head_revision")
+                        or ""
                     )
                     or None,
                     "created_at": changed_at,
@@ -5967,25 +7182,38 @@ class BuilderWorkflowService:
             self._require_active(workflow, "prototype", action)
             experiment_id = str(metadata.get("experiment_id") or "").strip()
             experiments = [
-                dict(item) for item in prototype.get("experiments") or [] if isinstance(item, Mapping)
+                dict(item)
+                for item in prototype.get("experiments") or []
+                if isinstance(item, Mapping)
             ]
             experiment = next(
-                (item for item in experiments if item.get("experiment_id") == experiment_id), None
+                (
+                    item
+                    for item in experiments
+                    if item.get("experiment_id") == experiment_id
+                ),
+                None,
             )
             if not isinstance(experiment, dict):
-                raise BuilderWorkflowError(f"unknown Prototype experiment: {experiment_id}")
+                raise BuilderWorkflowError(
+                    f"unknown Prototype experiment: {experiment_id}"
+                )
             if str(experiment.get("status") or "") != "pending":
                 raise BuilderWorkflowError("Prototype experiment is already decided")
             if action == "discard_experiment":
                 experiment["status"] = "discarded"
                 experiment["decided_at"] = changed_at
                 experiment["reason"] = _bounded_text(
-                    metadata.get("reason"), field="experiment discard reason", max_length=1000
+                    metadata.get("reason"),
+                    field="experiment discard reason",
+                    max_length=1000,
                 )
                 prototype["experiments"] = experiments
                 return
             if not bool(metadata.get("confirmed")):
-                raise BuilderWorkflowError("adopting a Prototype experiment requires confirmation")
+                raise BuilderWorkflowError(
+                    "adopting a Prototype experiment requires confirmation"
+                )
             prototype.update(
                 {
                     "head_revision": experiment["revision"],
@@ -6002,7 +7230,9 @@ class BuilderWorkflowService:
             update_change_set(status="in_progress", gate="prototype")
             return
         if action == "stabilize_prototype":
-            governed_state = str(_mapping(workflow.get("governed")).get("state") or "").strip()
+            governed_state = str(
+                _mapping(workflow.get("governed")).get("state") or ""
+            ).strip()
             if (
                 str(workflow.get("active_phase") or "prototype") == "automation"
                 and governed_state == "prototype_editing"
@@ -6017,8 +7247,12 @@ class BuilderWorkflowService:
                     }
                 )
             self._require_active(workflow, "prototype", action)
-            prototype.update({"status": "working", "stable": True, "stabilized_at": changed_at})
-            prototype["head_revision"] = metadata.get("revision") or prototype.get("head_revision")
+            prototype.update(
+                {"status": "working", "stable": True, "stabilized_at": changed_at}
+            )
+            prototype["head_revision"] = metadata.get("revision") or prototype.get(
+                "head_revision"
+            )
             if isinstance(metadata.get("acceptance"), Mapping):
                 prototype["acceptance"] = copy.deepcopy(dict(metadata["acceptance"]))
             current = workflow.get("change_set")
@@ -6070,11 +7304,19 @@ class BuilderWorkflowService:
                     prototype_first=False,
                 )
             self._require_active(workflow, "prototype", action)
-            source_revision = str(metadata.get("source_prototype_revision") or "").strip()
+            source_revision = str(
+                metadata.get("source_prototype_revision") or ""
+            ).strip()
             if source_revision.lower().startswith("ui "):
                 source_revision = source_revision[3:].strip()
-            source_revision = source_revision or str(prototype.get("head_revision") or "").strip() or None
-            prototype.update({"status": "frozen", "stable": True, "frozen_at": changed_at})
+            source_revision = (
+                source_revision
+                or str(prototype.get("head_revision") or "").strip()
+                or None
+            )
+            prototype.update(
+                {"status": "frozen", "stable": True, "frozen_at": changed_at}
+            )
             prototype["head_revision"] = source_revision
             automation["iteration"] = int(automation.get("iteration") or 0) + 1
             workflow["active_phase"] = "automation"
@@ -6082,7 +7324,8 @@ class BuilderWorkflowService:
                 {
                     "status": "working",
                     "source_prototype_revision": source_revision,
-                    "head_task_id": metadata.get("task_id") or automation.get("head_task_id"),
+                    "head_task_id": metadata.get("task_id")
+                    or automation.get("head_task_id"),
                     "started_at": changed_at,
                     "completed_at": None,
                     "error": None,
@@ -6104,9 +7347,14 @@ class BuilderWorkflowService:
             next_task_id = str(metadata.get("task_id") or "").strip()
             previous_task_id = str(automation.get("head_task_id") or "").strip()
             reconciles_stale_working_state = bool(
-                status == "working" and next_task_id and next_task_id != previous_task_id
+                status == "working"
+                and next_task_id
+                and next_task_id != previous_task_id
             )
-            if status not in {"completed", "failed"} and not reconciles_stale_working_state:
+            if (
+                status not in {"completed", "failed"}
+                and not reconciles_stale_working_state
+            ):
                 raise BuilderWorkflowError(
                     "a new Automation iteration requires a completed or failed Automation result"
                 )
@@ -6115,7 +7363,8 @@ class BuilderWorkflowService:
             automation.update(
                 {
                     "status": "working",
-                    "head_task_id": metadata.get("task_id") or automation.get("head_task_id"),
+                    "head_task_id": metadata.get("task_id")
+                    or automation.get("head_task_id"),
                     "started_at": changed_at,
                     "completed_at": None,
                     "error": None,
@@ -6131,10 +7380,14 @@ class BuilderWorkflowService:
             automation.update(
                 {
                     "status": "completed",
-                    "head_task_id": metadata.get("task_id") or automation.get("head_task_id"),
-                    "snapshot_task_id": metadata.get("task_id") or automation.get("snapshot_task_id"),
-                    "result_version": metadata.get("version") or automation.get("result_version"),
-                    "snapshot_path": metadata.get("snapshot_path") or automation.get("snapshot_path"),
+                    "head_task_id": metadata.get("task_id")
+                    or automation.get("head_task_id"),
+                    "snapshot_task_id": metadata.get("task_id")
+                    or automation.get("snapshot_task_id"),
+                    "result_version": metadata.get("version")
+                    or automation.get("result_version"),
+                    "snapshot_path": metadata.get("snapshot_path")
+                    or automation.get("snapshot_path"),
                     "completed_at": changed_at,
                     "error": None,
                 }
@@ -6156,7 +7409,8 @@ class BuilderWorkflowService:
             automation.update(
                 {
                     "status": "failed",
-                    "head_task_id": metadata.get("task_id") or automation.get("head_task_id"),
+                    "head_task_id": metadata.get("task_id")
+                    or automation.get("head_task_id"),
                     "error": metadata.get("error"),
                     "completed_at": changed_at,
                 }
@@ -6168,7 +7422,9 @@ class BuilderWorkflowService:
         if action == "request_return_to_prototype":
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") != "completed":
-                raise BuilderWorkflowError("return to prototype requires completed automation")
+                raise BuilderWorkflowError(
+                    "return to prototype requires completed automation"
+                )
             automation["status"] = "adapting"
             automation.pop("adaptation_error", None)
             automation.pop("adaptation_failed_at", None)
@@ -6181,7 +7437,9 @@ class BuilderWorkflowService:
         if action == "return_to_prototype_failed":
             self._require_active(workflow, "automation", action)
             status = str(automation.get("status") or "")
-            recoverable_failed_state = bool(status == "failed" and automation.get("snapshot_path"))
+            recoverable_failed_state = bool(
+                status == "failed" and automation.get("snapshot_path")
+            )
             if status != "adapting" and not recoverable_failed_state:
                 raise BuilderWorkflowError(
                     "failed Prototype adaptation recovery requires adapting Automation or a retained snapshot"
@@ -6199,7 +7457,9 @@ class BuilderWorkflowService:
         if action == "return_to_prototype":
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") not in {"adapting", "completed"}:
-                raise BuilderWorkflowError("return to prototype requires completed adaptation")
+                raise BuilderWorkflowError(
+                    "return to prototype requires completed adaptation"
+                )
             automation.update({"status": "frozen", "frozen_at": changed_at})
             automation.pop("adaptation_error", None)
             automation.pop("adaptation_failed_at", None)
@@ -6208,8 +7468,10 @@ class BuilderWorkflowService:
                 {
                     "status": "working",
                     "stable": False,
-                    "head_revision": metadata.get("revision") or prototype.get("head_revision"),
-                    "derived_from_automation_task": metadata.get("task_id") or automation.get("head_task_id"),
+                    "head_revision": metadata.get("revision")
+                    or prototype.get("head_revision"),
+                    "derived_from_automation_task": metadata.get("task_id")
+                    or automation.get("head_task_id"),
                     "resumed_at": changed_at,
                 }
             )
@@ -6283,7 +7545,9 @@ class BuilderWorkflowService:
         if action == "candidate_preparation_started":
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") != "completed":
-                raise BuilderWorkflowError("trial activation requires completed automation")
+                raise BuilderWorkflowError(
+                    "trial activation requires completed automation"
+                )
             delivery_status = str(delivery.get("status") or "")
             reconciles_observed_result = (
                 delivery_status == "activating"
@@ -6291,11 +7555,16 @@ class BuilderWorkflowService:
                 == "external_trial_result_observed"
             )
             if delivery_status != "checkpoint" and not reconciles_observed_result:
-                raise BuilderWorkflowError("trial activation requires an exact checkpoint")
+                raise BuilderWorkflowError(
+                    "trial activation requires an exact checkpoint"
+                )
             delivery.update(
                 {
                     "status": "activating",
-                    "activity_attempt_id": str(metadata.get("activity_attempt_id") or "").strip() or None,
+                    "activity_attempt_id": str(
+                        metadata.get("activity_attempt_id") or ""
+                    ).strip()
+                    or None,
                     "activation_started_at": changed_at,
                     "activation_error": None,
                 }
@@ -6305,9 +7574,13 @@ class BuilderWorkflowService:
         if action == "candidate_prepared":
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") != "completed":
-                raise BuilderWorkflowError("candidate preparation requires completed automation")
+                raise BuilderWorkflowError(
+                    "candidate preparation requires completed automation"
+                )
             if str(delivery.get("status") or "") not in {"activating", "checkpoint"}:
-                raise BuilderWorkflowError("candidate result requires an active Trial activity")
+                raise BuilderWorkflowError(
+                    "candidate result requires an active Trial activity"
+                )
             candidate_id = str(metadata.get("candidate_id") or "").strip()
             release_digest = str(metadata.get("release_digest") or "").strip()
             package_digest = str(metadata.get("package_digest") or "").strip()
@@ -6342,12 +7615,16 @@ class BuilderWorkflowService:
             return
         if action in {"candidate_preparation_failed", "candidate_preparation_unknown"}:
             if str(delivery.get("status") or "") != "activating":
-                raise BuilderWorkflowError("Trial failure requires an active Trial activity")
+                raise BuilderWorkflowError(
+                    "Trial failure requires an active Trial activity"
+                )
             unknown = action == "candidate_preparation_unknown"
             delivery.update(
                 {
                     "status": "unknown" if unknown else "checkpoint",
-                    "activation_error": str(metadata.get("error") or "trial_activation_failed")[:1000],
+                    "activation_error": str(
+                        metadata.get("error") or "trial_activation_failed"
+                    )[:1000],
                     "activation_finished_at": changed_at,
                 }
             )
@@ -6358,10 +7635,14 @@ class BuilderWorkflowService:
             return
         if action in {"candidate_accepted", "candidate_rejected"}:
             if str(delivery.get("status") or "") != "trial":
-                raise BuilderWorkflowError("candidate decision requires an active trial")
+                raise BuilderWorkflowError(
+                    "candidate decision requires an active trial"
+                )
             candidate_id = str(metadata.get("candidate_id") or "").strip()
             if candidate_id != str(delivery.get("candidate_id") or ""):
-                raise BuilderWorkflowError("candidate decision does not match the active trial")
+                raise BuilderWorkflowError(
+                    "candidate decision does not match the active trial"
+                )
             candidate_digest = str(metadata.get("candidate_digest") or "").strip()
             expected_digest = str(
                 delivery.get("package_digest") or delivery.get("release_digest") or ""
@@ -6372,27 +7653,36 @@ class BuilderWorkflowService:
                 )
             delivery.update(
                 {
-                    "status": "accepted" if action == "candidate_accepted" else "rejected",
+                    "status": "accepted"
+                    if action == "candidate_accepted"
+                    else "rejected",
                     "decided_at": changed_at,
                     "decision_observations": list(metadata.get("observations") or ()),
                 }
             )
             update_change_set(
-                status="accepted" if action == "candidate_accepted" else "changes_requested",
+                status="accepted"
+                if action == "candidate_accepted"
+                else "changes_requested",
                 gate="publication" if action == "candidate_accepted" else "automation",
             )
             return
         if action == "candidate_stale":
             candidate_id = str(metadata.get("candidate_id") or "").strip()
             if candidate_id != str(delivery.get("candidate_id") or ""):
-                raise BuilderWorkflowError("stale candidate does not match the active delivery")
+                raise BuilderWorkflowError(
+                    "stale candidate does not match the active delivery"
+                )
             rebase_plan = metadata.get("rebase_plan")
             if not isinstance(rebase_plan, Mapping):
-                raise BuilderWorkflowError("stale candidate requires an exact rebase plan")
+                raise BuilderWorkflowError(
+                    "stale candidate requires an exact rebase plan"
+                )
             delivery.update(
                 {
                     "status": "stale",
-                    "stale_reason": rebase_plan.get("stale_reason") or "base_release_moved",
+                    "stale_reason": rebase_plan.get("stale_reason")
+                    or "base_release_moved",
                     "stale_at": changed_at,
                     "replaces_candidate_id": candidate_id,
                     "rebase_plan": dict(rebase_plan),
@@ -6415,12 +7705,17 @@ class BuilderWorkflowService:
                 # dispatch the publication activity here.
                 return
             if str(delivery.get("status") or "") != "accepted":
-                raise BuilderWorkflowError("publication requires an accepted candidate trial")
+                raise BuilderWorkflowError(
+                    "publication requires an accepted candidate trial"
+                )
             delivery["status"] = "publication_waiting"
             publication.update(
                 {
                     "status": "publishing",
-                    "activity_attempt_id": str(metadata.get("activity_attempt_id") or "").strip() or None,
+                    "activity_attempt_id": str(
+                        metadata.get("activity_attempt_id") or ""
+                    ).strip()
+                    or None,
                     "started_at": changed_at,
                     "error": None,
                 }
@@ -6431,11 +7726,18 @@ class BuilderWorkflowService:
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") != "completed":
                 raise BuilderWorkflowError("publication requires completed automation")
-            if str(delivery.get("status") or "") not in {"accepted", "publication_waiting"}:
-                raise BuilderWorkflowError("publication result requires an active Publication activity")
+            if str(delivery.get("status") or "") not in {
+                "accepted",
+                "publication_waiting",
+            }:
+                raise BuilderWorkflowError(
+                    "publication result requires an active Publication activity"
+                )
             candidate_id = str(metadata.get("candidate_id") or "").strip()
             if candidate_id != str(delivery.get("candidate_id") or ""):
-                raise BuilderWorkflowError("publication candidate does not match the accepted trial")
+                raise BuilderWorkflowError(
+                    "publication candidate does not match the accepted trial"
+                )
             candidate_digest = str(metadata.get("candidate_digest") or "").strip()
             expected_digest = str(
                 delivery.get("package_digest") or delivery.get("release_digest") or ""
@@ -6466,7 +7768,8 @@ class BuilderWorkflowService:
                     "status": "published",
                     "current_version": version,
                     "published_at": changed_at,
-                    "source_automation_task": metadata.get("task_id") or automation.get("head_task_id"),
+                    "source_automation_task": metadata.get("task_id")
+                    or automation.get("head_task_id"),
                     "release": metadata.get("release"),
                     "release_record": release_record,
                 }
@@ -6484,7 +7787,9 @@ class BuilderWorkflowService:
             return
         if action in {"publication_failed", "publication_unknown"}:
             if str(delivery.get("status") or "") != "publication_waiting":
-                raise BuilderWorkflowError("Publication failure requires an active Publication activity")
+                raise BuilderWorkflowError(
+                    "Publication failure requires an active Publication activity"
+                )
             unknown = action == "publication_unknown"
             publication.update(
                 {
@@ -6505,7 +7810,10 @@ class BuilderWorkflowService:
             "reconcile_publication",
         }:
             current = workflow.get("change_set")
-            if not isinstance(current, dict) or str(current.get("status") or "") != "reconciliation_required":
+            if (
+                not isinstance(current, dict)
+                or str(current.get("status") or "") != "reconciliation_required"
+            ):
                 raise BuilderWorkflowError(
                     "workflow reconciliation requires an unknown external outcome"
                 )
@@ -6582,7 +7890,14 @@ class BuilderWorkflowService:
     def automation_snapshot_root(self, object_type: str, object_id: str) -> Path:
         kind = _kind(object_type)
         project_id = _project_id(object_id)
-        return Path(self.state_dir or current_state_dir()) / "builder" / "workflow_snapshots" / kind / project_id / "automation"
+        return (
+            Path(self.state_dir or current_state_dir())
+            / "builder"
+            / "workflow_snapshots"
+            / kind
+            / project_id
+            / "automation"
+        )
 
     def snapshot_current_automation(
         self,
@@ -6598,15 +7913,26 @@ class BuilderWorkflowService:
         from adaos.services.artifact_pipeline.storage import mutation_lock
         from adaos.services.builder.automation_snapshot import snapshot_lock_path
 
-        with mutation_lock(snapshot_lock_path(self.automation_snapshot_root(object_type, object_id))):
-            return self._snapshot_current_automation(object_type, object_id, task_id=task_id,
-                project_ref=project_ref, component_refs=component_refs)
+        with mutation_lock(
+            snapshot_lock_path(self.automation_snapshot_root(object_type, object_id))
+        ):
+            return self._snapshot_current_automation(
+                object_type,
+                object_id,
+                task_id=task_id,
+                project_ref=project_ref,
+                component_refs=component_refs,
+            )
 
     def _snapshot_current_automation(
-        self, object_type: str, object_id: str, *, task_id: str | None = None,
-        project_ref: str | None = None, component_refs: Sequence[str] = (),
+        self,
+        object_type: str,
+        object_id: str,
+        *,
+        task_id: str | None = None,
+        project_ref: str | None = None,
+        component_refs: Sequence[str] = (),
     ) -> dict[str, Any]:
-
         kind = _kind(object_type)
         project_id = _project_id(object_id)
         root = self.project_root(kind, project_id)
@@ -6617,7 +7943,11 @@ class BuilderWorkflowService:
         temporary.mkdir(parents=True, exist_ok=False)
         copied: list[str] = []
         components: list[dict[str, Any]] = []
-        names = ("webui.json", "scenario.yaml", "scenario.json") if kind == "scenario" else ("skill.yaml",)
+        names = (
+            ("webui.json", "scenario.yaml", "scenario.json")
+            if kind == "scenario"
+            else ("skill.yaml",)
+        )
         try:
             for name in names:
                 source = root / name
@@ -6641,7 +7971,9 @@ class BuilderWorkflowService:
                 shutil.copy2(project_source, project_target)
                 copied.append("project/project.yaml")
 
-            for component_ref in dict.fromkeys(str(item or "").strip() for item in component_refs):
+            for component_ref in dict.fromkeys(
+                str(item or "").strip() for item in component_refs
+            ):
                 if not component_ref.startswith("skill:"):
                     continue
                 skill_id = _project_id(component_ref.split(":", 1)[1])
@@ -6683,8 +8015,10 @@ class BuilderWorkflowService:
                 "version": self._project_version(kind, project_id),
                 "created_at": created_at,
                 "files": copied,
-                "file_digests": {name: hashlib.sha256((temporary / name).read_bytes()).hexdigest()
-                                 for name in copied},
+                "file_digests": {
+                    name: hashlib.sha256((temporary / name).read_bytes()).hexdigest()
+                    for name in copied
+                },
             }
             (temporary / "snapshot.json").write_text(
                 json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
@@ -6719,15 +8053,23 @@ class BuilderWorkflowService:
     ) -> dict[str, Any]:
         kind = _kind(object_type)
         if kind != "scenario":
-            return {"ok": True, "revision": self._project_version(kind, object_id), "created": False}
+            return {
+                "ok": True,
+                "revision": self._project_version(kind, object_id),
+                "created": False,
+            }
         root = self.project_root(kind, object_id)
         webui_path = root / "webui.json"
         try:
             webui = json.loads(webui_path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise BuilderWorkflowError(f"cannot snapshot prototype webui.json: {exc}") from exc
+            raise BuilderWorkflowError(
+                f"cannot snapshot prototype webui.json: {exc}"
+            ) from exc
         if not isinstance(webui, Mapping) or not isinstance(webui.get("ui"), Mapping):
-            raise BuilderWorkflowError("cannot snapshot prototype: webui.json has no ui object")
+            raise BuilderWorkflowError(
+                "cannot snapshot prototype: webui.json has no ui object"
+            )
         revision_dir = root / "ui_revisions"
         revision_dir.mkdir(parents=True, exist_ok=True)
         numbers = [
@@ -6742,7 +8084,11 @@ class BuilderWorkflowService:
             "revision": revision,
             "created_at": created_at,
             "scenario_id": _project_id(object_id),
-            "request": {"text": str(request_text or "Derived safe prototype from Automation result")},
+            "request": {
+                "text": str(
+                    request_text or "Derived safe prototype from Automation result"
+                )
+            },
             "patch": {
                 "id": f"workflow-return-{revision}",
                 "target": "ui",
@@ -6754,9 +8100,17 @@ class BuilderWorkflowService:
             "preview_state": {},
         }
         path = revision_dir / f"{revision}.json"
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
         (revision_dir / "current.txt").write_text(revision + "\n", encoding="utf-8")
-        return {"ok": True, "revision": revision, "path": str(path), "created": True, "created_at": created_at}
+        return {
+            "ok": True,
+            "revision": revision,
+            "path": str(path),
+            "created": True,
+            "created_at": created_at,
+        }
 
 
 __all__ = [

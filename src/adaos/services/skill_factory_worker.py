@@ -31,8 +31,15 @@ from adaos.domain.development_validation import (
     normalize_validation_budget,
 )
 from adaos.domain.development_escalations import parse_development_escalations
-from adaos.domain.development_feedback import parse_development_feedback, required_user_questions
-from adaos.domain.automation_outcome import OUTCOME_INSTRUCTION, OUTCOME_SCHEMA, outcome_message
+from adaos.domain.development_feedback import (
+    parse_development_feedback,
+    required_user_questions,
+)
+from adaos.domain.automation_outcome import (
+    OUTCOME_INSTRUCTION,
+    OUTCOME_SCHEMA,
+    outcome_message,
+)
 from adaos.domain.development_budget import (
     execution_billable_token_limit,
     execution_prompt_token_limit,
@@ -102,7 +109,10 @@ def _now_iso() -> str:
 
 
 def _safe_token(value: Any, *, fallback: str = "task") -> str:
-    token = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in str(value or "").strip())
+    token = "".join(
+        ch if ch.isalnum() or ch in {"-", "_", "."} else "_"
+        for ch in str(value or "").strip()
+    )
     return token.strip("._") or fallback
 
 
@@ -201,7 +211,9 @@ def _string_list(value: Any) -> list[str]:
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def _write_json_preserving_style(path: Path, payload: Any, original: str) -> None:
@@ -235,7 +247,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _estimate_codex_tokens_from_text(*parts: Any) -> int:
-    payload = "\n".join(str(part or "").strip() for part in parts if str(part or "").strip())
+    payload = "\n".join(
+        str(part or "").strip() for part in parts if str(part or "").strip()
+    )
     if not payload:
         return 0
     return max(1, (len(payload.encode("utf-8", errors="replace")) + 3) // 4)
@@ -308,7 +322,9 @@ def _resolve_mcp_http_url(value: Any) -> str:
 
 
 def _assignment_task_mcp_env_var(assignment: Mapping[str, Any]) -> str:
-    task_id = _safe_config_token(assignment.get("task_id") or "TASK", fallback="TASK").upper()
+    task_id = _safe_config_token(
+        assignment.get("task_id") or "TASK", fallback="TASK"
+    ).upper()
     return f"ADAOS_TASK_MCP_AUTH_{task_id}"
 
 
@@ -324,10 +340,16 @@ def _codex_jsonl_usage(path: Path) -> dict[str, int]:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            usage = event.get("usage") if isinstance(event.get("usage"), Mapping) else None
+            usage = (
+                event.get("usage") if isinstance(event.get("usage"), Mapping) else None
+            )
             if usage is None and isinstance(event.get("turn"), Mapping):
                 turn = event["turn"]
-                usage = turn.get("usage") if isinstance(turn.get("usage"), Mapping) else None
+                usage = (
+                    turn.get("usage")
+                    if isinstance(turn.get("usage"), Mapping)
+                    else None
+                )
             if usage is None:
                 continue
             aliases = {
@@ -338,7 +360,14 @@ def _codex_jsonl_usage(path: Path) -> dict[str, int]:
             }
             for key, candidates in aliases.items():
                 try:
-                    observed = next((usage.get(candidate) for candidate in candidates if usage.get(candidate) is not None), 0)
+                    observed = next(
+                        (
+                            usage.get(candidate)
+                            for candidate in candidates
+                            if usage.get(candidate) is not None
+                        ),
+                        0,
+                    )
                     values[key] = max(values.get(key, 0), int(observed or 0))
                 except (TypeError, ValueError):
                     continue
@@ -399,7 +428,11 @@ def _mcp_structured_payload(result: Mapping[str, Any]) -> dict[str, Any]:
     )
     response = structured.get("response") if isinstance(structured, Mapping) else None
     response_result = response.get("result") if isinstance(response, Mapping) else None
-    return dict(response_result) if isinstance(response_result, Mapping) else dict(structured)
+    return (
+        dict(response_result)
+        if isinstance(response_result, Mapping)
+        else dict(structured)
+    )
 
 
 def _call_task_root_mcp_tool(
@@ -450,7 +483,9 @@ def _call_task_root_mcp_tool(
         raise ValueError(f"task-scoped Root MCP call failed for {tool}")
     structured = _mcp_structured_payload(result)
     if not structured:
-        raise ValueError(f"task-scoped Root MCP returned no structured result for {tool}")
+        raise ValueError(
+            f"task-scoped Root MCP returned no structured result for {tool}"
+        )
     return structured, dict(result)
 
 
@@ -462,7 +497,9 @@ def _descriptor_working_set_query(assignment: Mapping[str, Any]) -> str:
     hints = artifacts.get("repair_hints")
     hints = dict(hints) if isinstance(hints, Mapping) else {}
     checks = hints.get("acceptance_checks")
-    checks = checks if isinstance(checks, Sequence) and not isinstance(checks, str) else []
+    checks = (
+        checks if isinstance(checks, Sequence) and not isinstance(checks, str) else []
+    )
     target = assignment.get("target")
     target = dict(target) if isinstance(target, Mapping) else {}
     values: list[Any] = [
@@ -537,16 +574,21 @@ def _task_mcp_descriptor_working_set(
     search = search_payload.get("search")
     if not isinstance(search, Mapping):
         raise ValueError("task-scoped descriptor search returned no search projection")
-    headers = [dict(item) for item in search.get("items") or [] if isinstance(item, Mapping)]
+    headers = [
+        dict(item) for item in search.get("items") or [] if isinstance(item, Mapping)
+    ]
     details: list[dict[str, Any]] = []
     call_digests = [
         {
             "tool": "search_descriptors",
             "result_digest": "sha256:"
             + hashlib.sha256(
-                json.dumps(search_result, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-                    "utf-8"
-                )
+                json.dumps(
+                    search_result,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
             ).hexdigest(),
         }
     ]
@@ -617,8 +659,12 @@ def _task_mcp_descriptor_working_set(
             "recorded_at": _now_iso(),
         },
     }
-    encoded = json.dumps(working_set, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    working_set["digest"] = "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    encoded = json.dumps(
+        working_set, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    working_set["digest"] = (
+        "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    )
     return working_set
 
 
@@ -643,14 +689,17 @@ def _persisted_descriptor_working_set_evidence(
         return None
     payload = dict(working_set)
     observed_digest = str(payload.pop("digest", "")).strip()
-    expected_digest = "sha256:" + hashlib.sha256(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+    expected_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    )
     if (
         working_set.get("schema") != "adaos.builder.descriptor_working_set.v1"
         or observed_digest != expected_digest
@@ -671,9 +720,7 @@ def _persisted_descriptor_working_set_evidence(
         if str(item).strip()
     }
     calls = [
-        dict(item)
-        for item in evidence.get("calls") or []
-        if isinstance(item, Mapping)
+        dict(item) for item in evidence.get("calls") or [] if isinstance(item, Mapping)
     ]
     if (
         evidence.get("schema") != "adaos.skill_factory.root_mcp_evidence.v1"
@@ -683,8 +730,7 @@ def _persisted_descriptor_working_set_evidence(
         or str(evidence.get("task_id") or "").strip() != source_task_id
         or (
             expected_target
-            and str(evidence.get("bound_target_id") or "").strip()
-            != expected_target
+            and str(evidence.get("bound_target_id") or "").strip() != expected_target
         )
         or not calls
     ):
@@ -719,7 +765,9 @@ def _codex_jsonl_root_mcp_evidence(
         return None
     profile = dict(root_mcp or {})
     if not profile or profile.get("enabled") is False:
-        raise ValueError("repair requires Root MCP but no task-scoped route was admitted")
+        raise ValueError(
+            "repair requires Root MCP but no task-scoped route was admitted"
+        )
     expected_server = _safe_config_token(profile.get("server_name") or "adaos_root")
     allowed_tools = {
         str(item).strip()
@@ -730,7 +778,9 @@ def _codex_jsonl_root_mcp_evidence(
         profile.get("bound_target_id") or profile.get("target_id") or ""
     ).strip()
     if not path.is_file():
-        raise ValueError("repair requires Root MCP evidence but the Codex event trace is unavailable")
+        raise ValueError(
+            "repair requires Root MCP evidence but the Codex event trace is unavailable"
+        )
     try:
         if path.stat().st_size > 16 * 1024 * 1024:
             raise ValueError("Root MCP evidence trace exceeds the trusted parser limit")
@@ -749,11 +799,19 @@ def _codex_jsonl_root_mcp_evidence(
                 continue
             server = str(item.get("server") or "").strip()
             tool = str(item.get("tool") or item.get("name") or "").strip()
-            if server != expected_server or (allowed_tools and tool not in allowed_tools):
+            if server != expected_server or (
+                allowed_tools and tool not in allowed_tools
+            ):
                 continue
-            arguments = item.get("arguments") if isinstance(item.get("arguments"), Mapping) else {}
+            arguments = (
+                item.get("arguments")
+                if isinstance(item.get("arguments"), Mapping)
+                else {}
+            )
             argument_target = str(arguments.get("target_id") or "").strip()
-            result = item.get("result") if isinstance(item.get("result"), Mapping) else {}
+            result = (
+                item.get("result") if isinstance(item.get("result"), Mapping) else {}
+            )
             if not result or not _mcp_result_succeeded(result):
                 continue
             structured = (
@@ -770,14 +828,17 @@ def _codex_jsonl_root_mcp_evidence(
                 or (not argument_target and not result_target)
             ):
                 continue
-            result_digest = "sha256:" + hashlib.sha256(
-                json.dumps(
-                    result,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
+            result_digest = (
+                "sha256:"
+                + hashlib.sha256(
+                    json.dumps(
+                        result,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+            )
             return {
                 "schema": "adaos.skill_factory.root_mcp_evidence.v1",
                 "status": "passed",
@@ -811,7 +872,9 @@ def _task_mcp_validation_evidence(
         return None
     profile = dict(root_mcp or {})
     if not profile or profile.get("enabled") is False:
-        raise ValueError("repair requires Root MCP but no task-scoped route was admitted")
+        raise ValueError(
+            "repair requires Root MCP but no task-scoped route was admitted"
+        )
     url = str(profile.get("url") or "").strip()
     access_token = str(profile.get("_bearer_token_value") or "").strip()
     if not url or not access_token:
@@ -845,7 +908,9 @@ def _task_mcp_validation_evidence(
         None,
     )
     if selected is None:
-        raise ValueError("task-scoped Root MCP policy admits no deterministic validation tool")
+        raise ValueError(
+            "task-scoped Root MCP policy admits no deterministic validation tool"
+        )
     tool, arguments = selected
     task_id = str(assignment.get("task_id") or "").strip()
     request_id = f"builder-validation-{_safe_token(task_id)}"
@@ -880,15 +945,20 @@ def _task_mcp_validation_evidence(
         else {}
     )
     if not structured:
-        raise ValueError(f"task-scoped Root MCP validation returned no structured result for {tool}")
-    result_digest = "sha256:" + hashlib.sha256(
-        json.dumps(
-            result,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+        raise ValueError(
+            f"task-scoped Root MCP validation returned no structured result for {tool}"
+        )
+    result_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                result,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    )
     return {
         "schema": "adaos.skill_factory.root_mcp_evidence.v1",
         "status": "passed",
@@ -927,12 +997,16 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
         try:
             if path.stat().st_size > 16 * 1024 * 1024:
                 return {}
-            for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            for raw_line in path.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
                 try:
                     event = json.loads(raw_line)
                 except json.JSONDecodeError:
                     continue
-                item = event.get("item") if isinstance(event.get("item"), Mapping) else {}
+                item = (
+                    event.get("item") if isinstance(event.get("item"), Mapping) else {}
+                )
                 if event.get("type") != "item.completed":
                     continue
                 item_type = str(item.get("type") or "")
@@ -949,8 +1023,16 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
                     continue
                 item_bytes = len(raw_line.encode("utf-8", errors="replace"))
                 if item_type == "mcp_tool_call":
-                    result = item.get("result") if isinstance(item.get("result"), Mapping) else {}
-                    metadata = result.get("_meta") if isinstance(result.get("_meta"), Mapping) else {}
+                    result = (
+                        item.get("result")
+                        if isinstance(item.get("result"), Mapping)
+                        else {}
+                    )
+                    metadata = (
+                        result.get("_meta")
+                        if isinstance(result.get("_meta"), Mapping)
+                        else {}
+                    )
                     projection = (
                         metadata.get("adaos/modelProjection")
                         if isinstance(metadata.get("adaos/modelProjection"), Mapping)
@@ -961,9 +1043,17 @@ def _codex_jsonl_live_budget_estimate(path: Path, *, prompt: str) -> dict[str, A
                     except (TypeError, ValueError):
                         projected_bytes = 0
                     if projected_bytes <= 0:
-                        content = result.get("content") if isinstance(result.get("content"), list) else []
+                        content = (
+                            result.get("content")
+                            if isinstance(result.get("content"), list)
+                            else []
+                        )
                         projected_bytes = sum(
-                            len(str(block.get("text") or "").encode("utf-8", errors="replace"))
+                            len(
+                                str(block.get("text") or "").encode(
+                                    "utf-8", errors="replace"
+                                )
+                            )
                             for block in content
                             if isinstance(block, Mapping)
                         )
@@ -1167,7 +1257,9 @@ def _prototype_acceptance_prompt_projection(value: Any) -> dict[str, Any]:
     ][:20]
     # Obligations influence execution strategy as well as model context. They
     # must survive compact projection unchanged, including accepted provenance.
-    projected["automation_requirements"] = copy.deepcopy(acceptance.get("automation_requirements") or [])
+    projected["automation_requirements"] = copy.deepcopy(
+        acceptance.get("automation_requirements") or []
+    )
     projected["behavior_checks"] = [
         {"id": item.get("id"), "status": item.get("status")}
         for item in acceptance.get("behavior_checks") or []
@@ -1224,16 +1316,16 @@ def _context_artifacts_prompt_projection(value: Any) -> dict[str, Any]:
     return projected
 
 
-def context_packet_prompt_projection(value: Any, *, implementation_brief: str = "") -> dict[str, Any]:
+def context_packet_prompt_projection(
+    value: Any, *, implementation_brief: str = ""
+) -> dict[str, Any]:
     """Keep Codex context useful and bounded without replacing exact evidence."""
 
     packet = dict(value) if isinstance(value, Mapping) else {}
     if not packet:
         return {}
     change = dict(packet.get("change") or {})
-    issues = [
-        item for item in change.get("issues") or [] if isinstance(item, Mapping)
-    ]
+    issues = [item for item in change.get("issues") or [] if isinstance(item, Mapping)]
     active_issues = [
         item
         for item in issues
@@ -1256,7 +1348,9 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
                     if str(criterion).strip()
                 ][:8],
                 "semantic_refs": [
-                    str(ref) for ref in item.get("semantic_refs") or [] if str(ref).strip()
+                    str(ref)
+                    for ref in item.get("semantic_refs") or []
+                    if str(ref).strip()
                 ][:12],
             }
         )
@@ -1287,7 +1381,9 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
             .get("acceptance", {})
             .get("decision")
             or ""
-        ).strip().lower()
+        )
+        .strip()
+        .lower()
         == "accepted"
     )
     if accepted_prototype:
@@ -1352,8 +1448,12 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
                 for item in facet.get("issue_acceptance") or []
                 if isinstance(item, Mapping) and str(item.get("issue_id") or "").strip()
             ][:100]
-            common["acceptance_constraints"] = list(facet.get("acceptance_constraints") or [])[:100]
-            common["active_review_refs"] = list(facet.get("active_review_refs") or [])[:100]
+            common["acceptance_constraints"] = list(
+                facet.get("acceptance_constraints") or []
+            )[:100]
+            common["active_review_refs"] = list(facet.get("active_review_refs") or [])[
+                :100
+            ]
         elif facet_name == "workflow_definition":
             common["diagnostics"] = list(facet.get("diagnostics") or [])[:20]
             authoring = dict(facet.get("authoring") or {})
@@ -1371,14 +1471,25 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
             if facet.get("execution_mode"):
                 common["execution_mode"] = facet["execution_mode"]
             if isinstance(facet.get("prototype_binding"), Mapping):
-                common["prototype_binding"] = {key: facet["prototype_binding"].get(key)
-                                                for key in ("selected_profile_id", "selected_mode")}
+                common["prototype_binding"] = {
+                    key: facet["prototype_binding"].get(key)
+                    for key in ("selected_profile_id", "selected_mode")
+                }
             if isinstance(facet.get("local_release_lifecycle"), Mapping):
-                common["local_release_lifecycle"] = copy.deepcopy(facet["local_release_lifecycle"])
+                common["local_release_lifecycle"] = copy.deepcopy(
+                    facet["local_release_lifecycle"]
+                )
             mapping = dict(facet.get("implementation_mapping") or {})
             common["implementation_mapping"] = {
                 key: mapping.get(key)
-                for key in ("status", "profile_id", "mode", "mapping_count", "missing", "ready")
+                for key in (
+                    "status",
+                    "profile_id",
+                    "mode",
+                    "mapping_count",
+                    "missing",
+                    "ready",
+                )
                 if mapping.get(key) not in (None, "", [], {})
             }
         elif facet_name == "application_permissions":
@@ -1411,14 +1522,18 @@ def context_packet_prompt_projection(value: Any, *, implementation_brief: str = 
                     value = facet.get(key)
                     common[key] = value[:20] if isinstance(value, list) else value
         projected_facets[str(facet_name)] = common
-    if str(projected_change.get("intent") or "").strip() == str(implementation_brief or "").strip():
+    if " ".join(str(projected_change.get("intent") or "").split()) == " ".join(
+        str(implementation_brief or "").split()
+    ):
         projected_change.pop("intent", None)
     previous_run = dict(packet.get("previous_run") or {})
     # Orchestrator topology/rate metrics are evaluation evidence, not app requirements.
     metrics = previous_run.pop("workflow_metrics", None)
     if isinstance(metrics, Mapping):
         previous_run["workflow_metrics_ref"] = {
-            key: metrics[key] for key in ("report_id", "evidence_digest") if metrics.get(key)
+            key: metrics[key]
+            for key in ("report_id", "evidence_digest")
+            if metrics.get(key)
         }
     return {
         "schema": packet.get("schema"),
@@ -1552,7 +1667,13 @@ def _bounded_repair_brief_prompt(value: str) -> str:
             continue
         evidence_type = str(item.get("type") or "").strip()
         evidence_status = str(item.get("status") or "").strip().lower()
-        if evidence_type not in {"screenshot", "runtime_guard", "trace", "test", "validation"}:
+        if evidence_type not in {
+            "screenshot",
+            "runtime_guard",
+            "trace",
+            "test",
+            "validation",
+        }:
             continue
         if evidence_status in {"passed", "completed", "reported"}:
             continue
@@ -1600,7 +1721,10 @@ def _bounded_repair_hints_prompt(
         if not check:
             continue
         visible_prefix = "User-visible acceptance:"
-        if check.startswith(visible_prefix) and check[len(visible_prefix) :].strip() == approved_summary:
+        if (
+            check.startswith(visible_prefix)
+            and check[len(visible_prefix) :].strip() == approved_summary
+        ):
             continue
         acceptance_checks.append(check)
     projected = {
@@ -1760,9 +1884,19 @@ def _selected_prompt_rule_capsules(
 
 
 def _prototype_acceptance_from_context(value: Mapping[str, Any]) -> dict[str, Any]:
-    artifacts = value.get("artifacts") if isinstance(value.get("artifacts"), Mapping) else {}
-    prototype = artifacts.get("prototype") if isinstance(artifacts.get("prototype"), Mapping) else {}
-    acceptance = prototype.get("acceptance") if isinstance(prototype.get("acceptance"), Mapping) else {}
+    artifacts = (
+        value.get("artifacts") if isinstance(value.get("artifacts"), Mapping) else {}
+    )
+    prototype = (
+        artifacts.get("prototype")
+        if isinstance(artifacts.get("prototype"), Mapping)
+        else {}
+    )
+    acceptance = (
+        prototype.get("acceptance")
+        if isinstance(prototype.get("acceptance"), Mapping)
+        else {}
+    )
     return copy.deepcopy(dict(acceptance))
 
 
@@ -1797,7 +1931,10 @@ def _prototype_prompt_facts(context_packet: Mapping[str, Any]) -> dict[str, Any]
     )
     qualification = acceptance.get("qualification") or evaluation.get("qualification")
     qualification = dict(qualification) if isinstance(qualification, Mapping) else {}
-    if str(acceptance.get("decision") or "").strip().lower() != "accepted" or not qualification:
+    if (
+        str(acceptance.get("decision") or "").strip().lower() != "accepted"
+        or not qualification
+    ):
         return {}
     requirements = (
         dict(qualification.get("requirements") or {})
@@ -1861,7 +1998,11 @@ def _merge_prompt_facts(*values: Mapping[str, Any]) -> dict[str, Any]:
                     dict.fromkeys(
                         [
                             *existing,
-                            *(str(token).strip() for token in incoming if str(token).strip()),
+                            *(
+                                str(token).strip()
+                                for token in incoming
+                                if str(token).strip()
+                            ),
                         ]
                     )
                 )
@@ -1931,9 +2072,13 @@ def _validate_repair_contract_closure(
         for value in closure.get("required_paths") or []
         if str(value).strip()
     }
-    has_manifest = any(path.endswith(("/skill.yaml", "/skill.yml")) for path in required)
+    has_manifest = any(
+        path.endswith(("/skill.yaml", "/skill.yml")) for path in required
+    )
     has_webui = any(path.endswith("/webui.json") for path in required)
-    has_handler = any("/handlers/" in path and path.endswith(".py") for path in required)
+    has_handler = any(
+        "/handlers/" in path and path.endswith(".py") for path in required
+    )
     if not required or not (has_manifest and has_webui and has_handler):
         raise ValueError(
             "skill_public_tool_graph closure requires manifest, WebUI, and handler paths"
@@ -1973,11 +2118,15 @@ def _resolve_json_target_ref(document: Any, target_ref: str) -> Any:
         index = match.group("index")
         item_id = match.group("id")
         if index is not None:
-            if not isinstance(current, Sequence) or isinstance(current, (str, bytes, bytearray)):
+            if not isinstance(current, Sequence) or isinstance(
+                current, (str, bytes, bytearray)
+            ):
                 raise KeyError(target_ref)
             current = current[int(index)]
         elif item_id is not None:
-            if not isinstance(current, Sequence) or isinstance(current, (str, bytes, bytearray)):
+            if not isinstance(current, Sequence) or isinstance(
+                current, (str, bytes, bytearray)
+            ):
                 raise KeyError(target_ref)
             matches = [
                 item
@@ -1996,19 +2145,23 @@ def _find_unique_json_id(
 ) -> tuple[Any, Sequence[Any] | None, int, str] | None:
     matches: list[tuple[Any, Sequence[Any] | None, int, str]] = []
 
-    def visit(value: Any, path: str, siblings: Sequence[Any] | None = None, index: int = -1) -> None:
+    def visit(
+        value: Any, path: str, siblings: Sequence[Any] | None = None, index: int = -1
+    ) -> None:
         if isinstance(value, Mapping):
             if str(value.get("id") or "") == item_id:
                 matches.append((value, siblings, index, path))
             for key, child in value.items():
                 visit(child, f"{path}.{key}" if path else str(key))
-        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
             for child_index, child in enumerate(value):
-                child_id = str(child.get("id") or "") if isinstance(child, Mapping) else ""
+                child_id = (
+                    str(child.get("id") or "") if isinstance(child, Mapping) else ""
+                )
                 child_path = (
-                    f"{path}[id={child_id}]"
-                    if child_id
-                    else f"{path}[{child_index}]"
+                    f"{path}[id={child_id}]" if child_id else f"{path}[{child_index}]"
                 )
                 visit(child, child_path, value, child_index)
 
@@ -2104,7 +2257,9 @@ def _brief_literal_anchors(value: str) -> list[str]:
         texts.append(raw)
     result: list[str] = []
     for text in texts:
-        for match in re.finditer(r"(?P<quote>['\"`])(?P<value>[^'\"`\r\n]{2,120})(?P=quote)", text):
+        for match in re.finditer(
+            r"(?P<quote>['\"`])(?P<value>[^'\"`\r\n]{2,120})(?P=quote)", text
+        ):
             anchor = str(match.group("value") or "").strip()
             if anchor and anchor not in result:
                 result.append(anchor)
@@ -2137,7 +2292,9 @@ def _python_symbol_ranges(source: str, anchors: Sequence[str]) -> list[dict[str,
             normalized = name.strip("_").lower()
             if normalized == anchor:
                 score = 0
-            elif normalized.startswith(f"{anchor}_") or normalized.endswith(f"_{anchor}"):
+            elif normalized.startswith(f"{anchor}_") or normalized.endswith(
+                f"_{anchor}"
+            ):
                 score = 1
             elif anchor in normalized.split("_") or anchor in normalized:
                 score = 2
@@ -2308,8 +2465,13 @@ def _bounded_repair_target_context(
                     if index != selected_index
                     and selected_index - 1 <= index <= selected_index + 2
                 ]
-            encoded = json.dumps(candidate, ensure_ascii=False, sort_keys=True).encode("utf-8")
-            if len(encoded) > 24 * 1024 or used_bytes + len(encoded) > BOUNDED_REPAIR_TARGET_CONTEXT_BYTES:
+            encoded = json.dumps(candidate, ensure_ascii=False, sort_keys=True).encode(
+                "utf-8"
+            )
+            if (
+                len(encoded) > 24 * 1024
+                or used_bytes + len(encoded) > BOUNDED_REPAIR_TARGET_CONTEXT_BYTES
+            ):
                 match = {
                     "target_ref": target_ref,
                     "file": relative,
@@ -2334,9 +2496,7 @@ def _bounded_repair_target_context(
         if anchor not in anchors:
             anchors.append(anchor)
     resolved_files = {
-        str(item.get("file") or "")
-        for item in resolved
-        if str(item.get("file") or "")
+        str(item.get("file") or "") for item in resolved if str(item.get("file") or "")
     }
     source_slices: list[dict[str, Any]] = []
     for relative in target_files:
@@ -2367,17 +2527,20 @@ def _bounded_repair_target_context(
                     "line_end": end,
                     "source": "\n".join(lines[start:end]),
                 }
-                encoded = json.dumps(candidate, ensure_ascii=False, sort_keys=True).encode("utf-8")
-                if len(encoded) > 24 * 1024 or used_bytes + len(encoded) > BOUNDED_REPAIR_TARGET_CONTEXT_BYTES:
+                encoded = json.dumps(
+                    candidate, ensure_ascii=False, sort_keys=True
+                ).encode("utf-8")
+                if (
+                    len(encoded) > 24 * 1024
+                    or used_bytes + len(encoded) > BOUNDED_REPAIR_TARGET_CONTEXT_BYTES
+                ):
                     continue
                 used_bytes += len(encoded)
                 used_ranges.add(range_key)
                 symbol_anchors.add(str(symbol_range["anchor"]))
                 source_slices.append(candidate)
         file_anchors = (
-            anchors
-            if not is_json or relative in resolved_files
-            else literal_anchors
+            anchors if not is_json or relative in resolved_files else literal_anchors
         )
         for anchor in file_anchors:
             if anchor in symbol_anchors:
@@ -2396,8 +2559,13 @@ def _bounded_repair_target_context(
                     "line_end": end,
                     "source": "\n".join(lines[start:end]),
                 }
-                encoded = json.dumps(candidate, ensure_ascii=False, sort_keys=True).encode("utf-8")
-                if len(encoded) > 8 * 1024 or used_bytes + len(encoded) > BOUNDED_REPAIR_TARGET_CONTEXT_BYTES:
+                encoded = json.dumps(
+                    candidate, ensure_ascii=False, sort_keys=True
+                ).encode("utf-8")
+                if (
+                    len(encoded) > 8 * 1024
+                    or used_bytes + len(encoded) > BOUNDED_REPAIR_TARGET_CONTEXT_BYTES
+                ):
                     continue
                 used_bytes += len(encoded)
                 used_ranges.add(range_key)
@@ -2456,7 +2624,9 @@ def _root_mcp_profile_from_assignment(
             "enabled": True,
             "transport": "streamable_http",
             "server_name": mcp.get("server_name") or "adaos_task_root",
-            "url": _resolve_mcp_http_url(mcp.get("url") or mcp.get("mcp_http_url") or mcp.get("endpoint")),
+            "url": _resolve_mcp_http_url(
+                mcp.get("url") or mcp.get("mcp_http_url") or mcp.get("endpoint")
+            ),
             "bearer_token_env_var": _assignment_task_mcp_env_var(assignment),
             "required": bool(mcp.get("required", False)),
             "scope": _string_list(mcp.get("scope") or mcp.get("requested_scope")),
@@ -2483,9 +2653,7 @@ def _root_mcp_profile_from_assignment(
             parsed_root = urlparse(root_url)
             if parsed_root.scheme in {"http", "https"} and parsed_root.netloc:
                 task_url = f"{parsed_root.scheme}://{parsed_root.netloc}{task_endpoint}"
-    url = _resolve_mcp_http_url(
-        task_url if task_scoped else root_url
-    )
+    url = _resolve_mcp_http_url(task_url if task_scoped else root_url)
     if not url:
         return None
     env_var = (
@@ -2547,7 +2715,10 @@ def _root_mcp_profile_from_assignment(
             ]
             if "get_sdk_metadata" in explicit_tools:
                 for replacement in ("search_descriptors", "get_descriptor_item"):
-                    if replacement in scoped_tool_set and replacement not in admitted_tools:
+                    if (
+                        replacement in scoped_tool_set
+                        and replacement not in admitted_tools
+                    ):
                         admitted_tools.append(replacement)
         else:
             admitted_tools = scoped_tools
@@ -2805,7 +2976,9 @@ def _generated_test_budget(assignment: Mapping[str, Any] | None) -> dict[str, An
             max_wall_seconds = value
             break
     return derive_validation_budget(
-        {"max_wall_seconds": max_wall_seconds} if max_wall_seconds is not None else None,
+        {"max_wall_seconds": max_wall_seconds}
+        if max_wall_seconds is not None
+        else None,
         source=source,
     )
 
@@ -2831,7 +3004,10 @@ def _codex_execution_timeout_seconds(
         if isinstance(artifacts.get("development_context"), Mapping)
         else {}
     )
-    for raw_budget in (artifacts.get("execution_budget"), development.get("execution_budget")):
+    for raw_budget in (
+        artifacts.get("execution_budget"),
+        development.get("execution_budget"),
+    ):
         if not isinstance(raw_budget, Mapping):
             continue
         try:
@@ -2880,7 +3056,9 @@ def _execution_model_attempt_limit(
     return max(1, int(default))
 
 
-def _codex_execution_token_budget(assignment: Mapping[str, Any] | None) -> dict[str, Any]:
+def _codex_execution_token_budget(
+    assignment: Mapping[str, Any] | None,
+) -> dict[str, Any]:
     task = assignment if isinstance(assignment, Mapping) else {}
     request = (
         task.get("realize_request")
@@ -3034,7 +3212,11 @@ def _codex_failure_detail(result: CodexRunResult, *, limit: int = 2000) -> str:
             message = str(event.get("message") or "")
         elif event_type == "turn.failed":
             error = event.get("error")
-            message = str(dict(error).get("message") or "") if isinstance(error, Mapping) else ""
+            message = (
+                str(dict(error).get("message") or "")
+                if isinstance(error, Mapping)
+                else ""
+            )
         elif event_type == "item.completed":
             item = event.get("item")
             if isinstance(item, Mapping) and str(item.get("type") or "") == "error":
@@ -3063,7 +3245,9 @@ def _candidate_check_report(events: str, *, attempt: int) -> dict[str, Any]:
         command = str(item.get("command") or "").strip()
         lowered = command.lower()
         kind = None
-        if "-m pytest" in lowered or re.search(r"(^|[\s'\";&])pytest(?:\.exe)?([\s'\";&]|$)", lowered):
+        if "-m pytest" in lowered or re.search(
+            r"(^|[\s'\";&])pytest(?:\.exe)?([\s'\";&]|$)", lowered
+        ):
             kind = "test"
         elif any(
             marker in lowered
@@ -3149,12 +3333,16 @@ class SubprocessCodexExecutor:
         self.reasoning_effort = str(reasoning_effort or "").strip() or None
         self.timeout_seconds = max(60, int(timeout_seconds))
         self.repo_root = Path(repo_root).resolve() if repo_root is not None else None
-        configured_sandbox = str(sandbox_mode or os.getenv("ADAOS_LOCAL_CODEX_SANDBOX") or "").strip()
+        configured_sandbox = str(
+            sandbox_mode or os.getenv("ADAOS_LOCAL_CODEX_SANDBOX") or ""
+        ).strip()
         # Native Codex workspace sandboxing is not currently writable in our
         # Windows host profile.  Local-process is an explicitly trusted debug
         # backend with a bounded environment and disposable task checkout;
         # Docker workers should override this back to workspace-write.
-        self.sandbox_mode = configured_sandbox or ("danger-full-access" if os.name == "nt" else "workspace-write")
+        self.sandbox_mode = configured_sandbox or (
+            "danger-full-access" if os.name == "nt" else "workspace-write"
+        )
 
     def __call__(
         self,
@@ -3170,7 +3358,9 @@ class SubprocessCodexExecutor:
     ) -> CodexRunResult:
         output_dir.mkdir(parents=True, exist_ok=True)
         final_path = output_dir / "last_message.md"
-        outcome_schema_path = output_dir.parent / "input" / "automation-outcome.schema.json"
+        outcome_schema_path = (
+            output_dir.parent / "input" / "automation-outcome.schema.json"
+        )
         outcome_schema_path.parent.mkdir(parents=True, exist_ok=True)
         _write_json(outcome_schema_path, OUTCOME_SCHEMA)
         live_events_path = output_dir / "codex-live.jsonl"
@@ -3196,14 +3386,19 @@ class SubprocessCodexExecutor:
         if self.model:
             command.extend(["--model", self.model])
         if self.reasoning_effort:
-            command.extend(["--config", f'model_reasoning_effort="{self.reasoning_effort}"'])
+            command.extend(
+                ["--config", f'model_reasoning_effort="{self.reasoning_effort}"']
+            )
         command.append("-")
-        with live_events_path.open("w", encoding="utf-8", newline="\n") as events_file, live_stderr_path.open(
-            "w", encoding="utf-8", newline="\n"
-        ) as stderr_file:
+        with (
+            live_events_path.open("w", encoding="utf-8", newline="\n") as events_file,
+            live_stderr_path.open("w", encoding="utf-8", newline="\n") as stderr_file,
+        ):
             popen_kwargs: dict[str, Any] = {}
             if os.name == "nt":
-                popen_kwargs["creationflags"] = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                popen_kwargs["creationflags"] = int(
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                )
             else:
                 popen_kwargs["start_new_session"] = True
             # Mutable SDK state belongs to the runner-owned task envelope, not
@@ -3237,7 +3432,9 @@ class SubprocessCodexExecutor:
                 process.stdin.close()
                 process.stdin = None
                 deadline = time.monotonic() + self.timeout_seconds
-                next_budget_check = time.monotonic() + CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS
+                next_budget_check = (
+                    time.monotonic() + CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS
+                )
                 budget_exceeded: dict[str, Any] | None = None
                 while process.poll() is None:
                     if cancel_check is not None and cancel_check():
@@ -3261,7 +3458,9 @@ class SubprocessCodexExecutor:
                             if budget_exceeded is not None:
                                 self._terminate_process_tree(process)
                                 break
-                            next_budget_check = now + CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS
+                            next_budget_check = (
+                                now + CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS
+                            )
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         self._terminate_process_tree(process)
@@ -3276,7 +3475,11 @@ class SubprocessCodexExecutor:
                 raise
         events = live_events_path.read_text(encoding="utf-8", errors="replace")
         stderr = live_stderr_path.read_text(encoding="utf-8", errors="replace")
-        final_message = final_path.read_text(encoding="utf-8", errors="replace") if final_path.exists() else ""
+        final_message = (
+            final_path.read_text(encoding="utf-8", errors="replace")
+            if final_path.exists()
+            else ""
+        )
         outcome_error = ""
         if process.returncode == 0 and budget_exceeded is None:
             try:
@@ -3286,9 +3489,15 @@ class SubprocessCodexExecutor:
                 # never enter the source validation/automatic repair loop.
                 outcome_error = f"Invalid Automation outcome: {exc}"
                 stderr = stderr.rstrip() + "\n" + outcome_error + "\n"
-        if budget_exceeded is None and max_model_tokens is not None and max_model_tokens > 0:
+        if (
+            budget_exceeded is None
+            and max_model_tokens is not None
+            and max_model_tokens > 0
+        ):
             provider_usage = _codex_jsonl_usage(live_events_path)
-            live_estimate = _codex_jsonl_live_budget_estimate(live_events_path, prompt=prompt)
+            live_estimate = _codex_jsonl_live_budget_estimate(
+                live_events_path, prompt=prompt
+            )
             budget_exceeded = _codex_budget_exceeded_receipt(
                 provider_usage=provider_usage,
                 live_estimate=live_estimate,
@@ -3327,7 +3536,10 @@ class SubprocessCodexExecutor:
         profile = dict(root_mcp or {})
         if not profile or profile.get("enabled") is False:
             return []
-        if str(profile.get("transport") or "streamable_http").strip() not in {"streamable_http", "http"}:
+        if str(profile.get("transport") or "streamable_http").strip() not in {
+            "streamable_http",
+            "http",
+        }:
             return []
         server = _safe_config_token(profile.get("server_name") or "adaos_root")
         url = str(profile.get("url") or "").strip()
@@ -3416,16 +3628,27 @@ class SubprocessCodexExecutor:
         user_profile = str(os.getenv("USERPROFILE") or "").strip()
         if user_profile and requested.lower() in {"codex", "codex.exe"}:
             profile = Path(user_profile)
-            for extensions_root in (profile / ".vscode" / "extensions", profile / ".vscode-insiders" / "extensions"):
+            for extensions_root in (
+                profile / ".vscode" / "extensions",
+                profile / ".vscode-insiders" / "extensions",
+            ):
                 candidates.extend(
-                    extensions_root.glob("openai.chatgpt-*-win32-x64/bin/windows-x86_64/codex.exe")
+                    extensions_root.glob(
+                        "openai.chatgpt-*-win32-x64/bin/windows-x86_64/codex.exe"
+                    )
                 )
         available = [path for path in candidates if path.is_file()]
         if available:
-            return str(max(available, key=lambda path: (path.stat().st_mtime_ns, str(path))).resolve())
+            return str(
+                max(
+                    available, key=lambda path: (path.stat().st_mtime_ns, str(path))
+                ).resolve()
+            )
 
         hint = "Set ADAOS_CODEX_EXECUTABLE to the absolute Codex CLI path."
-        raise RuntimeError(f"codex_executable_not_found: {requested!r} was not found. {hint}")
+        raise RuntimeError(
+            f"codex_executable_not_found: {requested!r} was not found. {hint}"
+        )
 
     @staticmethod
     def _bounded_environment() -> dict[str, str]:
@@ -3447,7 +3670,11 @@ class SubprocessCodexExecutor:
             "LANG",
             "LC_ALL",
         }
-        return {key: value for key, value in os.environ.items() if key.upper() in allowed and value}
+        return {
+            key: value
+            for key, value in os.environ.items()
+            if key.upper() in allowed and value
+        }
 
     def _materialize_sdk_snapshot(self, runtime_root: Path) -> Path | None:
         """Expose only a commit-bound SDK reference, never the live repository.
@@ -3485,7 +3712,9 @@ class SubprocessCodexExecutor:
         )
         if result.returncode:
             detail = (result.stderr or result.stdout).strip()
-            raise RuntimeError(f"cannot materialize filtered AdaOS SDK snapshot: {detail}")
+            raise RuntimeError(
+                f"cannot materialize filtered AdaOS SDK snapshot: {detail}"
+            )
         # ``runtime_root`` is private to one task and no consumer starts until
         # this method returns.  Extracting into a staging directory and then
         # renaming the whole tree therefore added no atomicity, while Windows
@@ -3502,7 +3731,9 @@ class SubprocessCodexExecutor:
                     try:
                         destination.relative_to(sdk_root.resolve())
                     except ValueError as exc:
-                        raise RuntimeError("AdaOS SDK archive contains an unsafe path") from exc
+                        raise RuntimeError(
+                            "AdaOS SDK archive contains an unsafe path"
+                        ) from exc
                     if member.issym() or member.islnk():
                         raise RuntimeError("AdaOS SDK archive may not contain links")
                 archive.extractall(sdk_root, members=members)
@@ -3568,32 +3799,44 @@ class SubprocessCodexExecutor:
         inherited_path = str(environment.get("PATH") or "").strip()
         environment["PATH"] = os.pathsep.join(
             dict.fromkeys(
-                entry
-                for entry in (str(python_path.parent), inherited_path)
-                if entry
+                entry for entry in (str(python_path.parent), inherited_path) if entry
             )
         )
-        exposed_sdk = Path(sdk_root).resolve() if sdk_root is not None else self.repo_root
+        exposed_sdk = (
+            Path(sdk_root).resolve() if sdk_root is not None else self.repo_root
+        )
         if exposed_sdk is not None:
             environment["ADAOS_REPO_ROOT"] = str(exposed_sdk)
             environment["PYTHONPATH"] = str(exposed_sdk / "src")
         profile = dict(root_mcp or {})
         env_var = str(profile.get("bearer_token_env_var") or "").strip()
         if env_var:
-            token = str(profile.get("_bearer_token_value") or "").strip() or os.getenv(env_var)
+            token = str(profile.get("_bearer_token_value") or "").strip() or os.getenv(
+                env_var
+            )
             if token:
                 environment[env_var] = token
         return environment
 
 
-def requalified_feedback_message(run_root: Path, failure: Mapping[str, Any]) -> str | None:
+def requalified_feedback_message(
+    run_root: Path, failure: Mapping[str, Any]
+) -> str | None:
     """Recheck retained feedback after a parser fix; never waive a blocking report."""
-    if failure.get("stage") != "development_feedback" or "development feedback" not in str(failure.get("message") or ""):
+    if failure.get(
+        "stage"
+    ) != "development_feedback" or "development feedback" not in str(
+        failure.get("message") or ""
+    ):
         return None
     try:
         message = (run_root / "runtime" / "codex-final.md").read_text(encoding="utf-8")
         items = parse_development_feedback(message)
-        if not items or any(item.get("blocking") for item in items) or parse_development_escalations(message):
+        if (
+            not items
+            or any(item.get("blocking") for item in items)
+            or parse_development_escalations(message)
+        ):
             return None
     except (OSError, UnicodeError, ValueError, TypeError):
         return None
@@ -3620,7 +3863,9 @@ class LocalSkillFactoryWorker:
         self.repo_root = Path(repo_root)
         self.dev_skills_root = Path(dev_skills_root)
         self.dev_scenarios_root = Path(dev_scenarios_root)
-        self.runs_root = Path(runs_root or (self.state_dir / "skill_factory" / "local_runs"))
+        self.runs_root = Path(
+            runs_root or (self.state_dir / "skill_factory" / "local_runs")
+        )
         self.node_id = node_id
         self.executor = executor or SubprocessCodexExecutor(repo_root=self.repo_root)
         self.progress_callback = progress_callback
@@ -3652,11 +3897,15 @@ class LocalSkillFactoryWorker:
             artifacts.append(
                 {
                     "kind": kind,
-                    "logical_path": str(expected_paths.get(kind) or "").replace("\\", "/"),
+                    "logical_path": str(expected_paths.get(kind) or "").replace(
+                        "\\", "/"
+                    ),
                     "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
                     "size_bytes": len(payload),
                     "media_type": (
-                        "application/json" if path.suffix.lower() == ".json" else "text/plain"
+                        "application/json"
+                        if path.suffix.lower() == ".json"
+                        else "text/plain"
                     ),
                 }
             )
@@ -3677,7 +3926,8 @@ class LocalSkillFactoryWorker:
         paths = [
             path
             for path in paths
-            if (workspace / path).exists() or bool(_git(["ls-files", "--", path], cwd=workspace))
+            if (workspace / path).exists()
+            or bool(_git(["ls-files", "--", path], cwd=workspace))
         ]
         if not paths:
             raise ValueError("task has no source paths authorized for commit")
@@ -3690,7 +3940,13 @@ class LocalSkillFactoryWorker:
                 "node_type": "local_dev_node_simulator",
                 "status": "registered_waiting",
                 "trust_level": "trusted_local_debug",
-                "capabilities": ["codex", "git", "local_tests", "webui", "skill_scaffold"],
+                "capabilities": [
+                    "codex",
+                    "git",
+                    "local_tests",
+                    "webui",
+                    "skill_scaffold",
+                ],
                 "max_parallel_tasks": 1,
                 "metadata": {
                     "runner_version": RUNNER_VERSION,
@@ -3753,14 +4009,26 @@ class LocalSkillFactoryWorker:
             raise ValueError("result recovery requires the preserved task workspace")
         structured_message = None
         if (input_dir / "automation-outcome.schema.json").is_file():
-            structured_message = outcome_message((output_dir / "last_message.md").read_text(encoding="utf-8"))
-            if any(item["blocking"] for item in parse_development_feedback(structured_message)):
-                raise ValueError("Cannot recover an implementation with unresolved blocking development feedback")
+            structured_message = outcome_message(
+                (output_dir / "last_message.md").read_text(encoding="utf-8")
+            )
+            if any(
+                item["blocking"]
+                for item in parse_development_feedback(structured_message)
+            ):
+                raise ValueError(
+                    "Cannot recover an implementation with unresolved blocking development feedback"
+                )
 
         test_report_path = output_dir / "test_report.json"
         test_report = _read_json(test_report_path) if test_report_path.is_file() else {}
-        dirty = bool(_git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace))
-        report_passed = bool(test_report.get("ok")) and str(test_report.get("status") or "") == "passed"
+        dirty = bool(
+            _git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace)
+        )
+        report_passed = (
+            bool(test_report.get("ok"))
+            and str(test_report.get("status") or "") == "passed"
+        )
         if not report_passed:
             # A worker/host failure can happen after Codex has returned but
             # before deterministic validation or the result commit.  Resume
@@ -3768,15 +4036,23 @@ class LocalSkillFactoryWorker:
             # never invoke Codex again from the recovery path.
             final_message_path = runtime_dir / "codex-final.md"
             if not final_message_path.is_file():
-                raise ValueError("pre-commit recovery requires a completed Codex result")
-            final_message = structured_message or final_message_path.read_text(encoding="utf-8").strip()
+                raise ValueError(
+                    "pre-commit recovery requires a completed Codex result"
+                )
+            final_message = (
+                structured_message
+                or final_message_path.read_text(encoding="utf-8").strip()
+            )
             development_escalations = parse_development_escalations(final_message)
             feedback_items = parse_development_feedback(final_message)
             development_feedback = self._record_codex_development_feedback(
-                assignment, feedback_items,
+                assignment,
+                feedback_items,
             )
             if any(item.get("blocking") for item in feedback_items):
-                raise ValueError("Cannot recover an implementation with unresolved blocking development feedback")
+                raise ValueError(
+                    "Cannot recover an implementation with unresolved blocking development feedback"
+                )
             recovery_packet = _read_json(input_dir / "packet.json")
             recovery_constraints = (
                 dict(recovery_packet.get("constraints"))
@@ -3823,25 +4099,40 @@ class LocalSkillFactoryWorker:
                     "errors": [],
                 }
             else:
-                self._validate_changed_paths(assignment, changed_paths, workspace=workspace)
+                self._validate_changed_paths(
+                    assignment, changed_paths, workspace=workspace
+                )
                 test_report = self._validate_workspace(
                     assignment,
                     workspace,
                 )
             _write_json(output_dir / "test_report.json", test_report)
-            if not bool(test_report.get("ok")) or str(test_report.get("status") or "") != "passed":
-                raise ValueError("preserved result does not pass deterministic validation")
+            if (
+                not bool(test_report.get("ok"))
+                or str(test_report.get("status") or "") != "passed"
+            ):
+                raise ValueError(
+                    "preserved result does not pass deterministic validation"
+                )
 
-            evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
+            evidence_paths = dict(
+                (assignment.get("evidence") or {}).get("expected_paths") or {}
+            )
             evidence_root = self._task_evidence_root(output_dir)
             evidence_root.mkdir(parents=True, exist_ok=True)
             (evidence_root / "changed_files.txt").write_text(
                 "\n".join(changed_paths) + "\n", encoding="utf-8"
             )
-            shutil.copy2(output_dir / "test_report.json", evidence_root / "test_report.json")
+            shutil.copy2(
+                output_dir / "test_report.json", evidence_root / "test_report.json"
+            )
             task_prompt = (input_dir / "task.md").read_text(encoding="utf-8")
-            packet_hash = "sha256:" + hashlib.sha256(task_prompt.encode("utf-8")).hexdigest()
-            source_snapshot = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
+            packet_hash = (
+                "sha256:" + hashlib.sha256(task_prompt.encode("utf-8")).hexdigest()
+            )
+            source_snapshot = dict(
+                (assignment.get("forge") or {}).get("source_snapshot") or {}
+            )
             sdk_snapshot_path = runtime_dir / "codex-sdk-snapshot.json"
             sdk_snapshot = (
                 _read_json(sdk_snapshot_path) if sdk_snapshot_path.is_file() else {}
@@ -3853,7 +4144,10 @@ class LocalSkillFactoryWorker:
                 "instruction_packet_hash": packet_hash,
                 "dependency_changes": self._dependency_changes(workspace),
                 "source_refs": dict(assignment.get("source_refs") or {}),
-                "base_revision": str((assignment.get("forge") or {}).get("base_revision") or "") or None,
+                "base_revision": str(
+                    (assignment.get("forge") or {}).get("base_revision") or ""
+                )
+                or None,
                 "source_snapshot": {
                     "snapshot_id": source_snapshot.get("snapshot_id"),
                     "digest": source_snapshot.get("digest"),
@@ -3896,11 +4190,17 @@ class LocalSkillFactoryWorker:
             report_passed = True
 
         if not report_passed:
-            raise ValueError("result recovery requires a passed deterministic test report")
+            raise ValueError(
+                "result recovery requires a passed deterministic test report"
+            )
         if dirty:
-            raise ValueError("result recovery refuses a modified validated task workspace")
+            raise ValueError(
+                "result recovery refuses a modified validated task workspace"
+            )
 
-        evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
+        evidence_paths = dict(
+            (assignment.get("evidence") or {}).get("expected_paths") or {}
+        )
         evidence_root = self._task_evidence_root(output_dir)
         result_manifest = _read_json(evidence_root / "result.json")
         provenance = _read_json(evidence_root / "provenance.json")
@@ -3919,7 +4219,10 @@ class LocalSkillFactoryWorker:
             "branch": str((assignment.get("forge") or {}).get("branch") or ""),
             "changed_paths": recovered_changed_paths,
             "no_source_change": not bool(recovered_changed_paths),
-            "tests": {"status": "passed", "report": str(evidence_paths.get("test_report") or "")},
+            "tests": {
+                "status": "passed",
+                "report": str(evidence_paths.get("test_report") or ""),
+            },
             "provenance": provenance,
             "evidence": self._evidence_manifest(evidence_root, evidence_paths),
             "summary": str(result_manifest.get("summary") or "").strip(),
@@ -3951,7 +4254,13 @@ class LocalSkillFactoryWorker:
                 "completed_at": _now_iso(),
             },
         )
-        return {"ok": True, "recovered": True, "assignment": assignment, "result": result, "completed": completed}
+        return {
+            "ok": True,
+            "recovered": True,
+            "assignment": assignment,
+            "result": result,
+            "completed": completed,
+        }
 
     def recover_orphaned_codex_run(self, task_id: str) -> dict[str, Any]:
         """Finish a Codex turn whose supervising API process was restarted.
@@ -3976,21 +4285,28 @@ class LocalSkillFactoryWorker:
         local_state = _read_json(local_state_path) if local_state_path.is_file() else {}
         local_status = str(local_state.get("status") or "").strip()
         if local_status in {"completed", "failed"}:
-            raise ValueError(f"orphaned recovery is not available for local status {local_status!r}")
+            raise ValueError(
+                f"orphaned recovery is not available for local status {local_status!r}"
+            )
         if self._process_owner_is_active(local_state.get("owner")):
             # API/status readers execute in a different process, so a
             # module-level lock cannot prove that the detached worker died.
             # The PID plus process creation time is the durable ownership
             # fence; PID reuse therefore cannot steal finalization.
-            raise ValueError("orphaned recovery refused: the original worker process is still active")
+            raise ValueError(
+                "orphaned recovery refused: the original worker process is still active"
+            )
 
         events_path = output_dir / "codex-live.jsonl"
         final_message_path = output_dir / "last_message.md"
         if not self._codex_journal_completed(events_path):
             raise ValueError("orphaned recovery requires a terminal Codex journal")
-        if not final_message_path.is_file() or not final_message_path.read_text(
-            encoding="utf-8", errors="strict"
-        ).strip():
+        if (
+            not final_message_path.is_file()
+            or not final_message_path.read_text(
+                encoding="utf-8", errors="strict"
+            ).strip()
+        ):
             raise ValueError("orphaned recovery requires the completed Codex message")
 
         runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -4002,7 +4318,10 @@ class LocalSkillFactoryWorker:
                 "status": "failed",
                 "error": "orphaned_after_codex_completion",
                 "failed_at": _now_iso(),
-                "recovery": {"mode": "terminal_journal_resume", "automatic_attempts": 1},
+                "recovery": {
+                    "mode": "terminal_journal_resume",
+                    "automatic_attempts": 1,
+                },
             },
         )
         self.factory.fail_task(
@@ -4089,7 +4408,9 @@ class LocalSkillFactoryWorker:
         report = _read_json(report_path) if report_path.is_file() else {}
         errors = [str(item) for item in report.get("errors") or [] if str(item).strip()]
         if bool(report.get("ok")) or not errors:
-            raise ValueError("preserved repair requires deterministic validation errors")
+            raise ValueError(
+                "preserved repair requires deterministic validation errors"
+            )
         if not _git(["status", "--porcelain", "--untracked-files=all"], cwd=workspace):
             raise ValueError("preserved repair requires an uncommitted Codex worktree")
         previous_repairs = sorted(runtime_dir.glob("codex-events-repair-*.jsonl"))
@@ -4099,7 +4420,9 @@ class LocalSkillFactoryWorker:
         prompt = (input_dir / "task.md").read_text(encoding="utf-8")
         repair_prompt = _deterministic_repair_prompt(prompt, errors)
         attempt = len(previous_repairs) + 1
-        result = self.executor(workspace=workspace, prompt=repair_prompt, output_dir=output_dir)
+        result = self.executor(
+            workspace=workspace, prompt=repair_prompt, output_dir=output_dir
+        )
         self._record_codex_attempt(runtime_dir, result, attempt=attempt)
         if result.returncode:
             raise RuntimeError(
@@ -4109,7 +4432,9 @@ class LocalSkillFactoryWorker:
         if result.final_message:
             # Recovery uses the primary final-message path for the durable
             # result summary; the original message remains in the event log.
-            (runtime_dir / "codex-final.md").write_text(result.final_message, encoding="utf-8")
+            (runtime_dir / "codex-final.md").write_text(
+                result.final_message, encoding="utf-8"
+            )
         return self.recover_validated_run(task_id)
 
     def run_assignment(self, assignment: Mapping[str, Any]) -> dict[str, Any]:
@@ -4145,7 +4470,9 @@ class LocalSkillFactoryWorker:
                 assignment,
                 include_private_token=True,
             )
-            self._progress(task_id, "workspace_preparing", "Preparing isolated local workspace")
+            self._progress(
+                task_id, "workspace_preparing", "Preparing isolated local workspace"
+            )
             if workspace.exists():
                 shutil.rmtree(workspace)
             workspace.mkdir(parents=True)
@@ -4157,7 +4484,10 @@ class LocalSkillFactoryWorker:
             _write_json(input_dir / "assignment.json", dict(assignment))
             self._init_git_workspace(
                 workspace,
-                str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"),
+                str(
+                    (assignment.get("forge") or {}).get("branch")
+                    or f"realize/{task_id}"
+                ),
             )
             target = dict(assignment.get("target") or {})
             target_type = str(target.get("type") or "skill").strip().lower()
@@ -4166,17 +4496,22 @@ class LocalSkillFactoryWorker:
             # source. A restored Automation candidate is expected to differ.
             accepted_prototype_identity = None
             if target_type == "scenario":
-                accepted_prototype_identity = self._retained_accepted_prototype_identity(
-                    assignment,
-                    target_id=target_id,
-                ) or self._accepted_prototype_identity(
+                accepted_prototype_identity = (
+                    self._retained_accepted_prototype_identity(
+                        assignment,
+                        target_id=target_id,
+                    )
+                    or self._accepted_prototype_identity(
+                        assignment,
+                        workspace,
+                        target_id=target_id,
+                    )
+                )
+            prototype_resource_handoff = (
+                self._prototype_resource_handoff_from_assignment(
                     assignment,
                     workspace,
-                    target_id=target_id,
                 )
-            prototype_resource_handoff = self._prototype_resource_handoff_from_assignment(
-                assignment,
-                workspace,
             )
             deterministic_resource_realization = bool(
                 prototype_resource_handoff
@@ -4194,7 +4529,9 @@ class LocalSkillFactoryWorker:
                 else self._restore_continuation_candidate(assignment, workspace)
             )
             structured_edits = self._structured_edits_from_assignment(assignment)
-            validation_only = self._validation_only_from_assignment(assignment, workspace)
+            validation_only = self._validation_only_from_assignment(
+                assignment, workspace
+            )
             descriptor_working_set: dict[str, Any] | None = None
             if (
                 root_mcp is not None
@@ -4315,12 +4652,13 @@ class LocalSkillFactoryWorker:
                 codex_result = CodexRunResult(
                     returncode=0,
                     final_message=(
-                        continuation.get("requalified_feedback_message") or (
-                        "Applied qualified deterministic edits and finalized the preserved "
-                        f"candidate from {continuation['source_task_id']} without repeating model work."
-                        if structured_edits
-                        else "Validated and finalized the preserved candidate from "
-                        f"{continuation['source_task_id']} without repeating model work."
+                        continuation.get("requalified_feedback_message")
+                        or (
+                            "Applied qualified deterministic edits and finalized the preserved "
+                            f"candidate from {continuation['source_task_id']} without repeating model work."
+                            if structured_edits
+                            else "Validated and finalized the preserved candidate from "
+                            f"{continuation['source_task_id']} without repeating model work."
                         )
                     ),
                 )
@@ -4372,7 +4710,11 @@ class LocalSkillFactoryWorker:
                 )
             else:
                 failure_stage = "model_execution"
-                self._progress(task_id, "in_progress", "Codex is implementing the requested skill changes")
+                self._progress(
+                    task_id,
+                    "in_progress",
+                    "Codex is implementing the requested skill changes",
+                )
                 self._ensure_task_active(task_id)
                 codex_result = self._execute_codex(
                     task_id=task_id,
@@ -4404,19 +4746,23 @@ class LocalSkillFactoryWorker:
             feedback_items = parse_development_feedback(codex_result.final_message)
             clarification_questions = required_user_questions(feedback_items)
             development_feedback = self._record_codex_development_feedback(
-                assignment, feedback_items,
+                assignment,
+                feedback_items,
             )
             if any(item.get("blocking") for item in feedback_items):
-                failure_feedback_refs = [item["feedback_id"] for item in development_feedback]
-                raise ValueError("Automation blocked by reported development feedback; candidate was not applied")
+                failure_feedback_refs = [
+                    item["feedback_id"] for item in development_feedback
+                ]
+                raise ValueError(
+                    "Automation blocked by reported development feedback; candidate was not applied"
+                )
             packet_constraints = (
                 dict(packet.get("constraints"))
                 if isinstance(packet.get("constraints"), Mapping)
                 else {}
             )
             if development_escalations and not (
-                str(packet_constraints.get("mode") or "").strip()
-                == "dev_ticket_repair"
+                str(packet_constraints.get("mode") or "").strip() == "dev_ticket_repair"
                 or packet_constraints.get("minimal_diff") is True
                 or "adaos.dev_ticket.autonomous_repair_brief.v1"
                 in str(packet.get("brief") or "")
@@ -4440,7 +4786,11 @@ class LocalSkillFactoryWorker:
             for repair_attempt in range(validation_repair_limit + 1):
                 failure_stage = "deterministic_validation"
                 self._ensure_task_active(task_id)
-                self._progress(task_id, "tests_running", "Validating generated manifests, Python and Web UI")
+                self._progress(
+                    task_id,
+                    "tests_running",
+                    "Validating generated manifests, Python and Web UI",
+                )
                 self._cleanup_generated_files(workspace)
                 changed_paths = self._changed_paths(workspace)
                 if development_escalations and changed_paths:
@@ -4480,7 +4830,9 @@ class LocalSkillFactoryWorker:
                     }
                 else:
                     try:
-                        self._validate_changed_paths(assignment, changed_paths, workspace=workspace)
+                        self._validate_changed_paths(
+                            assignment, changed_paths, workspace=workspace
+                        )
                     except ValueError as exc:
                         # A scope violation is deterministic and often
                         # repairable (for example, a test placed mutable runtime
@@ -4513,7 +4865,9 @@ class LocalSkillFactoryWorker:
                         self._cleanup_generated_files(workspace)
                         changed_paths = self._changed_paths(workspace)
                         try:
-                            self._validate_changed_paths(assignment, changed_paths, workspace=workspace)
+                            self._validate_changed_paths(
+                                assignment, changed_paths, workspace=workspace
+                            )
                         except ValueError as exc:
                             test_report["ok"] = False
                             test_report["status"] = "failed"
@@ -4532,8 +4886,14 @@ class LocalSkillFactoryWorker:
                     break
                 if repair_attempt >= validation_repair_limit:
                     break
-                self._progress(task_id, "in_progress", "Codex is repairing deterministic validation failures")
-                repair_prompt = _deterministic_repair_prompt(prompt, test_report["errors"])
+                self._progress(
+                    task_id,
+                    "in_progress",
+                    "Codex is repairing deterministic validation failures",
+                )
+                repair_prompt = _deterministic_repair_prompt(
+                    prompt, test_report["errors"]
+                )
                 repair_root_mcp = root_mcp
                 if root_mcp_evidence:
                     repair_prompt += (
@@ -4551,7 +4911,9 @@ class LocalSkillFactoryWorker:
                     root_mcp=repair_root_mcp,
                 )
                 self._ensure_task_active(task_id)
-                self._record_codex_attempt(runtime_dir, codex_result, attempt=repair_attempt + 1)
+                self._record_codex_attempt(
+                    runtime_dir, codex_result, attempt=repair_attempt + 1
+                )
                 if codex_result.returncode:
                     raise RuntimeError(
                         f"Codex repair exited with code {codex_result.returncode}: "
@@ -4560,12 +4922,20 @@ class LocalSkillFactoryWorker:
                 failure_stage = "development_feedback"
                 repair_feedback = parse_development_feedback(codex_result.final_message)
                 clarification_questions = required_user_questions(repair_feedback)
-                development_feedback.extend(self._record_codex_development_feedback(assignment, repair_feedback))
+                development_feedback.extend(
+                    self._record_codex_development_feedback(assignment, repair_feedback)
+                )
                 if any(item.get("blocking") for item in repair_feedback):
-                    failure_feedback_refs = [item["feedback_id"] for item in development_feedback]
-                    raise ValueError("Automation blocked by reported development feedback; candidate was not applied")
+                    failure_feedback_refs = [
+                        item["feedback_id"] for item in development_feedback
+                    ]
+                    raise ValueError(
+                        "Automation blocked by reported development feedback; candidate was not applied"
+                    )
                 if parse_development_escalations(codex_result.final_message):
-                    raise ValueError("Validation repair escalation requires a separate governed no-source repair")
+                    raise ValueError(
+                        "Validation repair escalation requires a separate governed no-source repair"
+                    )
             self._cleanup_generated_files(workspace)
             if root_mcp_evidence:
                 test_report.setdefault("checks", []).append(
@@ -4600,9 +4970,14 @@ class LocalSkillFactoryWorker:
                         task_id,
                         exc_info=True,
                     )
-                raise RuntimeError("Generated project validation failed: " + "; ".join(test_report["errors"]))
+                raise RuntimeError(
+                    "Generated project validation failed: "
+                    + "; ".join(test_report["errors"])
+                )
 
-            evidence_paths = dict((assignment.get("evidence") or {}).get("expected_paths") or {})
+            evidence_paths = dict(
+                (assignment.get("evidence") or {}).get("expected_paths") or {}
+            )
             evidence_root = self._task_evidence_root(output_dir)
             evidence_root.mkdir(parents=True, exist_ok=True)
             candidate_check_reports: list[dict[str, Any]] = []
@@ -4621,16 +4996,24 @@ class LocalSkillFactoryWorker:
                 "authority": "candidate_diagnostic_only",
                 "status": (
                     "failed"
-                    if any(not bool(item.get("ok")) for item in attempted_candidate_checks)
+                    if any(
+                        not bool(item.get("ok")) for item in attempted_candidate_checks
+                    )
                     else "passed"
                     if attempted_candidate_checks
                     else "not_run"
                 ),
                 "attempts": candidate_check_reports,
             }
-            (evidence_root / "changed_files.txt").write_text("\n".join(changed_paths) + "\n", encoding="utf-8")
-            shutil.copy2(output_dir / "test_report.json", evidence_root / "test_report.json")
-            _write_json(evidence_root / "candidate_checks.json", candidate_check_summary)
+            (evidence_root / "changed_files.txt").write_text(
+                "\n".join(changed_paths) + "\n", encoding="utf-8"
+            )
+            shutil.copy2(
+                output_dir / "test_report.json", evidence_root / "test_report.json"
+            )
+            _write_json(
+                evidence_root / "candidate_checks.json", candidate_check_summary
+            )
             if root_mcp_evidence:
                 _write_json(evidence_root / "root_mcp_evidence.json", root_mcp_evidence)
             provenance = {
@@ -4640,7 +5023,10 @@ class LocalSkillFactoryWorker:
                 "instruction_packet_hash": packet_hash,
                 "dependency_changes": self._dependency_changes(workspace),
                 "source_refs": dict(assignment.get("source_refs") or {}),
-                "base_revision": str((assignment.get("forge") or {}).get("base_revision") or "") or None,
+                "base_revision": str(
+                    (assignment.get("forge") or {}).get("base_revision") or ""
+                )
+                or None,
                 "source_snapshot": {
                     "snapshot_id": source_snapshot.get("snapshot_id"),
                     "digest": source_snapshot.get("digest"),
@@ -4688,7 +5074,9 @@ class LocalSkillFactoryWorker:
             }
             _write_json(evidence_root / "result.json", result_manifest)
             all_changed_paths = self._changed_paths(workspace)
-            (evidence_root / "changed_files.txt").write_text("\n".join(all_changed_paths) + "\n", encoding="utf-8")
+            (evidence_root / "changed_files.txt").write_text(
+                "\n".join(all_changed_paths) + "\n", encoding="utf-8"
+            )
 
             self._progress(task_id, "commit_ready", "Committing validated local result")
             failure_stage = "commit"
@@ -4710,7 +5098,10 @@ class LocalSkillFactoryWorker:
                 "branch": str((assignment.get("forge") or {}).get("branch") or ""),
                 "changed_paths": final_changed_paths,
                 "no_source_change": not bool(final_changed_paths),
-                "tests": {"status": "passed", "report": str(evidence_paths.get("test_report") or "")},
+                "tests": {
+                    "status": "passed",
+                    "report": str(evidence_paths.get("test_report") or ""),
+                },
                 "candidate_checks": candidate_check_summary,
                 "provenance": provenance,
                 "evidence": self._evidence_manifest(evidence_root, evidence_paths),
@@ -4734,14 +5125,28 @@ class LocalSkillFactoryWorker:
                     "completed_at": _now_iso(),
                 },
             )
-            return {"ok": True, "assignment": dict(assignment), "result": result, "completed": completed}
+            return {
+                "ok": True,
+                "assignment": dict(assignment),
+                "result": result,
+                "completed": completed,
+            }
         except TaskExecutionCancelled as exc:
-            cancelled = {"status": "cancelled", "error": str(exc), "cancelled_at": _now_iso()}
+            cancelled = {
+                "status": "cancelled",
+                "error": str(exc),
+                "cancelled_at": _now_iso(),
+            }
             _write_json(
                 runtime_dir / "state.json",
                 {"schema": LOCAL_SESSION_SCHEMA, "owner": process_owner, **cancelled},
             )
-            return {"ok": False, "assignment": dict(assignment), **cancelled, "run_dir": str(run_root)}
+            return {
+                "ok": False,
+                "assignment": dict(assignment),
+                **cancelled,
+                "run_dir": str(run_root),
+            }
         except Exception as exc:
             failure = {
                 "status": "failed",
@@ -4770,7 +5175,9 @@ class LocalSkillFactoryWorker:
                 if failure_feedback_refs:
                     failure_report.update(
                         {
-                            "failure_class": "capability_blocked" if failure_stage == "development_feedback" else "validation_failed",
+                            "failure_class": "capability_blocked"
+                            if failure_stage == "development_feedback"
+                            else "validation_failed",
                             "stage": failure_stage,
                             "details": {
                                 "development_feedback_refs": failure_feedback_refs,
@@ -4778,14 +5185,23 @@ class LocalSkillFactoryWorker:
                         }
                     )
                 if clarification_questions:
-                    failure_report.update(failure_class="user_input_required", retryable=False,
-                        details={**failure_report.get("details", {}), "clarification_questions": clarification_questions})
-                self.factory.fail_task(
-                    failure_report
-                )
+                    failure_report.update(
+                        failure_class="user_input_required",
+                        retryable=False,
+                        details={
+                            **failure_report.get("details", {}),
+                            "clarification_questions": clarification_questions,
+                        },
+                    )
+                self.factory.fail_task(failure_report)
             except Exception:
                 pass
-            return {"ok": False, "assignment": dict(assignment), **failure, "run_dir": str(run_root)}
+            return {
+                "ok": False,
+                "assignment": dict(assignment),
+                **failure,
+                "run_dir": str(run_root),
+            }
 
     def _task_status(self, task_id: str) -> str:
         try:
@@ -4808,7 +5224,9 @@ class LocalSkillFactoryWorker:
         constraints = dict(assignment.get("constraints") or {})
         if str(constraints.get("mode") or "").strip() != "dev_ticket_repair":
             return {}
-        artifacts = dict(dict(assignment.get("realize_request") or {}).get("artifacts") or {})
+        artifacts = dict(
+            dict(assignment.get("realize_request") or {}).get("artifacts") or {}
+        )
         hints = dict(artifacts.get("repair_hints") or {})
         structured = dict(hints.get("structured_edits") or {})
         if not structured:
@@ -4831,7 +5249,9 @@ class LocalSkillFactoryWorker:
             "accepted_prototype_validation",
         }:
             return {}
-        artifacts = dict(dict(assignment.get("realize_request") or {}).get("artifacts") or {})
+        artifacts = dict(
+            dict(assignment.get("realize_request") or {}).get("artifacts") or {}
+        )
         hints = dict(artifacts.get("repair_hints") or {})
         if hints.get("validation_only") is not True:
             return {}
@@ -4862,7 +5282,9 @@ class LocalSkillFactoryWorker:
             try:
                 path.relative_to(root)
             except ValueError as exc:
-                raise ValueError(f"validation-only path escapes workspace: {relative}") from exc
+                raise ValueError(
+                    f"validation-only path escapes workspace: {relative}"
+                ) from exc
             if not path.is_file():
                 raise ValueError(f"validation-only source is missing: {relative}")
             raw = path.read_bytes()
@@ -4870,7 +5292,9 @@ class LocalSkillFactoryWorker:
             expected_digest = str(item.get("sha256") or "").strip().lower()
             expected_size = int(item.get("size") or 0)
             if actual_digest != expected_digest or len(raw) != expected_size:
-                raise ValueError(f"validation-only source precondition changed: {relative}")
+                raise ValueError(
+                    f"validation-only source precondition changed: {relative}"
+                )
             verified.append(
                 {
                     "path": relative,
@@ -4897,7 +5321,9 @@ class LocalSkillFactoryWorker:
         if not structured:
             return None
         constraints = dict(assignment.get("constraints") or {})
-        artifacts = dict(dict(assignment.get("realize_request") or {}).get("artifacts") or {})
+        artifacts = dict(
+            dict(assignment.get("realize_request") or {}).get("artifacts") or {}
+        )
         hints = dict(artifacts.get("repair_hints") or {})
         allowed = {
             str(item).replace("\\", "/").strip("/")
@@ -4918,12 +5344,16 @@ class LocalSkillFactoryWorker:
             op = str(operation.get("op") or "").strip().lower()
             relative = str(operation.get("path") or "").replace("\\", "/").strip("/")
             if relative not in allowed:
-                raise ValueError(f"structured edit path is outside exact_changed_paths: {relative}")
+                raise ValueError(
+                    f"structured edit path is outside exact_changed_paths: {relative}"
+                )
             path = (root / Path(relative)).resolve()
             try:
                 path.relative_to(root)
             except ValueError as exc:
-                raise ValueError(f"structured edit path escapes workspace: {relative}") from exc
+                raise ValueError(
+                    f"structured edit path escapes workspace: {relative}"
+                ) from exc
             if not path.is_file():
                 raise ValueError(f"structured edit file is missing: {relative}")
             before_bytes = path.read_bytes()
@@ -4934,7 +5364,9 @@ class LocalSkillFactoryWorker:
                 new = operation.get("new")
                 expected_count = int(operation.get("expected_count") or 1)
                 if not isinstance(old, str) or not old or not isinstance(new, str):
-                    raise ValueError("replace_text requires non-empty old and string new")
+                    raise ValueError(
+                        "replace_text requires non-empty old and string new"
+                    )
                 newline = "\r\n" if "\r\n" in text else "\r" if "\r" in text else "\n"
                 matched_old = _text_for_newline_style(old, newline)
                 matched_new = _text_for_newline_style(new, newline)
@@ -4952,11 +5384,15 @@ class LocalSkillFactoryWorker:
                 document = json.loads(original_text)
                 pointer = str(operation.get("pointer") or "")
                 if op == "json_add":
-                    _json_pointer_add(document, pointer, copy.deepcopy(operation.get("value")))
+                    _json_pointer_add(
+                        document, pointer, copy.deepcopy(operation.get("value"))
+                    )
                 elif op == "json_replace":
                     observed = _json_pointer_get(document, pointer)
                     if observed != operation.get("expected"):
-                        raise ValueError(f"json_replace precondition failed for {relative}:{pointer}")
+                        raise ValueError(
+                            f"json_replace precondition failed for {relative}:{pointer}"
+                        )
                     parent, token = _json_pointer_parent(document, pointer)
                     if isinstance(parent, list):
                         parent[int(token)] = copy.deepcopy(operation.get("value"))
@@ -4965,17 +5401,23 @@ class LocalSkillFactoryWorker:
                 elif op == "json_remove":
                     observed = _json_pointer_get(document, pointer)
                     if observed != operation.get("expected"):
-                        raise ValueError(f"json_remove precondition failed for {relative}:{pointer}")
+                        raise ValueError(
+                            f"json_remove precondition failed for {relative}:{pointer}"
+                        )
                     _json_pointer_remove(document, pointer)
                 else:
                     from_pointer = str(operation.get("from_pointer") or "")
                     source_tokens = _json_pointer_tokens(from_pointer)
                     target_tokens = _json_pointer_tokens(pointer)
                     if target_tokens[: len(source_tokens)] == source_tokens:
-                        raise ValueError("json_move cannot move a value into its own child")
+                        raise ValueError(
+                            "json_move cannot move a value into its own child"
+                        )
                     observed = _json_pointer_get(document, from_pointer)
                     if observed != operation.get("expected"):
-                        raise ValueError(f"json_move precondition failed for {relative}:{from_pointer}")
+                        raise ValueError(
+                            f"json_move precondition failed for {relative}:{from_pointer}"
+                        )
                     moved = _json_pointer_remove(document, from_pointer)
                     _json_pointer_add(document, pointer, moved)
                 newline = "\r\n" if "\r\n" in original_text else "\n"
@@ -4987,7 +5429,9 @@ class LocalSkillFactoryWorker:
                     rendered += newline
                 path.write_bytes(rendered.encode("utf-8"))
             else:
-                raise ValueError(f"unsupported structured edit operation: {op or '<missing>'}")
+                raise ValueError(
+                    f"unsupported structured edit operation: {op or '<missing>'}"
+                )
             after_bytes = path.read_bytes()
             if after_bytes == before_bytes:
                 raise ValueError(f"structured edit produced no change: {relative}")
@@ -5003,7 +5447,9 @@ class LocalSkillFactoryWorker:
             )
         max_changed_files = int(constraints.get("max_changed_files") or len(allowed))
         if len(changed_files) > max_changed_files:
-            raise ValueError("structured edits changed more files than max_changed_files")
+            raise ValueError(
+                "structured edits changed more files than max_changed_files"
+            )
         return {
             "schema": "adaos.skill_factory.structured_edit_receipt.v1",
             "strategy": "structured_edits",
@@ -5018,7 +5464,12 @@ class LocalSkillFactoryWorker:
     def _archive_model_output(task_id: str, output_dir: Path, attempt: int) -> None:
         archive = output_dir / "model-attempts" / f"{attempt:03}"
         artifacts = {}
-        for name in ("codex-live.jsonl", "codex-live.stderr.log", "last_message.md", "test_report.json"):
+        for name in (
+            "codex-live.jsonl",
+            "codex-live.stderr.log",
+            "last_message.md",
+            "test_report.json",
+        ):
             source = output_dir / name
             if not source.is_file():
                 continue
@@ -5027,16 +5478,26 @@ class LocalSkillFactoryWorker:
             destination = archive / name
             if destination.exists():
                 if destination.read_bytes() != raw:
-                    raise ValueError("Refusing to overwrite retained model attempt output")
+                    raise ValueError(
+                        "Refusing to overwrite retained model attempt output"
+                    )
             else:
                 with destination.open("xb") as stream:
                     stream.write(raw)
-            artifacts[name] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+            artifacts[name] = {
+                "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            }
         if artifacts:
-            _write_json(archive / "receipt.json", {
-                "schema": "adaos.skill_factory.model_output.v1", "task_id": task_id,
-                "attempt": attempt, "artifacts": artifacts,
-            })
+            _write_json(
+                archive / "receipt.json",
+                {
+                    "schema": "adaos.skill_factory.model_output.v1",
+                    "task_id": task_id,
+                    "attempt": attempt,
+                    "artifacts": artifacts,
+                },
+            )
 
     def _execute_codex(
         self,
@@ -5061,11 +5522,16 @@ class LocalSkillFactoryWorker:
         raw_prompt = prompt.encode("utf-8")
         with prompt_path.open("xb") as stream:
             stream.write(raw_prompt)
-        _write_json(prompt_path.with_suffix(".json"), {
-            "schema": "adaos.skill_factory.model_input.v1", "task_id": task_id,
-            "attempt": attempt, "prompt_bytes": len(raw_prompt),
-            "prompt_sha256": hashlib.sha256(raw_prompt).hexdigest(),
-        })
+        _write_json(
+            prompt_path.with_suffix(".json"),
+            {
+                "schema": "adaos.skill_factory.model_input.v1",
+                "task_id": task_id,
+                "attempt": attempt,
+                "prompt_bytes": len(raw_prompt),
+                "prompt_sha256": hashlib.sha256(raw_prompt).hexdigest(),
+            },
+        )
         if isinstance(self.executor, SubprocessCodexExecutor):
             profile = dict(agent_profile or {})
             provider = str(profile.get("provider") or "openai-codex-cli").strip()
@@ -5078,13 +5544,17 @@ class LocalSkillFactoryWorker:
             )
             token_budget = _codex_execution_token_budget(assignment)
             max_model_tokens = int(token_budget.get("max_model_tokens") or 0) or None
-            max_billable_tokens = int(token_budget.get("max_billable_tokens") or 0) or None
+            max_billable_tokens = (
+                int(token_budget.get("max_billable_tokens") or 0) or None
+            )
             token_budget_metric = str(token_budget.get("metric") or "model_tokens")
             if profile or timeout_seconds != self.executor.timeout_seconds:
                 executor = SubprocessCodexExecutor(
                     executable=self.executor.executable,
-                    model=str(profile.get("model") or "").strip() or self.executor.model,
-                    reasoning_effort=str(profile.get("reasoning_effort") or "").strip() or None,
+                    model=str(profile.get("model") or "").strip()
+                    or self.executor.model,
+                    reasoning_effort=str(profile.get("reasoning_effort") or "").strip()
+                    or None,
                     timeout_seconds=timeout_seconds,
                     sandbox_mode=self.executor.sandbox_mode,
                     repo_root=self.executor.repo_root,
@@ -5097,27 +5567,41 @@ class LocalSkillFactoryWorker:
                 max_model_tokens=max_model_tokens,
                 max_billable_tokens=max_billable_tokens,
                 token_budget_metric=token_budget_metric,
-                cancel_check=lambda: self._task_status(task_id) in {"cancelled", "expired"},
+                cancel_check=lambda: self._task_status(task_id)
+                in {"cancelled", "expired"},
             )
         return self.executor(workspace=workspace, prompt=prompt, output_dir=output_dir)
 
     @staticmethod
-    def _record_codex_attempt(runtime_dir: Path, result: CodexRunResult, *, attempt: int) -> None:
+    def _record_codex_attempt(
+        runtime_dir: Path, result: CodexRunResult, *, attempt: int
+    ) -> None:
         from adaos.services.codex_profiles import execution_profile_from_command
 
         suffix = "" if attempt == 0 else f"-repair-{attempt}"
-        _write_json(runtime_dir / f"codex-execution-profile{suffix}.json", execution_profile_from_command(result.command))
-        (runtime_dir / f"codex-events{suffix}.jsonl").write_text(result.events, encoding="utf-8")
-        (runtime_dir / f"codex-stderr{suffix}.log").write_text(result.stderr, encoding="utf-8")
+        _write_json(
+            runtime_dir / f"codex-execution-profile{suffix}.json",
+            execution_profile_from_command(result.command),
+        )
+        (runtime_dir / f"codex-events{suffix}.jsonl").write_text(
+            result.events, encoding="utf-8"
+        )
+        (runtime_dir / f"codex-stderr{suffix}.log").write_text(
+            result.stderr, encoding="utf-8"
+        )
         if result.final_message:
-            (runtime_dir / f"codex-final{suffix}.md").write_text(result.final_message, encoding="utf-8")
+            (runtime_dir / f"codex-final{suffix}.md").write_text(
+                result.final_message, encoding="utf-8"
+            )
         if result.sdk_snapshot:
             _write_json(
                 runtime_dir / f"codex-sdk-snapshot{suffix}.json",
                 result.sdk_snapshot,
             )
         if result.token_budget:
-            _write_json(runtime_dir / f"codex-token-budget{suffix}.json", result.token_budget)
+            _write_json(
+                runtime_dir / f"codex-token-budget{suffix}.json", result.token_budget
+            )
         _write_json(
             runtime_dir / f"candidate-checks{suffix}.json",
             _candidate_check_report(result.events, attempt=attempt),
@@ -5126,13 +5610,23 @@ class LocalSkillFactoryWorker:
     def _progress(self, task_id: str, status: str, message: str) -> None:
         self.factory.report_progress(
             task_id,
-            {"node_id": self.node_id, "status": status, "stage": status, "message": message},
+            {
+                "node_id": self.node_id,
+                "status": status,
+                "stage": status,
+                "message": message,
+            },
         )
         if self.progress_callback is not None:
             try:
                 self.progress_callback(task_id, status, message)
             except Exception:
-                _log.warning("local worker progress callback failed task=%s status=%s", task_id, status, exc_info=True)
+                _log.warning(
+                    "local worker progress callback failed task=%s status=%s",
+                    task_id,
+                    status,
+                    exc_info=True,
+                )
 
     def _record_codex_development_feedback(
         self,
@@ -5268,8 +5762,11 @@ class LocalSkillFactoryWorker:
                     "stage": "codex_final_response",
                     "target_type": target_type,
                     "target_id": target_id,
-                    **({"clarification_questions": item["clarification_questions"]}
-                       if item.get("clarification_questions") else {}),
+                    **(
+                        {"clarification_questions": item["clarification_questions"]}
+                        if item.get("clarification_questions")
+                        else {}
+                    ),
                     **(
                         {"application_trace": application_trace}
                         if application_trace
@@ -5282,8 +5779,14 @@ class LocalSkillFactoryWorker:
                         json.dumps(
                             {
                                 "category": item.get("category"),
-                                **({"task_id": assignment.get("task_id"), "questions": item["clarification_questions"]}
-                                   if item.get("clarification_questions") else {}),
+                                **(
+                                    {
+                                        "task_id": assignment.get("task_id"),
+                                        "questions": item["clarification_questions"],
+                                    }
+                                    if item.get("clarification_questions")
+                                    else {}
+                                ),
                                 "summary": str(item.get("summary") or "")
                                 .strip()
                                 .casefold(),
@@ -5292,12 +5795,8 @@ class LocalSkillFactoryWorker:
                                     for ref in item_target_refs
                                     if str(ref).strip()
                                 ),
-                                "contract_ref": application_trace.get(
-                                    "contract_ref"
-                                ),
-                                "operation_id": application_trace.get(
-                                    "operation_id"
-                                ),
+                                "contract_ref": application_trace.get("contract_ref"),
+                                "operation_id": application_trace.get("operation_id"),
                             },
                             ensure_ascii=False,
                             sort_keys=True,
@@ -5443,7 +5942,9 @@ class LocalSkillFactoryWorker:
         ]
         service = DevelopmentFeedbackService(state_dir=self.state_dir)
         records: list[dict[str, Any]] = []
-        for (contract_ref, category, label, expected), group in list(grouped.items())[:4]:
+        for (contract_ref, category, label, expected), group in list(grouped.items())[
+            :4
+        ]:
             error_codes = sorted(group["codes"])
             operation_ids = sorted(group["operations"])
             observed = "\n".join(group["errors"][:12])[:12000]
@@ -5513,13 +6014,17 @@ class LocalSkillFactoryWorker:
             records.append(result["feedback"])
         return records
 
-    def _materialize_sources(self, assignment: Mapping[str, Any], workspace: Path) -> dict[str, Any] | None:
+    def _materialize_sources(
+        self, assignment: Mapping[str, Any], workspace: Path
+    ) -> dict[str, Any] | None:
         forge = dict(assignment.get("forge") or {})
         snapshot_reference = dict(forge.get("source_snapshot") or {})
         if snapshot_reference:
             base_revision = str(forge.get("base_revision") or "").strip()
             if base_revision != str(snapshot_reference.get("digest") or "").strip():
-                raise SourceSnapshotError("task base revision differs from its immutable source snapshot")
+                raise SourceSnapshotError(
+                    "task base revision differs from its immutable source snapshot"
+                )
             return materialize_source_snapshot(
                 state_dir=self.state_dir,
                 reference=snapshot_reference,
@@ -5563,7 +6068,9 @@ class LocalSkillFactoryWorker:
                 / "automation"
             )
             if automation_snapshot.is_dir():
-                shutil.copytree(automation_snapshot, destination / ".builder_previous_automation")
+                shutil.copytree(
+                    automation_snapshot, destination / ".builder_previous_automation"
+                )
         elif target_type == "skill":
             source = self.dev_skills_root / target_id
             destination = workspace / "skills" / target_id
@@ -5573,7 +6080,9 @@ class LocalSkillFactoryWorker:
                 )
             shutil.copytree(source, destination, ignore=implementation_source_ignore)
         else:
-            raise ValueError(f"local worker supports skill or scenario targets, got {target_type!r}")
+            raise ValueError(
+                f"local worker supports skill or scenario targets, got {target_type!r}"
+            )
         return None
 
     def _restore_continuation_candidate(
@@ -5603,7 +6112,10 @@ class LocalSkillFactoryWorker:
         if not current_contract or checkpoint_contract != current_contract:
             return None
         source_task_id = str(checkpoint.get("source_task_id") or "").strip()
-        if not source_task_id or source_task_id == str(assignment.get("task_id") or "").strip():
+        if (
+            not source_task_id
+            or source_task_id == str(assignment.get("task_id") or "").strip()
+        ):
             raise ValueError("continuation checkpoint source_task_id is invalid")
 
         source_task = self.factory.read_task(source_task_id)
@@ -5627,25 +6139,36 @@ class LocalSkillFactoryWorker:
             and "Generated project validation failed:" in failure_message
         )
         feedback_message = (
-            requalified_feedback_message(self.runs_root / _safe_token(source_task_id), failure)
-            if continuation_reason == "development_feedback_requalified" else None
+            requalified_feedback_message(
+                self.runs_root / _safe_token(source_task_id), failure
+            )
+            if continuation_reason == "development_feedback_requalified"
+            else None
         )
         if not token_boundary and not deterministic_validation and not feedback_message:
             raise ValueError(
                 "continuation source task did not stop at an eligible preservation boundary"
             )
         expected_failure_id = str(checkpoint.get("failure_id") or "").strip()
-        if expected_failure_id and expected_failure_id != str(failure.get("failure_id") or "").strip():
+        if (
+            expected_failure_id
+            and expected_failure_id != str(failure.get("failure_id") or "").strip()
+        ):
             raise ValueError("continuation checkpoint failure identity does not match")
 
         source_run = (self.runs_root / _safe_token(source_task_id)).resolve()
         previous_workspace = (source_run / "workspace").resolve()
         previous_assignment_path = source_run / "input" / "assignment.json"
-        if not previous_workspace.is_dir() or not (previous_workspace / ".git").is_dir():
+        if (
+            not previous_workspace.is_dir()
+            or not (previous_workspace / ".git").is_dir()
+        ):
             raise ValueError("continuation candidate workspace is unavailable")
         if not previous_assignment_path.is_file():
             raise ValueError("continuation candidate assignment is unavailable")
-        previous_assignment = json.loads(previous_assignment_path.read_text(encoding="utf-8"))
+        previous_assignment = json.loads(
+            previous_assignment_path.read_text(encoding="utf-8")
+        )
         previous_request = (
             dict(previous_assignment.get("realize_request"))
             if isinstance(previous_assignment.get("realize_request"), Mapping)
@@ -5658,10 +6181,16 @@ class LocalSkillFactoryWorker:
         )
         if previous_artifacts.get("continuation_contract") != current_contract:
             return None
-        if dict(previous_assignment.get("target") or {}) != dict(assignment.get("target") or {}):
+        if dict(previous_assignment.get("target") or {}) != dict(
+            assignment.get("target") or {}
+        ):
             raise ValueError("continuation candidate targets another project")
-        previous_snapshot = dict((previous_assignment.get("forge") or {}).get("source_snapshot") or {})
-        current_snapshot = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
+        previous_snapshot = dict(
+            (previous_assignment.get("forge") or {}).get("source_snapshot") or {}
+        )
+        current_snapshot = dict(
+            (assignment.get("forge") or {}).get("source_snapshot") or {}
+        )
         previous_digest = str(previous_snapshot.get("digest") or "").strip()
         current_digest = str(current_snapshot.get("digest") or "").strip()
         if not previous_digest or previous_digest != current_digest:
@@ -5680,7 +6209,9 @@ class LocalSkillFactoryWorker:
             if str(item).strip()
         }
         if expected_source_paths and set(changed_paths) != expected_source_paths:
-            raise ValueError("continuation candidate changed since checkpoint qualification")
+            raise ValueError(
+                "continuation candidate changed since checkpoint qualification"
+            )
         try:
             self._validate_changed_paths(
                 assignment,
@@ -5699,26 +6230,36 @@ class LocalSkillFactoryWorker:
             raise
         workspace_root = workspace.resolve()
         for changed_path in changed_paths:
-            parts = [part for part in changed_path.replace("\\", "/").split("/") if part]
+            parts = [
+                part for part in changed_path.replace("\\", "/").split("/") if part
+            ]
             if not parts or any(part in {"..", ".git"} for part in parts):
                 raise ValueError(f"unsafe continuation candidate path: {changed_path}")
             source = previous_workspace.joinpath(*parts)
             destination = workspace.joinpath(*parts)
             resolved_destination = destination.resolve(strict=False)
             if workspace_root not in resolved_destination.parents:
-                raise ValueError(f"continuation candidate path escapes workspace: {changed_path}")
+                raise ValueError(
+                    f"continuation candidate path escapes workspace: {changed_path}"
+                )
             if source.is_symlink():
-                raise ValueError(f"continuation candidate symlink is not allowed: {changed_path}")
+                raise ValueError(
+                    f"continuation candidate symlink is not allowed: {changed_path}"
+                )
             if source.is_file():
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
             elif source.exists():
-                raise ValueError(f"continuation candidate directory change is unsupported: {changed_path}")
+                raise ValueError(
+                    f"continuation candidate directory change is unsupported: {changed_path}"
+                )
             elif destination.is_file() or destination.is_symlink():
                 destination.unlink()
             elif destination.is_dir():
                 if workspace_root not in destination.resolve().parents:
-                    raise ValueError(f"continuation deletion escapes workspace: {changed_path}")
+                    raise ValueError(
+                        f"continuation deletion escapes workspace: {changed_path}"
+                    )
                 shutil.rmtree(destination)
 
         restored_paths = self._changed_paths(workspace)
@@ -5757,7 +6298,11 @@ class LocalSkillFactoryWorker:
             "source_snapshot_digest": current_digest,
             "changed_paths": restored_paths,
             "root_mcp_evidence": root_mcp_evidence,
-            **({"requalified_feedback_message": feedback_message} if feedback_message else {}),
+            **(
+                {"requalified_feedback_message": feedback_message}
+                if feedback_message
+                else {}
+            ),
             "restored_at": _now_iso(),
         }
 
@@ -5868,11 +6413,7 @@ class LocalSkillFactoryWorker:
         if handoff.get("automation_requirements"):
             reasons.append("pending_automation_requirements")
         return {
-            "strategy": (
-                "codex"
-                if reasons
-                else "deterministic_resource_promotion"
-            ),
+            "strategy": ("codex" if reasons else "deterministic_resource_promotion"),
             "model_required": bool(reasons),
             "reasons": reasons,
             "covered_resource_types": sorted(source_types),
@@ -5895,13 +6436,12 @@ class LocalSkillFactoryWorker:
         def collect(value: Any) -> None:
             if isinstance(value, Mapping):
                 data_source = value.get("dataSource")
-                if isinstance(data_source, Mapping) and str(
-                    data_source.get("kind") or ""
-                ).strip() == "mcp":
+                if (
+                    isinstance(data_source, Mapping)
+                    and str(data_source.get("kind") or "").strip() == "mcp"
+                ):
                     tool_id = str(
-                        data_source.get("toolId")
-                        or data_source.get("name")
-                        or ""
+                        data_source.get("toolId") or data_source.get("name") or ""
                     ).strip()
                     if tool_id:
                         usage.setdefault(tool_id, set()).add("data_source")
@@ -5957,9 +6497,10 @@ class LocalSkillFactoryWorker:
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
         acceptance = artifacts.get("prototype_acceptance")
-        if not isinstance(acceptance, Mapping) or str(
-            acceptance.get("decision") or ""
-        ).strip() != "accepted":
+        if (
+            not isinstance(acceptance, Mapping)
+            or str(acceptance.get("decision") or "").strip() != "accepted"
+        ):
             return None
         webui_path = workspace / "scenarios" / target_id / "webui.json"
         if not webui_path.is_file():
@@ -5968,7 +6509,9 @@ class LocalSkillFactoryWorker:
         try:
             webui = json.loads(webui_raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("accepted Prototype canonical webui.json is invalid") from exc
+            raise ValueError(
+                "accepted Prototype canonical webui.json is invalid"
+            ) from exc
         from adaos.services.resources.prototype import prototype_webui_digest
 
         expected = str(acceptance.get("webui_digest") or "").strip()
@@ -6018,8 +6561,7 @@ class LocalSkillFactoryWorker:
         expected_revision = str(acceptance.get("revision") or "").strip()
         expected_path = f"scenarios/{target_id}/webui.json"
         if (
-            identity.get("schema")
-            != "adaos.builder.accepted_prototype_identity.v1"
+            identity.get("schema") != "adaos.builder.accepted_prototype_identity.v1"
             or identity.get("verification_owner") != "trusted_worker"
             or identity.get("matches_acceptance") is not True
             or str(identity.get("revision") or "").strip() != expected_revision
@@ -6055,12 +6597,20 @@ class LocalSkillFactoryWorker:
         links = dict(request.get("links") or {})
         reference = links.get("prototype_resource_handoff_reference")
         if reference:
-            from adaos.services.builder.retained_resource_handoff import read_retained_handoff
+            from adaos.services.builder.retained_resource_handoff import (
+                read_retained_handoff,
+            )
 
-            handoff = read_retained_handoff(self.runs_root, reference,
-                acceptance=artifacts.get("prototype_acceptance") or _prototype_acceptance_from_context(context_packet), target=target,
+            handoff = read_retained_handoff(
+                self.runs_root,
+                reference,
+                acceptance=artifacts.get("prototype_acceptance")
+                or _prototype_acceptance_from_context(context_packet),
+                target=target,
                 companion_skill_ids=companions,
-                session_id=str(links.get("automation_session_id") or ""), iteration=int(links.get("iteration") or 0))
+                session_id=str(links.get("automation_session_id") or ""),
+                iteration=int(links.get("iteration") or 0),
+            )
         else:
             handoff = self._prototype_resource_implementation_handoff(
                 target_type=target_type,
@@ -6073,26 +6623,44 @@ class LocalSkillFactoryWorker:
         accepted = artifacts.get("prototype_acceptance")
         if isinstance(accepted, Mapping):
             projected_acceptance = _prototype_acceptance_from_context(context_packet)
-            for key in ("acceptance_id", "digest", "webui_digest", "change_id", "revision"):
+            for key in (
+                "acceptance_id",
+                "digest",
+                "webui_digest",
+                "change_id",
+                "revision",
+            ):
                 if accepted.get(key) != projected_acceptance.get(key):
-                    raise ValueError(f"prototype acceptance projection identity mismatch: {key}")
-            if ("automation_requirements" in projected_acceptance
-                    and projected_acceptance["automation_requirements"] != (accepted.get("automation_requirements") or [])):
+                    raise ValueError(
+                        f"prototype acceptance projection identity mismatch: {key}"
+                    )
+            if (
+                "automation_requirements" in projected_acceptance
+                and projected_acceptance["automation_requirements"]
+                != (accepted.get("automation_requirements") or [])
+            ):
                 raise ValueError("prototype acceptance projection obligations mismatch")
             # Older stored projections omitted these obligations. Recover from
             # the same acceptance, never infer completion from an absent field.
-            handoff["automation_requirements"] = copy.deepcopy(accepted.get("automation_requirements") or [])
+            handoff["automation_requirements"] = copy.deepcopy(
+                accepted.get("automation_requirements") or []
+            )
         handoff["completion"] = self._prototype_resource_completion(
             workspace,
             target_id=target_id,
             handoff=handoff,
             implementation_brief=str(
                 artifacts.get("implementation_brief")
-                or dict(request.get("source") or {}).get("text") or ""
+                or dict(request.get("source") or {}).get("text")
+                or ""
             ),
             iteration_instruction=str(artifacts.get("iteration_instruction") or ""),
         )
-        handoff["mode"] = "implementation_blueprint" if handoff["completion"]["model_required"] else "exact_local_crud"
+        handoff["mode"] = (
+            "implementation_blueprint"
+            if handoff["completion"]["model_required"]
+            else "exact_local_crud"
+        )
         return handoff
 
     def _apply_prototype_resource_handoff(
@@ -6101,7 +6669,9 @@ class LocalSkillFactoryWorker:
         handoff: Mapping[str, Any],
     ) -> dict[str, Any]:
         if handoff.get("mode") == "implementation_blueprint":
-            raise ValueError("implementation blueprint cannot be applied as completed Automation")
+            raise ValueError(
+                "implementation blueprint cannot be applied as completed Automation"
+            )
         if str(handoff.get("schema") or "").strip() != (
             "adaos.builder.resource_implementation_handoff.v1"
         ):
@@ -6128,25 +6698,39 @@ class LocalSkillFactoryWorker:
             if not isinstance(raw, Mapping):
                 raise ValueError("prototype resource handoff entries must be objects")
             resource = dict(raw)
-            relative = str(resource.get("declaration_path") or "").replace("\\", "/").strip("/")
+            relative = (
+                str(resource.get("declaration_path") or "")
+                .replace("\\", "/")
+                .strip("/")
+            )
             expected_prefix = f"skills/{companion}/"
             if not relative.startswith(expected_prefix):
-                raise ValueError(f"prototype resource declaration escapes companion skill: {relative}")
+                raise ValueError(
+                    f"prototype resource declaration escapes companion skill: {relative}"
+                )
             declaration_path = (workspace / Path(relative)).resolve()
             try:
                 declaration_path.relative_to(skill_root)
             except ValueError as exc:
-                raise ValueError(f"prototype resource declaration escapes companion skill: {relative}") from exc
+                raise ValueError(
+                    f"prototype resource declaration escapes companion skill: {relative}"
+                ) from exc
             bundle = copy.deepcopy(dict(resource.get("bundle") or {}))
             validate_local_resource_bundle(
                 bundle,
                 expected_owner_ref=f"skill:{companion}",
             )
-            before = _read_json(declaration_path) if declaration_path.is_file() else None
+            before = (
+                _read_json(declaration_path) if declaration_path.is_file() else None
+            )
             if before != bundle:
                 _write_json(declaration_path, bundle)
                 changed_files.add(relative)
-            declaration = str(resource.get("manifest_declaration") or "").replace("\\", "/").strip("/")
+            declaration = (
+                str(resource.get("manifest_declaration") or "")
+                .replace("\\", "/")
+                .strip("/")
+            )
             if not declaration:
                 raise ValueError("prototype resource manifest declaration is missing")
             declarations.append(declaration)
@@ -6181,7 +6765,10 @@ class LocalSkillFactoryWorker:
         merged_declarations = list(
             dict.fromkeys(
                 [
-                    *[str(item).replace("\\", "/").strip("/") for item in current_declarations],
+                    *[
+                        str(item).replace("\\", "/").strip("/")
+                        for item in current_declarations
+                    ],
                     *declarations,
                 ]
             )
@@ -6239,8 +6826,14 @@ class LocalSkillFactoryWorker:
         webui_path = workspace / "scenarios" / target_id / "webui.json"
         try:
             manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-            runtime = manifest.get("resource_runtime") if isinstance(manifest, Mapping) else None
-            declarations = runtime.get("declarations") if isinstance(runtime, Mapping) else None
+            runtime = (
+                manifest.get("resource_runtime")
+                if isinstance(manifest, Mapping)
+                else None
+            )
+            declarations = (
+                runtime.get("declarations") if isinstance(runtime, Mapping) else None
+            )
             declared = {
                 str(item).replace("\\", "/").strip("/")
                 for item in declarations or []
@@ -6248,15 +6841,19 @@ class LocalSkillFactoryWorker:
             }
             webui = _read_json(webui_path)
         except Exception as exc:
-            errors.append(f"prototype resource handoff closure: {type(exc).__name__}: {exc}")
+            errors.append(
+                f"prototype resource handoff closure: {type(exc).__name__}: {exc}"
+            )
             return
         if handoff.get("mode") == "implementation_blueprint":
             prototype_refs: set[str] = set()
 
             def visit(value: Any) -> None:
                 if isinstance(value, Mapping):
-                    for marker, kind, key in (("kind", "resourceQuery", "resourceType"),
-                                               ("type", "resourceOperation", "target")):
+                    for marker, kind, key in (
+                        ("kind", "resourceQuery", "resourceType"),
+                        ("type", "resourceOperation", "target"),
+                    ):
                         ref = str(value.get(key) or "")
                         if value.get(marker) == kind and ref.startswith("prototype."):
                             prototype_refs.add(ref)
@@ -6268,25 +6865,47 @@ class LocalSkillFactoryWorker:
 
             visit(webui)
             if prototype_refs:
-                errors.append("implementation retains disposable resource bindings: " + ", ".join(sorted(prototype_refs)))
+                errors.append(
+                    "implementation retains disposable resource bindings: "
+                    + ", ".join(sorted(prototype_refs))
+                )
             for relative in declared:
                 declaration = (manifest_path.parent / relative).resolve()
                 if not declaration.is_relative_to(manifest_path.parent.resolve()):
-                    errors.append("implementation resource declaration escapes its owner")
+                    errors.append(
+                        "implementation resource declaration escapes its owner"
+                    )
                 elif not declaration.is_file():
-                    errors.append(f"implementation resource declaration is missing: {relative}")
+                    errors.append(
+                        f"implementation resource declaration is missing: {relative}"
+                    )
                 elif _read_json(declaration).get("seed"):
-                    errors.append("implementation must not seed production data without a separate installation data policy")
+                    errors.append(
+                        "implementation must not seed production data without a separate installation data policy"
+                    )
             if not errors:
-                checks.append({"kind": "prototype_resource_handoff.detached", "ok": True,
-                               "scope": "disposable binding and installation seed boundary; not business-rule verification"})
+                checks.append(
+                    {
+                        "kind": "prototype_resource_handoff.detached",
+                        "ok": True,
+                        "scope": "disposable binding and installation seed boundary; not business-rule verification",
+                    }
+                )
             return
         for raw in handoff.get("resources") or []:
             resource = dict(raw)
-            relative = str(resource.get("declaration_path") or "").replace("\\", "/").strip("/")
+            relative = (
+                str(resource.get("declaration_path") or "")
+                .replace("\\", "/")
+                .strip("/")
+            )
             declaration_path = workspace / Path(relative)
             expected_bundle = dict(resource.get("bundle") or {})
-            manifest_declaration = str(resource.get("manifest_declaration") or "").replace("\\", "/").strip("/")
+            manifest_declaration = (
+                str(resource.get("manifest_declaration") or "")
+                .replace("\\", "/")
+                .strip("/")
+            )
             source_type = str(resource.get("source_resource_type") or "").strip()
             target_type = str(resource.get("target_resource_type") or "").strip()
             failures: list[str] = []
@@ -6299,11 +6918,15 @@ class LocalSkillFactoryWorker:
             source_count = self._count_exact_string(webui, source_type)
             target_count = self._count_exact_string(webui, target_type)
             if source_count:
-                failures.append(f"WebUI retains {source_count} reference(s) to {source_type}")
+                failures.append(
+                    f"WebUI retains {source_count} reference(s) to {source_type}"
+                )
             if not target_count:
                 failures.append(f"WebUI does not reference {target_type}")
             if failures:
-                errors.extend(f"prototype resource handoff: {item}" for item in failures)
+                errors.extend(
+                    f"prototype resource handoff: {item}" for item in failures
+                )
             else:
                 checks.append(
                     {
@@ -6350,8 +6973,12 @@ class LocalSkillFactoryWorker:
             if str(item.get("resource_type") or "").strip()
         ]
         snapshots = service.acceptance_snapshots(
-            project_ref=resolve_prototype_resource_owner(service, resource_types,
-                component_ref=project_ref, dev_projects_root=self.dev_scenarios_root.parent / "projects"),
+            project_ref=resolve_prototype_resource_owner(
+                service,
+                resource_types,
+                component_ref=project_ref,
+                dev_projects_root=self.dev_scenarios_root.parent / "projects",
+            ),
             change_id=change_id,
             revision=revision,
             webui_digest=webui_digest,
@@ -6384,7 +7011,9 @@ class LocalSkillFactoryWorker:
             prototype_type = str(snapshot["resource_type"])
             definition = service.definition(prototype_type)
             if not isinstance(definition, Mapping):
-                raise ValueError(f"prototype resource definition is missing: {prototype_type}")
+                raise ValueError(
+                    f"prototype resource definition is missing: {prototype_type}"
+                )
             production_type = _production_resource_type(companion, prototype_type)
             production_definition = copy.deepcopy(dict(definition))
             production_definition.update(
@@ -6418,7 +7047,13 @@ class LocalSkillFactoryWorker:
                 if isinstance(production_definition.get("metadata"), Mapping)
                 else {}
             )
-            for key in ("prototype", "project_ref", "change_id", "revision", "webui_digest"):
+            for key in (
+                "prototype",
+                "project_ref",
+                "change_id",
+                "revision",
+                "webui_digest",
+            ):
                 metadata.pop(key, None)
             production_definition["metadata"] = {
                 **metadata,
@@ -6438,7 +7073,9 @@ class LocalSkillFactoryWorker:
             }
             relative_path = (
                 "resources/"
-                + _safe_token(prototype_type.removeprefix("prototype."), fallback="records")
+                + _safe_token(
+                    prototype_type.removeprefix("prototype."), fallback="records"
+                )
                 + ".resource.json"
             )
             resources.append(
@@ -6454,9 +7091,7 @@ class LocalSkillFactoryWorker:
                         "resource_definition": production_definition,
                         "seed": [],
                     },
-                    "webui_rewrites": [
-                        {"from": prototype_type, "to": production_type}
-                    ],
+                    "webui_rewrites": [{"from": prototype_type, "to": production_type}],
                 }
             )
             from adaos.services.resources.local import validate_local_resource_bundle
@@ -6472,7 +7107,9 @@ class LocalSkillFactoryWorker:
             "change_id": change_id,
             "revision": revision,
             "companion_skill_id": companion,
-            "automation_requirements": copy.deepcopy(acceptance.get("automation_requirements") or []),
+            "automation_requirements": copy.deepcopy(
+                acceptance.get("automation_requirements") or []
+            ),
             "data_policy": "first installation starts empty; upgrades preserve admitted runtime data through core migration. Prototype records are test evidence, never installation seeds",
             "manifest_field": "resource_runtime.declarations",
             "resources": resources,
@@ -6492,11 +7129,17 @@ class LocalSkillFactoryWorker:
         target = dict(assignment.get("target") or {})
         target_type = str(target.get("type") or "skill")
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
-        companions = self._companion_skill_ids(assignment) if target_type == "scenario" else [target_id]
+        companions = (
+            self._companion_skill_ids(assignment)
+            if target_type == "scenario"
+            else [target_id]
+        )
         companion = companions[0] if companions else ""
         source = dict(request.get("source") or {})
         artifacts = dict(request.get("artifacts") or {})
-        brief = str(artifacts.get("implementation_brief") or source.get("text") or "").strip()
+        brief = str(
+            artifacts.get("implementation_brief") or source.get("text") or ""
+        ).strip()
         iteration = str(artifacts.get("iteration_instruction") or "").strip()
         workflow_transition = str(artifacts.get("workflow_transition") or "").strip()
         context_packet = (
@@ -6525,7 +7168,10 @@ class LocalSkillFactoryWorker:
             development_context,
             workspace,
         )
-        allowed = [str(item) for item in (assignment.get("forge") or {}).get("sparse_paths") or []]
+        allowed = [
+            str(item)
+            for item in (assignment.get("forge") or {}).get("sparse_paths") or []
+        ]
         constraints = dict(assignment.get("constraints") or {})
         repair_hints = (
             dict(artifacts.get("repair_hints"))
@@ -6603,15 +7249,24 @@ class LocalSkillFactoryWorker:
             "iteration_instruction": iteration,
             "workflow_transition": workflow_transition or None,
             "context_packet": context_packet or None,
-            "context_packet_ref": str(artifacts.get("context_packet_ref") or "").strip() or None,
-            "context_plan_ref": str(artifacts.get("context_plan_ref") or "").strip() or None,
-            "compiled_context_ref": str(artifacts.get("compiled_context_ref") or "").strip() or None,
+            "context_packet_ref": str(artifacts.get("context_packet_ref") or "").strip()
+            or None,
+            "context_plan_ref": str(artifacts.get("context_plan_ref") or "").strip()
+            or None,
+            "compiled_context_ref": str(
+                artifacts.get("compiled_context_ref") or ""
+            ).strip()
+            or None,
             "context_packet_digest": str(
-                artifacts.get("context_packet_digest") or context_packet.get("digest") or ""
+                artifacts.get("context_packet_digest")
+                or context_packet.get("digest")
+                or ""
             ).strip()
             or None,
             "development_context": development_context or None,
-            "development_context_digest": str(development_context.get("digest") or "").strip()
+            "development_context_digest": str(
+                development_context.get("digest") or ""
+            ).strip()
             or None,
             "contract_execution_checklist": contract_checklist or None,
             "validation_budget": _generated_test_budget(assignment),
@@ -6654,7 +7309,9 @@ class LocalSkillFactoryWorker:
             ).lower()
             target_webui = workspace / "scenarios" / target_id / "webui.json"
             if target_webui.exists():
-                binding_request += "\n" + target_webui.read_text(encoding="utf-8").lower()
+                binding_request += (
+                    "\n" + target_webui.read_text(encoding="utf-8").lower()
+                )
             include_attachments = any(
                 token in binding_request
                 for token in (
@@ -6673,7 +7330,9 @@ class LocalSkillFactoryWorker:
                     include_attachments=include_attachments
                 ),
             )
-            packet["implementation_bindings_ref"] = (input_dir / "implementation-bindings.json").resolve().as_posix()
+            packet["implementation_bindings_ref"] = (
+                (input_dir / "implementation-bindings.json").resolve().as_posix()
+            )
         external_mcp_contracts = (
             self._external_mcp_contract_bundle(workspace, target_id=target_id)
             if target_type == "scenario"
@@ -6685,8 +7344,8 @@ class LocalSkillFactoryWorker:
                 external_mcp_contracts,
             )
             packet["external_mcp_contracts_ref"] = (
-                input_dir / "external-mcp-contracts.json"
-            ).resolve().as_posix()
+                (input_dir / "external-mcp-contracts.json").resolve().as_posix()
+            )
         accepted_prototype_identity = (
             dict(accepted_prototype_identity)
             if isinstance(accepted_prototype_identity, Mapping)
@@ -6704,8 +7363,8 @@ class LocalSkillFactoryWorker:
                 accepted_prototype_identity,
             )
             packet["accepted_prototype_identity_ref"] = (
-                input_dir / "accepted-prototype-identity.json"
-            ).resolve().as_posix()
+                (input_dir / "accepted-prototype-identity.json").resolve().as_posix()
+            )
         _write_json(input_dir / "packet.json", packet)
         if browser_feedback:
             _write_json(input_dir / "browser-feedback.json", browser_feedback)
@@ -6714,12 +7373,17 @@ class LocalSkillFactoryWorker:
                 input_dir / "prototype-resource-handoff.json",
                 prototype_resource_handoff,
             )
-        (input_dir / "allowed_files.txt").write_text("\n".join(allowed) + "\n", encoding="utf-8")
-        transition_requirements = """
+        (input_dir / "allowed_files.txt").write_text(
+            "\n".join(allowed) + "\n", encoding="utf-8"
+        )
+        transition_requirements = (
+            """
 ## Workflow transition constraints
 
 This task returns the completed Automation result to Prototype. Edit only the scenario-facing declarative prototype files. Preserve the information architecture and interaction intent, remove real tool/data/service bindings from the prototype UI, and replace them with bounded local mock or initial-state data. Do not modify or delete the companion skill, the retained `.builder_previous_automation` snapshot, or the `.builder_current_publication` baseline. The functional Automation implementation and current Publication remain frozen for Preview and for the next Automation cycle.
-""" if workflow_transition == "return_to_prototype" else """
+"""
+            if workflow_transition == "return_to_prototype"
+            else """
 ## Previous Automation
 
 When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as the immutable previous Automation edition supplied alongside the current Prototype requirements. Use it as implementation context, but never edit it.
@@ -6727,8 +7391,12 @@ When `scenarios/{target_id}/.builder_previous_automation` exists, treat it as th
 ## Current Publication
 
 When `scenarios/{target_id}/.builder_current_publication` exists, treat it as immutable reference for established capabilities and bindings. The accepted Prototype, not that older publication, owns the current information architecture and layout. Reuse applicable behavior in the editable candidate without restoring the older UI. Never edit the retained publication directory itself. Tests that require obsolete widget identities must be migrated to preserve behavioral coverage under the accepted layout, not used to revert that layout.
-""" if target_type == "scenario" else ""
-        dev_ticket_repair_requirements = """
+"""
+            if target_type == "scenario"
+            else ""
+        )
+        dev_ticket_repair_requirements = (
+            """
 ## Dev Ticket repair constraints
 
 This is a bounded Dev Ticket repair, not a full project implementation pass. Treat the ticket summary, target_scope, evidence_refs and governed Issue acceptance as the complete repair scope. Prefer the smallest code or data change that satisfies the ticket and proves it with focused validation. Leave unrelated UX, manifests, versions, generated descriptors, and source layout unchanged.
@@ -6740,7 +7408,10 @@ Do not rewrite, regenerate, minify, collapse, or broadly restructure `scenario.j
 ```
 
 Allowed impact values are `blocker`, `speed`, `generalization`, `contract_gap`, `observability_gap`, `lifecycle_gap`, `policy_boundary`, `compatibility_debt`, and `security_governance`. Do not create a documentation, issue, TODO, or placeholder implementation file. The orchestrator, not this task, owns ticket mutation.
-""" if is_dev_ticket_repair else ""
+"""
+            if is_dev_ticket_repair
+            else ""
+        )
         development_feedback_contract = """
 ## Development feedback channel
 
@@ -6759,7 +7430,8 @@ No secret, placeholder code or blocker-report files. Use
 
         development_feedback_contract += (
             "\nExact parser vocabulary and bounds (no invented enum values):\n```json\n"
-            + json.dumps(development_feedback_model_rules(), separators=(",", ":")) + "\n```\n"
+            + json.dumps(development_feedback_model_rules(), separators=(",", ":"))
+            + "\n```\n"
         )
         repair_profile = str(constraints.get("repair_profile") or "").strip()
         surgical_ui = is_dev_ticket_repair and repair_profile == "surgical_ui"
@@ -6847,14 +7519,17 @@ No secret, placeholder code or blocker-report files. Use
 8. Do not publish, install, activate, or mutate the canonical workspace. The worker owns validation, checkpointing, trial activation, and evidence.
 9. Conclude against each ticket acceptance point. Report any unmet point explicitly instead of describing the repair as complete."""
         else:
-            required_result = """1. Inspect only the admitted manifests and source files needed for the accepted change; do not enumerate or print every file under a target directory.
+            required_result = (
+                """1. Inspect only the admitted manifests and source files needed for the accepted change; do not enumerate or print every file under a target directory.
 2. Edit only the current scenario's declarative prototype files; do not modify companion skills.
 3. Preserve useful UX while removing functional tool, service, credential, external-network, device, and production-data bindings from the Prototype.
 4. Use bounded local mock or `initialState` data so the resulting `webui.json` remains safely interactive.
 5. Keep `scenario.yaml` and `webui.json` valid and do not publish or activate a release.
 6. Run relevant bounded checks and fix failures caused by your changes.
 7. Do not edit anything outside these task paths: {allowed_paths}.
-8. Do not edit `.builder_previous_automation`; it is immutable input.""" if workflow_transition == "return_to_prototype" else """1. This is AdaOS project source work, not Codex skill authoring. Do not load generic skill-creator instructions or personal/global skills.
+8. Do not edit `.builder_previous_automation`; it is immutable input."""
+                if workflow_transition == "return_to_prototype"
+                else """1. This is AdaOS project source work, not Codex skill authoring. Do not load generic skill-creator instructions or personal/global skills.
 2. The packet, accepted prototype, companion scaffold, and rule capsules are authoritative; do not rediscover them.{accepted_prototype_instruction}
 3. Use public `adaos.sdk` contracts only. Edit only: {allowed_paths}. Preserve unrelated behavior, immutable inputs, and manifest `version`/`updated_at`; Forge owns release metadata. Write text as UTF-8 without BOM; Windows PowerShell `-Encoding UTF8` can emit a BOM, so use a BOM-free writer for JSON.
 4. Inspect manifests/handlers, UI bindings, and tests in exact files or JSON slices: at most {command_output_lines} lines and {command_output_bytes} bytes per response; there is no fixed first-edit line quota for a full implementation. Do not scan the complete SDK, repository, or task tree.
@@ -6864,6 +7539,7 @@ No secret, placeholder code or blocker-report files. Use
 8. Honor the application_permissions context facet: align Project declarations with inferred capabilities, enforce roles in tools, and test the access matrix.
 9. No publication, installation, activation or external IO beyond the admitted read-only MCP discovery; the trusted worker owns finalization and rollback evidence.
 10. Map each acceptance point to source/test or a blocker. These are implementation claims, not passing checks. Explicitly mark checks not executed. Never claim browser, restart or authorization success without evidence; report unsupported requirements."""
+            )
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,
@@ -6882,14 +7558,20 @@ No secret, placeholder code or blocker-report files. Use
             if context_projection
             else "No governed context packet was supplied. Inspect the complete target source and fail closed if the requested scope or acceptance criteria are ambiguous."
         )
-        iteration_text = iteration or (
+        iteration_text = (
+            "Same as the approved implementation brief above; no additional delta."
+            if iteration and iteration == brief
+            else iteration
+        ) or (
             "This is a bounded Dev Ticket repair. Satisfy only the scoped ticket, "
             "record focused evidence, and leave unrelated behavior unchanged."
             if is_dev_ticket_repair
             else "This is the initial realization. Implement the complete first working version."
         )
         development_inputs = (
-            json.dumps(development_context, ensure_ascii=False, indent=2, sort_keys=True)
+            json.dumps(
+                development_context, ensure_ascii=False, indent=2, sort_keys=True
+            )
             if development_context
             else "No external Development Session inputs were admitted."
         )
@@ -6973,7 +7655,8 @@ contract separately; skill capabilities and request payload actor/role fields
 are not evidence of the caller's authority. Missing authentication ingress remains
 a real blocker even when a policy-check facade exists.
 """
-            if prototype_resource_handoff and prototype_resource_handoff.get("mode") == "implementation_blueprint"
+            if prototype_resource_handoff
+            and prototype_resource_handoff.get("mode") == "implementation_blueprint"
             else """## Accepted resource implementation handoff
 
 `prototype-resource-handoff.json` is the machine-generated, acceptance-bound
@@ -6986,7 +7669,10 @@ operations and do not read `ui_revisions` to reconstruct accepted data.
             if prototype_resource_handoff
             else ""
         )
-        if packet.get("implementation_bindings_ref") and not resource_implementation_section:
+        if (
+            packet.get("implementation_bindings_ref")
+            and not resource_implementation_section
+        ):
             resource_implementation_section = """## Exact Automation binding contract
 
 Read `implementation-bindings.json` before implementation. It is the
@@ -7135,9 +7821,9 @@ Target: {target_type}:{target_id}
 ```
 
 The bounded governed projection and immutable packet reference are retained in
-`packet.json` with digest `{packet.get('context_packet_digest') or 'none'}`.
+`packet.json` with digest `{packet.get("context_packet_digest") or "none"}`.
 The hints are requirement evidence; file authority remains limited to:
-{', '.join(allowed)}.
+{", ".join(allowed)}.
 
 ## Qualified target slices
 
@@ -7155,7 +7841,7 @@ change, edit directly and do not rediscover the same structures.
 
 {dev_ticket_repair_requirements}
 
-{root_mcp_section if root_mcp else ''}
+{root_mcp_section if root_mcp else ""}
 
 {prompt_rule_capsules_section}
 
@@ -7189,7 +7875,7 @@ Implement the approved AdaOS change and focused tests in this checkout, or repor
 
 ## Approved implementation brief
 
-{brief or 'Use the existing prototype and project files as the complete source of requirements.'}
+{brief or "Use the existing prototype and project files as the complete source of requirements."}
 
 ## Current chat iteration
 
@@ -7258,13 +7944,20 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             path = input_dir / name
             if path.is_file():
                 raw = path.read_bytes()
-                context_files.append({"name": name, "path": path.resolve().as_posix(),
-                                      "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
+                context_files.append(
+                    {
+                        "name": name,
+                        "path": path.resolve().as_posix(),
+                        "bytes": len(raw),
+                        "sha256": hashlib.sha256(raw).hexdigest(),
+                    }
+                )
         prompt += (
             "\n## Read-only task inputs\n\n"
             "Exact absolute paths below are admitted read-only context, not checkout-relative paths. "
             "Read needed JSON fields only; never edit inputs, enumerate sibling tasks or read assignment credentials.\n\n```json\n"
-            + json.dumps(context_files, ensure_ascii=False, separators=(",", ":")) + "\n```\n"
+            + json.dumps(context_files, ensure_ascii=False, separators=(",", ":"))
+            + "\n```\n"
         )
         (input_dir / "task.md").write_text(prompt, encoding="utf-8")
         return packet
@@ -7276,7 +7969,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         _git(["config", "user.name", "AdaOS Local Skill Factory"], cwd=workspace)
         _git(["config", "user.email", "skill-factory@localhost"], cwd=workspace)
         _git(["add", "-A"], cwd=workspace)
-        _git(["commit", "-m", "chore: materialize realization workspace"], cwd=workspace)
+        _git(
+            ["commit", "-m", "chore: materialize realization workspace"], cwd=workspace
+        )
         _git(["checkout", "-b", branch], cwd=workspace)
 
     def _changed_paths(self, workspace: Path) -> list[str]:
@@ -7310,7 +8005,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 for path in sorted(workspace.rglob("*"))
                 if path.is_file() and ".git" not in path.parts
             ]
-        roots = _git(["rev-list", "--max-parents=0", "HEAD"], cwd=workspace).splitlines()
+        roots = _git(
+            ["rev-list", "--max-parents=0", "HEAD"], cwd=workspace
+        ).splitlines()
         if not roots:
             raise RuntimeError("isolated realization workspace has no baseline commit")
         baseline = roots[-1].strip()
@@ -7348,7 +8045,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
 
     @staticmethod
     def _baseline_commit(workspace: Path) -> str:
-        roots = _git(["rev-list", "--max-parents=0", "HEAD"], cwd=workspace).splitlines()
+        roots = _git(
+            ["rev-list", "--max-parents=0", "HEAD"], cwd=workspace
+        ).splitlines()
         if not roots:
             raise RuntimeError("isolated realization workspace has no baseline commit")
         return roots[-1].strip()
@@ -7360,6 +8059,88 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             return int(raw)
         except (RuntimeError, TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _manifest_widget_edit_scope(
+        assignment: Mapping[str, Any],
+    ) -> set[str]:
+        request = (
+            assignment.get("realize_request")
+            if isinstance(assignment.get("realize_request"), Mapping)
+            else {}
+        )
+        artifacts = (
+            request.get("artifacts")
+            if isinstance(request.get("artifacts"), Mapping)
+            else {}
+        )
+        repair_hints = (
+            artifacts.get("repair_hints")
+            if isinstance(artifacts.get("repair_hints"), Mapping)
+            else {}
+        )
+        result: set[str] = set()
+        for value in repair_hints.get("target_refs") or []:
+            for match in re.finditer(
+                r"(?:^|[\s,;/])widget:([A-Za-z0-9_.-]+)(?=$|[\s,;/])",
+                str(value or ""),
+            ):
+                result.add(match.group(1))
+        return result
+
+    @classmethod
+    def _is_scoped_webui_widget_edit(
+        cls,
+        assignment: Mapping[str, Any],
+        *,
+        workspace: Path,
+        baseline: str,
+        path: str,
+    ) -> bool:
+        """Admit a large line diff only when its semantic JSON scope is exact."""
+
+        if Path(path).name != "webui.json":
+            return False
+        allowed = cls._manifest_widget_edit_scope(assignment)
+        if not allowed or len(allowed) > 20:
+            return False
+        try:
+            before = json.loads(_git(["show", f"{baseline}:{path}"], cwd=workspace))
+            after = json.loads((workspace / path).read_text(encoding="utf-8"))
+        except (RuntimeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+
+        def masked(value: Any) -> tuple[Any, dict[str, int]]:
+            seen = {widget_id: 0 for widget_id in allowed}
+
+            def visit(node: Any, *, widget_collection: bool = False) -> Any:
+                if isinstance(node, Mapping):
+                    return {
+                        str(key): visit(item, widget_collection=str(key) == "widgets")
+                        for key, item in node.items()
+                    }
+                if isinstance(node, list):
+                    projected = []
+                    for item in node:
+                        if widget_collection and isinstance(item, Mapping):
+                            widget_id = str(item.get("id") or "").strip()
+                            if widget_id in allowed:
+                                seen[widget_id] += 1
+                                projected.append({"$adaos_scoped_widget": widget_id})
+                                continue
+                        projected.append(visit(item))
+                    return projected
+                return node
+
+            return visit(value), seen
+
+        masked_before, seen_before = masked(before)
+        masked_after, seen_after = masked(after)
+        return (
+            masked_before == masked_after
+            and all(seen_before[widget_id] == 1 for widget_id in allowed)
+            and seen_before == seen_after
+        )
 
     @classmethod
     def _validate_manifest_rewrite_bounds(
@@ -7381,7 +8162,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         if not manifest_paths:
             return
         baseline = cls._baseline_commit(workspace)
-        output = _git(["diff", "--numstat", baseline, "--", *manifest_paths], cwd=workspace)
+        output = _git(
+            ["diff", "--numstat", baseline, "--", *manifest_paths], cwd=workspace
+        )
         violations: list[str] = []
         for line in output.splitlines():
             parts = line.split("\t")
@@ -7420,6 +8203,13 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     and shrank_substantially
                 )
             ):
+                if cls._is_scoped_webui_widget_edit(
+                    assignment,
+                    workspace=workspace,
+                    baseline=baseline,
+                    path=path,
+                ):
+                    continue
                 violations.append(
                     f"{path} (+{additions}/-{deletions}, "
                     f"baseline_bytes={baseline_size}, current_bytes={current_size})"
@@ -7437,8 +8227,17 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         *,
         workspace: Path | None = None,
     ) -> None:
-        allowed = [str(item).replace("\\", "/").strip("/") + "/" for item in (assignment.get("forge") or {}).get("sparse_paths") or []]
-        invalid = [path for path in changed_paths if not any(path == item.rstrip("/") or path.startswith(item) for item in allowed)]
+        allowed = [
+            str(item).replace("\\", "/").strip("/") + "/"
+            for item in (assignment.get("forge") or {}).get("sparse_paths") or []
+        ]
+        invalid = [
+            path
+            for path in changed_paths
+            if not any(
+                path == item.rstrip("/") or path.startswith(item) for item in allowed
+            )
+        ]
         if invalid:
             raise ValueError(f"Codex changed paths outside the task scope: {invalid}")
         constraints = dict(assignment.get("constraints") or {})
@@ -7458,7 +8257,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             )
         outside_exact = [path for path in changed_paths if exact and path not in exact]
         if outside_exact:
-            raise ValueError(f"Codex changed paths outside the exact repair files: {outside_exact}")
+            raise ValueError(
+                f"Codex changed paths outside the exact repair files: {outside_exact}"
+            )
         request = dict(assignment.get("realize_request") or {})
         artifacts = dict(request.get("artifacts") or {})
         transition = str(artifacts.get("workflow_transition") or "").strip()
@@ -7466,7 +8267,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             forbidden = [
                 path
                 for path in changed_paths
-                if path.startswith("skills/") or "/.builder_previous_automation/" in f"/{path}"
+                if path.startswith("skills/")
+                or "/.builder_previous_automation/" in f"/{path}"
             ]
             if forbidden:
                 raise ValueError(
@@ -7483,23 +8285,44 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 "Automation may not modify the current Publication baseline: "
                 f"{immutable_publication}"
             )
-        immutable_automation = [path for path in changed_paths if "/.builder_previous_automation/" in f"/{path}"]
+        immutable_automation = [
+            path
+            for path in changed_paths
+            if "/.builder_previous_automation/" in f"/{path}"
+        ]
         if immutable_automation:
-            raise ValueError(f"Automation may not modify the previous Automation baseline: {immutable_automation}")
+            raise ValueError(
+                f"Automation may not modify the previous Automation baseline: {immutable_automation}"
+            )
         acceptance = artifacts.get("prototype_acceptance") or {}
-        revision = acceptance.get("revision") if isinstance(acceptance, Mapping) else None
+        revision = (
+            acceptance.get("revision") if isinstance(acceptance, Mapping) else None
+        )
         target = assignment.get("target") or {}
         if revision and target.get("type") == "scenario":
             accepted_path = f"scenarios/{target.get('id')}/ui_revisions/{revision}.json"
             if accepted_path in changed_paths:
-                raise ValueError(f"Automation may not modify accepted Prototype evidence: {accepted_path}")
-        self._validate_manifest_rewrite_bounds(assignment, changed_paths, workspace=workspace)
+                raise ValueError(
+                    f"Automation may not modify accepted Prototype evidence: {accepted_path}"
+                )
+        self._validate_manifest_rewrite_bounds(
+            assignment, changed_paths, workspace=workspace
+        )
 
     @staticmethod
     def _candidate_file(path: Path, workspace: Path) -> bool:
-        return not any(part in {".git", ".pytest_cache", "__pycache__",
-                               ".builder_current_publication", ".builder_previous_automation", "ui_revisions"}
-                       for part in path.relative_to(workspace).parts)
+        return not any(
+            part
+            in {
+                ".git",
+                ".pytest_cache",
+                "__pycache__",
+                ".builder_current_publication",
+                ".builder_previous_automation",
+                "ui_revisions",
+            }
+            for part in path.relative_to(workspace).parts
+        )
 
     @staticmethod
     def _validate_application_permissions(
@@ -7510,9 +8333,15 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
     ) -> None:
         request = assignment.get("realize_request")
         artifacts = request.get("artifacts") if isinstance(request, Mapping) else {}
-        packet = artifacts.get("context_packet") if isinstance(artifacts, Mapping) else {}
+        packet = (
+            artifacts.get("context_packet") if isinstance(artifacts, Mapping) else {}
+        )
         facets = packet.get("facets") if isinstance(packet, Mapping) else {}
-        supplied = facets.get("application_permissions") if isinstance(facets, Mapping) else None
+        supplied = (
+            facets.get("application_permissions")
+            if isinstance(facets, Mapping)
+            else None
+        )
         if not isinstance(supplied, Mapping):
             return
         project_ref = str(supplied.get("project_ref") or "").strip()
@@ -7532,7 +8361,11 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             application_permissions_context,
         )
 
-        target = assignment.get("target") if isinstance(assignment.get("target"), Mapping) else {}
+        target = (
+            assignment.get("target")
+            if isinstance(assignment.get("target"), Mapping)
+            else {}
+        )
         component_ref = f"{str(target.get('type') or '').strip()}:{str(target.get('id') or '').strip()}"
         report = application_permissions_context(
             component_ref=component_ref,
@@ -7541,7 +8374,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             dev_skills_root=workspace / "skills",
         )
         declaration_status = str(report.get("declaration_status") or "unavailable")
-        declaration_ok = report.get("status") == "present" and declaration_status == "present"
+        declaration_ok = (
+            report.get("status") == "present" and declaration_status == "present"
+        )
         checks.append(
             {
                 "kind": "application_permissions.profile",
@@ -7580,7 +8415,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 "kind": "application_permissions.roles",
                 "path": manifest_ref,
                 "ok": True,
-                "roles": [str(item.get("id") or "") for item in report.get("roles") or []],
+                "roles": [
+                    str(item.get("id") or "") for item in report.get("roles") or []
+                ],
                 "role_matrix": dict(report.get("role_matrix") or {}),
             }
         )
@@ -7622,7 +8459,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         self._validate_skill_data_routes(workspace, checks, errors)
         self._validate_skill_dependency_isolation(workspace, checks, errors)
         self._validate_application_permissions(assignment, workspace, checks, errors)
-        self._validate_brief_contract_requirements(assignment, workspace, checks, errors)
+        self._validate_brief_contract_requirements(
+            assignment, workspace, checks, errors
+        )
         self._validate_admitted_operation_schemas(assignment, workspace, checks, errors)
         self._validate_prototype_resource_handoff(
             assignment,
@@ -7635,32 +8474,71 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 continue
             try:
                 payload = _loads_strict_json(path.read_text(encoding="utf-8"))
-                checks.append({"kind": "json", "path": path.relative_to(workspace).as_posix(), "ok": True})
+                checks.append(
+                    {
+                        "kind": "json",
+                        "path": path.relative_to(workspace).as_posix(),
+                        "ok": True,
+                    }
+                )
                 if path.name == "webui.json":
-                    from adaos.services.webui_contract import validate_form_action_bindings
+                    from adaos.services.webui_contract import (
+                        validate_form_action_bindings,
+                    )
 
                     relative = path.relative_to(workspace).as_posix()
                     issues = validate_form_action_bindings(payload, source=relative)
-                    checks.append({"kind": "webui.form_action_bindings.strict", "path": relative,
-                                   "ok": not issues, "issues": [issue.to_dict() for issue in issues]})
-                    errors.extend(f"{issue.code}: {issue.message} ({issue.where})" for issue in issues)
+                    checks.append(
+                        {
+                            "kind": "webui.form_action_bindings.strict",
+                            "path": relative,
+                            "ok": not issues,
+                            "issues": [issue.to_dict() for issue in issues],
+                        }
+                    )
+                    errors.extend(
+                        f"{issue.code}: {issue.message} ({issue.where})"
+                        for issue in issues
+                    )
             except Exception as exc:
-                errors.append(f"{path.relative_to(workspace)}: {type(exc).__name__}: {exc}")
+                errors.append(
+                    f"{path.relative_to(workspace)}: {type(exc).__name__}: {exc}"
+                )
         for path in sorted([*workspace.rglob("*.yaml"), *workspace.rglob("*.yml")]):
             if not self._candidate_file(path, workspace):
                 continue
             try:
                 yaml.safe_load(path.read_text(encoding="utf-8"))
-                checks.append({"kind": "yaml", "path": path.relative_to(workspace).as_posix(), "ok": True})
+                checks.append(
+                    {
+                        "kind": "yaml",
+                        "path": path.relative_to(workspace).as_posix(),
+                        "ok": True,
+                    }
+                )
             except Exception as exc:
-                errors.append(f"{path.relative_to(workspace)}: {type(exc).__name__}: {exc}")
-        python_files = [path for path in workspace.rglob("*.py") if self._candidate_file(path, workspace)]
+                errors.append(
+                    f"{path.relative_to(workspace)}: {type(exc).__name__}: {exc}"
+                )
+        python_files = [
+            path
+            for path in workspace.rglob("*.py")
+            if self._candidate_file(path, workspace)
+        ]
         for path in python_files:
             try:
                 compile(path.read_text(encoding="utf-8"), str(path), "exec")
-                checks.append({"kind": "python", "path": path.relative_to(workspace).as_posix(), "ok": True})
+                checks.append(
+                    {
+                        "kind": "python",
+                        "path": path.relative_to(workspace).as_posix(),
+                        "ok": True,
+                    }
+                )
             except Exception as exc:
-                errors.append(f"{path.relative_to(workspace)}: {type(exc).__name__}: {exc}")
+                errors.append(
+                    f"{path.relative_to(workspace)}: {type(exc).__name__}: {exc}"
+                )
 
         manifest_paths = [
             *workspace.glob("scenarios/*/scenario.yaml"),
@@ -7668,11 +8546,15 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         ]
         for manifest_path in sorted(manifest_paths):
             try:
-                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                manifest = (
+                    yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                )
             except Exception:
                 # The general YAML pass above already records the parse error.
                 continue
-            workflow = manifest.get("workflow") if isinstance(manifest, Mapping) else None
+            workflow = (
+                manifest.get("workflow") if isinstance(manifest, Mapping) else None
+            )
             workflow_manifest = (
                 str(workflow.get("manifest") or "").strip()
                 if isinstance(workflow, Mapping)
@@ -7687,7 +8569,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     allow_legacy_inline=False,
                 )
                 if artifact is None:
-                    raise WorkflowArtifactError("manifest workflow declaration did not resolve an artifact")
+                    raise WorkflowArtifactError(
+                        "manifest workflow declaration did not resolve an artifact"
+                    )
             except (OSError, UnicodeError, WorkflowArtifactError) as exc:
                 errors.append(
                     f"{manifest_path.relative_to(workspace)}: workflow definition: "
@@ -7697,13 +8581,17 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 checks.append(
                     {
                         "kind": "workflow.definition.v1",
-                        "path": artifact.definition_path.relative_to(workspace).as_posix(),
+                        "path": artifact.definition_path.relative_to(
+                            workspace
+                        ).as_posix(),
                         "ok": True,
                         "definition_digest": artifact.definition_digest,
                     }
                 )
 
-        webui_schema_path = self.repo_root / "src" / "adaos" / "abi" / "webui.v1.schema.json"
+        webui_schema_path = (
+            self.repo_root / "src" / "adaos" / "abi" / "webui.v1.schema.json"
+        )
         if webui_schema_path.exists():
             try:
                 from jsonschema import Draft202012Validator
@@ -7713,19 +8601,34 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     if not self._candidate_file(path, workspace):
                         continue
                     payload = _read_json(path)
-                    validation_errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.path))
+                    validation_errors = sorted(
+                        validator.iter_errors(payload), key=lambda item: list(item.path)
+                    )
                     if validation_errors:
                         for item in validation_errors[:20]:
-                            pointer = "/".join(str(part) for part in item.absolute_path) or "<root>"
+                            pointer = (
+                                "/".join(str(part) for part in item.absolute_path)
+                                or "<root>"
+                            )
                             errors.append(
                                 f"{path.relative_to(workspace)}: webui schema at {pointer}: {item.message}"
                             )
                     else:
-                        checks.append({"kind": "webui.v1", "path": path.relative_to(workspace).as_posix(), "ok": True})
+                        checks.append(
+                            {
+                                "kind": "webui.v1",
+                                "path": path.relative_to(workspace).as_posix(),
+                                "ok": True,
+                            }
+                        )
             except Exception as exc:
-                errors.append(f"webui schema validation setup failed: {type(exc).__name__}: {exc}")
+                errors.append(
+                    f"webui schema validation setup failed: {type(exc).__name__}: {exc}"
+                )
 
-        scenario_schema_path = self.repo_root / "src" / "adaos" / "abi" / "scenario.schema.json"
+        scenario_schema_path = (
+            self.repo_root / "src" / "adaos" / "abi" / "scenario.schema.json"
+        )
         if scenario_schema_path.exists():
             try:
                 from jsonschema import Draft202012Validator
@@ -7735,47 +8638,91 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
                     if not isinstance(payload, Mapping):
                         payload = {}
-                    validation_errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.path))
+                    validation_errors = sorted(
+                        validator.iter_errors(payload), key=lambda item: list(item.path)
+                    )
                     if validation_errors:
                         errors.extend(
                             f"{path.relative_to(workspace)}: scenario schema: {item.message}"
                             for item in validation_errors[:20]
                         )
                     else:
-                        checks.append({"kind": "scenario.v1", "path": path.relative_to(workspace).as_posix(), "ok": True})
-                    ui = payload.get("ui") if isinstance(payload.get("ui"), Mapping) else {}
-                    application = ui.get("application") if isinstance(ui.get("application"), Mapping) else {}
+                        checks.append(
+                            {
+                                "kind": "scenario.v1",
+                                "path": path.relative_to(workspace).as_posix(),
+                                "ok": True,
+                            }
+                        )
+                    ui = (
+                        payload.get("ui")
+                        if isinstance(payload.get("ui"), Mapping)
+                        else {}
+                    )
+                    application = (
+                        ui.get("application")
+                        if isinstance(ui.get("application"), Mapping)
+                        else {}
+                    )
                     manifest_name = str(ui.get("manifest") or "").strip()
                     if application:
                         continue
                     adjacent_webui_path = path.parent / "webui.json"
                     try:
-                        adjacent_webui = _read_json(adjacent_webui_path) if adjacent_webui_path.is_file() else {}
+                        adjacent_webui = (
+                            _read_json(adjacent_webui_path)
+                            if adjacent_webui_path.is_file()
+                            else {}
+                        )
                     except Exception:
                         adjacent_webui = {}
-                    adjacent_ui = adjacent_webui.get("ui") if isinstance(adjacent_webui.get("ui"), Mapping) else {}
+                    adjacent_ui = (
+                        adjacent_webui.get("ui")
+                        if isinstance(adjacent_webui.get("ui"), Mapping)
+                        else {}
+                    )
                     adjacent_application = (
-                        adjacent_ui.get("application") if isinstance(adjacent_ui.get("application"), Mapping) else {}
+                        adjacent_ui.get("application")
+                        if isinstance(adjacent_ui.get("application"), Mapping)
+                        else {}
                     )
                     if not adjacent_application:
                         continue
-                    manifest_path = path.parent / manifest_name if manifest_name else None
+                    manifest_path = (
+                        path.parent / manifest_name if manifest_name else None
+                    )
                     try:
-                        manifest = _read_json(manifest_path) if manifest_path and manifest_path.is_file() else {}
+                        manifest = (
+                            _read_json(manifest_path)
+                            if manifest_path and manifest_path.is_file()
+                            else {}
+                        )
                     except Exception:
                         manifest = {}
-                    manifest_ui = manifest.get("ui") if isinstance(manifest.get("ui"), Mapping) else {}
-                    if not isinstance(manifest_ui.get("application"), Mapping) or not manifest_ui.get("application"):
+                    manifest_ui = (
+                        manifest.get("ui")
+                        if isinstance(manifest.get("ui"), Mapping)
+                        else {}
+                    )
+                    if not isinstance(
+                        manifest_ui.get("application"), Mapping
+                    ) or not manifest_ui.get("application"):
                         errors.append(
                             f"{path.relative_to(workspace)}: scenario UI is not renderable; "
                             "provide ui.application or ui.manifest pointing to a complete adjacent webui.json"
                         )
             except Exception as exc:
-                errors.append(f"scenario schema validation setup failed: {type(exc).__name__}: {exc}")
+                errors.append(
+                    f"scenario schema validation setup failed: {type(exc).__name__}: {exc}"
+                )
 
         target = dict(assignment.get("target") or {})
         target_id = _safe_token(target.get("id"), fallback="generated_skill")
-        skill_ids = self._companion_skill_ids(assignment) if target.get("type") == "scenario" else [target_id]
+        skill_ids = (
+            self._companion_skill_ids(assignment)
+            if target.get("type") == "scenario"
+            else [target_id]
+        )
         required = [
             path
             for skill_id in skill_ids
@@ -7789,7 +8736,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         for path in required:
             if not path.exists():
                 errors.append(f"required file missing: {path.relative_to(workspace)}")
-        if workflow_transition == "return_to_prototype" and target.get("type") == "scenario":
+        if (
+            workflow_transition == "return_to_prototype"
+            and target.get("type") == "scenario"
+        ):
             self._validate_safe_prototype(workspace, target_id, checks, errors)
         self._run_generated_tests(
             workspace,
@@ -7820,7 +8770,12 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             checks=checks,
             errors=errors,
         )
-        return {"ok": not errors, "status": "passed" if not errors else "failed", "checks": checks, "errors": errors}
+        return {
+            "ok": not errors,
+            "status": "passed" if not errors else "failed",
+            "checks": checks,
+            "errors": errors,
+        }
 
     def _validate_admitted_contract_operation_sequences(
         self,
@@ -7890,7 +8845,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         manifests: list[tuple[Path, dict[str, Any]]] = []
         for manifest_path in sorted(workspace.glob("skills/*/skill.yaml")):
             try:
-                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                manifest = (
+                    yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                )
             except Exception:
                 continue
             if isinstance(manifest, Mapping):
@@ -7907,7 +8864,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         continue
                     if str(declaration.get("contract") or "") != contract_id:
                         continue
-                    if capability and str(declaration.get("capability") or "") != capability:
+                    if (
+                        capability
+                        and str(declaration.get("capability") or "") != capability
+                    ):
                         continue
                     providers.append(skill_dir)
                     break
@@ -7976,7 +8936,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         "error": f"missing trusted sequence report: {type(exc).__name__}: {exc}",
                     }
                 if result.returncode or not report.get("ok"):
-                    detail = str(report.get("error") or (result.stdout + result.stderr)[-2000:])
+                    detail = str(
+                        report.get("error") or (result.stdout + result.stderr)[-2000:]
+                    )
                     errors.append(
                         f"admitted operation sequence {label} failed for {skill_dir.name}: {detail}"
                     )
@@ -8058,9 +9020,14 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 continue
             if contract.get("schema") != "adaos.contract.operation_set.v1":
                 continue
-            contract_label = str(contract.get("contract") or descriptor.get("kind") or "contract")
+            contract_label = str(
+                contract.get("contract") or descriptor.get("kind") or "contract"
+            )
             for fixture in contract.get("conformance_fixtures") or []:
-                if isinstance(fixture, Mapping) and str(fixture.get("kind") or "") == "document_set":
+                if (
+                    isinstance(fixture, Mapping)
+                    and str(fixture.get("kind") or "") == "document_set"
+                ):
                     fixtures.append((contract_label, dict(fixture)))
 
         if not fixtures:
@@ -8088,7 +9055,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             ][:50]
             label = f"{contract_label}:{fixture_id}"
             if not documents or not required_documents:
-                errors.append(f"admitted contract fixture {label} has no document schemas")
+                errors.append(
+                    f"admitted contract fixture {label} has no document schemas"
+                )
                 continue
             invalid_names = [
                 name
@@ -8105,7 +9074,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             for name in required_documents:
                 schema = documents.get(name)
                 if not isinstance(schema, Mapping):
-                    errors.append(f"admitted contract fixture {label} schema for {name} is not an object")
+                    errors.append(
+                        f"admitted contract fixture {label} schema for {name} is not an object"
+                    )
                     schema_invalid = True
                     continue
                 try:
@@ -8156,7 +9127,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 continue
             selected = max(
                 complete_roots,
-                key=lambda root: max((root / name).stat().st_mtime_ns for name in required_documents),
+                key=lambda root: max(
+                    (root / name).stat().st_mtime_ns for name in required_documents
+                ),
             )
             fixture_errors = 0
             for name in required_documents:
@@ -8187,7 +9160,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         "kind": "admitted_contract.document_set",
                         "contract": contract_label,
                         "fixture_id": fixture_id,
-                        "runtime_path": selected.relative_to(runtime_root).as_posix() or ".",
+                        "runtime_path": selected.relative_to(runtime_root).as_posix()
+                        or ".",
                         "documents": required_documents,
                         "ok": True,
                     }
@@ -8212,8 +9186,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             else:
                 return False
             return any(
-                token in owner
-                for token in ("manifest", "scenario", "project", "skill")
+                token in owner for token in ("manifest", "scenario", "project", "skill")
             )
 
         def checkpoint_key(node: ast.AST) -> str | None:
@@ -8241,7 +9214,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             if isinstance(node, ast.Constant):
                 return isinstance(node.value, (str, int, float))
             if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-                return bool(node.elts) and all(exact_literal(item) for item in node.elts)
+                return bool(node.elts) and all(
+                    exact_literal(item) for item in node.elts
+                )
             return False
 
         def pins_manifest_digest(node: ast.Compare) -> bool:
@@ -8289,7 +9264,11 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 keys = [key for item in expressions if (key := checkpoint_key(item))]
                 if not keys:
                     continue
-                if any(exact_literal(item) for item in expressions if checkpoint_key(item) is None):
+                if any(
+                    exact_literal(item)
+                    for item in expressions
+                    if checkpoint_key(item) is None
+                ):
                     violations.append((int(getattr(node, "lineno", 0) or 0), keys[0]))
             if violations:
                 errors.extend(
@@ -8298,7 +9277,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     for line, key in violations
                 )
             else:
-                checks.append({"kind": "checkpoint_test_contract", "path": relative, "ok": True})
+                checks.append(
+                    {"kind": "checkpoint_test_contract", "path": relative, "ok": True}
+                )
 
     @staticmethod
     def _validate_tests_do_not_depend_on_development_context(
@@ -8409,11 +9390,20 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
                 issues = validate_manifest_schema(manifest)
             except Exception as exc:
-                errors.append(f"{relative}: manifest schema validation failed: {type(exc).__name__}: {exc}")
-                checks.append({"kind": "skill.manifest.schema", "path": relative, "ok": False})
+                errors.append(
+                    f"{relative}: manifest schema validation failed: {type(exc).__name__}: {exc}"
+                )
+                checks.append(
+                    {"kind": "skill.manifest.schema", "path": relative, "ok": False}
+                )
                 continue
-            errors.extend(f"{relative}: {issue.code}: {issue.message} ({issue.where})" for issue in issues)
-            checks.append({"kind": "skill.manifest.schema", "path": relative, "ok": not issues})
+            errors.extend(
+                f"{relative}: {issue.code}: {issue.message} ({issue.where})"
+                for issue in issues
+            )
+            checks.append(
+                {"kind": "skill.manifest.schema", "path": relative, "ok": not issues}
+            )
 
     @staticmethod
     def _validate_owned_skill_data_lifecycle(
@@ -8435,7 +9425,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             except Exception:
                 # The general YAML and project composition validators report parsing errors.
                 continue
-            components = project.get("components") if isinstance(project, Mapping) else None
+            components = (
+                project.get("components") if isinstance(project, Mapping) else None
+            )
             owned = components.get("owned") if isinstance(components, Mapping) else None
             if not isinstance(owned, list):
                 continue
@@ -8464,9 +9456,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     checks.append(check)
                     continue
                 try:
-                    manifest = yaml.safe_load(
-                        manifest_path.read_text(encoding="utf-8")
-                    ) or {}
+                    manifest = (
+                        yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                    )
                     if not isinstance(manifest, Mapping):
                         raise ValueError("skill manifest must be an object")
                     require_native_tools(manifest)
@@ -8525,7 +9517,12 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 if not isinstance(item, Mapping):
                     continue
                 tool_name = str(item.get("name") or f"tools[{index}]").strip()
-                side_effects = str(item.get("side_effects") or "").strip().lower().replace("-", "_")
+                side_effects = (
+                    str(item.get("side_effects") or "")
+                    .strip()
+                    .lower()
+                    .replace("-", "_")
+                )
                 if not side_effects:
                     violations.append(f"{tool_name}: missing side_effects")
                 elif side_effects not in allowed:
@@ -8551,13 +9548,19 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
 
     def _validate_declared_sqlite_initialization(self, workspace, checks, errors):
         from adaos.services.applications.data_lifecycle import declared_databases
-        from adaos.services.applications.sqlite_data_transition import initialize_sqlite_schema
+        from adaos.services.applications.sqlite_data_transition import (
+            initialize_sqlite_schema,
+        )
 
         for path in sorted(workspace.glob("skills/*/skill.yaml")):
             relative = path.relative_to(workspace).as_posix()
             started = time.monotonic()
-            check = {"kind": "skill.data_lifecycle.sqlite_initialization", "path": relative,
-                     "scope": "empty-synthetic-store-and-reopen", "ok": False}
+            check = {
+                "kind": "skill.data_lifecycle.sqlite_initialization",
+                "path": relative,
+                "scope": "empty-synthetic-store-and-reopen",
+                "ok": False,
+            }
             try:
                 manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
                 if not isinstance(manifest, dict) or "data_lifecycle" not in manifest:
@@ -8567,15 +9570,23 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 # use its test doubles, or inspect installed records/settings.
                 validation_root = self.state_dir / "skill_factory" / "validation"
                 validation_root.mkdir(parents=True, exist_ok=True)
-                with tempfile.TemporaryDirectory(prefix="sqlite-", dir=validation_root) as temporary:
+                with tempfile.TemporaryDirectory(
+                    prefix="sqlite-", dir=validation_root
+                ) as temporary:
                     for index, chain in enumerate(chains.values()):
                         database = Path(temporary) / f"{index}.sqlite3"
                         initialize_sqlite_schema(database, chain)
-                        if initialize_sqlite_schema(database, chain)["applied_versions"]:
-                            raise ValueError("Repeated initialization must not apply migrations")
+                        if initialize_sqlite_schema(database, chain)[
+                            "applied_versions"
+                        ]:
+                            raise ValueError(
+                                "Repeated initialization must not apply migrations"
+                            )
                 check.update(ok=True, databases=len(chains))
             except Exception as exc:
-                errors.append(f"{relative}: Core SQLite initialization: {type(exc).__name__}: {exc}")
+                errors.append(
+                    f"{relative}: Core SQLite initialization: {type(exc).__name__}: {exc}"
+                )
             check["elapsed_ms"] = round((time.monotonic() - started) * 1000, 2)
             checks.append(check)
 
@@ -8594,7 +9605,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             try:
                 manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             except Exception as exc:
-                errors.append(f"{relative}: data route validation failed: {type(exc).__name__}: {exc}")
+                errors.append(
+                    f"{relative}: data route validation failed: {type(exc).__name__}: {exc}"
+                )
                 continue
             if not isinstance(manifest, dict):
                 errors.append(f"{relative}: skill manifest must be an object")
@@ -8606,7 +9619,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     for issue in route_issues
                 )
             else:
-                checks.append({"kind": "skill.data_routes.strict", "path": relative, "ok": True})
+                checks.append(
+                    {"kind": "skill.data_routes.strict", "path": relative, "ok": True}
+                )
 
     @staticmethod
     def _validate_skill_dependency_isolation(
@@ -8616,14 +9631,18 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
     ) -> None:
         """Reject manifests that the runtime installer will deterministically refuse."""
 
-        from adaos.services.skill.validation import validate_dependency_isolation_contract
+        from adaos.services.skill.validation import (
+            validate_dependency_isolation_contract,
+        )
 
         for path in sorted(workspace.glob("skills/*/skill.yaml")):
             relative = path.relative_to(workspace).as_posix()
             try:
                 manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             except Exception as exc:
-                errors.append(f"{relative}: dependency isolation validation failed: {type(exc).__name__}: {exc}")
+                errors.append(
+                    f"{relative}: dependency isolation validation failed: {type(exc).__name__}: {exc}"
+                )
                 continue
             if not isinstance(manifest, dict):
                 errors.append(f"{relative}: skill manifest must be an object")
@@ -8639,7 +9658,13 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     for issue in policy_issues
                 )
             else:
-                checks.append({"kind": "skill.dependency_isolation.install", "path": relative, "ok": True})
+                checks.append(
+                    {
+                        "kind": "skill.dependency_isolation.install",
+                        "path": relative,
+                        "ok": True,
+                    }
+                )
 
     @staticmethod
     def _validate_brief_contract_requirements(
@@ -8650,8 +9675,16 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
     ) -> None:
         """Consumer-drive provider declarations from a structured implementation brief."""
 
-        request = assignment.get("realize_request") if isinstance(assignment.get("realize_request"), Mapping) else {}
-        artifacts = request.get("artifacts") if isinstance(request.get("artifacts"), Mapping) else {}
+        request = (
+            assignment.get("realize_request")
+            if isinstance(assignment.get("realize_request"), Mapping)
+            else {}
+        )
+        artifacts = (
+            request.get("artifacts")
+            if isinstance(request.get("artifacts"), Mapping)
+            else {}
+        )
         raw = artifacts.get("implementation_brief")
         try:
             brief = json.loads(str(raw or ""))
@@ -8662,7 +9695,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         requirements = [
             dict(item)
             for item in brief.get("contract_requirements") or []
-            if isinstance(item, Mapping) and str(item.get("role") or "").strip() == "provider"
+            if isinstance(item, Mapping)
+            and str(item.get("role") or "").strip() == "provider"
         ]
         if not requirements:
             return
@@ -8691,12 +9725,20 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         continue
                     if str(declaration.get("contract") or "").strip() != contract:
                         continue
-                    if capability and str(declaration.get("capability") or "").strip() != capability:
+                    if (
+                        capability
+                        and str(declaration.get("capability") or "").strip()
+                        != capability
+                    ):
                         continue
                     matches.append((relative, declaration))
-            label = str(requirement.get("id") or contract or capability or "provider contract")
+            label = str(
+                requirement.get("id") or contract or capability or "provider contract"
+            )
             if not matches:
-                errors.append(f"implementation brief provider requirement {label} has no matching skill provider_contracts declaration")
+                errors.append(
+                    f"implementation brief provider requirement {label} has no matching skill provider_contracts declaration"
+                )
                 continue
             provided = {
                 str(operation).strip()
@@ -8742,7 +9784,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 baseline = yaml.safe_load(baseline_text) or {}
                 current = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             except Exception as exc:
-                errors.append(f"{relative}: checkpoint metadata validation failed: {type(exc).__name__}: {exc}")
+                errors.append(
+                    f"{relative}: checkpoint metadata validation failed: {type(exc).__name__}: {exc}"
+                )
                 continue
             if not isinstance(baseline, Mapping) or not isinstance(current, Mapping):
                 continue
@@ -8781,7 +9825,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         depends = manifest.get("depends")
         if isinstance(depends, str):
             depends = [depends]
-        if isinstance(depends, (list, tuple)) and any(str(item).strip() for item in depends):
+        if isinstance(depends, (list, tuple)) and any(
+            str(item).strip() for item in depends
+        ):
             bindings.append("scenario.yaml depends")
         for section_name in ("runtime", "skills"):
             section = manifest.get(section_name)
@@ -8793,7 +9839,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             required = skills.get("required")
             if isinstance(required, str):
                 required = [required]
-            if isinstance(required, (list, tuple)) and any(str(item).strip() for item in required):
+            if isinstance(required, (list, tuple)) and any(
+                str(item).strip() for item in required
+            ):
                 bindings.append(f"scenario.yaml {section_name}.skills.required")
 
         try:
@@ -8819,12 +9867,21 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             "invoketool",
             "requesthttp",
         }
-        external_prefixes = ("http://", "https://", "ws://", "wss://", "file://", "device://")
+        external_prefixes = (
+            "http://",
+            "https://",
+            "ws://",
+            "wss://",
+            "file://",
+            "device://",
+        )
 
         def visit(value: Any, path: str) -> None:
             if isinstance(value, Mapping):
                 kind = str(value.get("kind") or "").strip().lower()
-                action_type = str(value.get("type") or "").replace("_", "").strip().lower()
+                action_type = (
+                    str(value.get("type") or "").replace("_", "").strip().lower()
+                )
                 if kind in binding_kinds:
                     bindings.append(f"{path}.kind={kind}")
                 if action_type in binding_actions or action_type == "fileupload":
@@ -8836,7 +9893,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 for index, item in enumerate(value):
                     visit(item, f"{path}[{index}]")
                 return
-            if isinstance(value, str) and value.strip().lower().startswith(external_prefixes):
+            if isinstance(value, str) and value.strip().lower().startswith(
+                external_prefixes
+            ):
                 bindings.append(path)
 
         visit(webui, "webui.json")
@@ -8890,7 +9949,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             (tests_dir, owner_kind)
             for owner_kind in ("skills", "scenarios")
             for tests_dir in sorted(
-                path for path in workspace.glob(f"{owner_kind}/*/tests") if path.is_dir()
+                path
+                for path in workspace.glob(f"{owner_kind}/*/tests")
+                if path.is_dir()
             )
         ]
         for tests_dir, owner_kind in test_roots:
@@ -8915,9 +9976,14 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 # A native skill slot contains only that skill, not the task's
                 # sibling scenario/project sources. Cross-component tests belong
                 # to the scenario's application-closure checks instead.
-                test_cwd = validation_root / "isolated-skills" / tests_dir.parent.name / "src"
+                test_cwd = (
+                    validation_root / "isolated-skills" / tests_dir.parent.name / "src"
+                )
                 packaged_tests = test_cwd / tests_dir.relative_to(workspace)
-                shutil.copytree(validation_root / "skills" / tests_dir.parent.name, packaged_tests.parent)
+                shutil.copytree(
+                    validation_root / "skills" / tests_dir.parent.name,
+                    packaged_tests.parent,
+                )
             # Validate the exact package-shaped source projection, without
             # authoring-only ``.adaos_context``. This closes the gap between
             # Codex workspace tests and Forge/native installed validation.
@@ -8953,9 +10019,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     }
                 )
             validation_budget = _generated_test_budget(assignment)
-            timeout_seconds = int(
-                validation_budget["packaged_pytest_wall_seconds"]
-            )
+            timeout_seconds = int(validation_budget["packaged_pytest_wall_seconds"])
             try:
                 result = _run(
                     [
@@ -8979,7 +10043,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     {
                         "kind": "pytest.packaged",
                         "path": relative,
-                        "source_scope": "skill_package" if owner_kind == "skills" else "application_closure",
+                        "source_scope": "skill_package"
+                        if owner_kind == "skills"
+                        else "application_closure",
                         "ok": False,
                         "status": "timeout",
                         "timeout_seconds": timeout_seconds,
@@ -8996,7 +10062,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 {
                     "kind": "pytest.packaged",
                     "path": relative,
-                    "source_scope": "skill_package" if owner_kind == "skills" else "application_closure",
+                    "source_scope": "skill_package"
+                    if owner_kind == "skills"
+                    else "application_closure",
                     "ok": result.returncode == 0,
                     "timeout_seconds": timeout_seconds,
                     "validation_budget": validation_budget,
@@ -9010,7 +10078,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 )
         if validation_root.exists():
             if not validation_root.resolve().is_relative_to(workspace.parent.resolve()):
-                raise ValueError("package validation projection escapes its task directory")
+                raise ValueError(
+                    "package validation projection escapes its task directory"
+                )
             shutil.rmtree(validation_root)
 
     @staticmethod
@@ -9071,7 +10141,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             operations = contract.get("operations")
             if not isinstance(operations, Mapping) or not operations:
                 continue
-            label = str(contract.get("contract") or descriptor.get("kind") or "contract")
+            label = str(
+                contract.get("contract") or descriptor.get("kind") or "contract"
+            )
             contracts.append((label, dict(contract)))
 
         if not contracts:
@@ -9111,7 +10183,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             if isinstance(value, Mapping):
                 return {
                     str(key): semantic_schema(item, keyword=str(key))
-                    for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+                    for key, item in sorted(
+                        value.items(), key=lambda pair: str(pair[0])
+                    )
                     if str(key) not in annotations
                 }
             if isinstance(value, list):
@@ -9129,7 +10203,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 return normalized
             return value
 
-        def first_difference(expected: Any, actual: Any, pointer: str = "") -> str | None:
+        def first_difference(
+            expected: Any, actual: Any, pointer: str = ""
+        ) -> str | None:
             if isinstance(expected, Mapping) and isinstance(actual, Mapping):
                 expected_keys = set(expected)
                 actual_keys = set(actual)
@@ -9231,7 +10307,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                             operation_ok = False
                             continue
                         difference = first_difference(
-                            semantic_schema(expected_schema), semantic_schema(actual_schema)
+                            semantic_schema(expected_schema),
+                            semantic_schema(actual_schema),
                         )
                         if difference:
                             errors.append(
@@ -9272,8 +10349,18 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 path.unlink()
 
     def _dependency_changes(self, workspace: Path) -> list[dict[str, Any]]:
-        names = {"requirements.txt", "pyproject.toml", "uv.lock", "package.json", "package-lock.json"}
-        return [{"path": path, "action": "changed"} for path in self._changed_paths(workspace) if Path(path).name in names]
+        names = {
+            "requirements.txt",
+            "pyproject.toml",
+            "uv.lock",
+            "package.json",
+            "package-lock.json",
+        }
+        return [
+            {"path": path, "action": "changed"}
+            for path in self._changed_paths(workspace)
+            if Path(path).name in names
+        ]
 
     def _sync_artifacts(self, assignment: Mapping[str, Any], workspace: Path) -> None:
         target = dict(assignment.get("target") or {})
@@ -9281,13 +10368,20 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         sources: list[tuple[Path, Path]] = []
         dev_projects_root = self.dev_scenarios_root.parent / "projects"
         if target.get("type") == "scenario":
-            sources.append((workspace / "scenarios" / target_id, self.dev_scenarios_root / target_id))
+            sources.append(
+                (
+                    workspace / "scenarios" / target_id,
+                    self.dev_scenarios_root / target_id,
+                )
+            )
             sources.extend(
                 (workspace / "skills" / skill_id, self.dev_skills_root / skill_id)
                 for skill_id in self._companion_skill_ids(assignment)
             )
         else:
-            sources.append((workspace / "skills" / target_id, self.dev_skills_root / target_id))
+            sources.append(
+                (workspace / "skills" / target_id, self.dev_skills_root / target_id)
+            )
         for sparse_path in (assignment.get("forge") or {}).get("sparse_paths") or []:
             normalized = str(sparse_path or "").strip().replace("\\", "/").strip("/")
             if not normalized.startswith("projects/"):
@@ -9296,7 +10390,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             if len(parts) == 2 and parts[1]:
                 project_id = _safe_token(parts[1], fallback="")
                 if project_id:
-                    pair = (workspace / "projects" / project_id, dev_projects_root / project_id)
+                    pair = (
+                        workspace / "projects" / project_id,
+                        dev_projects_root / project_id,
+                    )
                     if pair not in sources:
                         sources.append(pair)
 
@@ -9307,11 +10404,17 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 return f"skills/{destination.name}"
             if destination.parent == dev_projects_root:
                 return f"projects/{destination.name}"
-            raise SourceSnapshotError(f"unsupported mutable source destination: {destination}")
+            raise SourceSnapshotError(
+                f"unsupported mutable source destination: {destination}"
+            )
 
-        snapshot_reference = dict((assignment.get("forge") or {}).get("source_snapshot") or {})
+        snapshot_reference = dict(
+            (assignment.get("forge") or {}).get("source_snapshot") or {}
+        )
         if snapshot_reference:
-            manifest = verify_source_snapshot(state_dir=self.state_dir, reference=snapshot_reference)
+            manifest = verify_source_snapshot(
+                state_dir=self.state_dir, reference=snapshot_reference
+            )
             snapshot_artifacts = {
                 str(item.get("path") or "").strip().replace("\\", "/"): dict(item)
                 for item in manifest.get("artifacts") or []
@@ -9321,10 +10424,14 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 relative = artifact_relative(destination)
                 descriptor = snapshot_artifacts.get(relative)
                 if not descriptor:
-                    raise SourceSnapshotError(f"task snapshot does not contain mutable source {relative}")
+                    raise SourceSnapshotError(
+                        f"task snapshot does not contain mutable source {relative}"
+                    )
                 expected_digest = str(descriptor.get("digest") or "")
                 excluded_dirs = source_projection_excluded_dirs(descriptor)
-                actual_digest = source_tree_digest(destination, excluded_dirs=excluded_dirs)
+                actual_digest = source_tree_digest(
+                    destination, excluded_dirs=excluded_dirs
+                )
                 if actual_digest != expected_digest:
                     raise SourceSnapshotError(
                         f"DEV source changed while Codex was running: {relative}; "
@@ -9332,7 +10439,10 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     )
             expected_by_destination = {
                 destination: (
-                    str(snapshot_artifacts[artifact_relative(destination)].get("digest") or ""),
+                    str(
+                        snapshot_artifacts[artifact_relative(destination)].get("digest")
+                        or ""
+                    ),
                     source_projection_excluded_dirs(
                         snapshot_artifacts[artifact_relative(destination)]
                     ),
@@ -9367,10 +10477,16 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         try:
             for source, destination in sources:
                 if not source.is_dir():
-                    raise FileNotFoundError(f"task result is missing source directory: {source}")
+                    raise FileNotFoundError(
+                        f"task result is missing source directory: {source}"
+                    )
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                staged = destination.parent / f".{destination.name}.apply.{transaction_id}"
-                backup = destination.parent / f".{destination.name}.backup.{transaction_id}"
+                staged = (
+                    destination.parent / f".{destination.name}.apply.{transaction_id}"
+                )
+                backup = (
+                    destination.parent / f".{destination.name}.backup.{transaction_id}"
+                )
                 shutil.copytree(source, staged)
                 _expected_digest, excluded_dirs = expected_by_destination.get(
                     destination, ("", frozenset())
@@ -9413,10 +10529,14 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 expected_digest, excluded_dirs = expected_by_destination.get(
                     destination, ("", frozenset())
                 )
-                if not expected_digest or source_tree_digest(
-                    destination,
-                    excluded_dirs=excluded_dirs,
-                ) != expected_digest:
+                if (
+                    not expected_digest
+                    or source_tree_digest(
+                        destination,
+                        excluded_dirs=excluded_dirs,
+                    )
+                    != expected_digest
+                ):
                     raise SourceSnapshotError(
                         f"DEV source changed during result activation: {destination.name}; "
                         "the transaction was rolled back"
@@ -9439,7 +10559,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     if backup.exists():
                         replace_with_retry(backup, destination)
                 except Exception as exc:
-                    rollback_errors.append(f"{destination}: {type(exc).__name__}: {exc}")
+                    rollback_errors.append(
+                        f"{destination}: {type(exc).__name__}: {exc}"
+                    )
             if rollback_errors:
                 raise RuntimeError(
                     f"DEV result activation failed ({apply_error}); rollback also failed: {rollback_errors}"
@@ -9462,10 +10584,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         """Apply source trees without renaming live directories on Windows."""
 
         backup_root = (
-            self.state_dir
-            / "skill_factory"
-            / "activation_backups"
-            / transaction_id
+            self.state_dir / "skill_factory" / "activation_backups" / transaction_id
         )
         journal: list[tuple[Path, Path | None]] = []
 
@@ -9482,10 +10601,14 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     destination,
                     ("", frozenset()),
                 )
-                if not expected_digest or source_tree_digest(
-                    destination,
-                    excluded_dirs=excluded_dirs,
-                ) != expected_digest:
+                if (
+                    not expected_digest
+                    or source_tree_digest(
+                        destination,
+                        excluded_dirs=excluded_dirs,
+                    )
+                    != expected_digest
+                ):
                     raise SourceSnapshotError(
                         f"DEV source changed during result activation: {destination.name}; "
                         "the transaction was rolled back"
@@ -9579,4 +10702,9 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             shutil.rmtree(backup_root, ignore_errors=True)
 
 
-__all__ = ["CodexRunResult", "LocalSkillFactoryWorker", "SubprocessCodexExecutor", "TaskExecutionCancelled"]
+__all__ = [
+    "CodexRunResult",
+    "LocalSkillFactoryWorker",
+    "SubprocessCodexExecutor",
+    "TaskExecutionCancelled",
+]

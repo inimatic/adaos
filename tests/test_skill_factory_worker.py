@@ -16,7 +16,10 @@ import yaml
 
 from adaos.sdk.developer.prototypes import derive_board_resource_spec
 from adaos.services import skill_factory_worker as worker_module
-from adaos.services.resources.prototype import PrototypeResourceService, prototype_webui_digest
+from adaos.services.resources.prototype import (
+    PrototypeResourceService,
+    prototype_webui_digest,
+)
 from adaos.services.root.service import _rewrite_skill_template_identity
 from adaos.services.skill_factory import SkillFactoryService
 from adaos.services.skill_factory_mcp import task_scope_enabled_tools
@@ -55,8 +58,12 @@ def test_strict_json_validation_rejects_duplicate_manifest_keys() -> None:
 
 
 def test_validation_repair_leads_with_failures_and_keeps_full_reference():
-    original = "Original accepted task and resolved decisions.\nKeep the full reference."
-    prompt = _deterministic_repair_prompt(original, ["scenario/test.py: ordered steps were collapsed"])
+    original = (
+        "Original accepted task and resolved decisions.\nKeep the full reference."
+    )
+    prompt = _deterministic_repair_prompt(
+        original, ["scenario/test.py: ordered steps were collapsed"]
+    )
     assert prompt.startswith("# Deterministic validation repair")
     assert prompt.index("ordered steps were collapsed") < prompt.index(original)
     assert prompt.count(original) == 1
@@ -283,7 +290,9 @@ def test_run_assignment_persists_preflight_mcp_failure(
     ]
 
 
-def test_codex_jsonl_root_mcp_evidence_is_bounded_and_target_scoped(tmp_path: Path) -> None:
+def test_codex_jsonl_root_mcp_evidence_is_bounded_and_target_scoped(
+    tmp_path: Path,
+) -> None:
     journal = tmp_path / "codex.jsonl"
     journal.write_text(
         json.dumps(
@@ -310,9 +319,7 @@ def test_codex_jsonl_root_mcp_evidence_is_bounded_and_target_scoped(tmp_path: Pa
         encoding="utf-8",
     )
     assignment = {
-        "realize_request": {
-            "artifacts": {"repair_hints": {"requires_root_mcp": True}}
-        }
+        "realize_request": {"artifacts": {"repair_hints": {"requires_root_mcp": True}}}
     }
 
     evidence = _codex_jsonl_root_mcp_evidence(
@@ -744,9 +751,9 @@ def test_persisted_descriptor_working_set_evidence_is_reusable(
         sort_keys=True,
         separators=(",", ":"),
     )
-    working_set["digest"] = "sha256:" + hashlib.sha256(
-        encoded.encode("utf-8")
-    ).hexdigest()
+    working_set["digest"] = (
+        "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    )
     path = tmp_path / "descriptor-working-set.json"
     path.write_text(json.dumps(working_set), encoding="utf-8")
 
@@ -885,7 +892,7 @@ def test_contract_execution_checklist_surfaces_every_exact_sequence_assertion(
                                 ],
                             }
                         ],
-                    }
+                    },
                 ],
                 "lifecycle": {"execution": "candidate"},
                 "workflow_smoke_evidence": {
@@ -921,12 +928,15 @@ def test_contract_execution_checklist_surfaces_every_exact_sequence_assertion(
         "contract": "example.runner.v1",
         "capability": "example.runner",
     }
-    assert projected["operations"][0]["input_schema"]["properties"][
-        "output_ref"
-    ]["pattern"] == "^content://"
-    assert projected["operations"][0]["output_schema"]["properties"][
-        "result"
-    ]["required"] == ["evidence_class"]
+    assert (
+        projected["operations"][0]["input_schema"]["properties"]["output_ref"][
+            "pattern"
+        ]
+        == "^content://"
+    )
+    assert projected["operations"][0]["output_schema"]["properties"]["result"][
+        "required"
+    ] == ["evidence_class"]
     assert projected["operations"][0]["input_required"] == ["output_ref"]
     assert projected["operations"][0]["output_required"] == [
         "result",
@@ -1013,9 +1023,7 @@ def test_source_snapshot_excludes_generated_authoring_history(tmp_path: Path) ->
     (scenario / "llm_jobs" / "historical-response.json").write_text(
         "{}\n", encoding="utf-8"
     )
-    (scenario / "ui_revisions" / "001.json").write_text(
-        "{}\n", encoding="utf-8"
-    )
+    (scenario / "ui_revisions" / "001.json").write_text("{}\n", encoding="utf-8")
     (scenario / "builder_memory.md").write_text("history\n", encoding="utf-8")
     (scenario / "tests" / "test_dashboard.py").write_text(
         "def test_dashboard():\n    assert True\n", encoding="utf-8"
@@ -1176,7 +1184,9 @@ def test_projected_snapshot_activation_syncs_owning_project_manifest(
         workspace,
     )
 
-    assert "permission_profile" in (project / "project.yaml").read_text(encoding="utf-8")
+    assert "permission_profile" in (project / "project.yaml").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_filewise_artifact_activation_rolls_back_all_sources(
@@ -1228,11 +1238,7 @@ def test_filewise_artifact_activation_rolls_back_all_sources(
         encoding="utf-8"
     ) == "before-1"
     assert not (
-        tmp_path
-        / "state"
-        / "skill_factory"
-        / "activation_backups"
-        / "transaction-test"
+        tmp_path / "state" / "skill_factory" / "activation_backups" / "transaction-test"
     ).exists()
 
 
@@ -1369,7 +1375,10 @@ def test_local_worker_realizes_scenario_and_companion_skill(tmp_path: Path) -> N
         "provenance",
     }
     assert task["result"]["local_run_ref"] == f"skill-factory-run:{task['task_id']}"
-    assert task["result"]["tests"]["report"] == result["assignment"]["evidence"]["expected_paths"]["test_report"]
+    assert (
+        task["result"]["tests"]["report"]
+        == result["assignment"]["evidence"]["expected_paths"]["test_report"]
+    )
     run_root = tmp_path / "runs" / task["task_id"]
     assert (run_root / "evidence" / "provenance.json").is_file()
     tracked = subprocess.run(
@@ -1498,28 +1507,44 @@ def test_local_worker_materializes_and_syncs_all_companion_skills(
 
 def test_worker_automation_prompt_requires_bom_free_json(tmp_path: Path) -> None:
     worker = LocalSkillFactoryWorker(
-        state_dir=tmp_path / "state", repo_root=Path(__file__).resolve().parents[1],
-        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios",
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "skills",
+        dev_scenarios_root=tmp_path / "scenarios",
     )
     workspace, inputs = tmp_path / "workspace", tmp_path / "input"
     (workspace / "skills" / "demo").mkdir(parents=True)
-    worker._build_packet({"task_id": "task.encoding", "target": {"type": "skill", "id": "demo"},
-                          "forge": {"sparse_paths": ["skills/demo/"]}}, workspace, inputs)
+    worker._build_packet(
+        {
+            "task_id": "task.encoding",
+            "target": {"type": "skill", "id": "demo"},
+            "forge": {"sparse_paths": ["skills/demo/"]},
+        },
+        workspace,
+        inputs,
+    )
     assert "UTF-8 without BOM" in (inputs / "task.md").read_text(encoding="utf-8")
 
 
 def test_worker_git_workspace_supports_deep_source_paths(tmp_path: Path) -> None:
     worker = LocalSkillFactoryWorker(
-        state_dir=tmp_path / "state", repo_root=tmp_path,
-        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios",
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "skills",
+        dev_scenarios_root=tmp_path / "scenarios",
     )
     workspace = tmp_path / "workspace"
     source = workspace / ("a" * 90) / ("b" * 90) / "source.json"
     source.parent.mkdir(parents=True)
     source.write_text("{}\n", encoding="utf-8")
     worker._init_git_workspace(workspace, "test/long-path")
-    assert worker_module._git(["config", "--local", "core.longpaths"], cwd=workspace) == "true"
-    assert source.relative_to(workspace).as_posix() in worker_module._git(["ls-files"], cwd=workspace)
+    assert (
+        worker_module._git(["config", "--local", "core.longpaths"], cwd=workspace)
+        == "true"
+    )
+    assert source.relative_to(workspace).as_posix() in worker_module._git(
+        ["ls-files"], cwd=workspace
+    )
 
 
 def test_worker_rejects_codex_changes_to_checkpoint_owned_manifest_metadata(
@@ -2209,18 +2234,29 @@ def test_automation_cannot_modify_current_publication_baseline(tmp_path: Path) -
         )
 
 
-@pytest.mark.parametrize("path,reason", [
-    ("scenarios/recipe_book/.builder_previous_automation/webui.json", "previous Automation baseline"),
-    ("scenarios/recipe_book/ui_revisions/071.json", "accepted Prototype evidence"),
-])
+@pytest.mark.parametrize(
+    "path,reason",
+    [
+        (
+            "scenarios/recipe_book/.builder_previous_automation/webui.json",
+            "previous Automation baseline",
+        ),
+        ("scenarios/recipe_book/ui_revisions/071.json", "accepted Prototype evidence"),
+    ],
+)
 def test_automation_cannot_rewrite_retained_evidence(tmp_path, path, reason):
     worker = LocalSkillFactoryWorker(
-        state_dir=tmp_path / "state", repo_root=Path(__file__).resolve().parents[1],
-        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios",
-        runs_root=tmp_path / "runs")
-    assignment = {"target": {"type": "scenario", "id": "recipe_book"},
-                  "forge": {"sparse_paths": ["scenarios/recipe_book/"]},
-                  "realize_request": {"artifacts": {"prototype_acceptance": {"revision": "071"}}}}
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "skills",
+        dev_scenarios_root=tmp_path / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    assignment = {
+        "target": {"type": "scenario", "id": "recipe_book"},
+        "forge": {"sparse_paths": ["scenarios/recipe_book/"]},
+        "realize_request": {"artifacts": {"prototype_acceptance": {"revision": "071"}}},
+    }
     with pytest.raises(ValueError, match=reason):
         worker._validate_changed_paths(assignment, [path])
 
@@ -2229,21 +2265,32 @@ def test_validation_uses_candidate_not_historical_baseline(tmp_path):
     repo = Path(__file__).resolve().parents[1]
     workspace = tmp_path / "workspace"
     _core_created_skill_fixture(repo, workspace / "skills", "demo")
-    for folder in (".builder_current_publication", ".builder_previous_automation", "ui_revisions"):
+    for folder in (
+        ".builder_current_publication",
+        ".builder_previous_automation",
+        "ui_revisions",
+    ):
         archived = workspace / "scenarios" / "demo" / folder
         archived.mkdir(parents=True)
-        (archived / "webui.json").write_text('{"invalid_old_abi": true}', encoding="utf-8")
-        (archived / "legacy.py").write_text('invalid old python !!', encoding="utf-8")
+        (archived / "webui.json").write_text(
+            '{"invalid_old_abi": true}', encoding="utf-8"
+        )
+        (archived / "legacy.py").write_text("invalid old python !!", encoding="utf-8")
     worker = LocalSkillFactoryWorker(
-        state_dir=tmp_path / "state", repo_root=repo,
-        dev_skills_root=workspace / "skills", dev_scenarios_root=workspace / "scenarios",
-        runs_root=tmp_path / "runs")
-    assignment = {"target": {"type": "skill", "id": "demo"},
-                  "forge": {"sparse_paths": ["skills/demo/"]}}
+        state_dir=tmp_path / "state",
+        repo_root=repo,
+        dev_skills_root=workspace / "skills",
+        dev_scenarios_root=workspace / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    assignment = {
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+    }
     report = worker._validate_workspace(assignment, workspace)
     assert report["ok"], report["errors"]
     current = workspace / "skills" / "demo" / "handlers" / "broken.py"
-    current.write_text('invalid candidate python !!', encoding="utf-8")
+    current.write_text("invalid candidate python !!", encoding="utf-8")
     rejected = worker._validate_workspace(assignment, workspace)
     assert not rejected["ok"]
     assert any("broken.py" in error for error in rejected["errors"])
@@ -2255,27 +2302,59 @@ def test_worker_rejects_unreachable_form_success_action_before_browser(tmp_path)
     _core_created_skill_fixture(repo, workspace / "skills", "demo")
     scenario = workspace / "scenarios" / "demo"
     scenario.mkdir(parents=True)
-    form = {"id": "editor", "type": "ui.form", "inputs": {"buttons": [{"id": "delete"}]}, "actions": [
-        {"id": "delete", "on": "submit", "type": "callSkill", "target": "demo.remove"},
-        {"id": "clear", "on": "submit", "type": "updateState", "params": {"selected": ""}},
-    ]}
+    form = {
+        "id": "editor",
+        "type": "ui.form",
+        "inputs": {"buttons": [{"id": "delete"}]},
+        "actions": [
+            {
+                "id": "delete",
+                "on": "submit",
+                "type": "callSkill",
+                "target": "demo.remove",
+            },
+            {
+                "id": "clear",
+                "on": "submit",
+                "type": "updateState",
+                "params": {"selected": ""},
+            },
+        ],
+    }
     document = {"widgets": [form]}
     path = scenario / "webui.json"
     path.write_text(json.dumps(document), encoding="utf-8")
     history = scenario / ".builder_previous_automation"
     history.mkdir()
     (history / "webui.json").write_text(json.dumps(document), encoding="utf-8")
-    worker = LocalSkillFactoryWorker(state_dir=tmp_path / "state", repo_root=repo,
-        dev_skills_root=workspace / "skills", dev_scenarios_root=workspace / "scenarios", runs_root=tmp_path / "runs")
-    assignment = {"target": {"type": "skill", "id": "demo"}, "forge": {"sparse_paths": ["skills/demo/"]}}
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo,
+        dev_skills_root=workspace / "skills",
+        dev_scenarios_root=workspace / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    assignment = {
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+    }
     rejected = worker._validate_workspace(assignment, workspace)
     assert not rejected["ok"]
-    assert sum("webui.form.submit_action_unreachable" in error for error in rejected["errors"]) == 1
+    assert (
+        sum(
+            "webui.form.submit_action_unreachable" in error
+            for error in rejected["errors"]
+        )
+        == 1
+    )
     form["actions"][1]["id"] = "delete"
     path.write_text(json.dumps(document), encoding="utf-8")
     accepted = worker._validate_workspace(assignment, workspace)
     assert accepted["ok"], accepted["errors"]
-    assert any(check["kind"] == "webui.form_action_bindings.strict" and check["ok"] for check in accepted["checks"])
+    assert any(
+        check["kind"] == "webui.form_action_bindings.strict" and check["ok"]
+        for check in accepted["checks"]
+    )
 
 
 def test_surgical_repair_enforces_exact_files_and_file_count(tmp_path: Path) -> None:
@@ -2352,7 +2431,7 @@ def test_bounded_repair_prompt_requires_targeted_reads(
                 "required": True,
                 "bound_target_id": "hub:sn_demo",
                 "enabled_tools": ["get_managed_target"],
-            }
+            },
         },
         "realize_request": {
             "artifacts": {
@@ -2379,7 +2458,9 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "at most 400 source lines before the first edit" in prompt
     assert "trusted worker reruns" in prompt
     assert "same-skill WebUI `callSkill`" in prompt
-    assert "reconcile the exact name across `webui.json`, `skill.yaml` `tools`" in prompt
+    assert (
+        "reconcile the exact name across `webui.json`, `skill.yaml` `tools`" in prompt
+    )
     assert "`exports.tools`" in prompt
     assert "every textual `Get-Content`" in prompt
     assert "`-Encoding UTF8`" in prompt
@@ -2398,10 +2479,13 @@ def test_bounded_repair_prompt_requires_targeted_reads(
         for item in packet["prompt_rule_capsules"]
     )
     contexts = worker_module.ContextControlService(state_dir=tmp_path / "state")
-    assert contexts.list_capsules(
-        subject_ref="prompt-rule:adaos.skill.webui_tool_contract.v2",
-        limit=1,
-    )[0]["capsule_id"] == packet["prompt_rule_capsules"][2]["context_ref"]
+    assert (
+        contexts.list_capsules(
+            subject_ref="prompt-rule:adaos.skill.webui_tool_contract.v2",
+            limit=1,
+        )[0]["capsule_id"]
+        == packet["prompt_rule_capsules"][2]["context_ref"]
+    )
     assert "Task-scoped Root MCP route" in prompt
     assert "hub:sn_demo" in prompt
     assert "Never substitute a skill, scenario, project, or component ID" in prompt
@@ -2526,7 +2610,7 @@ def test_worker_records_codex_development_feedback_as_workspace_resource(
                     }
                 ),
                 "repair_hints": {"target_refs": ["modal:demo"]},
-            }
+            },
         },
     }
 
@@ -2549,9 +2633,7 @@ def test_worker_records_codex_development_feedback_as_workspace_resource(
             "observed_behavior": "Returned the full snapshot.",
             "validation_result": "failed",
             "user_response": "",
-            "trace_refs": [
-                {"type": "trace", "ref": "trace:resources.query.demo"}
-            ],
+            "trace_refs": [{"type": "trace", "ref": "trace:resources.query.demo"}],
         },
     }
     records = worker._record_codex_development_feedback(assignment, [feedback_item])
@@ -2608,9 +2690,7 @@ def test_worker_records_exhausted_public_contract_validation_feedback(
                         "ticket_id": "dticket.demo",
                     }
                 ),
-                "repair_hints": {
-                    "target_refs": ["project:demo_project", "modal:demo"]
-                },
+                "repair_hints": {"target_refs": ["project:demo_project", "modal:demo"]},
             }
         },
     }
@@ -2670,62 +2750,118 @@ def test_worker_records_exhausted_public_contract_validation_feedback(
 
 @pytest.mark.parametrize("during_repair", [False, True])
 @pytest.mark.parametrize("user_decision", [False, True])
-def test_worker_retains_blocking_feedback_without_validating_or_applying(tmp_path, monkeypatch, during_repair, user_decision):
+def test_worker_retains_blocking_feedback_without_validating_or_applying(
+    tmp_path, monkeypatch, during_repair, user_decision
+):
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev/skills"
     _core_created_skill_fixture(repo_root, dev_skills, "blocked_example")
     factory = SkillFactoryService(state_dir=state_dir)
-    submitted = factory.submit_realize_request({
-        "target": {"type": "skill", "id": "blocked_example"},
-        "artifacts": {"implementation_brief": "Use a supported permission boundary."},
-        "repo": {"sparse_paths": ["skills/blocked_example/"]},
-    })
-    envelope = {"schema": "adaos.development_feedback_output.v1", "items": [{
-        "category": "ambiguous_contract", "summary": "Caller identity contract is unavailable",
-        "blocking": True, "confidence": 0.9, "impact": ["comprehension"],
-        "target_refs": ["sdk:identity"], "details": "No caller authority was admitted.",
-        "recommendation": "Disclose the supported identity contract.", "evidence_refs": [],
-    }]}
+    submitted = factory.submit_realize_request(
+        {
+            "target": {"type": "skill", "id": "blocked_example"},
+            "artifacts": {
+                "implementation_brief": "Use a supported permission boundary."
+            },
+            "repo": {"sparse_paths": ["skills/blocked_example/"]},
+        }
+    )
+    envelope = {
+        "schema": "adaos.development_feedback_output.v1",
+        "items": [
+            {
+                "category": "ambiguous_contract",
+                "summary": "Caller identity contract is unavailable",
+                "blocking": True,
+                "confidence": 0.9,
+                "impact": ["comprehension"],
+                "target_refs": ["sdk:identity"],
+                "details": "No caller authority was admitted.",
+                "recommendation": "Disclose the supported identity contract.",
+                "evidence_refs": [],
+            }
+        ],
+    }
     model_calls = []
+
     def execute(**kwargs):
         model_calls.append(kwargs["prompt"])
         if user_decision:
             from adaos.domain.automation_outcome import outcome_message
-            final_message = outcome_message(json.dumps({
-                "status": "needs_input", "report": "An ownership decision is pending.",
-                "questions": [{"id": "ownership", "question": "Shared or personal?",
-                               "reason": "The requested scope is undecided.", "options": []}],
-            }))
+
+            final_message = outcome_message(
+                json.dumps(
+                    {
+                        "status": "needs_input",
+                        "report": "An ownership decision is pending.",
+                        "questions": [
+                            {
+                                "id": "ownership",
+                                "question": "Shared or personal?",
+                                "reason": "The requested scope is undecided.",
+                                "options": [],
+                            }
+                        ],
+                    }
+                )
+            )
         else:
-            final_message = "```adaos-development-feedback\n" + json.dumps(envelope) + "\n```"
-        return CodexRunResult(returncode=0, final_message=(
-            "Initial implementation" if during_repair and len(model_calls) == 1 else
-            final_message))
+            final_message = (
+                "```adaos-development-feedback\n" + json.dumps(envelope) + "\n```"
+            )
+        return CodexRunResult(
+            returncode=0,
+            final_message=(
+                "Initial implementation"
+                if during_repair and len(model_calls) == 1
+                else final_message
+            ),
+        )
+
     worker = LocalSkillFactoryWorker(
-        state_dir=state_dir, repo_root=repo_root, dev_skills_root=dev_skills,
-        dev_scenarios_root=tmp_path / "dev/scenarios", runs_root=tmp_path / "runs",
-        executor=execute, max_repair_attempts=1,
+        state_dir=state_dir,
+        repo_root=repo_root,
+        dev_skills_root=dev_skills,
+        dev_scenarios_root=tmp_path / "dev/scenarios",
+        runs_root=tmp_path / "runs",
+        executor=execute,
+        max_repair_attempts=1,
     )
     validations = []
+
     def validate(*args):
         validations.append(True)
         if not during_repair or len(validations) > 1:
             pytest.fail("must not validate an unresolved blocker")
-        return {"ok": False, "status": "failed", "checks": [], "errors": ["Repair the binding"]}
+        return {
+            "ok": False,
+            "status": "failed",
+            "checks": [],
+            "errors": ["Repair the binding"],
+        }
+
     monkeypatch.setattr(worker, "_validate_workspace", validate)
-    monkeypatch.setattr(worker, "_sync_artifacts", lambda *args: pytest.fail("must not activate blocked source"))
+    monkeypatch.setattr(
+        worker,
+        "_sync_artifacts",
+        lambda *args: pytest.fail("must not activate blocked source"),
+    )
     result = worker.run_once()
     assert result["ok"] is False
     failure = factory.read_task(submitted["task"]["task_id"])["failure_history"][-1]
     assert failure["stage"] == "development_feedback"
-    assert failure["failure_class"] == ("user_input_required" if user_decision else "capability_blocked")
+    assert failure["failure_class"] == (
+        "user_input_required" if user_decision else "capability_blocked"
+    )
     if user_decision:
         assert failure["details"]["clarification_questions"][0]["id"] == "ownership"
     assert len(failure["details"]["development_feedback_refs"]) == 1
     assert len(model_calls) == (2 if during_repair else 1)
     if during_repair:
-        assert "candidate checks are diagnostic rather than acceptance" in model_calls[-1]
+        assert (
+            "candidate checks are diagnostic rather than acceptance" in model_calls[-1]
+        )
         assert "trusted worker reruns authoritative checks" in model_calls[-1]
 
 
@@ -2754,7 +2890,10 @@ def test_worker_links_final_validator_feedback_to_failed_task(
     )
 
     def fake_codex(
-        *, workspace: Path, prompt: str, output_dir: Path  # noqa: ARG001
+        *,
+        workspace: Path,
+        prompt: str,
+        output_dir: Path,  # noqa: ARG001
     ) -> CodexRunResult:
         handler = workspace / "skills" / "feedback_demo" / "handlers" / "main.py"
         handler.write_text(
@@ -2999,8 +3138,16 @@ def test_bounded_repair_prompt_includes_only_qualified_json_target_slices(
                             "schema": {
                                 "semantic": {
                                     "views": [
-                                        {"id": "grid", "kind": "collection_grid", "title": "Metrics"},
-                                        {"id": "chart", "kind": "metric_chart", "secret": "not selected"},
+                                        {
+                                            "id": "grid",
+                                            "kind": "collection_grid",
+                                            "title": "Metrics",
+                                        },
+                                        {
+                                            "id": "chart",
+                                            "kind": "metric_chart",
+                                            "secret": "not selected",
+                                        },
                                     ]
                                 }
                             }
@@ -3046,7 +3193,11 @@ def test_bounded_repair_prompt_includes_only_qualified_json_target_slices(
                         "skills/demo/handlers/main.py",
                         "skills/demo/tests/test_webui.py",
                     ],
-                    "target_refs": [target_ref, moved_target_ref, "registry.modals.missing"],
+                    "target_refs": [
+                        target_ref,
+                        moved_target_ref,
+                        "registry.modals.missing",
+                    ],
                 },
                 "iteration_instruction": "Keep the chart sibling unchanged.",
             }
@@ -3082,7 +3233,9 @@ def test_bounded_repair_prompt_includes_only_qualified_json_target_slices(
     assert "Keep the chart sibling unchanged." in prompt
 
 
-def test_bounded_repair_prompt_keeps_full_follow_up_only_in_packet(tmp_path: Path) -> None:
+def test_bounded_repair_prompt_keeps_full_follow_up_only_in_packet(
+    tmp_path: Path,
+) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
         repo_root=Path(__file__).resolve().parents[1],
@@ -3137,7 +3290,10 @@ def test_bounded_repair_prompt_keeps_full_follow_up_only_in_packet(tmp_path: Pat
                         "Validate skill:demo.",
                     ],
                     "source_preconditions": [
-                        {"path": "skills/demo/webui.json", "sha256": "sha256:source-only"}
+                        {
+                            "path": "skills/demo/webui.json",
+                            "sha256": "sha256:source-only",
+                        }
                     ],
                 },
             }
@@ -3155,6 +3311,62 @@ def test_bounded_repair_prompt_keeps_full_follow_up_only_in_packet(tmp_path: Pat
     assert "Validate skill:demo." in prompt
     assert packet["iteration_instruction"] == json.dumps(iteration)
     assert packet["repair_hints"]["source_preconditions"]
+
+
+def test_full_automation_prompt_does_not_duplicate_identical_iteration(
+    tmp_path: Path,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    (scenario / "scenario.yaml").write_text("id: demo\nversion: 0.1.0\n", encoding="utf-8")
+    instruction = "Audit the current implementation against real data sources."
+    assignment = {
+        "task_id": "task.compact-iteration",
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": instruction,
+                "iteration_instruction": instruction,
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+
+    assert prompt.count(instruction) == 1
+    assert "Same as the approved implementation brief above" in prompt
+
+
+def test_context_projection_omits_whitespace_normalized_duplicate_intent() -> None:
+    brief = "Validate the current source.\n\nDo not publish."
+    projection = _context_packet_prompt_projection(
+        {
+            "schema": "adaos.builder.context_packet.v1",
+            "change": {
+                "change_id": "CH-current",
+                "intent": "Validate the current source. Do not publish.",
+                "issues": [],
+            },
+        },
+        implementation_brief=brief,
+    )
+
+    assert projection["change"] == {
+        "change_id": "CH-current",
+        "issues": [],
+        "acceptance_constraints": [],
+        "reviews": [],
+    }
 
 
 def test_bounded_repair_resolves_semantic_refs_in_json_and_yaml(
@@ -3235,8 +3447,7 @@ def test_bounded_repair_resolves_semantic_refs_in_json_and_yaml(
     assert context["missing"] == []
     assert context["coverage"]["complete"] is True
     assert any(
-        item["file"] == "scenarios/demo/webui.json"
-        for item in context["source_slices"]
+        item["file"] == "scenarios/demo/webui.json" for item in context["source_slices"]
     )
     assert any(
         item["file"] == "scenarios/demo/scenario.yaml"
@@ -3297,7 +3508,10 @@ def test_surgical_repair_preloads_quoted_json_literals_when_refs_are_semantic(
                 "implementation_brief": brief,
                 "repair_hints": {
                     "target_files": ["skills/demo/webui.json"],
-                    "target_refs": ["view:demo.compat.notes", "view:demo.semantic.notes"],
+                    "target_refs": [
+                        "view:demo.compat.notes",
+                        "view:demo.semantic.notes",
+                    ],
                 },
             }
         },
@@ -3316,8 +3530,7 @@ def test_surgical_repair_preloads_quoted_json_literals_when_refs_are_semantic(
         "Metric notes",
     ]
     assert any(
-        "Builder E2E validation" in item["source"]
-        for item in context["source_slices"]
+        "Builder E2E validation" in item["source"] for item in context["source_slices"]
     )
     assert "Apply the exact patch directly" in prompt
     assert "Locate one exact target ID" not in prompt
@@ -3519,9 +3732,9 @@ def test_structured_edits_apply_with_exact_preconditions(tmp_path: Path) -> None
     webui = json.loads((skill / "webui.json").read_text(encoding="utf-8"))
     assert webui["title"] == "Live metrics"
     assert [item["id"] for item in webui["actions"]] == ["create", "refresh"]
-    assert 'SUMMARY = "Current usage"' in (
-        skill / "handlers" / "main.py"
-    ).read_text(encoding="utf-8")
+    assert 'SUMMARY = "Current usage"' in (skill / "handlers" / "main.py").read_text(
+        encoding="utf-8"
+    )
     assert receipt["strategy"] == "structured_edits"
     assert receipt["model_tokens"] == 0
     assert receipt["changed_files"] == [
@@ -3599,9 +3812,9 @@ def test_structured_edit_worker_never_calls_codex(tmp_path: Path) -> None:
 
     assert result["ok"] is True, result
     assert result["result"]["execution_strategy"] == "structured_edits"
-    assert result["result"]["provenance"]["structured_edit_receipt"][
-        "model_tokens"
-    ] == 0
+    assert (
+        result["result"]["provenance"]["structured_edit_receipt"]["model_tokens"] == 0
+    )
     preflight = json.loads(
         (
             tmp_path
@@ -3617,7 +3830,9 @@ def test_structured_edit_worker_never_calls_codex(tmp_path: Path) -> None:
     assert "Current usage" in handler.read_text(encoding="utf-8")
 
 
-def test_validation_only_worker_never_calls_codex_or_changes_source(tmp_path: Path) -> None:
+def test_validation_only_worker_never_calls_codex_or_changes_source(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_dir = tmp_path / "state"
     dev_skills = tmp_path / "dev" / "skills"
@@ -3728,12 +3943,16 @@ def test_bounded_dev_ticket_rejects_large_manifest_collapse(tmp_path: Path) -> N
         check=True,
         capture_output=True,
     )
-    manifest.write_text('{"schema":"adaos.scenario.v1","id":"demo"}\n', encoding="utf-8")
+    manifest.write_text(
+        '{"schema":"adaos.scenario.v1","id":"demo"}\n', encoding="utf-8"
+    )
     worker = object.__new__(LocalSkillFactoryWorker)
     changed_paths = worker._changed_from_baseline(workspace)
     assignment = {
         "forge": {"sparse_paths": ["scenarios/demo/"]},
-        "realize_request": {"artifacts": {"execution_budget": {"max_wall_seconds": 300}}},
+        "realize_request": {
+            "artifacts": {"execution_budget": {"max_wall_seconds": 300}}
+        },
     }
 
     with pytest.raises(ValueError, match="large declarative manifest rewrite"):
@@ -3775,9 +3994,84 @@ def test_bounded_dev_ticket_rejects_large_manifest_format_churn(tmp_path: Path) 
     worker = object.__new__(LocalSkillFactoryWorker)
     assignment = {
         "forge": {"sparse_paths": ["scenarios/demo/"]},
-        "realize_request": {"artifacts": {"execution_budget": {"max_wall_seconds": 300}}},
+        "realize_request": {
+            "artifacts": {"execution_budget": {"max_wall_seconds": 300}}
+        },
     }
 
+    with pytest.raises(ValueError, match="large declarative manifest rewrite"):
+        worker._validate_changed_paths(
+            assignment,
+            worker._changed_from_baseline(workspace),
+            workspace=workspace,
+        )
+
+
+def test_bounded_task_admits_large_semantically_scoped_widget_edit(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    manifest = scenario / "webui.json"
+    document = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "widgets": [
+                {
+                    "id": "catalog",
+                    "type": "ui.list",
+                    "dataSource": {
+                        "kind": "static",
+                        "value": [
+                            {"id": f"item-{index}", "title": f"Item {index}"}
+                            for index in range(180)
+                        ],
+                    },
+                },
+                {"id": "status", "type": "visual.metric", "value": "ready"},
+            ]
+        },
+    }
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
+    document["ui"]["widgets"][0]["dataSource"] = {
+        "kind": "skill",
+        "name": "demo.list_items",
+    }
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    worker = object.__new__(LocalSkillFactoryWorker)
+    assignment = {
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "realize_request": {
+            "artifacts": {
+                "execution_budget": {"max_wall_seconds": 300},
+                "repair_hints": {"target_refs": ["widget:catalog"]},
+            }
+        },
+    }
+
+    worker._validate_changed_paths(
+        assignment,
+        worker._changed_from_baseline(workspace),
+        workspace=workspace,
+    )
+
+    document["ui"]["widgets"][1]["value"] = "degraded"
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="large declarative manifest rewrite"):
         worker._validate_changed_paths(
             assignment,
@@ -4195,7 +4489,10 @@ def test_optional_root_mcp_is_omitted_without_credential(
         },
     }
 
-    assert _root_mcp_profile_from_assignment(assignment, include_private_token=True) is None
+    assert (
+        _root_mcp_profile_from_assignment(assignment, include_private_token=True)
+        is None
+    )
 
 
 def test_api_serve_rebinds_stale_loopback_mcp_url_to_configured_local_api(
@@ -4348,7 +4645,7 @@ def test_worker_projects_task_scoped_mcp_lease_without_prompt_secret(
     assert executor._root_mcp_config_args({"enabled": False}) == []
     assert any(
         arg.endswith(
-            "mcp_servers.adaos_task_root.url=\"http://127.0.0.1:8778/v1/root/mcp/task/task.lease\""
+            'mcp_servers.adaos_task_root.url="http://127.0.0.1:8778/v1/root/mcp/task/task.lease"'
         )
         for arg in config_args
     )
@@ -4497,10 +4794,13 @@ def test_codex_live_budget_estimate_counts_growing_tool_context(tmp_path: Path) 
     assert usage["estimated_fresh_input_tokens"] == (
         usage["input_tokens"] - usage["cached_input_tokens"]
     )
-    assert _codex_budget_observed_tokens(
-        usage,
-        metric="fresh_plus_output",
-    ) < usage["model_tokens"]
+    assert (
+        _codex_budget_observed_tokens(
+            usage,
+            metric="fresh_plus_output",
+        )
+        < usage["model_tokens"]
+    )
 
 
 def test_codex_live_budget_counts_mcp_model_projection_not_audit_payload(
@@ -4664,8 +4964,15 @@ def test_automation_prompt_keeps_release_contract_but_not_runtime_values() -> No
     from adaos.services.applications.data_lifecycle import automation_data_contract
 
     contract = automation_data_contract()
-    packet = {"facets": {"data_policy": {"status": "present", "local_release_lifecycle": contract,
-              "runtime_values": {"secret": "private-value"}}}}
+    packet = {
+        "facets": {
+            "data_policy": {
+                "status": "present",
+                "local_release_lifecycle": contract,
+                "runtime_values": {"secret": "private-value"},
+            }
+        }
+    }
     projection = _context_packet_prompt_projection(packet)
     assert projection["facets"]["data_policy"]["local_release_lifecycle"] == contract
     assert "private-value" not in json.dumps(projection)
@@ -4957,20 +5264,38 @@ def test_worker_applies_frozen_agent_profile_to_codex_executor(
     assert actual_prompt.endswith("bounded task")
     assert "needs_input" in actual_prompt
     receipt = json.loads(prompt_path.with_suffix(".json").read_text(encoding="utf-8"))
-    assert receipt["prompt_sha256"] == hashlib.sha256(actual_prompt.encode("utf-8")).hexdigest()
+    assert (
+        receipt["prompt_sha256"]
+        == hashlib.sha256(actual_prompt.encode("utf-8")).hexdigest()
+    )
 
 
 def test_worker_retains_each_exact_model_input_before_execution(tmp_path):
     observed = []
+
     def execute(**kwargs):
         observed.append(kwargs["prompt"])
         path = tmp_path / "input/model-attempts" / f"{len(observed):03}.prompt.md"
         assert path.read_text(encoding="utf-8") == kwargs["prompt"]
         return CodexRunResult(returncode=0)
-    worker = LocalSkillFactoryWorker(state_dir=tmp_path / "state", repo_root=tmp_path,
-        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios", executor=execute)
-    for prompt in ("Initial task", "Correction: \u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430"):
-        worker._execute_codex(task_id="task.inputs", workspace=tmp_path / "workspace", prompt=prompt, output_dir=tmp_path / "output")
+
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "skills",
+        dev_scenarios_root=tmp_path / "scenarios",
+        executor=execute,
+    )
+    for prompt in (
+        "Initial task",
+        "Correction: \u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430",
+    ):
+        worker._execute_codex(
+            task_id="task.inputs",
+            workspace=tmp_path / "workspace",
+            prompt=prompt,
+            output_dir=tmp_path / "output",
+        )
     assert len(list((tmp_path / "input/model-attempts").glob("*.prompt.md"))) == 2
 
 
@@ -5060,7 +5385,10 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     assert "admitted read-only context" in prompt
     assert "same schema with `blocking:true`" in prompt
     from adaos.domain.development_feedback import development_feedback_model_rules
-    assert json.dumps(development_feedback_model_rules(), separators=(",", ":")) in prompt
+
+    assert (
+        json.dumps(development_feedback_model_rules(), separators=(",", ":")) in prompt
+    )
     assert "Candidate checks are diagnostic" in prompt
     assert "application_permissions context facet" in prompt
     assert "every textual `Get-Content`" in prompt
@@ -5086,8 +5414,12 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     assert "irrelevant.full.catalog" not in prompt
     # Keep the original narrative budget; account separately for the bounded
     # clarification grammar, whose exact inclusion is asserted above.
-    clarification_bytes = len(json.dumps(development_feedback_model_rules()["clarification_questions"],
-                                        separators=(",", ":")).encode("utf-8"))
+    clarification_bytes = len(
+        json.dumps(
+            development_feedback_model_rules()["clarification_questions"],
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
     assert len(prompt.encode("utf-8")) - clarification_bytes < 9_500
     assert [item["id"] for item in packet["prompt_rule_capsules"]] == [
         "adaos.builder.execution_boundary.v1",
@@ -5108,14 +5440,26 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
 
 
 def test_worker_prompt_distinguishes_accepted_design_from_editable_candidate(tmp_path):
-    worker = LocalSkillFactoryWorker(state_dir=tmp_path / "state", repo_root=Path(__file__).resolve().parents[1],
-        dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios")
-    assignment = {"task_id": "task.correction", "target": {"type": "scenario", "id": "demo"},
-        "forge": {"sparse_paths": ["scenarios/demo/"]}, "realize_request": {
-            "target": {"type": "scenario", "id": "demo"}, "artifacts": {
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "skills",
+        dev_scenarios_root=tmp_path / "scenarios",
+    )
+    assignment = {
+        "task_id": "task.correction",
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "realize_request": {
+            "target": {"type": "scenario", "id": "demo"},
+            "artifacts": {
                 "implementation_brief": "Preserve the approved interface.",
-                "context_packet": {"artifacts": {"prototype": {"acceptance": {"revision": "002"}}}},
-            }}}
+                "context_packet": {
+                    "artifacts": {"prototype": {"acceptance": {"revision": "002"}}}
+                },
+            },
+        },
+    }
     workspace = tmp_path / "workspace"
     (workspace / "scenarios/demo").mkdir(parents=True)
     worker._build_packet(assignment, workspace, tmp_path / "input")
@@ -5295,14 +5639,28 @@ def test_worker_rejects_manifest_schema_errors_before_checkpoint(tmp_path):
     workspace = tmp_path / "workspace"
     skill_root = workspace / "skills" / "demo"
     skill_root.mkdir(parents=True)
-    manifest = {"name": "demo", "version": "0.1.0", "description": "Test", "entry": "handlers/main.py",
-                "data_routes": [{"surface": "widget:items", "route": "tool", "tool": "list_items",
-                                 "max_request_hz": 4, "preserve_last_value": True,
-                                 "read_policy": {"mode": "explicit", "triggers": ["mount"]}}]}
+    manifest = {
+        "name": "demo",
+        "version": "0.1.0",
+        "description": "Test",
+        "entry": "handlers/main.py",
+        "data_routes": [
+            {
+                "surface": "widget:items",
+                "route": "tool",
+                "tool": "list_items",
+                "max_request_hz": 4,
+                "preserve_last_value": True,
+                "read_policy": {"mode": "explicit", "triggers": ["mount"]},
+            }
+        ],
+    }
     (skill_root / "skill.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
     checks, errors = [], []
     LocalSkillFactoryWorker._validate_skill_manifests(workspace, checks, errors)
-    assert checks == [{"kind": "skill.manifest.schema", "path": "skills/demo/skill.yaml", "ok": False}]
+    assert checks == [
+        {"kind": "skill.manifest.schema", "path": "skills/demo/skill.yaml", "ok": False}
+    ]
     assert len(errors) == len(validate_manifest_schema(manifest))
     assert any("Additional properties" in error for error in errors)
     assert any("max_request_hz" in error and "required" in error for error in errors)
@@ -5316,7 +5674,9 @@ def test_worker_rejects_manifest_schema_errors_before_checkpoint(tmp_path):
     assert checks[0]["ok"] is True
 
 
-def test_worker_requires_data_lifecycle_for_project_owned_skills(tmp_path: Path) -> None:
+def test_worker_requires_data_lifecycle_for_project_owned_skills(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     project_root = workspace / "projects" / "demo"
     skill_root = workspace / "skills" / "demo_runtime"
@@ -5388,7 +5748,9 @@ def test_worker_requires_data_lifecycle_for_project_owned_skills(tmp_path: Path)
     ]
 
 
-def test_worker_requires_tool_effects_on_changed_skill_manifests(tmp_path: Path) -> None:
+def test_worker_requires_tool_effects_on_changed_skill_manifests(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     skill_root = workspace / "skills" / "demo"
     skill_root.mkdir(parents=True)
@@ -5516,9 +5878,7 @@ def test_worker_rejects_same_skill_webui_action_for_undeclared_tool(
     checks: list[dict] = []
     errors: list[str] = []
 
-    LocalSkillFactoryWorker._validate_skill_webui_contracts(
-        workspace, checks, errors
-    )
+    LocalSkillFactoryWorker._validate_skill_webui_contracts(workspace, checks, errors)
 
     assert any("webui.action.skill_tool_unknown" in error for error in errors)
     assert checks == []
@@ -6558,8 +6918,7 @@ def test_worker_allows_exact_non_manifest_abi_versions(tmp_path: Path) -> None:
     tests_dir = workspace / "scenarios" / "demo" / "tests"
     tests_dir.mkdir(parents=True)
     (tests_dir / "test_layout.py").write_text(
-        "def test_layout_version(page):\n"
-        "    assert page['layout']['version'] == 2\n",
+        "def test_layout_version(page):\n    assert page['layout']['version'] == 2\n",
         encoding="utf-8",
     )
     checks: list[dict] = []
@@ -6656,8 +7015,10 @@ def test_skill_package_checks_cannot_depend_on_sibling_scenario(tmp_path: Path) 
         encoding="utf-8",
     )
     worker = LocalSkillFactoryWorker(
-        state_dir=tmp_path / "state", repo_root=Path(__file__).resolve().parents[1],
-        dev_skills_root=tmp_path / "dev/skills", dev_scenarios_root=tmp_path / "dev/scenarios",
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev/skills",
+        dev_scenarios_root=tmp_path / "dev/scenarios",
     )
     checks, errors = [], []
     worker._run_generated_tests(workspace, checks, errors)
@@ -6689,9 +7050,7 @@ def test_worker_records_budgeted_package_test_timeout_for_autonomous_repair(
     assignment = {
         "realize_request": {
             "artifacts": {
-                "development_context": {
-                    "execution_budget": {"max_wall_seconds": 10800}
-                }
+                "development_context": {"execution_budget": {"max_wall_seconds": 10800}}
             }
         }
     }
@@ -6737,9 +7096,9 @@ def test_worker_records_budgeted_package_test_timeout_for_autonomous_repair(
     assert errors == [
         "skills/demo/tests: packaged pytest timed out after 180 seconds: partial output"
     ]
-    assert worker_module._generated_test_budget({})[
-        "packaged_pytest_wall_seconds"
-    ] == 60
+    assert (
+        worker_module._generated_test_budget({})["packaged_pytest_wall_seconds"] == 60
+    )
 
 
 def test_worker_ignores_unchanged_baseline_version_pins(tmp_path: Path) -> None:
@@ -6917,7 +7276,7 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
                     "source_task_id": source_task_id,
                     "failure_id": failure_id,
                     "continuation_contract": continuation_contract,
-                }
+                },
             }
         },
     }
@@ -6986,7 +7345,9 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
         (source_run / "runtime" / "codex-final.md").write_text(
             '```adaos-development-feedback\n{"schema":"adaos.development_feedback_output.v1",'
             '"items":[{"category":"validation_gap","summary":"Browser not checked",'
-            '"blocking":false,"target_refs":["adaos.sdk.access.require"]}]}\n```', encoding="utf-8")
+            '"blocking":false,"target_refs":["adaos.sdk.access.require"]}]}\n```',
+            encoding="utf-8",
+        )
     monkeypatch.setattr(
         SkillFactoryService,
         "read_task",
@@ -6996,11 +7357,13 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
             "failure_history": [
                 {
                     "failure_id": failure_id,
-                    "stage": "development_feedback" if continuation_reason == "development_feedback_requalified" else "deterministic_validation",
+                    "stage": "development_feedback"
+                    if continuation_reason == "development_feedback_requalified"
+                    else "deterministic_validation",
                     "message": (
                         "ValueError: development feedback target_refs are invalid"
-                        if continuation_reason == "development_feedback_requalified" else
-                        "RuntimeError: Generated project validation failed: "
+                        if continuation_reason == "development_feedback_requalified"
+                        else "RuntimeError: Generated project validation failed: "
                         "skills/demo/skill.yaml: data_routes.budget_missing"
                     ),
                 }
@@ -7044,7 +7407,12 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
     if continuation_reason == "development_feedback_requalified":
         assert "Browser not checked" in restored["requalified_feedback_message"]
         final = source_run / "runtime" / "codex-final.md"
-        final.write_text(final.read_text(encoding="utf-8").replace('"blocking":false', '"blocking":true'), encoding="utf-8")
+        final.write_text(
+            final.read_text(encoding="utf-8").replace(
+                '"blocking":false', '"blocking":true'
+            ),
+            encoding="utf-8",
+        )
         with pytest.raises(ValueError, match="eligible preservation boundary"):
             worker._restore_continuation_candidate(assignment, workspace)
 
@@ -7455,7 +7823,10 @@ def test_worker_isolates_generated_test_side_effects_from_candidate_source(
     assert result["ok"] is True, result
     assert len(calls) == 1
     run_root = tmp_path / "runs" / submitted["task"]["task_id"]
-    assert result["result"]["local_run_ref"] == f"skill-factory-run:{submitted['task']['task_id']}"
+    assert (
+        result["result"]["local_run_ref"]
+        == f"skill-factory-run:{submitted['task']['task_id']}"
+    )
     assert not (run_root / "workspace" / "escaped-validation.txt").exists()
     assert not (run_root / "package-validation").exists()
 
@@ -7705,8 +8076,7 @@ def test_worker_binds_exact_external_mcp_contracts_and_prototype_identity(
     assert packet["external_mcp_contracts_ref"] == contracts_path.resolve().as_posix()
     assert contracts["unresolved_tool_ids"] == []
     assert {
-        (item["id"], tuple(item["binding_usage"]))
-        for item in contracts["contracts"]
+        (item["id"], tuple(item["binding_usage"])) for item in contracts["contracts"]
     } == {
         ("users_access.create_invite", ("action",)),
         ("users_access.summary", ("data_source",)),
@@ -7973,10 +8343,23 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     if aggregate_owner:
         owner_root = tmp_path / "dev/projects/operations"
         owner_root.mkdir(parents=True)
-        (owner_root / "project.yaml").write_text(json.dumps({"id": "operations", "components": {
-            "owned": [{"ref": f"scenario:{project_id}"}, {"ref": f"skill:{companion}"}]}}), encoding="utf-8")
-    context_packet["artifacts"]["prototype"]["acceptance"]["prototype_resources"].append({
-        "resource_type": "prototype.locale_dictionaries"})
+        (owner_root / "project.yaml").write_text(
+            json.dumps(
+                {
+                    "id": "operations",
+                    "components": {
+                        "owned": [
+                            {"ref": f"scenario:{project_id}"},
+                            {"ref": f"skill:{companion}"},
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+    context_packet["artifacts"]["prototype"]["acceptance"][
+        "prototype_resources"
+    ].append({"resource_type": "prototype.locale_dictionaries"})
     packet = worker._build_packet(assignment, workspace, tmp_path / "input")
     handoff = packet["prototype_resource_handoff"]
     resource = handoff["resources"][0]
@@ -8019,16 +8402,24 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
         "resources/work_items.resource.json"
     ]
     realized_webui = json.loads(
-        (workspace / "scenarios" / project_id / "webui.json").read_text(encoding="utf-8")
+        (workspace / "scenarios" / project_id / "webui.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert (
-        workspace / "scenarios" / project_id / "webui.json"
-    ).read_text(encoding="utf-8").splitlines()[1].startswith("    ")
+        (workspace / "scenarios" / project_id / "webui.json")
+        .read_text(encoding="utf-8")
+        .splitlines()[1]
+        .startswith("    ")
+    )
     assert worker._count_exact_string(realized_webui, prototype_type) == 0
-    assert worker._count_exact_string(
-        realized_webui,
-        "skill.flowboard_skill.work_items",
-    ) == 2
+    assert (
+        worker._count_exact_string(
+            realized_webui,
+            "skill.flowboard_skill.work_items",
+        )
+        == 2
+    )
     checks: list[dict] = []
     errors: list[str] = []
     worker._validate_prototype_resource_handoff(
@@ -8040,8 +8431,12 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     assert errors == []
     assert checks[0]["kind"] == "prototype_resource_handoff.exact"
 
-    assignment["realize_request"]["artifacts"]["implementation_brief"] = "Implement server-side policy and persistence."
-    blueprint = worker._prototype_resource_handoff_from_assignment(assignment, workspace)
+    assignment["realize_request"]["artifacts"]["implementation_brief"] = (
+        "Implement server-side policy and persistence."
+    )
+    blueprint = worker._prototype_resource_handoff_from_assignment(
+        assignment, workspace
+    )
     assert blueprint["mode"] == "implementation_blueprint"
     assert blueprint["completion"]["model_required"] is True
     with pytest.raises(ValueError, match="blueprint"):
@@ -8050,12 +8445,17 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     worker._validate_prototype_resource_handoff(assignment, workspace, checks, errors)
     assert not errors
     assert checks[0]["kind"] == "prototype_resource_handoff.detached"
-    blueprint_packet = worker._build_packet(assignment, workspace, tmp_path / "input-blueprint")
+    blueprint_packet = worker._build_packet(
+        assignment, workspace, tmp_path / "input-blueprint"
+    )
     prompt = (tmp_path / "input-blueprint/task.md").read_text(encoding="utf-8")
     bindings_path = tmp_path / "input-blueprint/implementation-bindings.json"
     bindings = json.loads(bindings_path.read_text(encoding="utf-8"))
     assert bindings["stage"] == "automation"
-    assert blueprint_packet["implementation_bindings_ref"] == bindings_path.resolve().as_posix()
+    assert (
+        blueprint_packet["implementation_bindings_ref"]
+        == bindings_path.resolve().as_posix()
+    )
     assert bindings_path.resolve().as_posix() in prompt
     assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
     assert "sample_skill.save_record" in bindings_path.read_text(encoding="utf-8")
@@ -8068,8 +8468,12 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     assert "Fresh installation starts with empty user data" in prompt
     assert "Core need not supply a domain policy registry" in prompt
     assert "Missing authentication ingress remains" in prompt
-    assert (tmp_path / "input-blueprint/prototype-resource-handoff.json").resolve().as_posix() in prompt
-    declaration = workspace / "skills" / companion / "resources/work_items.resource.json"
+    assert (
+        tmp_path / "input-blueprint/prototype-resource-handoff.json"
+    ).resolve().as_posix() in prompt
+    declaration = (
+        workspace / "skills" / companion / "resources/work_items.resource.json"
+    )
     empty_bundle = json.loads(declaration.read_text(encoding="utf-8"))
     seeded_bundle = {**empty_bundle, "seed": materialized["state"]["records"]}
     declaration.write_text(json.dumps(seeded_bundle), encoding="utf-8")
@@ -8086,35 +8490,72 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
     webui_path.write_text(realized_text, encoding="utf-8")
     assignment["realize_request"]["artifacts"]["implementation_brief"] = ""
 
-    for field, expected_reason in (("iteration_instruction", "iteration_requires_realization"),):
-        assignment["realize_request"]["artifacts"][field] = "Preserve permission failures in the editor."
-        completion = worker._prototype_resource_handoff_from_assignment(assignment, workspace)["completion"]
+    for field, expected_reason in (
+        ("iteration_instruction", "iteration_requires_realization"),
+    ):
+        assignment["realize_request"]["artifacts"][field] = (
+            "Preserve permission failures in the editor."
+        )
+        completion = worker._prototype_resource_handoff_from_assignment(
+            assignment, workspace
+        )["completion"]
         assert completion["model_required"] and expected_reason in completion["reasons"]
         assignment["realize_request"]["artifacts"].pop(field)
-    obligations = [{"requirement_ref": "job:completion", "acceptance": "Reject incomplete records"}]
-    context_packet["artifacts"]["prototype"]["acceptance"]["automation_requirements"] = obligations
-    completion = worker._prototype_resource_handoff_from_assignment(assignment, workspace)["completion"]
-    assert completion["model_required"] and "pending_automation_requirements" in completion["reasons"]
+    obligations = [
+        {"requirement_ref": "job:completion", "acceptance": "Reject incomplete records"}
+    ]
+    context_packet["artifacts"]["prototype"]["acceptance"][
+        "automation_requirements"
+    ] = obligations
+    completion = worker._prototype_resource_handoff_from_assignment(
+        assignment, workspace
+    )["completion"]
+    assert (
+        completion["model_required"]
+        and "pending_automation_requirements" in completion["reasons"]
+    )
     compact_packet = worker_module.context_packet_prompt_projection(context_packet)
-    assert compact_packet["artifacts"]["prototype"]["acceptance"]["automation_requirements"] == obligations
+    assert (
+        compact_packet["artifacts"]["prototype"]["acceptance"][
+            "automation_requirements"
+        ]
+        == obligations
+    )
     assignment_artifacts = assignment["realize_request"]["artifacts"]
-    assignment_artifacts["prototype_acceptance"] = copy.deepcopy(context_packet["artifacts"]["prototype"]["acceptance"])
+    assignment_artifacts["prototype_acceptance"] = copy.deepcopy(
+        context_packet["artifacts"]["prototype"]["acceptance"]
+    )
     assignment_artifacts.pop("context_packet")
     assignment_artifacts["context_projection"] = compact_packet
-    projected_handoff = worker._prototype_resource_handoff_from_assignment(assignment, workspace)
+    projected_handoff = worker._prototype_resource_handoff_from_assignment(
+        assignment, workspace
+    )
     assert projected_handoff["automation_requirements"] == obligations
-    assert "pending_automation_requirements" in projected_handoff["completion"]["reasons"]
-    compact_packet["artifacts"]["prototype"]["acceptance"].pop("automation_requirements")
-    assert worker._prototype_resource_handoff_from_assignment(assignment, workspace)["automation_requirements"] == obligations
+    assert (
+        "pending_automation_requirements" in projected_handoff["completion"]["reasons"]
+    )
+    compact_packet["artifacts"]["prototype"]["acceptance"].pop(
+        "automation_requirements"
+    )
+    assert (
+        worker._prototype_resource_handoff_from_assignment(assignment, workspace)[
+            "automation_requirements"
+        ]
+        == obligations
+    )
     assignment_artifacts["prototype_acceptance"]["digest"] = "sha256:another"
     with pytest.raises(ValueError, match="projection identity mismatch: digest"):
         worker._prototype_resource_handoff_from_assignment(assignment, workspace)
     assignment_artifacts.pop("prototype_acceptance")
     assignment_artifacts.pop("context_projection")
     assignment_artifacts["context_packet"] = context_packet
-    context_packet["artifacts"]["prototype"]["acceptance"].pop("automation_requirements")
+    context_packet["artifacts"]["prototype"]["acceptance"].pop(
+        "automation_requirements"
+    )
 
-    (workspace / "skills" / companion / "resources" / "work_items.resource.json").unlink()
+    (
+        workspace / "skills" / companion / "resources" / "work_items.resource.json"
+    ).unlink()
     checks = []
     errors = []
     worker._validate_prototype_resource_handoff(

@@ -4,11 +4,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from adaos.services.builder.automation import BuilderAutomationService
 from adaos.services.builder.browser_feedback import (
     BuilderBrowserFeedbackService,
     browser_feedback_failures,
 )
-from adaos.services.builder.automation import BuilderAutomationService
 from adaos.services.skill_factory_worker import _browser_feedback_prompt_projection
 
 
@@ -24,7 +24,8 @@ def test_browser_feedback_binds_runtime_source_and_evidence(
         encoding="utf-8",
     )
 
-    def runner(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
+    def runner(*args, **kwargs):
+        assert kwargs["env"]["ADAOS_E2E_SPACE_KIND"] == "workspace"
         output = Path(kwargs["env"]["ADAOS_E2E_OUTPUT"])
         (output / "wide.png").write_bytes(b"wide")
         (output / "compact.png").write_bytes(b"compact")
@@ -34,12 +35,14 @@ def test_browser_feedback_binds_runtime_source_and_evidence(
             "samples": [
                 {
                     "layout": "wide",
+                    "authoritative_data_settled": True,
                     "hard_failures": [],
                     "warnings": [],
                     "diagnostics": {"visible_widget_ids": ["main"]},
                 },
                 {
                     "layout": "compact",
+                    "authoritative_data_settled": True,
                     "hard_failures": [],
                     "warnings": [],
                     "diagnostics": {"visible_widget_ids": ["main"]},
@@ -59,11 +62,11 @@ def test_browser_feedback_binds_runtime_source_and_evidence(
     )
     monkeypatch.setattr(
         "adaos.services.builder.browser_feedback.resolve_control_base_url",
-        lambda **kwargs: "http://127.0.0.1:8777",  # noqa: ARG005
+        lambda **kwargs: "http://127.0.0.1:8777",
     )
     monkeypatch.setattr(
         "adaos.services.builder.browser_feedback.resolve_control_token",
-        lambda **kwargs: "local-token",  # noqa: ARG005
+        lambda **kwargs: "local-token",
     )
 
     receipt = service.evaluate(
@@ -73,10 +76,12 @@ def test_browser_feedback_binds_runtime_source_and_evidence(
         task_id="task.1",
         source_path=scenario,
         context_packet_digest="sha256:" + "1" * 64,
+        space_kind="workspace",
     )
 
     assert receipt["ok"] is True
     assert receipt["status"] == "passed"
+    assert receipt["space_kind"] == "workspace"
     assert receipt["source"]["digest"].startswith("sha256:")
     assert receipt["report_digest"].startswith("sha256:")
     assert receipt["runtime_contract"]["webui_abi_digest"].startswith("sha256:")
@@ -88,6 +93,87 @@ def test_browser_feedback_binds_runtime_source_and_evidence(
     assert json.loads(Path(receipt["receipt_path"]).read_text(encoding="utf-8"))[
         "source"
     ]["digest"] == receipt["source"]["digest"]
+
+
+def test_browser_feedback_rejects_success_without_authoritative_data(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ENV_TYPE", "dev")
+    scenario = tmp_path / "scenario"
+    scenario.mkdir()
+    (scenario / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "title": "Preview"}),
+        encoding="utf-8",
+    )
+
+    def runner(*args, **kwargs):
+        output = Path(kwargs["env"]["ADAOS_E2E_OUTPUT"])
+        report = {
+            "schema": "adaos.builder.browser_feedback.v1",
+            "passed": True,
+            "samples": [
+                {"layout": "wide", "hard_failures": [], "warnings": []},
+                {"layout": "compact", "hard_failures": [], "warnings": []},
+            ],
+        }
+        (output / "report.json").write_text(json.dumps(report), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    service = BuilderBrowserFeedbackService(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        command_runner=runner,
+    )
+    monkeypatch.setattr(
+        "adaos.services.builder.browser_feedback.resolve_control_base_url",
+        lambda **kwargs: "http://127.0.0.1:8777",
+    )
+    monkeypatch.setattr(
+        "adaos.services.builder.browser_feedback.resolve_control_token",
+        lambda **kwargs: "local-token",
+    )
+
+    receipt = service.evaluate(
+        scenario_id="reading_list",
+        webspace_id="desktop-dev",
+        subnet_id="sn_test",
+        task_id="task.1",
+        source_path=scenario,
+        context_packet_digest="sha256:" + "1" * 64,
+    )
+
+    assert receipt["ok"] is False
+    assert receipt["status"] == "failed"
+    assert receipt["report"]["failure"] == "authoritative_data_not_settled"
+
+
+def test_browser_feedback_rejects_unknown_space_kind(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ENV_TYPE", "dev")
+    scenario = tmp_path / "scenario"
+    scenario.mkdir()
+    (scenario / "webui.json").write_text("{}", encoding="utf-8")
+    service = BuilderBrowserFeedbackService(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+    )
+
+    try:
+        service.evaluate(
+            scenario_id="reading_list",
+            webspace_id="desktop",
+            subnet_id="sn_test",
+            task_id="task.1",
+            source_path=scenario,
+            space_kind="trial",
+        )
+    except ValueError as exc:
+        assert str(exc) == "browser feedback space_kind must be development or workspace"
+    else:
+        raise AssertionError("invalid space_kind must be rejected")
 
 
 def test_browser_feedback_projection_is_bounded_and_human_readable() -> None:
@@ -167,7 +253,7 @@ def test_failed_browser_feedback_queues_one_bounded_repair(
     submitted: list[dict] = []
 
     class Workflow:
-        def transition(self, *args, **kwargs):  # noqa: ANN002, ANN003, ARG002
+        def transition(self, *args, **kwargs):
             return {"ok": True}
 
     monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: Workflow())
