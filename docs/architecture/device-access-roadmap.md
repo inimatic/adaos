@@ -20,7 +20,8 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 - [x] Expose reusable SDK helpers before proliferating skill-local logic.
 - [x] Separate bootstrap issuance from long-lived access policy.
 - [x] Treat browser and member links with the same operator mental model.
-- [x] Keep `web_desktop` compact by moving section operations into settings modals.
+- [x] Keep `web_desktop` compact by moving device operations into focused
+  settings or action surfaces while Applications owns product lifecycle.
 
 ## Locked target decisions
 
@@ -33,7 +34,8 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 
 ## Core access model
 
-- [x] Rename the desktop surface from `Applications` to `Devices`.
+- [x] Supersede the earlier device-centric shell assumption: `web_desktop` is
+  Application-centric, while `Devices` remains a peer endpoint/access area.
 - [x] Define and use the terms `device`, `client`, `access link`, `detach`, and `display_name`.
 - [x] Introduce a runtime-owned access link registry backed by durable state.
 - [x] Support browser links keyed by `device_id`.
@@ -163,20 +165,25 @@ settings". It is:
 - [ ] Group browser inventory explicitly by last or current webspace in the operator UI.
 - [ ] Add browser settings UX parity between transient client modal and skill-hosted modal flow.
 
-## `web_desktop` device shell
+## Devices area in the application-centric `web_desktop`
 
 - [x] Add a `Browsers` entry point to the `Devices` panel.
 - [x] Replace per-section action rows with a single settings affordance.
-- [x] Move `Apps`, `Marketplace`, `Hide`, rename, lifetime, and `Detach` into device settings UX.
+- [ ] Remove per-node `Apps` and `Marketplace` ownership from device settings;
+  show active assignments as operational context and navigate lifecycle and
+  placement work to Applications.
+- [x] Keep `Hide`, rename, lifetime, and `Detach` in device settings UX.
 - [x] Keep compact-screen labels short and icon-first where needed.
 - [x] Route all device settings actions through one stable generic modal contract.
 - [ ] Add confirmation and richer status messaging for destructive detach flows.
 
-## Node-scoped operations inside device context
+## Node execution context
 
-- [x] Keep `Apps` bound to the current node context.
-- [x] Keep `Marketplace` bound to the current node context.
-- [x] Filter `Marketplace` to items not yet installed on that node.
+- [ ] Replace node-bound Application and Marketplace catalogs with
+  subnet-scoped Application inventory plus read-only component activation
+  context for the selected node.
+- [ ] Link selected-node component activity to the Applications placement
+  drill-down without duplicating deployment authority.
 - [x] Keep `Hide` or `Show` as presentation-only desktop state.
 - [ ] Unify node capability management and device access management under one reusable settings schema.
 
@@ -244,7 +251,8 @@ settings". It is:
 - [x] Phase 0 and Phase 1: vocabulary and core access model.
 - [x] Phase 2: ingress enforcement.
 - [x] Phase 3: first browser observability slice.
-- [x] Phase 4: `web_desktop` device shell.
+- [~] Phase 4: migrate the former device-centric shell to an
+  application-centric desktop with a peer Devices area.
 - [x] Phase 5: `DeviceInventoryService`, canonical `DeviceRecord`, and device reference normalization.
 - [x] Phase 6: SDK-first `devices` and `device_access` surfaces plus skill migration off direct service imports.
 - [x] Phase 7: unified settings contract and command-profile surface.

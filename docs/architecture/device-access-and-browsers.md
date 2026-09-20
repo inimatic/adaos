@@ -2,13 +2,14 @@
 
 ## Purpose
 
-This document captures the target architecture for device-centric access management in AdaOS.
+This document captures the target architecture for device access management in
+the application-centric AdaOS desktop.
 It consolidates the model behind:
 
 - the `Devices` panel in `web_desktop`
 - browser access links issued through the web pairing flow
 - member-node links joined through the subnet join flow
-- per-node marketplace and app management in a device-centric UI
+- execution-node visibility and placement diagnostics delegated by Applications
 - future voice- and automation-facing device naming and policy control
 
 The goal is to stop treating browser sessions, member links, app catalogs, and marketplace actions as isolated UI features.
@@ -46,7 +47,8 @@ What was missing is a single architectural model that answers:
 2. Where is the canonical lifetime policy stored?
 3. How are browser links and member links managed with the same mental model?
 4. Which layer owns rename, detach, and lifetime control?
-5. How does `web_desktop` stay device-centric while reusing generic platform components?
+5. How does the Devices area remain coherent without turning nodes into
+   Application installation identities?
 
 ## Core vocabulary
 
@@ -426,22 +428,26 @@ feature. It composes the device inventory read model with endpoint settings
 commands, assignment, active app/surface status, and scenario links to
 `slideshow_skill` and `redevice_voice`.
 
-## 9. `web_desktop` as a device-centric shell
+## 9. Devices inside an application-centric `web_desktop`
 
-The `desktop-icons` surface should be reframed from `Applications` to `Devices`.
+`web_desktop` is the launch and overview shell for subnet-installed
+Applications. `desktop-icons` represents pinned Application entry points;
+Devices is a peer management area for browsers, member nodes, endpoint access,
+trust, connectivity, and diagnostics.
 
 That means:
 
-- the top-level entry point is about managed endpoints, not only app icons
-- node sections represent device contexts
-- per-node operational actions move behind a settings affordance
-- node actions are still backed by generic modals and skill-hosted actions
+- one Application keeps one subnet installation and one logical desktop entry;
+- node sections represent execution/access contexts, not separate app catalogs;
+- Applications owns desired placement and observed activation drill-down;
+- device operations move behind a focused settings affordance;
+- node actions are still backed by generic modals and skill-hosted actions.
 
-The device section settings modal is the main operator shell for a node.
-It should expose:
+The device section settings modal is the main operator shell for a node. It
+should expose:
 
-- `Apps`
-- `Marketplace`
+- active Application/component assignments as read-only operational context;
+- a transition to the owning Application placement view;
 - `Hide` or `Show`
 - rename
 - lifetime policy
@@ -477,24 +483,28 @@ endpoint. Immediate remote logout requires a live control-plane rail such as
 browser sessions; until that rail exists, the UI should describe detach as
 revocation and the roadmap should track forced logout separately.
 
-## 11. Marketplace and app management stay node-scoped
+## 11. Application placement and device context
 
-The device-centric shell does not remove node-scoped capability management.
+Application installation and Marketplace inventory are subnet-scoped. Devices
+may host zero, one, or several component activations selected by the existing
+deployment policy. The Devices area may show those activations and their health,
+but install, update, remove, relocation, and drain are reviewed from Applications.
 
-Instead, it clarifies ownership:
+This clarifies ownership:
 
-- `Apps` is the installed app catalog for a concrete node
-- `Marketplace` is the list of installable skills and scenarios not yet installed on that node
-- `Hide` is desktop presentation state
-- rename, lifetime, and detach belong to device access management
-
-`Marketplace` therefore remains a node-scoped operational action, but it is launched from the device settings context instead of being mixed with every other section button.
+- Applications owns product identity, installation, channel, release and desired
+  placement;
+- `ProjectDeployment` owns desired component placement and observed activations;
+- Devices owns endpoint identity, access, trust and connectivity;
+- `Hide` remains desktop presentation state.
 
 ## 12. Offline semantics
 
 Offline state should not flap on brief transport loss.
 
-The device-centric desktop should continue to use a grace timeout before showing icons as disabled.
+The desktop should continue to use a grace timeout before showing affected
+Application entry points as degraded or unavailable. A node-presence timeout
+must not be interpreted as an uninstalled Application.
 That timeout belongs to presentation semantics.
 The access link registry remains the durable policy model and can record:
 

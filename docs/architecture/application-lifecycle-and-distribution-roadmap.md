@@ -116,6 +116,10 @@ later implementation shares one object and state model.
   Applications without granting upstream channel authority.
 - [ ] `[deferred]` `APP0-11` Ownership transfer, publisher succession,
   organization publishers, threshold authority, and collaborative development.
+- [x] `[must]` `APP0-12` Freeze Application installation at subnet scope.
+  Treat node and endpoint identity as mutable component-placement and activation
+  metadata backed by `ProjectDeployment`; never create per-node Application
+  identities, installations, subscriptions, or desktop entries.
 
 **Exit proof:** schema round trips and compatibility fixtures distinguish all
 seven Application objects, preserve legacy release identity, and reject
@@ -236,6 +240,11 @@ Project/Application identity collapse.
   additive setting in the second increment; DEV restart preservation and stale
   revision rejection are independently qualified. Reading List declares no
   credential slot, so these live cycles do not qualify credential transfer.
+- [ ] `[must]` `APP1-17` Project desired component placement and observed
+  activations into the Application read model from the existing
+  `ProjectDeploymentRuntime`. Include aggregate state, node/component counts,
+  health, freshness, partial-result markers, and an honest `not_reported`
+  state without creating a parallel placement store.
 - [x] `[must]` Qualify the `APP1-14` failed-preparation recovery primitive:
   exact Candidate/contract, unchanged Stable verification, durable interrupted
   recovery, retained evidence and no false completed-migration admission.
@@ -583,6 +592,18 @@ Builder development and consumes only public contracts.
   before building or uploading a registry batch. Reserve or advance every
   conflicting version first, then checkpoint the batch under one reachable
   Forge revision and report per-project build, upload, and retry timings.
+- [ ] `[must]` `APP4-41` Show subnet installation and mutable execution
+  placement in Applications. Keep the default summary Application-centric and
+  provide an expandable component/node drill-down with desired versus observed
+  state and reviewed relocation/drain entry points.
+- [ ] `[must]` `APP4-42` Make `web_desktop` the application-centric launch and
+  overview shell: Home contains pinned Applications only, complete inventory
+  and lifecycle navigate to Applications, and people/role management navigates
+  to Users & Access. Do not reproduce Marketplace mutations in the shell.
+- [ ] `[must]` `APP4-43` Restore the canonical desktop widget lifecycle in the
+  new shell: catalog, install/remove, pin/unpin, reorder, responsive placement,
+  and persisted layout preferences. Qualify parity against the previous
+  `desktop-icons`/`desktop-widgets` use cases before replacing the beta.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
 - [ ] `[could]` `APP4-38` Store UI revisions as base plus content-addressed

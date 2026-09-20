@@ -316,9 +316,17 @@ An `ApplicationInstallation` is the local aggregate that binds one Application
 to one exact installed release, component references, data-retention policy,
 and placement state. It is distinct from source and channel state.
 
+Installation scope is the subnet, not a node or Webspace. A node is an eligible
+execution location for one or more Application components and may change while
+the Application identity, installation, data scope, subscription, and desktop
+entry remain stable. A distributed skill may have several simultaneous
+activations; another component of the same Application may remain singleton.
+Neither case creates another installed Application.
+
 ```yaml
 installation:
   application_id: app_01...
+  subnet_ref: subnet:sn_...
   installed_release_digest: sha256:...
   component_refs:
     - package_digest: sha256:...
@@ -326,6 +334,21 @@ installation:
   data_policy: retain
   status: active
 ```
+
+`ProjectDeployment` remains the canonical desired placement and rollout
+contract. Its `ComponentPlacementPolicy` records constraints and selected
+nodes, while `ComponentActivation` records observed component/node instances.
+Applications projects those existing authorities rather than maintaining a
+second placement registry. The product read model therefore distinguishes:
+
+- installation identity and effective release at subnet scope;
+- desired placement policy per component;
+- observed activations and health per node;
+- observation freshness and partial/unknown state.
+
+Missing activation evidence is rendered as `not_reported` or `unknown`, never
+as an invented local placement. Advanced node and component diagnostics are a
+drill-down; the default product model remains the Application.
 
 ### ApplicationSubscription
 
@@ -687,6 +710,14 @@ The wide layout has three stable information zones:
 - compact `Installation`, `Marketplace`, `Categories`, and conditional
   `My development` metadata in an auxiliary rail.
 
+`Installation` is explicitly subnet-scoped. Its summary shows the installed
+release, effective channel, aggregate execution state, placement policy, active
+component/node count, last observation, and any degraded or unknown evidence.
+An expandable execution view shows desired component placement separately from
+observed node activations. Node identity is operational metadata, not the
+Application identity and not a second per-node install control. Relocation,
+drain, and placement-policy changes use reviewed deployment operations.
+
 Compact layouts expose the catalog as a drawer, keep the selected Application
 as the primary surface, and stack metadata after the main detail. Marketplace
 is the default discovery section and contains public stable Applications only;
@@ -719,6 +750,15 @@ adaptive overflow rather than an unstable horizontal scroll position. Local
 Workspace, Trial and DEV records may be combined by the Application read model,
 but public catalog/Root delivery remains separately authoritative. A local
 fallback is not evidence that the public `inimatic.com` path is healthy.
+
+`web_desktop` is an application-centric shell over this inventory. Home shows
+only pinned Application entry points and user-selected widgets; the complete
+installed set, Marketplace, versions, updates, placement and removal stay in
+Applications. Devices remains a separate access and endpoint-management area.
+The shell may summarize execution health but must navigate to Applications for
+product lifecycle and to Users & Access for people, roles and grants. This
+keeps changing execution placement from fragmenting one Application across
+several device-specific catalogs.
 
 Static scenario localization is owned by the scenario package. The scenario
 declares locale resources in `webui.json` and stores string dictionaries under
