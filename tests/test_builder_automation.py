@@ -3836,6 +3836,131 @@ def test_retry_after_reaccepting_same_change_reenters_automation(
         assert history[0]["replaced_at"]
 
 
+def test_followup_in_automation_phase_uses_iteration_without_reacceptance(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "status": "failed",
+            "iteration": 1,
+            "change_set_id": "change.recipes",
+            "current_task_id": "task.failed",
+            "updated_at": "2026-09-04T00:00:00+00:00",
+        }
+    )
+    transitions: list[str] = []
+    workflow = SimpleNamespace(
+        describe=lambda *_args: {
+            "active_phase": "automation",
+            "governed": {"state": "automation_ready"},
+            "automation": {"status": "failed", "head_task_id": "task.failed"},
+            "change_set": {
+                "change_set_id": "change.recipes",
+                "status": "blocked",
+                "gate": "automation",
+            },
+        },
+        require_current_prototype_acceptance=lambda *_args: pytest.fail(
+            "an Automation iteration must reuse its immutable Prototype receipt"
+        ),
+        transition=lambda *_args, **_kwargs: transitions.append(_args[2]) or {},
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: workflow)
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_refresh_session_companion_skill_ids",
+        lambda self, session: None,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService, "_capture_preview_binding", lambda self, session: None
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_submit",
+        lambda self, session, **_kwargs: {"task": {"task_id": "task.followup"}},
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService, "_notify_started_session", lambda self, session: session
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_launch_worker", lambda *_args: None)
+
+    result = service.submit_turn(
+        text="Repair the accepted implementation wiring.",
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    assert result["status"] == "automation_queued"
+    assert transitions == ["automation_iteration_started"]
+    assert service.get_session("scenario", "recipes")["iteration"] == 2
+
+
+def test_initial_automation_preflights_acceptance_before_session_mutation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    original = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "status": "failed",
+        "iteration": 1,
+        "change_set_id": "change.recipes",
+        "current_task_id": "task.failed",
+        "updated_at": "2026-09-04T00:00:00+00:00",
+    }
+    service._save_session(original)
+
+    def reject_acceptance(*_args):
+        raise ValueError("Prototype acceptance is stale")
+
+    workflow = SimpleNamespace(
+        describe=lambda *_args: {
+            "active_phase": "prototype",
+            "governed": {"state": "automation_ready"},
+            "prototype": {"acceptance_required": True},
+            "change_set": {
+                "change_set_id": "change.recipes",
+                "status": "approved",
+                "gate": "automation",
+            },
+        },
+        require_current_prototype_acceptance=reject_acceptance,
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: workflow)
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_submit",
+        lambda *_args, **_kwargs: pytest.fail("task must not be created"),
+    )
+
+    with pytest.raises(ValueError, match="acceptance is stale"):
+        service.submit_turn(
+            text="Start the accepted implementation.",
+            object_type="scenario",
+            object_id="recipes",
+        )
+
+    retained = service.get_session("scenario", "recipes")
+    assert retained["iteration"] == original["iteration"]
+    assert retained["current_task_id"] == original["current_task_id"]
+    assert retained.get("turns") is None
+
+
 def test_retry_replays_its_queued_task_without_creating_a_duplicate(
     tmp_path: Path,
     monkeypatch,
@@ -3860,6 +3985,9 @@ def test_retry_replays_its_queued_task_without_creating_a_duplicate(
             "active_phase": "prototype",
             "governed": {"state": "automation_ready"},
         },
+        require_current_prototype_acceptance=lambda *_args: {
+            "acceptance_id": "acceptance.current"
+        },
         transition=lambda *_args, **_kwargs: transitions.append(_args[2]) or {},
     )
     monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: workflow)
@@ -3883,6 +4011,66 @@ def test_retry_replays_its_queued_task_without_creating_a_duplicate(
     assert result["recovered_queued_retry"] is True
     assert result["task"]["task_id"] == "task.retry"
     assert transitions == ["automation_started"]
+    assert launched == ["automation.scenario.recipes"]
+
+
+def test_retry_recovers_queued_followup_created_before_workflow_transition(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "status": "queued",
+            "iteration": 3,
+            "change_id": "automation.followup",
+            "current_task_id": "task.followup",
+            "task_history": ["task.failed", "task.followup"],
+            "turns": [
+                {
+                    "iteration": 3,
+                    "text": "Reconcile the already applied wiring correction.",
+                }
+            ],
+            "updated_at": "2026-09-04T00:00:00+00:00",
+        }
+    )
+    transitions: list[tuple[str, dict]] = []
+    workflow = SimpleNamespace(
+        describe=lambda *_args: {
+            "active_phase": "automation",
+            "governed": {"state": "automation_ready"},
+            "automation": {"status": "failed", "head_task_id": "task.failed"},
+        },
+        transition=lambda *_args, **kwargs: transitions.append(
+            (_args[2], dict(kwargs.get("metadata") or {}))
+        )
+        or {},
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: workflow)
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda task_id: {"task_id": task_id, "status": "queued"}
+    )
+    launched: list[str] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_launch_worker",
+        lambda self, session_id: launched.append(session_id),
+    )
+
+    result = service.retry_failed(object_type="scenario", object_id="recipes")
+
+    assert result["recovered_queued_submission"] is True
+    assert transitions[0][0] == "automation_iteration_started"
+    assert transitions[0][1]["reconciliation"] is True
+    assert transitions[0][1]["task_id"] == "task.followup"
     assert launched == ["automation.scenario.recipes"]
 
 

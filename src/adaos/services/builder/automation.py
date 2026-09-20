@@ -3854,7 +3854,11 @@ class BuilderAutomationService:
                     else {}
                 )
                 governed_state = str(governed.get("state") or "").strip()
-                starts_automation = governed_state == "automation_ready"
+                active_phase = str(workflow_before.get("active_phase") or "").strip()
+                starts_automation = (
+                    active_phase == "prototype"
+                    and governed_state == "automation_ready"
+                )
                 if governed_state in {
                     "trial_ready",
                     "trial_review",
@@ -3942,6 +3946,24 @@ class BuilderAutomationService:
                     session["browser_feedback_repair_count"] = 0
                     session.pop("pending_browser_feedback", None)
                     session.pop("context_packet_digest", None)
+                prototype_before = (
+                    workflow_before.get("prototype")
+                    if isinstance(workflow_before.get("prototype"), Mapping)
+                    else {}
+                )
+                if starts_automation and bool(
+                    prototype_before.get("acceptance_required")
+                ):
+                    # Admission must happen before the session iteration and
+                    # factory task are created. A rejected Prototype handoff
+                    # must not leave a durable queued task with no matching
+                    # workflow transition.
+                    session["prototype_acceptance"] = (
+                        self._workflow().require_current_prototype_acceptance(
+                            str(session.get("object_type") or ""),
+                            str(session.get("object_id") or ""),
+                        )
+                    )
             if agent_profile is not None:
                 from adaos.services.codex_profiles import normalize_codex_profile
 
@@ -4330,10 +4352,6 @@ class BuilderAutomationService:
                     for item in session.get("turns") or []
                     if isinstance(item, Mapping)
                 ]
-                if not turns or str(turns[-1].get("text") or "").strip() != (
-                    _UNCHANGED_RETRY_INSTRUCTION
-                ):
-                    raise ValueError("only a failed Automation session can be retried")
                 task_id = str(session.get("current_task_id") or "").strip()
                 try:
                     task = self.factory.read_task(task_id)
@@ -4349,9 +4367,41 @@ class BuilderAutomationService:
                     if isinstance(projection.get("governed"), Mapping)
                     else {}
                 )
+                automation_state = (
+                    projection.get("automation")
+                    if isinstance(projection.get("automation"), Mapping)
+                    else {}
+                )
+                unchanged_retry = bool(
+                    turns
+                    and str(turns[-1].get("text") or "").strip()
+                    == _UNCHANGED_RETRY_INSTRUCTION
+                )
+                orphaned_before_transition = bool(
+                    active_phase == "automation"
+                    and str(automation_state.get("status") or "").strip()
+                    in {"completed", "failed"}
+                    and str(automation_state.get("head_task_id") or "").strip()
+                    != task_id
+                )
+                if not unchanged_retry and not orphaned_before_transition:
+                    raise ValueError("only a failed Automation session can be retried")
                 if active_phase == "prototype" and str(governed.get("state") or "") == (
                     "automation_ready"
                 ):
+                    prototype_state = (
+                        projection.get("prototype")
+                        if isinstance(projection.get("prototype"), Mapping)
+                        else {}
+                    )
+                    if bool(prototype_state.get("acceptance_required")):
+                        session["prototype_acceptance"] = (
+                            workflow.require_current_prototype_acceptance(
+                                kind, project_id
+                            )
+                        )
+                        session["updated_at"] = _now_iso()
+                        self._save_session(session)
                     workflow.transition(
                         kind,
                         project_id,
@@ -4360,6 +4410,24 @@ class BuilderAutomationService:
                         reason="resume the queued retry from the accepted Prototype",
                         metadata={
                             "confirmed": True,
+                            "task_id": task_id,
+                            "change_id": session.get("change_id"),
+                            "run_id": session.get("change_id"),
+                            "context_packet_digest": session.get(
+                                "context_packet_digest"
+                            ),
+                        },
+                    )
+                elif orphaned_before_transition:
+                    workflow.transition(
+                        kind,
+                        project_id,
+                        "automation_iteration_started",
+                        actor="builder.automation",
+                        reason="recover a queued Automation task created before its workflow transition",
+                        metadata={
+                            "confirmed": True,
+                            "reconciliation": True,
                             "task_id": task_id,
                             "change_id": session.get("change_id"),
                             "run_id": session.get("change_id"),
@@ -4383,6 +4451,7 @@ class BuilderAutomationService:
                     "automation": self.project_session(session),
                     "retried_unchanged_request": True,
                     "recovered_queued_retry": True,
+                    "recovered_queued_submission": orphaned_before_transition,
                 }
             if status != "failed":
                 raise ValueError("only a failed Automation session can be retried")
