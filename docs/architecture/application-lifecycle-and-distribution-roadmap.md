@@ -592,18 +592,28 @@ Builder development and consumes only public contracts.
   before building or uploading a registry batch. Reserve or advance every
   conflicting version first, then checkpoint the batch under one reachable
   Forge revision and report per-project build, upload, and retry timings.
-- [ ] `[must]` `APP4-41` Show subnet installation and mutable execution
+- [~] `[must]` `APP4-41` Show subnet installation and mutable execution
   placement in Applications. Keep the default summary Application-centric and
   provide an expandable component/node drill-down with desired versus observed
-  state and reviewed relocation/drain entry points.
-- [ ] `[must]` `APP4-42` Make `web_desktop` the application-centric launch and
+  state and reviewed relocation/drain entry points. The SDK/Root read model now
+  projects existing deployment/activation authorities; Applications browser
+  qualification and reviewed placement mutations remain open.
+- [~] `[must]` `APP4-42` Make `web_desktop` the application-centric launch and
   overview shell: Home contains pinned Applications only, complete inventory
   and lifecycle navigate to Applications, and people/role management navigates
   to Users & Access. Do not reproduce Marketplace mutations in the shell.
+  The DEV shell removes the embedded reduced products and renders the canonical
+  pin projection; updated Beta browser qualification remains open.
 - [ ] `[must]` `APP4-43` Restore the canonical desktop widget lifecycle in the
   new shell: catalog, install/remove, pin/unpin, reorder, responsive placement,
   and persisted layout preferences. Qualify parity against the previous
   `desktop-icons`/`desktop-widgets` use cases before replacing the beta.
+- [~] `[must]` `APP4-44` Keep Home presentation separate from installation and
+  placement: successful install pins by default, Home customization and
+  Applications can unpin without uninstalling, uninstall removes the launcher,
+  and order/pin state persists in the target Webspace overlay. SDK, Root MCP
+  and Client contracts are implemented; Applications and beta end-to-end proof
+  remain open.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
 - [ ] `[could]` `APP4-38` Store UI revisions as base plus content-addressed

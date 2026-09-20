@@ -216,6 +216,168 @@ def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) 
     )
 
 
+def test_successful_install_projects_application_to_home(monkeypatch) -> None:
+    class Service:
+        def apply_operation(self, *_args, **_kwargs):
+            return _Record(
+                {
+                    "operation_id": "appop.install",
+                    "application_id": "reading_list",
+                    "kind": "install",
+                    "status": "succeeded",
+                }
+            )
+
+    projected = []
+    monkeypatch.setattr(applications, "_service", Service)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:sn_home")
+    monkeypatch.setattr(
+        applications, "_admit_active_skill_capability", lambda _capability: None
+    )
+    monkeypatch.setattr(
+        applications,
+        "_sync_home_installation",
+        lambda application_id, **kwargs: projected.append(
+            (application_id, kwargs)
+        )
+        or {"pinned": True, "webspace_id": kwargs["webspace_id"]},
+    )
+
+    result = applications.apply_operation(
+        "appop.install",
+        plan_digest="sha256:" + "a" * 64,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+        idempotency_key="install-reading-list",
+        webspace_id="family",
+    )
+
+    assert result["home"] == {"pinned": True, "webspace_id": "family"}
+    assert projected == [
+        ("reading_list", {"installed": True, "webspace_id": "family"})
+    ]
+
+
+def test_home_pin_changes_only_presentation_overlay(monkeypatch) -> None:
+    snapshot = SimpleNamespace(
+        installed=SimpleNamespace(
+            apps=["scenario:reading_list"],
+            widgets=[],
+            removed_apps=[],
+            removed_widgets=[],
+        ),
+        pinned_applications=["scenario:reading_list", "scenario:notes"],
+    )
+    writes = []
+
+    class Desktop:
+        def get_snapshot(self, webspace_id):
+            assert webspace_id == "family"
+            return snapshot
+
+        def set_pinned_applications_with_live_room(self, values, webspace_id):
+            writes.append((values, webspace_id))
+
+    monkeypatch.setattr(
+        applications,
+        "get_application",
+        lambda application_id, **_kwargs: {
+            "application": {
+                "application_id": application_id,
+                "entrypoints": [
+                    {
+                        "entrypoint_id": "main",
+                        "presentation_ref": "scenario:reading_list",
+                    }
+                ],
+            },
+            "installed": True,
+        },
+    )
+    monkeypatch.setattr(applications, "WebDesktopService", Desktop)
+
+    result = applications.set_home_pinned(
+        "reading_list", pinned=False, webspace_id="family"
+    )
+
+    assert result["pinned"] is False
+    assert writes == [(["scenario:notes"], "family")]
+
+
+def test_application_list_reads_home_and_placement_inventory_once(monkeypatch) -> None:
+    models = [
+        {
+            "application": {
+                "application_id": application_id,
+                "visibility": "private",
+                "entrypoints": [
+                    {
+                        "entrypoint_id": "main",
+                        "presentation_ref": f"scenario:{application_id}",
+                    }
+                ],
+            },
+            "installed": True,
+            "channels": {},
+        }
+        for application_id in ("notes", "reading_list")
+    ]
+    snapshot = SimpleNamespace(
+        installed=SimpleNamespace(apps=["scenario:notes", "scenario:reading_list"]),
+        pinned_applications=["scenario:notes"],
+    )
+    home_reads: list[str] = []
+    placement_reads: list[tuple[str, ...]] = []
+
+    class Desktop:
+        def get_snapshot(self, webspace_id):
+            home_reads.append(webspace_id)
+            return snapshot
+
+    monkeypatch.setattr(applications, "_application_models", lambda **_kwargs: models)
+    monkeypatch.setattr(applications, "_local_development_index", dict)
+    monkeypatch.setattr(applications, "WebDesktopService", Desktop)
+    monkeypatch.setattr(
+        applications,
+        "_execution_placement_index",
+        lambda application_ids: placement_reads.append(tuple(application_ids)) or {},
+    )
+
+    listed = applications.list_applications(webspace_id="desktop")
+
+    assert home_reads == ["desktop"]
+    assert placement_reads == [("notes", "reading_list")]
+    assert [item["home"]["pinned"] for item in listed] == [True, False]
+
+
+def test_application_show_enriches_only_the_requested_model(monkeypatch) -> None:
+    models = [
+        {
+            "application": {"application_id": application_id},
+            "installed": True,
+            "channels": {},
+        }
+        for application_id in ("notes", "reading_list", "builder")
+    ]
+    enriched: list[list[str]] = []
+
+    def enrich(selected, **_kwargs):
+        enriched.append(
+            [item["application"]["application_id"] for item in selected]
+        )
+        return selected
+
+    monkeypatch.setattr(applications, "_application_models", lambda **_kwargs: models)
+    monkeypatch.setattr(applications, "_local_development_index", dict)
+    monkeypatch.setattr(applications, "_enrich_application_models", enrich)
+
+    shown = applications.get_application("reading_list", webspace_id="desktop")
+
+    assert shown["application"]["application_id"] == "reading_list"
+    assert enriched == [["reading_list"]]
+
+
 def test_sdk_application_access_helpers_forward_review_context(monkeypatch) -> None:
     calls = []
 

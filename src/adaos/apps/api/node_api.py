@@ -3593,10 +3593,17 @@ async def _materialize_catalog_items(webspace_id: str, kind: str) -> list[dict[s
         if bucket == "apps"
         else list(getattr(getattr(desktop_snapshot, "installed", None), "widgets", []) or [])
     )
-    pinned_ids = {
+    pinned_widget_ids = {
         str(item.get("id") or "").strip()
         for item in list(getattr(desktop_snapshot, "pinned_widgets", []) or [])
         if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    pinned_application_ids = {
+        str(item or "").strip()
+        for item in list(
+            getattr(desktop_snapshot, "pinned_applications", []) or []
+        )
+        if str(item or "").strip()
     }
     default_icon = "apps-outline" if bucket == "apps" else "layers-outline"
     materialized: list[dict[str, Any]] = []
@@ -3610,7 +3617,11 @@ async def _materialize_catalog_items(webspace_id: str, kind: str) -> list[dict[s
         launch_modal = str(raw.get("launchModal") or "").strip()
         source = str(raw.get("source") or raw.get("origin") or "").strip()
         installed_now = item_id in installed_ids
-        pinned_now = bucket == "widgets" and item_id in pinned_ids
+        pinned_now = (
+            item_id in pinned_widget_ids
+            if bucket == "widgets"
+            else item_id in pinned_application_ids
+        )
         kind_label = ""
         if scenario_id:
             kind_label = "Scenario"
@@ -3628,7 +3639,7 @@ async def _materialize_catalog_items(webspace_id: str, kind: str) -> list[dict[s
                 "installType": "app" if bucket == "apps" else "widget",
                 "installable": True,
                 "installed": installed_now,
-                "pinnable": bucket == "widgets" and (installed_now or pinned_now),
+                "pinnable": installed_now or pinned_now,
                 "pinned": pinned_now,
                 "scenario_id": scenario_id or None,
                 "launchModal": launch_modal or None,

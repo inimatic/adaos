@@ -755,10 +755,20 @@ fallback is not evidence that the public `inimatic.com` path is healthy.
 only pinned Application entry points and user-selected widgets; the complete
 installed set, Marketplace, versions, updates, placement and removal stay in
 Applications. Devices remains a separate access and endpoint-management area.
-The shell may summarize execution health but must navigate to Applications for
-product lifecycle and to Users & Access for people, roles and grants. This
-keeps changing execution placement from fragmenting one Application across
-several device-specific catalogs.
+Applications and Users & Access are installed system Applications and appear
+on Home through the same pin projection; the shell does not embed reduced
+copies of either product. The shell may summarize execution health but must
+navigate to Applications for product lifecycle and to Users & Access for
+people, roles and grants. This keeps changing execution placement from
+fragmenting one Application across several device-specific catalogs.
+
+A successful installation pins the Application to Home by default. Home
+customization owns pin state and order in the target Webspace overlay: unpinning
+hides the launcher without uninstalling or changing execution placement, while
+uninstall removes the obsolete launcher projection. Applications exposes the
+same `home.pinned` state and a direct pin/unpin control for installed products.
+This presentation state is not copied into `ProjectDeployment` and is never
+used as evidence that a component is running.
 
 Static scenario localization is owned by the scenario package. The scenario
 declares locale resources in `webui.json` and stores string dictionaries under

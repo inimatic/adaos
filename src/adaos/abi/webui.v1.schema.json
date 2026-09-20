@@ -2353,8 +2353,8 @@
           "items": { "$ref": "#/$defs/formOption" }
         },
         "optionsDataSource": {
-          "allOf": [{ "$ref": "#/$defs/dataSource" }, { "properties": { "kind": { "enum": ["resourceQuery", "skill"] } } }],
-          "description": "Live related-record options from a Resource Workbench query or a skill read tool. Return an array or {items:[...]}. Refreshes on matching invalidation, preserves the draft and blocks submission while unavailable."
+          "allOf": [{ "$ref": "#/$defs/dataSource" }, { "properties": { "kind": { "enum": ["resourceQuery", "skill", "mcp"] } } }],
+          "description": "Live related-record options from a Resource Workbench query, skill read tool, or public Root MCP read. Return an array or {items:[...]}. MCP reads require dry_run=true. Refreshes on matching invalidation, preserves the draft and blocks submission while unavailable."
         },
         "optionValuePath": { "$ref": "#/$defs/fieldPath" },
         "optionLabelPaths": { "type": "array", "items": { "$ref": "#/$defs/fieldPath" } },

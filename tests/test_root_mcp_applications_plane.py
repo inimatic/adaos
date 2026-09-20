@@ -26,6 +26,14 @@ class _StubSdk:
         self.calls.append(("apply_operation", args, kwargs))
         return {"operation_id": args[0], "status": "succeeded"}
 
+    def set_home_pinned(self, *args, **kwargs):
+        self.calls.append(("set_home_pinned", args, kwargs))
+        return {
+            "application_id": args[0],
+            "webspace_id": kwargs["webspace_id"],
+            "pinned": kwargs["pinned"],
+        }
+
     def resolve_trial_link(self, *args, **kwargs):
         self.calls.append(("resolve_trial_link", args, kwargs))
         return {"application_id": "app_recipes", "release_digest": "sha256:" + "c" * 64}
@@ -84,6 +92,7 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
     assert {item.id for item in contracts} == {
         "applications.list",
         "applications.show",
+        "applications.set_home_pin",
         "applications.access.show",
         "applications.access.users",
         "applications.access.reviews",
@@ -222,7 +231,36 @@ def test_applications_plane_forwards_catalog_and_development_filters(monkeypatch
                 "catalog_only": True,
                 "available_only": True,
                 "developed_only": True,
+                "webspace_id": "desktop",
             },
+        )
+    ]
+
+
+def test_applications_plane_exposes_explicit_home_pin_mutation(monkeypatch) -> None:
+    stub = _StubSdk()
+    monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
+
+    result = applications_plane.handlers()["applications.set_home_pin"](
+        {
+            "application_id": "app_recipes",
+            "pinned": False,
+            "webspace_id": "family",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert result["home"] == {
+        "application_id": "app_recipes",
+        "webspace_id": "family",
+        "pinned": False,
+    }
+    assert stub.calls == [
+        (
+            "set_home_pinned",
+            ("app_recipes",),
+            {"pinned": False, "webspace_id": "family"},
         )
     ]
 

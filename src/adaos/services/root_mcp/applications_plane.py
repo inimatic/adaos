@@ -373,6 +373,7 @@ def contracts() -> list[RootMcpToolContract]:
                     "catalog_only": {"type": "boolean"},
                     "available_only": {"type": "boolean"},
                     "developed_only": {"type": "boolean"},
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
                 }
             ),
             output_schema=response(),
@@ -384,10 +385,34 @@ def contracts() -> list[RootMcpToolContract]:
             title="Show Application",
             surface=RootMcpSurface.OPERATIONS,
             summary="Read one Application with exact installation, channel, and operation state.",
-            input_schema=schema_object(properties={"application_id": {"type": "string"}}, required=["application_id"]),
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                required=["application_id"],
+            ),
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_show"},
+        ),
+        RootMcpToolContract(
+            id="applications.set_home_pin",
+            title="Set Application Home pin",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Pin or unpin one installed Application on the selected Home without changing installation state.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "pinned": {"type": "boolean"},
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                required=["application_id", "pinned"],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_set_home_pin"},
         ),
         RootMcpToolContract(
             id="applications.access.show",
@@ -998,6 +1023,7 @@ def contracts() -> list[RootMcpToolContract]:
                     "operation_id": {"type": "string"},
                     "plan_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
                     "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
                 },
                 required=["operation_id", "plan_digest", "idempotency_key"],
             ),
@@ -1179,6 +1205,16 @@ def _context(arguments: Mapping[str, Any]) -> tuple[str, str]:
     return actor, subnet_ref
 
 
+def _webspace_id(arguments: Mapping[str, Any]) -> str:
+    explicit = str(arguments.get("webspace_id") or "").strip()
+    if explicit:
+        return explicit
+    raw = arguments.get("_mcp_context")
+    context = dict(raw) if isinstance(raw, Mapping) else {}
+    scope = context.get("scope") if isinstance(context.get("scope"), Mapping) else {}
+    return str(scope.get("webspace_id") or "desktop").strip() or "desktop"
+
+
 def _application_id(arguments: Mapping[str, Any]) -> str:
     value = str(arguments.get("application_id") or "").strip()
     if not value:
@@ -1222,12 +1258,36 @@ def _handle_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
             catalog_only=bool(arguments.get("catalog_only", False)),
             available_only=bool(arguments.get("available_only", False)),
             developed_only=bool(arguments.get("developed_only", False)),
+            webspace_id=_webspace_id(arguments),
         )
     }
 
 
 def _handle_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return {"application": _sdk().get_application(_application_id(arguments))}
+    return {
+        "application": _sdk().get_application(
+            _application_id(arguments), webspace_id=_webspace_id(arguments)
+        )
+    }
+
+
+def _handle_set_home_pin(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_set_home_pin": True,
+            "application_id": _application_id(arguments),
+            "pinned": bool(arguments.get("pinned")),
+            "webspace_id": _webspace_id(arguments),
+        }
+    return {
+        "home": _sdk().set_home_pinned(
+            _application_id(arguments),
+            pinned=bool(arguments.get("pinned")),
+            webspace_id=_webspace_id(arguments),
+        )
+    }
 
 
 def _handle_access_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -1905,6 +1965,7 @@ def _handle_apply(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]
             subnet_ref=subnet_ref,
             capability="applications.apply",
             idempotency_key=str(arguments.get("idempotency_key") or ""),
+            webspace_id=_webspace_id(arguments),
         )
     }
 
@@ -2054,6 +2115,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "applications.list": _handle_list,
         "applications.show": _handle_show,
+        "applications.set_home_pin": _handle_set_home_pin,
         "applications.access.show": _handle_access_show,
         "applications.access.users": _handle_access_users,
         "applications.access.reviews": _handle_access_reviews,

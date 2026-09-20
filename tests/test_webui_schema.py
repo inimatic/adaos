@@ -81,6 +81,24 @@ def test_action_button_supports_client_localized_tooltip():
         {"id": "create", "title": "New application", "title_i18n": {"key": "application.create"}})
 
 
+@pytest.mark.parametrize("source", [
+    {"kind": "resourceQuery", "resourceType": "prototype.subjects"},
+    {"kind": "skill", "name": "subjects_skill.list_subjects"},
+    {"kind": "mcp", "toolId": "applications.access.users", "arguments": {}, "dryRun": True,
+     "resultPath": "response.result.users_access.subjects"},
+])
+def test_form_options_accept_authoritative_read_sources(source):
+    schema = _load_schema()
+    validator = Draft202012Validator({"$ref": "#/$defs/formField", "$defs": schema["$defs"]})
+    validator.validate({
+        "id": "subject_ref",
+        "type": "dropdown",
+        "optionsDataSource": source,
+        "optionValuePath": "id",
+        "optionLabelPaths": ["name"],
+    })
+
+
 @pytest.mark.parametrize("patch,valid", [
     ({}, True),
     ({"rememberSelection": "yes"}, False),

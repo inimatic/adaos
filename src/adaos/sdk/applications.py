@@ -26,7 +26,12 @@ from adaos.services.applications import (
 )
 from adaos.services.builder.workbench import BuilderWorkbenchService
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
+from adaos.services.io_web.desktop import WebDesktopInstalled, WebDesktopService
 from adaos.services.policy.skill_capabilities import require_skill_capability
+from adaos.services.project_deployment import (
+    ProjectDeploymentStore,
+    ProjectDeploymentStoreError,
+)
 
 
 def _state_dir() -> Path:
@@ -238,13 +243,253 @@ def _application_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
     return model
 
 
+def _application_home_aliases(model: Mapping[str, Any]) -> tuple[str, ...]:
+    application = (
+        dict(model.get("application") or {})
+        if isinstance(model.get("application"), Mapping)
+        else {}
+    )
+    aliases: list[str] = []
+    for entrypoint in application.get("entrypoints") or ():
+        if not isinstance(entrypoint, Mapping):
+            continue
+        presentation_ref = str(entrypoint.get("presentation_ref") or "").strip()
+        if presentation_ref:
+            aliases.append(presentation_ref)
+    application_id = str(application.get("application_id") or "").strip()
+    legacy_project_id = str(application.get("legacy_project_id") or "").strip()
+    if application_id:
+        aliases.append(application_id)
+        aliases.append(f"scenario:{application_id}")
+    if legacy_project_id:
+        aliases.append(legacy_project_id)
+        aliases.append(f"scenario:{legacy_project_id}")
+    return tuple(dict.fromkeys(item for item in aliases if item))
+
+
+_HOME_SNAPSHOT_UNSET = object()
+
+
+def _home_projection(
+    model: Mapping[str, Any],
+    webspace_id: str | None,
+    *,
+    snapshot: Any = _HOME_SNAPSHOT_UNSET,
+) -> dict[str, Any]:
+    webspace = str(webspace_id or "").strip()
+    aliases = _application_home_aliases(model)
+    if not webspace:
+        return {
+            "schema": "adaos.application.home_projection.v1",
+            "webspace_id": None,
+            "application_ref": aliases[0] if aliases else None,
+            "installed": bool(model.get("installed")),
+            "pinnable": bool(model.get("installed")),
+            "pinned": False,
+            "status": "webspace_not_selected",
+        }
+    if snapshot is _HOME_SNAPSHOT_UNSET:
+        try:
+            snapshot = WebDesktopService().get_snapshot(webspace)
+        except (OSError, RuntimeError, ValueError):
+            snapshot = None
+    if snapshot is None:
+        return {
+            "schema": "adaos.application.home_projection.v1",
+            "webspace_id": webspace,
+            "application_ref": aliases[0] if aliases else None,
+            "installed": bool(model.get("installed")),
+            "pinnable": bool(model.get("installed")),
+            "pinned": False,
+            "status": "unavailable",
+        }
+    installed = set(snapshot.installed.apps)
+    pinned = set(snapshot.pinned_applications)
+    application_ref = next((item for item in aliases if item in installed), None)
+    if application_ref is None:
+        application_ref = next((item for item in aliases if item in pinned), None)
+    if application_ref is None and aliases:
+        application_ref = aliases[0]
+    is_installed = bool(installed.intersection(aliases))
+    return {
+        "schema": "adaos.application.home_projection.v1",
+        "webspace_id": webspace,
+        "application_ref": application_ref,
+        "installed": is_installed,
+        "pinnable": bool(model.get("installed")) and is_installed,
+        "pinned": bool(pinned.intersection(aliases)),
+        "status": "ready",
+    }
+
+
+def _empty_execution_placement(
+    application_id: str, *, status: str, managed: bool, partial: bool
+) -> dict[str, Any]:
+    deployment_id = f"application-deployment:{application_id}"
+    return {
+        "schema": "adaos.application.execution_placement.v1",
+        "installation_scope": "subnet",
+        "deployment_id": deployment_id,
+        "managed": managed,
+        "status": status,
+        "desired": [],
+        "observed": [],
+        "partial": partial,
+    }
+
+
+def _execution_placement_payload(
+    desired: Any,
+    activations: Sequence[Any],
+    *,
+    partial: bool,
+) -> dict[str, Any]:
+    return {
+        "schema": "adaos.application.execution_placement.v1",
+        "installation_scope": "subnet",
+        "deployment_id": desired.deployment_id,
+        "project_ref": desired.project_ref,
+        "managed": True,
+        "status": desired.status,
+        "revision": desired.revision,
+        "desired": [
+            {
+                "component_ref": item.component_ref,
+                "mode": item.mode,
+                "selected_node_ids": list(item.selected_node_ids),
+                "min_instances": item.min_instances,
+                "max_instances": item.max_instances,
+            }
+            for item in desired.placements
+        ],
+        "observed": [
+            {
+                "component_ref": item.component_ref,
+                "node_id": item.node_id,
+                "status": item.status,
+                "generation": item.generation,
+                "updated_at": item.updated_at,
+            }
+            for item in activations
+        ],
+        "desired_component_count": len(desired.placements),
+        "observed_instance_count": len(activations),
+        "observed_active_count": sum(
+            1 for item in activations if item.status == "active"
+        ),
+        "observed_node_ids": sorted({item.node_id for item in activations}),
+        "partial": partial,
+        "updated_at": desired.updated_at,
+    }
+
+
+def _execution_placement_read_model(
+    application_id: str,
+    *,
+    store: ProjectDeploymentStore | None = None,
+) -> dict[str, Any]:
+    deployment_id = f"application-deployment:{application_id}"
+    try:
+        store = store or ProjectDeploymentStore(state_dir=_state_dir())
+        desired = store.get_deployment(deployment_id)
+        activations, next_cursor = store.list_activations(
+            deployment_id=deployment_id,
+            limit=200,
+        )
+    except FileNotFoundError:
+        return _empty_execution_placement(
+            application_id,
+            status="not_materialized",
+            managed=False,
+            partial=False,
+        )
+    except (OSError, RuntimeError, ValueError, ProjectDeploymentStoreError):
+        return _empty_execution_placement(
+            application_id,
+            status="unavailable",
+            managed=True,
+            partial=True,
+        )
+    return _execution_placement_payload(
+        desired,
+        activations,
+        partial=next_cursor is not None,
+    )
+
+
+def _execution_placement_index(
+    application_ids: Sequence[str],
+) -> dict[str, dict[str, Any]]:
+    requested = {
+        f"application-deployment:{application_id}": application_id
+        for application_id in application_ids
+        if application_id
+    }
+    if not requested:
+        return {}
+    try:
+        store = ProjectDeploymentStore(state_dir=_state_dir())
+        deployments: dict[str, Any] = {}
+        cursor: str | None = None
+        while True:
+            page, cursor = store.list_deployments(cursor=cursor, limit=1000)
+            deployments.update(
+                (item.deployment_id, item)
+                for item in page
+                if item.deployment_id in requested
+            )
+            if cursor is None:
+                break
+        activations_by_deployment: dict[str, list[Any]] = {}
+        cursor = None
+        while True:
+            page, cursor = store.list_activations(cursor=cursor, limit=1000)
+            for item in page:
+                if item.deployment_id in requested:
+                    activations_by_deployment.setdefault(item.deployment_id, []).append(
+                        item
+                    )
+            if cursor is None:
+                break
+    except (OSError, RuntimeError, ValueError, ProjectDeploymentStoreError):
+        return {
+            application_id: _empty_execution_placement(
+                application_id,
+                status="unavailable",
+                managed=True,
+                partial=True,
+            )
+            for application_id in requested.values()
+        }
+    return {
+        application_id: (
+            _execution_placement_payload(
+                deployments[deployment_id],
+                activations_by_deployment.get(deployment_id, ()),
+                partial=False,
+            )
+            if deployment_id in deployments
+            else _empty_execution_placement(
+                application_id,
+                status="not_materialized",
+                managed=False,
+                partial=False,
+            )
+        )
+        for deployment_id, application_id in requested.items()
+    }
+
+
 def _workspace_project_read_models(
     existing: Sequence[Mapping[str, Any]],
+    *,
+    application_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Project manifests remain visible while their Application aggregate is migrated."""
     try:
         projects = ApplicationRegistryProjection(_state_dir()).list_workspace_projects(
-            include_hidden=False
+            include_hidden=False,
+            query=str(application_id or "").strip() or None,
         )
     except (OSError, RuntimeError, ValueError):
         return []
@@ -276,6 +521,8 @@ def _workspace_project_read_models(
     models: list[dict[str, Any]] = []
     for project in projects:
         project_id = str(project.get("id") or "").strip()
+        if application_id is not None and project_id != application_id:
+            continue
         if not project_id or project_id in claimed:
             continue
         entrypoints = [
@@ -486,28 +733,62 @@ def _development_workflow_summary(
         return None
 
 
-def list_applications(
+def _application_models(
     *,
-    installed_only: bool = False,
-    catalog_only: bool = False,
-    available_only: bool = False,
-    developed_only: bool = False,
-    include_development: bool = True,
+    installed_only: bool,
+    application_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    development = _local_development_index() if include_development else {}
-    models = [
-        _application_read_model(item)
-        for item in _service().list_models(
+    service = _service()
+    if application_id is None:
+        values = service.list_models(
             installed_only=installed_only,
             subscriber_subnet_ref=_local_subnet_ref(),
         )
+    else:
+        try:
+            value = service.get_model(
+                application_id,
+                subscriber_subnet_ref=_local_subnet_ref(),
+            )
+        except FileNotFoundError:
+            values = []
+        else:
+            values = [value] if not installed_only or value.get("installed") else []
+    models = [_application_read_model(item) for item in values]
+    if application_id is None:
+        models.extend(_workspace_project_read_models(models))
+    else:
+        models.extend(
+            _workspace_project_read_models(models, application_id=application_id)
+        )
+    return models
+
+
+def _enrich_application_models(
+    models: Sequence[dict[str, Any]],
+    *,
+    development: Mapping[str, Mapping[str, Any]],
+    webspace_id: str | None,
+) -> list[dict[str, Any]]:
+    webspace = str(webspace_id or "").strip()
+    home_snapshot: Any = None
+    if webspace:
+        try:
+            home_snapshot = WebDesktopService().get_snapshot(webspace)
+        except (OSError, RuntimeError, ValueError):
+            home_snapshot = None
+    application_ids = [
+        str((model.get("application") or {}).get("application_id") or "").strip()
+        for model in models
     ]
-    models.extend(_workspace_project_read_models(models))
+    placements = _execution_placement_index(application_ids)
+    enriched: list[dict[str, Any]] = []
     for model in models:
         application = model.get("application") or {}
         application_id = str(application.get("application_id") or "")
         model.setdefault("icon", "apps-outline")
-        local = development.get(application_id)
+        local_source = development.get(application_id)
+        local = deepcopy(dict(local_source)) if local_source is not None else None
         if local is not None:
             entrypoints = application.get("entrypoints") or []
             presentation_ref = str(
@@ -590,6 +871,33 @@ def list_applications(
                         "reason": "development_project_unavailable",
                     }
         model["local_development"] = local
+        model["execution_placement"] = placements.get(
+            application_id,
+            _empty_execution_placement(
+                application_id,
+                status="not_materialized",
+                managed=False,
+                partial=False,
+            ),
+        )
+        home = _home_projection(model, webspace_id, snapshot=home_snapshot)
+        model["home"] = home
+        model["pinned"] = bool(home.get("pinned"))
+        enriched.append(model)
+    return enriched
+
+
+def list_applications(
+    *,
+    installed_only: bool = False,
+    catalog_only: bool = False,
+    available_only: bool = False,
+    developed_only: bool = False,
+    include_development: bool = True,
+    webspace_id: str | None = None,
+) -> list[dict[str, Any]]:
+    development = _local_development_index() if include_development else {}
+    models = _application_models(installed_only=installed_only)
     if available_only:
         models = [
             item
@@ -608,6 +916,11 @@ def list_applications(
             if item["application"]["visibility"] == "public"
             and bool(item.get("channels", {}).get("stable"))
         ]
+    models = _enrich_application_models(
+        models,
+        development=development,
+        webspace_id=webspace_id,
+    )
     if developed_only:
         models = [
             item
@@ -617,12 +930,113 @@ def list_applications(
     return models
 
 
-def get_application(application_id: str) -> dict[str, Any]:
+def get_application(
+    application_id: str, *, webspace_id: str | None = None
+) -> dict[str, Any]:
     token = str(application_id or "").strip()
-    for item in list_applications():
+    for item in _application_models(
+        installed_only=False,
+        application_id=token,
+    ):
         if item["application"]["application_id"] == token:
-            return item
+            return _enrich_application_models(
+                [item],
+                development=_local_development_index(),
+                webspace_id=webspace_id,
+            )[0]
     raise FileNotFoundError(f"Application not found: {token}")
+
+
+def set_home_pinned(
+    application_id: str,
+    *,
+    pinned: bool,
+    webspace_id: str = "desktop",
+) -> dict[str, Any]:
+    """Set the presentation overlay without changing subnet installation state."""
+
+    webspace = str(webspace_id or "").strip()
+    if not webspace:
+        raise ValueError("webspace_id is required")
+    model = get_application(application_id, webspace_id=webspace)
+    if not bool(model.get("installed")):
+        raise ValueError("Only installed Applications can be pinned to Home")
+    aliases = _application_home_aliases(model)
+    service = WebDesktopService()
+    snapshot = service.get_snapshot(webspace)
+    installed = set(snapshot.installed.apps)
+    application_ref = next((item for item in aliases if item in installed), None)
+    if not application_ref:
+        raise ValueError("Application is not installed on the selected desktop")
+    alias_set = set(aliases)
+    next_pinned = [
+        item for item in snapshot.pinned_applications if item not in alias_set
+    ]
+    if pinned:
+        next_pinned.append(application_ref)
+    service.set_pinned_applications_with_live_room(next_pinned, webspace)
+    return {
+        "schema": "adaos.application.home_projection.v1",
+        "application_id": application_id,
+        "application_ref": application_ref,
+        "webspace_id": webspace,
+        "installed": True,
+        "pinnable": True,
+        "pinned": bool(pinned),
+        "status": "ready",
+    }
+
+
+def _sync_home_installation(
+    application_id: str,
+    *,
+    installed: bool,
+    webspace_id: str,
+) -> dict[str, Any]:
+    model = get_application(application_id, webspace_id=webspace_id)
+    aliases = _application_home_aliases(model)
+    if not aliases:
+        raise ValueError("Application has no Home presentation entrypoint")
+    service = WebDesktopService()
+    snapshot = service.get_snapshot(webspace_id)
+    current_apps = list(snapshot.installed.apps)
+    removed_apps = list(snapshot.installed.removed_apps)
+    alias_set = set(aliases)
+    existing_ref = next((item for item in current_apps if item in alias_set), None)
+    application_ref = existing_ref or aliases[0]
+    if installed:
+        next_apps = [item for item in current_apps if item not in alias_set]
+        next_apps.append(application_ref)
+        next_removed = [item for item in removed_apps if item not in alias_set]
+    else:
+        next_apps = [item for item in current_apps if item not in alias_set]
+        next_removed = [item for item in removed_apps if item not in alias_set]
+        next_removed.append(application_ref)
+    service.set_installed_with_live_room(
+        WebDesktopInstalled(
+            apps=next_apps,
+            widgets=list(snapshot.installed.widgets),
+            removed_apps=next_removed,
+            removed_widgets=list(snapshot.installed.removed_widgets),
+        ),
+        webspace_id,
+    )
+    next_pinned = [
+        item for item in snapshot.pinned_applications if item not in alias_set
+    ]
+    if installed:
+        next_pinned.append(application_ref)
+    service.set_pinned_applications_with_live_room(next_pinned, webspace_id)
+    return {
+        "schema": "adaos.application.home_projection.v1",
+        "application_id": application_id,
+        "application_ref": application_ref,
+        "webspace_id": webspace_id,
+        "installed": installed,
+        "pinnable": installed,
+        "pinned": installed,
+        "status": "ready",
+    }
 
 
 def get_identity(application_id: str) -> dict[str, Any]:
@@ -1692,6 +2106,7 @@ def apply_operation(
     subnet_ref: str,
     capability: str,
     idempotency_key: str,
+    webspace_id: str = "desktop",
 ) -> dict[str, Any]:
     if not str(plan_digest or "").startswith("sha256:"):
         raise ValueError("plan_digest is required")
@@ -1704,7 +2119,7 @@ def apply_operation(
         idempotency_key,
         required_capability="applications.apply",
     )
-    return (
+    result = (
         _service()
         .apply_operation(
             operation_id,
@@ -1716,6 +2131,28 @@ def apply_operation(
         )
         .to_dict()
     )
+    kind = str(result.get("kind") or "").strip()
+    application_id = str(result.get("application_id") or "").strip()
+    if (
+        str(result.get("status") or "").strip() == "succeeded"
+        and application_id
+        and kind in {"install", "remove"}
+    ):
+        try:
+            result["home"] = _sync_home_installation(
+                application_id,
+                installed=kind == "install",
+                webspace_id=str(webspace_id or "desktop").strip() or "desktop",
+            )
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+            result["home"] = {
+                "schema": "adaos.application.home_projection.v1",
+                "application_id": application_id,
+                "webspace_id": str(webspace_id or "desktop").strip() or "desktop",
+                "status": "sync_failed",
+                "error": type(exc).__name__,
+            }
+    return result
 
 
 def select_runtime(
@@ -1821,6 +2258,7 @@ __all__ = [
     "revoke_application_access",
     "revoke_trial_access",
     "select_runtime",
+    "set_home_pinned",
     "set_development_report_status",
     "set_prerelease_rollout",
     "simulate_application_access",

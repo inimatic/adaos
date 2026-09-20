@@ -909,6 +909,104 @@ class ApplicationService:
             "data_outcome": data_policy,
         }
 
+    def _read_model(
+        self,
+        application: Application,
+        *,
+        installation: ApplicationInstallation | None,
+        subscription: ApplicationSubscription | None,
+        runtime_selections: list[RuntimeSelection],
+        operation: ApplicationOperation | None,
+        subscriber_subnet_ref: str | None,
+    ) -> dict[str, Any]:
+        channels = dict(
+            self.store.get_channels(application.application_id).get("channels") or {}
+        )
+        local_beta = any(item.source == "local_trial" for item in runtime_selections)
+        prerelease_following = bool(
+            subscription and subscription.update_track == "prerelease"
+        )
+        effective = self.effective_release(
+            application.application_id,
+            subscriber_subnet_ref=subscriber_subnet_ref,
+        )
+        update_available = bool(
+            installation
+            and effective.get("release_digest")
+            and effective["release_digest"] != installation.installed_release_digest
+        )
+
+        def release_for(digest: str | None) -> dict[str, Any] | None:
+            if not digest:
+                return None
+            try:
+                return self.store.get_release(
+                    application.application_id, digest
+                ).to_dict()
+            except FileNotFoundError:
+                return None
+
+        return {
+            "application": application.to_dict(),
+            "installed": installation is not None,
+            "installation": installation.to_dict() if installation else None,
+            "available": bool(channels.get("stable"))
+            or application.visibility != "public",
+            "update_available": update_available,
+            "pinned": bool(subscription and subscription.update_policy == "pinned"),
+            "prerelease_following": prerelease_following,
+            "use_prerelease": local_beta or prerelease_following,
+            "local_beta_active": local_beta,
+            "runtime_selections": [item.to_dict() for item in runtime_selections],
+            "auto_update_enabled": bool(
+                subscription.update_policy == "auto_compatible"
+                if subscription is not None
+                else installation is not None
+            ),
+            "retired": application.lifecycle in {"retired", "archived"},
+            "subscription": subscription.to_dict() if subscription else None,
+            "channels": channels,
+            "installed_release": release_for(
+                installation.installed_release_digest if installation else None
+            ),
+            "marketplace_release": release_for(channels.get("stable")),
+            "prerelease_release": release_for(channels.get("prerelease")),
+            "effective_release": effective,
+            "operation": operation.to_dict() if operation else None,
+        }
+
+    def get_model(
+        self,
+        application_id: str,
+        *,
+        subscriber_subnet_ref: str | None = None,
+    ) -> dict[str, Any]:
+        application = self.store.get_application(application_id)
+        try:
+            installation = self.store.get_installation(application_id)
+            if installation.status == "removed":
+                installation = None
+        except FileNotFoundError:
+            installation = None
+        try:
+            subscription = self.store.get_subscription(application_id)
+        except FileNotFoundError:
+            subscription = None
+        runtime_selections = [
+            item
+            for item in self.store.list_runtime_selections()
+            if item.application_id == application_id
+        ]
+        operations = self.store.list_operations(application_id)
+        return self._read_model(
+            application,
+            installation=installation,
+            subscription=subscription,
+            runtime_selections=runtime_selections,
+            operation=operations[0] if operations else None,
+            subscriber_subnet_ref=subscriber_subnet_ref,
+        )
+
     def list_models(
         self,
         *,
@@ -928,57 +1026,17 @@ class ApplicationService:
             installation = installations.get(application.application_id)
             if installed_only and installation is None:
                 continue
-            channels = dict(self.store.get_channels(application.application_id).get("channels") or {})
             subscription = subscriptions.get(application.application_id)
             runtime_selections = selections.get(application.application_id, [])
-            local_beta = any(item.source == "local_trial" for item in runtime_selections)
-            prerelease_following = bool(subscription and subscription.update_track == "prerelease")
-            effective = self.effective_release(
-                application.application_id,
-                subscriber_subnet_ref=subscriber_subnet_ref,
-            )
-            update_available = bool(
-                installation
-                and effective.get("release_digest")
-                and effective["release_digest"] != installation.installed_release_digest
-            )
-
-            def release_for(digest: str | None) -> dict[str, Any] | None:
-                if not digest:
-                    return None
-                try:
-                    return self.store.get_release(application.application_id, digest).to_dict()
-                except FileNotFoundError:
-                    return None
-
             models.append(
-                {
-                    "application": application.to_dict(),
-                    "installed": installation is not None,
-                    "installation": installation.to_dict() if installation else None,
-                    "available": bool(channels.get("stable")) or application.visibility != "public",
-                    "update_available": update_available,
-                    "pinned": bool(subscription and subscription.update_policy == "pinned"),
-                    "prerelease_following": prerelease_following,
-                    "use_prerelease": local_beta or prerelease_following,
-                    "local_beta_active": local_beta,
-                    "runtime_selections": [item.to_dict() for item in runtime_selections],
-                    "auto_update_enabled": bool(
-                        subscription.update_policy == "auto_compatible"
-                        if subscription is not None
-                        else installation is not None
-                    ),
-                    "retired": application.lifecycle in {"retired", "archived"},
-                    "subscription": subscription.to_dict() if subscription else None,
-                    "channels": channels,
-                    "installed_release": release_for(
-                        installation.installed_release_digest if installation else None
-                    ),
-                    "marketplace_release": release_for(channels.get("stable")),
-                    "prerelease_release": release_for(channels.get("prerelease")),
-                    "effective_release": effective,
-                    "operation": operations.get(application.application_id).to_dict() if operations.get(application.application_id) else None,
-                }
+                self._read_model(
+                    application,
+                    installation=installation,
+                    subscription=subscription,
+                    runtime_selections=runtime_selections,
+                    operation=operations.get(application.application_id),
+                    subscriber_subnet_ref=subscriber_subnet_ref,
+                )
             )
         return models
 

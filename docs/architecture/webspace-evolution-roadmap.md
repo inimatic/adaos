@@ -870,6 +870,9 @@ Current status:
   under `ui_overlay_json.desktop`
 - installed apps/widgets are now overlay-first canonical state and are no
   longer read back from legacy Yjs paths during normal service reads
+- pinned Applications and their order are Webspace presentation state, separate
+  from subnet installation and component placement; install seeds a Home pin,
+  unpin keeps the installation, and uninstall removes the stale launcher
 - pinned widgets now also participate in the same overlay boundary instead of
   living only as scenario-owned `ui.application.desktop.pinnedWidgets`
 - shell composition (`topbar`, `pageSchema`) is intentionally still
@@ -877,10 +880,11 @@ Current status:
   manifest normalization so scenario switch keeps changing the visible page
 - semantic rebuild now consumes persistent overlay state only for desktop
   customization that already has a stable UX contract (`installed`,
-  `pinnedWidgets`) and mirrors the materialized result back into Yjs
+  `pinnedApplicationIds`, `pinnedWidgets`) and mirrors the materialized result back into Yjs
   compatibility paths for the current renderer
 - desktop customization is now inspectable as a first-class control-surface
-  snapshot (`installed`, `pinnedWidgets`, `topbar`, `pageSchema`) rather than only as raw overlay
+  snapshot (`installed`, `pinnedApplicationIds`, `pinnedWidgets`, `topbar`,
+  `pageSchema`) rather than only as raw overlay
   metadata or ad-hoc Yjs paths
 - the desktop widget renderer path now prefers the canonical
   `data.desktop.pinnedWidgets` mirror, with `ui.application.desktop` kept as
