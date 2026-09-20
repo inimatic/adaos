@@ -43,6 +43,10 @@ def test_installation_summary_projects_local_beta_without_stable_installation() 
             "installation": None,
             "subscription": None,
             "installed_release": None,
+            "active_release": {
+                "version": "1.3.0-beta.1",
+                "release_digest": release_digest,
+            },
             "local_beta_active": True,
             "auto_update_enabled": False,
             "runtime_selections": [
@@ -63,7 +67,7 @@ def test_installation_summary_projects_local_beta_without_stable_installation() 
         "installed": True,
         "status": "beta_active",
         "source": "local_trial",
-        "version": None,
+        "version": "1.3.0-beta.1",
         "release_digest": release_digest,
         "updated_at": "2026-09-20T18:42:32+00:00",
         "webspace_id": "desktop",
@@ -107,6 +111,38 @@ def test_installation_summary_prefers_selected_webspace_runtime() -> None:
     assert summary["version"] == "1.2.3"
     assert summary["update_track"] == "stable"
     assert summary["auto_update_enabled"] is True
+
+
+def test_active_release_follows_the_selected_webspace_beta() -> None:
+    beta_a = "sha256:" + "a" * 64
+    beta_b = "sha256:" + "b" * 64
+    model = {
+        "installed_release": {"version": "1.0.0", "release_digest": "stable"},
+        "active_release": None,
+        "local_beta_releases": [
+            {"version": "1.1.0-beta.1", "release_digest": beta_a},
+            {"version": "1.2.0-beta.1", "release_digest": beta_b},
+        ],
+        "runtime_selections": [
+            {
+                "webspace_id": "desktop",
+                "source": "local_trial",
+                "release_digest": beta_a,
+            },
+            {
+                "webspace_id": "office",
+                "source": "local_trial",
+                "release_digest": beta_b,
+            },
+        ],
+    }
+
+    selected = applications._active_release_for_webspace(
+        model, webspace_id="office"
+    )
+
+    assert selected["version"] == "1.2.0-beta.1"
+    assert selected["release_digest"] == beta_b
 
 
 def test_application_service_uses_authority_state_in_trial(

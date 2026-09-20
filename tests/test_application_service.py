@@ -245,6 +245,10 @@ def test_local_builder_beta_updates_display_flag_without_joining_public_testing(
     assert beta["use_prerelease"] and beta["local_beta_active"]
     assert beta["installed"] is True
     assert beta["installation"] is None
+    assert beta["installed_release"] is None
+    assert beta["local_beta_release"]["release_digest"] == release.release_digest
+    assert beta["active_release"] == beta["local_beta_release"]
+    assert beta["local_beta_releases"] == [beta["local_beta_release"]]
     assert service.list_models(installed_only=True)[0]["application"]["application_id"] == "app_recipes"
     assert not beta["prerelease_following"]
     assert service.store.get_subscription("app_recipes") == subscription

@@ -234,9 +234,22 @@ def _application_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
     application = model.get("application")
     if isinstance(application, dict):
         application.setdefault("aggregate_backed", True)
-    for field in ("installed_release", "marketplace_release", "prerelease_release"):
+    for field in (
+        "installed_release",
+        "local_beta_release",
+        "active_release",
+        "marketplace_release",
+        "prerelease_release",
+    ):
         if isinstance(model.get(field), Mapping):
             model[field] = _release_read_model(model[field])
+    local_beta_releases = model.get("local_beta_releases")
+    if isinstance(local_beta_releases, list):
+        model["local_beta_releases"] = [
+            _release_read_model(item)
+            for item in local_beta_releases
+            if isinstance(item, Mapping)
+        ]
     effective = model.get("effective_release")
     if isinstance(effective, dict) and isinstance(effective.get("release"), Mapping):
         effective["release"] = _release_read_model(effective["release"])
@@ -278,6 +291,9 @@ def _installation_summary(
         selections[0] if selections else {},
     )
     local_trial = str(active_runtime.get("source") or "") == "local_trial"
+    active_release = _active_release_for_webspace(
+        model, webspace_id=webspace_id, active_runtime=active_runtime
+    )
     installed = bool(model.get("installed"))
     if local_trial:
         status = "beta_active"
@@ -293,7 +309,7 @@ def _installation_summary(
         "installed": installed,
         "status": status,
         "source": source,
-        "version": installed_release.get("version"),
+        "version": active_release.get("version"),
         "release_digest": (
             active_runtime.get("release_digest")
             if local_trial
@@ -314,6 +330,44 @@ def _installation_summary(
         "auto_update_enabled": bool(model.get("auto_update_enabled")),
         "local_beta_active": bool(model.get("local_beta_active")),
     }
+
+
+def _active_release_for_webspace(
+    model: Mapping[str, Any],
+    *,
+    webspace_id: str | None,
+    active_runtime: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve release metadata for the runtime selected in one Webspace."""
+
+    selections = [
+        dict(item)
+        for item in model.get("runtime_selections") or ()
+        if isinstance(item, Mapping)
+    ]
+    webspace = str(webspace_id or "").strip()
+    selected = dict(active_runtime or {}) or next(
+        (
+            item
+            for item in selections
+            if webspace and str(item.get("webspace_id") or "") == webspace
+        ),
+        selections[0] if selections else {},
+    )
+    selected_digest = str(selected.get("release_digest") or "").strip()
+    if str(selected.get("source") or "") == "local_trial" and selected_digest:
+        for release in model.get("local_beta_releases") or ():
+            if (
+                isinstance(release, Mapping)
+                and str(release.get("release_digest") or "").strip()
+                == selected_digest
+            ):
+                return dict(release)
+    for field in ("active_release", "installed_release"):
+        release = model.get(field)
+        if isinstance(release, Mapping):
+            return dict(release)
+    return {}
 
 
 def _application_home_aliases(model: Mapping[str, Any]) -> tuple[str, ...]:
@@ -953,6 +1007,9 @@ def _enrich_application_models(
                 partial=False,
             ),
         )
+        model["active_release"] = _active_release_for_webspace(
+            model, webspace_id=webspace_id
+        ) or None
         home = _home_projection(model, webspace_id, snapshot=home_snapshot)
         model["home"] = home
         model["pinned"] = bool(home.get("pinned"))

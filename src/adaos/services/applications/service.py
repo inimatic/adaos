@@ -923,6 +923,11 @@ class ApplicationService:
             self.store.get_channels(application.application_id).get("channels") or {}
         )
         local_beta = any(item.source == "local_trial" for item in runtime_selections)
+        local_beta_digests = {
+            item.release_digest
+            for item in runtime_selections
+            if item.source == "local_trial"
+        }
         effective_installed = installation is not None or local_beta
         prerelease_following = bool(
             subscription and subscription.update_track == "prerelease"
@@ -946,6 +951,19 @@ class ApplicationService:
                 ).to_dict()
             except FileNotFoundError:
                 return None
+
+        installed_release = release_for(
+            installation.installed_release_digest if installation else None
+        )
+        local_beta_releases = [
+            release
+            for digest in sorted(local_beta_digests)
+            if (release := release_for(digest)) is not None
+        ]
+        local_beta_release = (
+            local_beta_releases[0] if len(local_beta_releases) == 1 else None
+        )
+        active_release = local_beta_release or installed_release
 
         return {
             "application": application.to_dict(),
@@ -971,9 +989,14 @@ class ApplicationService:
             "retired": application.lifecycle in {"retired", "archived"},
             "subscription": subscription.to_dict() if subscription else None,
             "channels": channels,
-            "installed_release": release_for(
-                installation.installed_release_digest if installation else None
-            ),
+            # Stable installation and selected Trial are separate lifecycle
+            # facts.  Consumers that render the effective runtime should use
+            # active_release while migration/rollback logic keeps using
+            # installed_release as its stable baseline.
+            "installed_release": installed_release,
+            "local_beta_release": local_beta_release,
+            "local_beta_releases": local_beta_releases,
+            "active_release": active_release,
             "marketplace_release": release_for(channels.get("stable")),
             "prerelease_release": release_for(channels.get("prerelease")),
             "effective_release": effective,
