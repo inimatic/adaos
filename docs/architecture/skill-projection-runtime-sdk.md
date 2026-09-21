@@ -68,10 +68,9 @@ Some existing skills are intentionally left noisy during the core guard rollout.
 They are not the target behavior, but they are valuable pressure fixtures for
 proving that the shared runtime survives inefficient skill code.
 
-Until the guard-observability acceptance checks pass, `browsers_skill`,
-`infrastate_skill`, `infrascope_skill`, and similarly chatty operational skills
-should be treated as load generators before they are treated as optimization
-targets. The core must:
+Until the guard-observability acceptance checks pass, `browsers_skill` and
+similarly chatty compatibility skills should be treated as load generators
+before they are treated as optimization targets. The core must:
 
 - keep the runtime alive and the primary desktop recoverable
 - attribute pressure to skill, route, receiver/path, webspace, and observed
@@ -130,8 +129,8 @@ rate limits.
 Example shape:
 
 ```python
-streams.register("infrastate.logs.recent", build_recent_logs)
-streams.register("infrastate.operation.detail", build_operation_detail)
+streams.register("diagnostics.logs.recent", build_recent_logs)
+streams.register("operations.detail", build_operation_detail)
 ```
 
 The SDK owns:
@@ -280,9 +279,10 @@ for governed non-projection Yjs access.
 
 Root-routed HTTP reads and tool calls are recovery and diagnostic paths, not a
 replacement for declared Yjs or stream data routes. A browser may still receive
-`/api/node/infrastate/snapshot` while its local Yjs provider is red; that is a
-fallback read path and must stay compact/read-only unless a caller explicitly
-requests projection. It should not be used as a hidden live-state channel.
+a bounded system or diagnostic snapshot while its local Yjs provider is red;
+that fallback must stay compact and read-only. Deprecated product-specific
+aliases are compatibility routes and must not become hidden live-state
+channels.
 
 The same boundary applies to `/api/tools/call`: it can serve details, actions,
 and fallback reads, but route ownership still belongs to the skill's declared
@@ -388,33 +388,13 @@ before the skill is fully optimized.
 The SDK should extract and generalize this pattern, then migrate the skill back
 onto the shared helper layer.
 
-### `infrastate_skill`
+### System and diagnostic consumers
 
-`infrastate_skill` should be the first heavy operational-skill migration after
-the SDK slice exists and the core guard evidence is good enough to trust. Until
-then, its broad runtime/update/browser event subscriptions remain a useful
-pressure source for validating Yjs owner guards, stream guards, status cards,
-and quarantine diagnostics.
-
-The earlier migration step split one large durable `infrastate.snapshot` into
-multiple Yjs section slots. That was useful as a compatibility stabilizer, but
-it is no longer the target shape. The target is stream-first:
-
-- Yjs keeps only minimal reconnect-stable bootstrap/control state, such as
-  current readiness, selected node, last refresh marker, degraded/error badge,
-  and a compact subscription summary.
-- Operator-facing variables are stream receivers: summary rows, action lists,
-  nodes, active operations, build state, runtime channels, marketplace rows,
-  skills/scenarios, Yjs load marks, and recent events.
-- Details and large evidence stay behind detail tools, requested stream
-  snapshots, disk snapshots, or 360log.
-- Hot inputs such as `browser.session.changed`, `device.registered`,
-  `webrtc.peer.state.changed`, and YWS guard/open/close events must have
-  explicit debounce/budget behavior. Raw evidence remains available in
-  diagnostics streams while operator-facing status is smoothed.
-
-This keeps the operational skill useful after reconnect while preventing its
-diagnostic surface from becoming a primary Yjs pressure source.
+System-facing products consume neutral `adaos.sdk.system`, control-plane,
+operation, and diagnostic contracts. They keep only reconnect-stable selection
+and compact status in Yjs; lists and bounded detail use section reads or stream
+receivers. Retiring compatibility skills are not reference implementations and
+must not define new receiver or projection conventions.
 
 ## Implementation Checklist
 
@@ -525,24 +505,18 @@ diagnostic surface from becoming a primary Yjs pressure source.
 - [ ] `browsers.reference_doc`: document the migrated skill as the minimal
   reference implementation
 
-### 5. `infrastate_skill` Migration
+### 5. Neutral System Consumers
 
-- [x] `infrastate.section_inventory`: inventory current snapshot sections and
-  classify each as projection, stream-only, action, or internal cache
-- [x] `infrastate.slot_map`: replace `infrastate.snapshot` with section slots
-  while keeping compatibility consumers working
-- [ ] `infrastate.event_routing`: route operations, browser, registry, update,
-  Yjs, and webspace events to minimal dirty sections
-- [x] `infrastate.stream_only_heavy`: move logs, histories, diagnostics, and
-  details to stream/request-only surfaces
-- [ ] `infrastate.no_full_snapshot_for_stream`: ensure one stream receiver does
-  not build the full operational snapshot
-- [x] `infrastate.tests_section_slot_writes`: test durable refresh writes
-  section slots instead of the legacy monolithic snapshot
-- [ ] `infrastate.tests_minimal_writes`: test event-specific refresh writes only
-  the affected slots
-- [ ] `infrastate.memory_soak`: run stand soak and verify Yjs load marks and RSS
-  do not grow steadily under idle/normal UI use
+- [x] `system.section_reads`: expose bounded services, connections, quotas,
+  incidents, update, and summary reads through `adaos.sdk.system`
+- [x] `system.coalesce_reliability`: build one reliability projection for
+  concurrent section consumers and reuse it within the freshness window
+- [ ] `system.section_producers`: avoid a full reliability build for every
+  independent section
+- [ ] `system.stream_details`: expose large logs, histories, diagnostics, and
+  operation details through neutral request-only receivers
+- [ ] `system.memory_soak`: verify no steady RSS/thread growth under normal
+  Desktop System use and reconnect churn
 
 ### 6. Cleanup and Policy
 
@@ -560,7 +534,7 @@ diagnostic surface from becoming a primary Yjs pressure source.
 The SDK is ready for broad rollout when:
 
 - `browsers_skill` uses the SDK without losing current behavior
-- `infrastate_skill` no longer publishes one large default Yjs snapshot
+- system consumers do not publish one large default Yjs snapshot
 - unchanged refreshes do not write Yjs payloads
 - stream requests build only the requested receiver payload by default
 - diagnostics attribute projection pressure to skill, webspace, slot, and

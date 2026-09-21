@@ -33,8 +33,11 @@ Status markers: `[x]` complete, `[~]` partial, `[ ]` open.
 - [~] `[must]` Move node/browser/device/link state to Desktop Devices. Pairing,
   filtering, and canonical device merge exist; complete remote-node and
   connected-browser parity still needs a browser matrix.
-- [~] `[must]` Move compact reliability, update, service, and incident status to
-  Desktop System and Activity without copying the complete operator cockpit.
+- [~] `[must]` Move compact reliability, update, service, connection, quota,
+  and incident status to Desktop System and Activity without copying the
+  complete operator cockpit. The section-driven `adaos.sdk.system` read model
+  and DEV Desktop views are implemented; beta and routed browser acceptance
+  remain open.
 - [ ] `[must]` Move typed environment/configuration views to Desktop Settings
   and System with policy, audit, drift, restart impact, and opaque secrets.
 - [ ] `[must]` Move Root MCP/Codex leases and operator access workflows to
@@ -44,8 +47,10 @@ Status markers: `[x]` complete, `[~]` partial, `[ ]` open.
 
 - [ ] `[must]` Publish neutral searchable log/event/report MCP contracts for
   Desktop Development, Builder, and Codex. Do not expose arbitrary local paths.
-- [ ] `[must]` Publish neutral operation and system-health projections with
-  bounded detail and stable object references.
+- [~] `[must]` Publish neutral operation and system-health projections with
+  bounded detail and stable object references. System reads are available via
+  `adaos.sdk.system`; policy-checked operation commands and detail links remain
+  open.
 - [ ] `[must]` Move core update, slot, validation, cancel, rollback, drain, and
   recovery actions behind policy-checked system operation commands.
 - [ ] `[must]` Retain stream budgets, projection demand, freshness, and guard
@@ -55,26 +60,31 @@ Status markers: `[x]` complete, `[~]` partial, `[ ]` open.
 
 ## IR3. Neutralize Core And Client
 
-- [ ] `[must]` Replace `/infrastate/*` Node API routes and
-  `infrastate.action` with neutral system/operation contracts; retain measured
-  compatibility aliases for one migration release.
-- [ ] `[must]` Replace member `infrastate` payloads and related environment
-  flags with versioned reliability/runtime projection names.
-- [ ] `[must]` Remove Infrastate-specific aliasing from scenario projection and
-  Yjs load-mark code after all supported consumers migrate.
+- [~] `[must]` Replace `/infrastate/*` Node API routes and
+  `infrastate.action` with neutral system/operation contracts. The routes are
+  deprecated compatibility aliases; mutation replacement and measured zero-use
+  evidence remain open.
+- [x] `[must]` Remove active member `infrastate` payload publication and use
+  versioned reliability/runtime projection names for new consumers.
+- [x] `[must]` Remove Infrastate-specific aliasing from scenario projection and
+  use neutral Yjs load-mark naming.
 - [ ] `[must]` Remove the Client Infrastate product extension after equivalent
   declarative actions use generic SDK/MCP commands.
-- [ ] `[must]` Remove setup-preset activation and tool-bridge allowlist entries
+- [x] `[must]` Remove setup-preset activation and tool-bridge allowlist entries
   for legacy skills.
-- [ ] `[should]` Rename NLU, projection-pilot, Builder compatibility, and test
+- [~] `[should]` Rename NLU, projection-pilot, Builder compatibility, and test
   fixtures to neutral specimens so platform tests do not imply a product
-  dependency.
-- [ ] `[must]` Prove no Core module imports or loads an Infrascope/Infrastate
-  skill to provide canonical state.
+  dependency. Active NLU and projection-pilot examples are neutral; the Builder
+  compatibility pack remains.
+- [x] `[must]` Prove no Core module imports or loads an Infrascope/Infrastate
+  skill to provide canonical state; Core reads are built by public SDK and
+  system-model services.
 
 ## IR4. Remove Legacy Product
 
-- [ ] `[must]` Stop publishing and installing `project:ops_infrascope`.
+- [~] `[must]` Stop publishing and installing `project:ops_infrascope`. New
+  composition no longer depends on `skill:infrastate_skill`; the recovery
+  checkpoint remains until replacement acceptance.
 - [ ] `[must]` Remove `scenario:infrascope`, `skill:infrascope_skill`, and
   `skill:infrastate_skill` after the zero-use gate passes.
 - [ ] `[must]` Retain, rename, or remove `infra_access_skill`, `subnet_env`, and

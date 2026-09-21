@@ -55,7 +55,7 @@ The current codebase already has most of the raw building blocks, but they are s
 - draft and publish flows in [service.py](/d:/git/adaos/src/adaos/services/root/service.py)
 - synchronous install endpoints in [skills.py](/d:/git/adaos/src/adaos/apps/api/skills.py) and [scenarios.py](/d:/git/adaos/src/adaos/apps/api/scenarios.py)
 - hub-only infrastructure snapshot and action endpoints in [node_api.py](/d:/git/adaos/src/adaos/apps/api/node_api.py)
-- `InfrastateSkill` snapshot/action composition in [main.py](/d:/git/adaos/.adaos/workspace/skills/infrastate_skill/handlers/main.py)
+- neutral Application, operation, and system read models in the public SDK
 - client modal, action, and notification plumbing in [page-modal.service.ts](/d:/git/adaos/src/adaos/integrations/adaos-client/src/app/runtime/page-modal.service.ts), [page-action.service.ts](/d:/git/adaos/src/adaos/integrations/adaos-client/src/app/runtime/page-action.service.ts), and [notification-log.service.ts](/d:/git/adaos/src/adaos/integrations/adaos-client/src/app/runtime/notification-log.service.ts)
 
 What is missing is one coherent contract that connects them.
@@ -90,8 +90,8 @@ Current MVP priority:
 
 ### Marketplace-adjacent UI
 
-- `InfrastateSkill` already builds infrastructure-facing tables and actions from a snapshot model in [main.py](/d:/git/adaos/.adaos/workspace/skills/infrastate_skill/handlers/main.py).
-- It already exposes `Update skills & scenarios` as an action row via `_update_actions(...)`.
+- Applications already builds product-facing inventory and reviewed lifecycle
+  actions from authoritative Application records.
 - The client already supports:
   - static modal routing in [page-modal.service.ts](/d:/git/adaos/src/adaos/integrations/adaos-client/src/app/runtime/page-modal.service.ts)
   - schema-backed transient modals
@@ -101,8 +101,10 @@ Current MVP priority:
 ### Runtime and Yjs projection
 
 - AdaOS already uses Yjs as the browser-visible runtime state and persists it through YStore snapshots.
-- `node_api` already exposes a hub-only `infrastate/snapshot` and `infrastate/action` surface.
-- `InfrastateSkill` already uses `skill_memory_*` for local UI state and supports background refresh, which is a useful precedent for non-blocking UI updates.
+- `node_api` retains deprecated Infrastate aliases only for the accepted Stable
+  desktop; new consumers use neutral SDK/MCP contracts.
+- Desktop and Applications use bounded section reads and projected operations
+  rather than a skill-owned operational snapshot.
 - Notifications already have a separation between transient UI display and persisted history, and Yjs already carries `data/desktop/toasts`.
 
 ## What Does Not Exist Yet
@@ -309,8 +311,8 @@ The Catalog is a thin Core adapter over stable registry metadata, local
 ApplicationInstallation state, subscriptions, and operation projections. It is
 not a direct UI binding to raw `registry.json`. The full-screen Applications
 scenario owns the product surface. Skills, scenarios, providers, capabilities,
-and dependency versions belong to advanced Application detail or Infrastate
-diagnostics.
+and dependency versions belong to advanced Application detail or neutral
+Desktop Development/System diagnostics.
 
 ### Target flow
 
@@ -319,7 +321,7 @@ diagnostics.
 3. Application rows are compared with ApplicationInstallation,
    ApplicationSubscription, ApplicationRelease, and WorkspaceLock state
 4. Applications opens Installed, Catalog, Updates/Operations, or detail views
-5. Infrastate exposes only technical component/runtime state and optional deep
+5. Desktop System/Development expose technical runtime state and optional deep
    links to Application detail
 6. an Application action dispatches one aggregate Application operation
 
@@ -352,8 +354,8 @@ The UI-facing model should be small and explicit:
 
 ### Compatibility anchors
 
-- installed skills list: `_skills_items()` in [main.py](/d:/git/adaos/.adaos/workspace/skills/infrastate_skill/handlers/main.py), to remain diagnostics-only
-- installed scenarios list: `_scenario_items()` in [main.py](/d:/git/adaos/.adaos/workspace/skills/infrastate_skill/handlers/main.py), to remain diagnostics-only
+- Application inventory and lifecycle: `adaos.sdk.applications`
+- technical system reads: `adaos.sdk.system` and `adaos.sdk.control_plane`
 - modal infrastructure: [page-modal.service.ts](/d:/git/adaos/src/adaos/integrations/adaos-client/src/app/runtime/page-modal.service.ts)
 
 ### Recommended implementation shape
@@ -361,8 +363,8 @@ The UI-facing model should be small and explicit:
 - add one Application Core catalog/inventory service on the hub side
 - have Applications consume its UI-ready snapshot instead of parsing registry
   payloads inline
-- remove product inventory ownership from `InfrastateSkill`; retain technical
-  component and runtime diagnostics
+- keep product inventory out of legacy compatibility skills and move technical
+  diagnostics to neutral Desktop/Core contracts
 - keep filtering logic as a pure function over:
   - catalog entries
   - installed ProjectRelease/WorkspaceLock identities
@@ -630,10 +632,9 @@ scenario.
 - [x] `[must]` full-screen Applications Installed, Catalog,
   Updates/Operations, and detail views
 - [x] `[must]` filtering against ApplicationInstallation and subscription state
-- [~] `[must]` remove product Inventory from Infrastate and retain deep-linked
-  technical component/runtime diagnostics. The DEV composition is product-
-  inventory free; the published compatibility surface remains until the
-  replacement and zero-use gates pass.
+- [x] `[must]` remove product Inventory authority from Infrastate. Applications
+  owns the product read model; the deprecated Stable compatibility package
+  remains only until the replacement and zero-use gates pass.
 - [ ] `[should]` advanced component detail and filters that use profiles for semantic selection,
   categories/tags for discovery, and deployment scope for compatibility
 
@@ -715,9 +716,8 @@ Smallest coherent change set:
     aggregate operation planning behind the public SDK
 - `src/adaos/services/operations/*`
   - new reusable operation runtime layer
-- `.adaos/workspace/skills/infrastate_skill/handlers/main.py`
-  - remove product Catalog/inventory actions; retain technical Components,
-    runtime diagnostics, and generic operation projection consumption
+- `src/adaos/sdk/system.py`
+  - expose bounded technical system reads without a product-specific skill
 - managed Applications scenario source
   - implement the full-screen Installed, Catalog, Updates/Operations, and
     Application Detail views through Builder using Application SDK/MCP
@@ -735,8 +735,9 @@ Smallest coherent change set:
   definitions/manifests; never infer machine semantics from description text.
 - Keep existing sync install APIs working during migration; async operation mode can be introduced behind new response fields first.
 - Keep existing `data/desktop/toasts` projection until the client fully consumes `runtime.notifications`.
-- Keep `infrastate.action` only as a compatibility/technical-operation path;
-  new product actions originate in Applications and route through the typed SDK.
+- Keep `infrastate.action` only as a deprecated Stable compatibility alias;
+  new product actions originate in Applications and route through typed SDK/MCP
+  commands.
 
 Main risk areas:
 
@@ -746,7 +747,7 @@ Main risk areas:
 - mixing machine profiles, UI categories, and deployment scope in one
   unvalidated tag list
 - letting operation status become duplicated between runtime memory and Yjs
-- leaving product Catalog parsing or inventory ownership in `InfrastateSkill`
+- leaving product Catalog parsing or inventory ownership in compatibility skills
 - introducing install-specific naming that prevents later reuse for node update, diagnostics, model download, or migrations
 
 ## Architectural Decision Summary
@@ -754,8 +755,7 @@ Main risk areas:
 AdaOS should evolve this area by reusing what already exists:
 
 - local deterministic registry helpers
-- hub-side technical `InfrastateSkill` snapshot/action composition where it
-  remains diagnostic
+- neutral Core system and operation projections consumed through public SDK/MCP
 - client action and notification plumbing
 - Yjs persistence and reconnect behavior
 

@@ -83,8 +83,8 @@ tests should use neutral fixtures such as `system`, `operations`, or
 
 ## Current Coupling Assessment
 
-The legacy product itself lives in `project:ops_infrascope` and currently
-composes:
+The legacy product itself lives in `project:ops_infrascope`. The preserved
+recovery checkpoint originally composed:
 
 - `scenario:infrascope`;
 - `skill:infrascope_skill`;
@@ -98,15 +98,18 @@ snapshot/action composer. Core does not import the Infrascope skill as its
 canonical domain model. The coupling is nevertheless material because legacy
 names and payload shapes appear in several adapters:
 
-- setup presets activate Infrascope/Infrastate by name;
-- Node API exposes `/infrastate/*` routes and an `infrastate.action` command;
-- subnet link management publishes member state under an `infrastate`
-  projection and related environment flags;
-- scenario projection code provides Infrastate-specific local aliases;
-- Yjs load marks and WebIO streams use `infrastate.*` receiver names;
+- Node API still exposes deprecated `/infrastate/*` routes and an
+  `infrastate.action` compatibility command for the accepted Stable desktop;
+- the compatibility skill and Client extension still use `infrastate.*`
+  receiver and action names;
 - the Client registers an Infrastate action/data extension;
-- NLU examples, projection-pilot selection, Builder compatibility fixtures,
-  and many runtime tests use Infrascope as a specimen.
+- the Builder compatibility fixture and retained Stable sources still use
+  Infrascope as a specimen.
+
+Default setup activation, tool-bridge special routing, active subnet member
+projection publication, scenario projection aliases, Yjs load-mark naming,
+and active NLU/projection-pilot examples have been neutralized. New
+`ops_infrascope` installations no longer compose `skill:infrastate_skill`.
 
 This is historical adapter coupling, not proof that the product must remain.
 Core can be cleaned after replacement consumers use neutral contracts. A
