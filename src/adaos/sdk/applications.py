@@ -1203,9 +1203,32 @@ def list_catalog() -> list[dict[str, Any]]:
 
 
 def list_releases(application_id: str) -> list[dict[str, Any]]:
-    return [
-        _release_read_model(item) for item in _service().list_releases(application_id)
-    ]
+    token = str(application_id or "").strip()
+    try:
+        releases = _service().list_releases(token)
+    except FileNotFoundError:
+        projections = _workspace_project_read_models((), application_id=token)
+        if not projections:
+            raise
+        projection = projections[0]
+        release = deepcopy(dict(projection.get("installed_release") or {}))
+        workspace_project = dict(projection.get("workspace_project") or {})
+        manifest_digest = str(workspace_project.get("manifest_digest") or "").strip()
+        if not release or not manifest_digest:
+            raise FileNotFoundError(f"Application release not found: {token}")
+        release.update(
+            {
+                "release_digest": manifest_digest,
+                "lifecycle": "stable",
+                "channels": ["stable"],
+            }
+        )
+        project_release = dict(release.get("project_release") or {})
+        project_release.setdefault("schema", "adaos.artifact.workspace_project_release.v1")
+        project_release["release_digest"] = manifest_digest
+        release["project_release"] = project_release
+        return [_release_read_model(release)]
+    return [_release_read_model(item) for item in releases]
 
 
 def get_subscription(application_id: str) -> dict[str, Any] | None:

@@ -940,6 +940,61 @@ def test_application_list_includes_read_only_workspace_project_projection(
     assert listed[0]["installed_release"]["version"] == "1.2.3"
 
 
+def test_release_list_projects_read_only_workspace_project(monkeypatch) -> None:
+    digest = "sha256:" + "a" * 64
+
+    class Service:
+        def list_releases(self, application_id):
+            assert application_id == "legacy_notes"
+            raise FileNotFoundError("Application not found: legacy_notes")
+
+    monkeypatch.setattr(applications, "_service", lambda: Service())
+    monkeypatch.setattr(
+        applications,
+        "_workspace_project_read_models",
+        lambda _existing, application_id=None: [
+            {
+                "installed_release": {
+                    "schema": "adaos.application.workspace_project_release.v1",
+                    "application_id": application_id,
+                    "version": "1.2.3",
+                    "project_release": {
+                        "project_id": application_id,
+                        "version": "1.2.3",
+                    },
+                },
+                "workspace_project": {"manifest_digest": digest},
+            }
+        ],
+    )
+
+    releases = applications.list_releases("legacy_notes")
+
+    assert releases == [
+        {
+            "schema": "adaos.application.workspace_project_release.v1",
+            "application_id": "legacy_notes",
+            "version": "1.2.3",
+            "release_digest": digest,
+            "lifecycle": "stable",
+            "channels": ["stable"],
+            "project_release": {
+                "schema": "adaos.artifact.workspace_project_release.v1",
+                "project_id": "legacy_notes",
+                "version": "1.2.3",
+                "release_digest": digest,
+                "components": [],
+                "resolved_dependencies": [],
+                "composition_lock": {"entrypoint_ids": []},
+                "migration": {"required": False, "count": 0},
+                "validation_evidence_count": 0,
+                "private_source": "redacted",
+            },
+            "acceptance_evidence_count": 0,
+        }
+    ]
+
+
 def test_workspace_project_access_surface_is_read_only(monkeypatch) -> None:
     projected = {
         "application": {
