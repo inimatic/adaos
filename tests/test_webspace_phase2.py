@@ -1033,8 +1033,8 @@ def test_remote_member_catalog_entries_are_node_scoped_and_auto_installed(monkey
                 "runtime_projection": {
                     "snapshot": {
                         "desktop_catalog": {
-                            "apps": [{"id": "infrastate_app", "title": "Infra State"}],
-                            "widgets": [{"id": "infrastate_widget", "title": "Infra State"}],
+                            "apps": [{"id": "system_monitor_app", "title": "System Monitor"}],
+                            "widgets": [{"id": "system_monitor_widget", "title": "System Monitor"}],
                         }
                     }
                 },
@@ -1060,23 +1060,23 @@ def test_remote_member_catalog_entries_are_node_scoped_and_auto_installed(monkey
 
     assert len(decls) == 1
     decl = decls[0]
-    assert decl["apps"][0]["id"] == "node:member-1:infrastate_app"
-    assert decl["apps"][0]["node_local_id"] == "infrastate_app"
+    assert decl["apps"][0]["id"] == "node:member-1:system_monitor_app"
+    assert decl["apps"][0]["node_local_id"] == "system_monitor_app"
     assert decl["apps"][0]["node_label"] == "Node 1"
-    assert decl["apps"][0]["title_i18n"] == {"key": "infrastate.text.infra_state"}
-    assert decl["widgets"][0]["id"] == "node:member-1:infrastate_widget"
-    assert decl["widgets"][0]["title_i18n"] == {"key": "infrastate.text.infra_state"}
+    assert decl["apps"][0]["title"] == "System Monitor"
+    assert decl["widgets"][0]["id"] == "node:member-1:system_monitor_widget"
+    assert decl["widgets"][0]["title"] == "System Monitor"
     assert decl["contributions"] == [
         {
             "extensionPoint": "desktop.apps",
             "type": "app",
-            "id": "node:member-1:infrastate_app",
+            "id": "node:member-1:system_monitor_app",
             "autoInstall": True,
         },
         {
             "extensionPoint": "desktop.widgets",
             "type": "widget",
-            "id": "node:member-1:infrastate_widget",
+            "id": "node:member-1:system_monitor_widget",
             "autoInstall": True,
         },
     ]

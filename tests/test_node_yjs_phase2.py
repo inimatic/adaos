@@ -834,7 +834,7 @@ def test_node_infrastate_snapshot_endpoint_does_not_call_tool_fallback(monkeypat
     assert result["degraded"] is False
     assert result["error"] is None
     assert result["snapshot"]["full_snapshot_removed"] is True
-    assert result["snapshot"]["summary"]["label"] == "Infra State"
+    assert result["snapshot"]["summary"]["label"] == "System"
 
 
 def test_node_infrastate_action_endpoint_publishes_event_and_returns_fast_ack(monkeypatch) -> None:
