@@ -82,6 +82,11 @@ DECLARATIVE_MANIFEST_NAMES = {
 MANIFEST_REWRITE_DELETION_THRESHOLD = 120
 MANIFEST_REWRITE_DELETION_RATIO = 4.0
 MANIFEST_REWRITE_SHRINK_RATIO = 0.5
+MANIFEST_REWRITE_MAX_ADDITIVE_LINE_RATIO = 0.25
+MANIFEST_REWRITE_MAX_TOTAL_LINE_RATIO = 0.4
+MANIFEST_REWRITE_MIN_IDENTITY_OVERLAP = 0.85
+MANIFEST_REWRITE_MIN_SIZE_RATIO = 0.7
+MANIFEST_REWRITE_MAX_SIZE_RATIO = 1.3
 CODEX_TOKEN_BUDGET_CHECK_INTERVAL_SECONDS = 2.0
 CODEX_TOKEN_BUDGET_EXIT_CODE = 124
 CODEX_LIVE_BUDGET_SAFETY_FACTOR = 1.25
@@ -8237,6 +8242,87 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         )
 
     @classmethod
+    def _is_bounded_semantic_webui_edit(
+        cls,
+        assignment: Mapping[str, Any],
+        *,
+        workspace: Path,
+        baseline: str,
+        path: str,
+        additions: int,
+        deletions: int,
+    ) -> bool:
+        """Admit proportionate Web UI evolution while rejecting broad rewrites."""
+
+        if Path(path).name != "webui.json":
+            return False
+        # Exact repair targets remain a stricter contract than this whole-page
+        # admission rule. They must be handled by _is_scoped_webui_widget_edit.
+        if cls._manifest_widget_edit_scope(assignment):
+            return False
+        try:
+            before_text = _git(["show", f"{baseline}:{path}"], cwd=workspace)
+            after_text = (workspace / path).read_text(encoding="utf-8")
+            before = json.loads(before_text)
+            after = json.loads(after_text)
+        except (RuntimeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(before, Mapping) or not isinstance(after, Mapping):
+            return False
+        if before.get("schema") != after.get("schema"):
+            return False
+
+        baseline_lines = max(1, len(before_text.splitlines()))
+        if (
+            additions / baseline_lines > MANIFEST_REWRITE_MAX_ADDITIVE_LINE_RATIO
+            or deletions / baseline_lines > MANIFEST_REWRITE_MAX_ADDITIVE_LINE_RATIO
+            or (additions + deletions) / baseline_lines
+            > MANIFEST_REWRITE_MAX_TOTAL_LINE_RATIO
+        ):
+            return False
+
+        baseline_size = max(1, len(before_text.encode("utf-8")))
+        size_ratio = len(after_text.encode("utf-8")) / baseline_size
+        if not (
+            MANIFEST_REWRITE_MIN_SIZE_RATIO
+            <= size_ratio
+            <= MANIFEST_REWRITE_MAX_SIZE_RATIO
+        ):
+            return False
+
+        def identities(document: Mapping[str, Any]) -> set[tuple[str, str, str]]:
+            result: set[tuple[str, str, str]] = set()
+
+            def visit(node: Any) -> None:
+                if isinstance(node, Mapping):
+                    node_id = node.get("id")
+                    if isinstance(node_id, str) and node_id.strip():
+                        result.add(
+                            (
+                                node_id.strip(),
+                                str(node.get("type") or "").strip(),
+                                str(node.get("kind") or "").strip(),
+                            )
+                        )
+                    for item in node.values():
+                        visit(item)
+                elif isinstance(node, list):
+                    for item in node:
+                        visit(item)
+
+            visit(document)
+            return result
+
+        before_identities = identities(before)
+        after_identities = identities(after)
+        if len(before_identities) < 4 or len(after_identities) < 4:
+            return False
+        overlap = len(before_identities & after_identities) / max(
+            len(before_identities), len(after_identities)
+        )
+        return overlap >= MANIFEST_REWRITE_MIN_IDENTITY_OVERLAP
+
+    @classmethod
     def _validate_manifest_rewrite_bounds(
         cls,
         assignment: Mapping[str, Any],
@@ -8302,6 +8388,15 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     workspace=workspace,
                     baseline=baseline,
                     path=path,
+                ):
+                    continue
+                if cls._is_bounded_semantic_webui_edit(
+                    assignment,
+                    workspace=workspace,
+                    baseline=baseline,
+                    path=path,
+                    additions=additions,
+                    deletions=deletions,
                 ):
                     continue
                 violations.append(

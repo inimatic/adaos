@@ -4262,6 +4262,61 @@ def test_bounded_dev_ticket_rejects_large_manifest_format_churn(tmp_path: Path) 
         )
 
 
+def test_bounded_task_admits_proportionate_semantic_webui_evolution(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = workspace / "scenarios" / "demo"
+    scenario.mkdir(parents=True)
+    manifest = scenario / "webui.json"
+    document = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "widgets": [
+                {
+                    "id": f"metric-{index}",
+                    "type": "visual.metric",
+                    "title": f"Metric {index}",
+                    "value": index,
+                    "description": "Original presentation",
+                }
+                for index in range(80)
+            ]
+        },
+    }
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
+    for widget in document["ui"]["widgets"][:32]:
+        widget["description"] = "Updated presentation"
+    manifest.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    worker = object.__new__(LocalSkillFactoryWorker)
+    assignment = {
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "realize_request": {
+            "artifacts": {"execution_budget": {"max_wall_seconds": 300}}
+        },
+    }
+
+    worker._validate_changed_paths(
+        assignment,
+        worker._changed_from_baseline(workspace),
+        workspace=workspace,
+    )
+
+
 def test_bounded_task_admits_large_semantically_scoped_widget_edit(
     tmp_path: Path,
 ) -> None:
