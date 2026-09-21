@@ -1862,6 +1862,17 @@ Handle artifact provenance, scenario UX, and runtime lifecycle after the communi
   decide whether `runtime_update` is enough.
 - [ ] `[must]` Make `desktop.scenario.set` transactional and observable with
   `requested`, `effective`, and `error` state.
+- [ ] `[must]` Bound projection work during intensive scenario switching. The
+  local 24-step sequential and 30-step rapid campaigns no longer reproduce an
+  unexplained YWS `1006`, and rapid requests coalesce, but the named-entity
+  projection still performs about 1.0-1.6 seconds of CPU work over an
+  approximately 670 KiB payload. Remove that event-loop pressure without
+  increasing transport timeouts.
+- [ ] `[must]` Give runtime beacon, direct reliability details, and aggregate
+  reliability summary one explicit freshness contract. A browser with fresh
+  sync and ready commands may show a transitional sidecar handoff, but the
+  aggregate summary must converge within the declared window and must not
+  overwrite fresher channel evidence with `unknown` or `runtime_report_stale`.
 - [ ] `[must]` Define explicit ownership for Yjs subtrees such as `ui`, `data`,
   `registry`, and desktop-installed artifacts.
 - [ ] `[should]` Surface artifact provenance in diagnostics: `workspace`,

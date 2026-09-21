@@ -639,14 +639,22 @@ Builder development and consumes only public contracts.
   irreversible approval. Core and the Applications DEV scenario now expose one
   `applications.update_settings` command that atomically creates and applies
   its own reviewed plan with the same idempotency identity. The declarative
-  toggles update optimistically and invalidate the authoritative summary; this
-  item remains open until the new Beta proves pending, failure/retry, migration
-  handoff and exact persisted values in the browser.
+  toggles update optimistically and invalidate the authoritative summary. A
+  local browser/API qualification changed Family Tasks through revisions 2-5,
+  observed the persisted values after each refresh, and restored the defaults
+  (`auto_update=true`, `use_prerelease=false`). The item remains open for the
+  failure/retry presentation and for a real track change that exercises the
+  migration handoff rather than only preference persistence.
 - [x] `[must]` `APP4-47` Carry universal Application icon metadata from
   `project.yaml` through Project composition, registry projection and SDK read
-  models. Home and Applications consume the same value; product ids and titles
-  are not icon lookup keys. Raster/generated variants remain a compatible media
-  extension rather than a Desktop-only contract.
+  models. `ProjectRelease.catalog` is the immutable ABI boundary, so build,
+  publication, installation, Home and Applications consume one release-owned
+  value; product ids and titles are not icon lookup keys. The local ABI and SDK
+  contract tests pass. Publishing the first releases that contain this field is
+  intentionally gated on deploying a Root that admits the extended release
+  schema; the older RU Root rejects the unknown field instead of silently
+  dropping it. Raster/generated variants remain a compatible media extension
+  rather than a Desktop-only contract.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
 - [ ] `[could]` `APP4-38` Store UI revisions as base plus content-addressed
