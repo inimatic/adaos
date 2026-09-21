@@ -6,7 +6,7 @@ It exists to prevent roadmap drift between:
 
 - [Operational Event Model](operational-event-model.md)
 - [Projection Subscription Roadmap](projection-subscription-roadmap.md)
-- [Infrascope Roadmap](infrascope-roadmap.md)
+- [Infrascope Retirement Roadmap](infrascope-roadmap.md)
 - communication and webspace/runtime hardening tracks
 
 This document is intentionally orchestration-first.
@@ -27,8 +27,8 @@ Use these documents as the authoritative sources for detailed design:
 - [Skill Projection Runtime SDK](skill-projection-runtime-sdk.md)
   Skill-facing SDK/core rails for projection slots, stream receivers, dirty
   routing, set-if-changed Yjs writes, and migration checklists.
-- [Infrascope Roadmap](infrascope-roadmap.md)
-  Operator-workspace sequencing and the later heavy-skill migration target.
+- [Infrascope Retirement Roadmap](infrascope-roadmap.md)
+  Legacy operator decomposition, neutral contract extraction, and removal gates.
 - [Webspace Scenario Pointer/Projection Roadmap](webspace-scenario-pointer-projection-roadmap.md)
   Webspace rebuild, semantic ownership, and projection/materialization evolution.
 - [Realtime Reliability Roadmap](realtime-reliability-roadmap.md)
@@ -45,7 +45,7 @@ AdaOS now has several related but distinct workstreams:
 - Yjs shape evolution
 - browser/client projection consumption
 - platform-emitted diagnostics and system messages
-- heavy-skill migration such as `Infrascope`
+- product-owned heavy-surface migration and legacy Infrascope decomposition
 
 Without a shared roadmap, these tracks can easily fork into:
 
@@ -97,7 +97,8 @@ sequence.
 - core/runtime ownership before browser specialization
 - node-aware shared Yjs shape before heavy scenario pilots
 - platform emitters before skill-specific pressure tests
-- `Infrascope` as a later architectural pilot, not the starting point
+- product-owned operator surfaces as later architectural pilots; legacy
+  Infrascope is decomposed, not promoted into a platform contract
 - event-driven projection work must not add critical Yjs load; domain events
   update memory first, and only demanded, fingerprint-changed projections may
   be materialized into Yjs
@@ -120,7 +121,7 @@ The intended order across all workstreams is:
 5. client projection adapter and subscription runtime
 6. shared dispatcher for demanded projection refresh
 7. platform-emitted projections
-8. heavy-skill pilots such as `Infrascope`
+8. heavy product-surface pilots and legacy decomposition
 9. cross-skill rollout
 10. cleanup and hardening
 
@@ -218,7 +219,7 @@ References:
 Current checkpoint as of 2026-05-15:
 
 - the taxonomy is stable in the architecture document and should no longer be
-  redefined independently by projection, Infrascope, or status-plane work
+  redefined independently by projection, a product surface, or status-plane work
 - named-entity topic constants and lifecycle envelopes exist in code, including
   observed, draft-name, display-name, alias add/remove/deprecate, conflict, and
   registry-changed events
@@ -484,7 +485,7 @@ Current checkpoint as of 2026-07-21:
 - the `STATUS-*` issue-tracker track should be executed here, not as a separate
   monitoring-only roadmap: status cards are the smallest useful platform-owned
   projections and should prove fingerprinting, versioning, thin reads, and
-  push/delta consumption before Infrascope migration
+  push/delta consumption before heavy product-surface migration
 - MVP implementation checkpoint: status-card ProjectionRecords can be
   materialized through the existing `StatusRegistry`, and live status-card
   change events now auto-refresh demanded projections through the dispatcher and
@@ -496,29 +497,34 @@ Why this comes first:
 
 - it validates the contract with platform-owned state
 - it avoids coupling the first pilot to the complexity of one heavy skill
-- it gives the browser a real projection consumer path before `Infrascope`
+- it gives the browser a real projection consumer path before migrating
+  product-owned operator surfaces or retiring legacy Infrascope projections
 
 Primary sources:
 
 - [Operational Event Model](operational-event-model.md)
 - [Projection Subscription Roadmap](projection-subscription-roadmap.md)
 
-### Phase 7. Heavy Skill Pilot
+### Phase 7. Heavy Operator-Surface Pilot
 
-- [x] `phase7.infrascope_gate`: do not start `Infrascope` migration before Phases 0-6 are materially in place, except for preparatory inventory and tests that do not create a parallel projection contract
-- [ ] `[must]` `phase7.infrascope_split`: migrate `Infrascope` from monolithic snapshots to demanded projection families for the M3 pilot
-- [ ] `[should]` `phase7.infrascope_platform_errors_outside_skill`: keep platform-originated diagnostics separate from skill-owned payloads
-- [ ] `[could]` `phase7.infrascope_access_metadata`: validate shared payload plus access metadata behavior for owner/guest/dev audiences
+- [x] `phase7.legacy_gate`: do not migrate legacy operator projections before
+  Phases 0-6 are materially in place or create a parallel projection contract
+- [ ] `[must]` `phase7.product_surface_split`: migrate Desktop System/Activity/
+  Development and Applications component detail from monolithic snapshots to
+  demanded neutral projection families
+- [ ] `[should]` `phase7.platform_errors_outside_skill`: keep platform-originated
+  diagnostics separate from skill-owned payloads
+- [ ] `[could]` `phase7.access_metadata`: validate shared payload plus access
+  metadata behavior for owner/guest/dev audiences
 
 Primary source:
 
-- [Infrascope Roadmap](infrascope-roadmap.md)
+- [Infrascope Retirement Roadmap](infrascope-roadmap.md)
 
 Harvest branch note: PR #87 included an Infrascope status-card adapter, but this
-branch deliberately does not carry it forward yet. The pilot readiness contract
-now marks Infrascope eligible for local pilot work because the platform emitter
-and browser ProjectionRecord cache are locally accepted; deployed stand
-acceptance remains required before broad rollout.
+branch deliberately does not carry it forward. The platform emitter and browser
+ProjectionRecord cache can be qualified directly through product-owned
+surfaces; the retiring product is not the target pilot contract.
 
 ### Phase 8. Follow-Up Pilots
 
@@ -569,4 +575,5 @@ The full roadmap is successful when:
 - shared Yjs space is ready for node-scoped ownership
 - browser clients can demand and cache multiple projections safely
 - platform-owned diagnostics and system errors use the same projection runtime as skills
-- `Infrascope` can migrate as an architectural pilot rather than a one-off workaround
+- product-owned heavy surfaces use the shared architecture and useful legacy
+  projections can be retired without one-off replacement contracts

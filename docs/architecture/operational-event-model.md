@@ -607,10 +607,12 @@ After those prerequisites, the best early scenario and skill candidates are:
 
 1. `web_desktop` platform surfaces
    Workspace manager, diagnostics, notification history, apps/widgets catalogs, and browser-shell diagnostics are a strong fit for platform-emitted projections.
-2. `Infrascope`
-   High event volume, many possible views, object drill-down, multiple concurrent consumers, and clear current pain from monolithic snapshots.
-3. `infrastate`-style shared operational overlays
-   These already behave like derived operational projections and need better per-webspace demand routing.
+2. Desktop System/Activity/Development and Applications component detail
+   High event volume, many possible views, object drill-down, multiple
+   concurrent consumers, and clear pressure on monolithic snapshots.
+3. useful legacy `infrascope`/`infrastate` operational projections
+   Migrate them only through neutral contracts needed by replacement consumers,
+   then remove the legacy adapters.
 4. prompt and dev-oriented workspaces such as `prompt_engineer_scenario`
    Multiple panels, artifacts, and inspector-like views make them good demand-driven candidates after the operator path is stable.
 5. voice/media/browser-session heavy surfaces
@@ -640,7 +642,8 @@ The intended order is:
 2. fix the core-to-skill event and projection contract
 3. fix the browser/client projection demand contract
 4. introduce node-scoped projection ownership in shared Yjs
-5. only then migrate heavy scenario skills such as `Infrascope`
+5. only then migrate product-owned heavy surfaces and neutralize legacy
+   Infrascope/Infrastate producers
 
 In other words, this is an architectural solution, not merely an `Infrascope` adaptation.
 
@@ -663,18 +666,20 @@ The intended implementation order for this architecture is:
    Add one reusable runtime path for `event -> in-memory update -> demanded projection refresh`.
 7. `platform-emitted projections`
    Migrate notifications, diagnostics, and system errors as the first real emitted projections.
-8. `heavy skill pilots`
-   Only after the above layers are stable should complex skills such as `Infrascope` migrate to the new model.
+8. `heavy surface pilots`
+   Only after the above layers are stable should product-owned operator
+   surfaces migrate and legacy monoliths be decomposed.
 
 This ordering should be treated as part of the target architecture, not just an implementation suggestion.
 
-## Relationship to Root MCP Foundation and Infrascope
+## Relationship to Root MCP Foundation and Human Surfaces
 
 This event model is shared infrastructure.
 
 It should align:
 
-- `Infrascope` and other browser-facing operator scenarios
+- Desktop System/Activity/Development, Applications, Users & Access, Builder,
+  and temporary legacy operator adapters
 - scenario and skill projection runtimes
 - platform-emitted diagnostics, notifications, and system errors
 - Root MCP operational audit and result envelopes

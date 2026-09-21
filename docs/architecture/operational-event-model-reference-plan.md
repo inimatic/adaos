@@ -34,8 +34,8 @@ The event model is covered when AdaOS has one shared path for:
    the same projection/runtime contract as skills
 6. named entities and human-facing labels changing without retraining or
    duplicating fallback rules
-7. heavy skills such as Infrascope migrating onto the shared contract instead
-   of defining their own projection ABI
+7. product-owned heavy surfaces and useful legacy projections migrating onto
+   the shared contract instead of defining their own projection ABI
 
 ## Non-Negotiable Invariants
 
@@ -65,7 +65,7 @@ Goal:
 
 Make runtime events, named entities, platform status, and projection records
 share one compatible contract surface before client subscription runtime or
-Infrascope migration.
+legacy operator decomposition.
 
 Required artifacts:
 
@@ -86,7 +86,7 @@ Exit criteria:
   priority, schema/version, and timestamps consistently
 - status cards and named-entity registry can be used as reference projection
   examples
-- no client, skill, or Infrascope-specific projection shape is introduced ahead
+- no client, skill, or legacy-product-specific projection shape is introduced ahead
   of the shared ABI
 
 ### Slice 2. Browser Demand Runtime
@@ -174,17 +174,19 @@ Exit criteria:
 - the pilot exercises the same projection record and lifecycle fields planned
   for skills
 
-### Slice 5. Heavy Skill Pilot
+### Slice 5. Heavy Product-Surface Pilot
 
 Goal:
 
-Migrate Infrascope only after the shared model has already been exercised by
-platform emitters.
+Migrate Desktop System/Activity/Development and Applications technical detail
+only after the shared model has already been exercised by platform emitters.
+Useful Infrascope/Infrastate producers may participate only as temporary neutral
+compatibility adapters.
 
 Required artifacts:
 
-- projection-family inventory for overview, inventory, inspector, topology, and
-  modal/widget payloads
+- projection-family inventory for system health, operations, diagnostics,
+  component topology, and on-demand object detail
 - demanded-only refresh per webspace
 - lazy inspector/detail loading
 - access metadata for shared owner/guest/dev payload behavior
@@ -192,11 +194,11 @@ Required artifacts:
 
 Exit criteria:
 
-- Infrascope no longer relies on one monolithic Yjs snapshot for active views
+- product-owned active views no longer rely on one monolithic Yjs snapshot
 - platform-originated warnings and materialization errors stay outside
   skill-owned payloads
 - the migration uses the shared dispatcher and projection ABI
-- no Infrascope-only subscription or lifecycle model exists
+- no legacy-product-only subscription or lifecycle model exists
 
 ### Slice 6. Cross-Skill Rollout
 
@@ -340,7 +342,7 @@ Use this checklist for every implementation slice touching the event model.
 | Client demand runtime | Page/widget/modal/pinned consumers | Server mapper exists and browser YDoc demand writes full records; primary ProjectionRecord read adoption remains the active client gap |
 | Shared dispatcher | Per-webspace demanded refresh | Dispatcher contract, SDK registration/restore helpers, lifecycle events, and live eventbus bridge are implemented for the status-card family |
 | Platform emitter pilot | Status/notifications/diagnostics through shared ABI | Status-card bridge and platform node diagnostics branch are implemented; notification ProjectionRecord migration remains open |
-| Infrascope migration | Uses shared ABI and dispatcher | Blocked by previous rows |
+| Heavy product-surface migration | Uses shared ABI and dispatcher; legacy adapters are temporary | Blocked by previous rows |
 
 ## Completion Definition
 
@@ -358,7 +360,7 @@ The operational event model can be considered covered when:
 - runtime browser/API surfaces do not allow arbitrary ProjectionRecord writes
 - named-entity lifecycle changes invalidate consumers without reload-only
   behavior
-- Infrascope or another heavy pilot uses the shared ABI without adding a
+- a product-owned heavy pilot uses the shared ABI without adding a
   parallel one
 - acceptance tests cover event envelope compatibility, multi-consumer demand,
   multi-webspace dispatch, platform emitter lifecycle, and pressure

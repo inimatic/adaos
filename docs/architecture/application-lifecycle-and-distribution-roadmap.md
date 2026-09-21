@@ -447,8 +447,13 @@ Builder development and consumes only public contracts.
   permission, role, user, child, guest, secret, approval management, and
   verification-checklist semantics are owned by `AAPR4`/`AAPR5` in the
   Application Access roadmap.
-- [ ] `[must]` `APP4-05` Make Applications the product inventory authority and
+- [~] `[must]` `APP4-05` Make Applications the product inventory authority and
   remove duplicate Inventory from Infrastate UI while preserving diagnostics.
+  Applications Beta `0.1.25` now renders the authoritative inventory and the
+  current DEV Infrascope composition omits product Inventory. The previously
+  published compatibility surface remains installed until the replacement
+  diagnostics/lifecycle matrix and zero-use gate in the Infrascope retirement
+  roadmap pass.
 - [ ] `[must]` `APP4-06` Mark Applications as a protected system Application:
   bootstrap-capable, ordinary-release updatable, unable to remove its active
   installation, and recoverable through CLI/MCP.
@@ -619,8 +624,11 @@ Builder development and consumes only public contracts.
   focused tests pass. A local active-Beta `0.3.43` rerun now passes reorder,
   unpin, repin, exact presentation-order restore, Settings mutation and chat
   visibility on the authoritative Webspace without direct YJS writes. Client
-  `0.0.414+8b23131` is deployed at `inimatic.com`; the same governed path was
-  requalified against that deployed source revision.
+  `0.0.415+a464f57` is deployed at `inimatic.com`. The Client now uses CDK's
+  mixed-orientation strategy for the CSS grid, freezes authoritative stream
+  replacement during a gesture, and keeps stable preview/placeholder identity.
+  Focused tests and production build pass; external interactive confirmation
+  on 2026-09-21 reports predictable reorder behavior.
 - [x] `[must]` `APP4-44` Keep Home presentation separate from installation and
   placement: successful install pins by default, Home customization and
   Applications can unpin without uninstalling, uninstall removes the launcher,
@@ -678,6 +686,23 @@ Builder development and consumes only public contracts.
 **Exit proof:** Builder produces and revises the Applications scenario through
 chat, its Trial is accepted and released, and a browser completes ordinary
 Application operations without Infrastate owning the workflow.
+
+2026-09-21 checkpoint: access-aware final verification and Builder
+`place_local_trial` selected exact Betas on `desktop`:
+
+- `web_desktop@0.3.44`, candidate
+  `web_desktop-0-3-44-eef5c0b47989`, digest
+  `sha256:288cb18f1017917149542f0fa8d0860525a5250f2b9d023a7606eef5c0b47989`;
+- `applications@0.1.25`, candidate
+  `applications-0-1-25-ec695c66fc49`, digest
+  `sha256:43ec06f838884aab106cb14f5a570fd86e26aae25f8a89f1142dec695c66fc49`;
+- `users_access@0.1.14`, candidate
+  `users_access-0-1-14-a0955e85a54c`, digest
+  `sha256:97eb53fd3432a68dc90863fdfc5e47f8e8574c62af6c562cbba6a0955e85a54c`.
+
+The Applications and Users & Access browser transitions materialize exact
+scenario ids, authoritative records, and zero renderer failures. This evidence
+does not close the remaining APP4 or APP6 items and is not Stable promotion.
 
 ## APP5. Development Reports and Relay
 

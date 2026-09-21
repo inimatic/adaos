@@ -106,8 +106,9 @@ The Builder does not own:
 - direct bypass of skill/scenario publication, activation, or policy gates
 - operational incident handling outside the development/repair loop
 
-Those surfaces are handled by the deterministic runtime, NLU Teacher,
-Root MCP operational planes, Infrascope, and supervisor/runtime governance.
+Those surfaces are handled by the deterministic runtime, NLU Teacher, Root MCP
+operational planes, product-owned Desktop/Applications/Users & Access surfaces,
+and supervisor/runtime governance.
 
 ## Project And Development Session Boundary
 

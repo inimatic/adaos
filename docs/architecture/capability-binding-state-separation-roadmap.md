@@ -606,8 +606,8 @@ canonical edges and impact results; no activation or identity record is lost.
   publication paths.
 - [ ] `[should]` `CBS8-07` Define and enforce capability maturity
   `application-local -> candidate -> reusable -> platform`.
-- [ ] `[could]` `CBS8-08` Add graph and impact visualization to Builder or
-  Infrascope.
+- [ ] `[could]` `CBS8-08` Add graph and impact visualization to Builder,
+  Applications component detail, or Desktop System diagnostics.
 - [ ] `[could]` `CBS8-09` Use a graph database or incremental cache only after
   measurements show the rebuildable relational/file projection is insufficient.
 - [ ] `[deferred]` `CBS8-10` Allow the Evolver to publish contracts, execute

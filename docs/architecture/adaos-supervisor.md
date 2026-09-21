@@ -467,7 +467,10 @@ It must not expose mutating control operations or become a substitute for the au
 
 Current MVP browser behavior may preserve and display the last known transition state during reconnect windows, and routed hub sessions can now consume that browser-safe transition state primarily as pushed `core.update.status` events over the control `/ws` channel, with `/hubs/<id>/api/supervisor/public/update-status` retained as a fallback when the control channel is unavailable.
 The target end state is stronger: every supported browser entry topology should be able to poll that read-only supervisor transition surface directly, so the shell can keep moving from `hub restarting` to `rollback in progress` or `root promotion pending` from supervisor truth rather than only from the last runtime-visible snapshot.
-Operator-facing surfaces are also expected to consume that same supervisor truth through the canonical control-plane model, so Infrascope and related overview projections can show core-runtime transition state in `active_runtimes`, health strips, and recent changes instead of presenting a restart only as generic hub instability.
+Operator-facing surfaces are also expected to consume that same supervisor
+truth through the canonical control-plane model, so Desktop System, Activity,
+and Development can show core-runtime transition state in health summaries and
+recent changes instead of presenting a restart only as generic hub instability.
 That browser-safe surface now also includes candidate runtime diagnostics needed for warm-switch work:
 
 - `action`
@@ -971,7 +974,7 @@ Recommended per-skill diagnostic fields:
 - `tests`
 - `error`
 
-Operator surfaces such as Infra State and Infrascope should be able to answer:
+Desktop System/Development and agent-facing diagnostics should be able to answer:
 
 - which skill failed migration
 - whether the failure happened during prepare, tests, activate, rollback, or deactivate
@@ -1488,7 +1491,7 @@ Exit criteria:
 ### Phase 6 - Unified audit and consumer convergence
 
 - align profiler actions with the shared Root MCP operational event model
-- let Infrascope and Codex consume the same typed profiler contracts
+- let Desktop Development and Codex consume the same typed profiler contracts
 - make capability-usage and activity views include profiler operations without a second audit vocabulary
 - reserve raw endpoints for transport substrate, debugging, and compatibility rather than primary integration
 
@@ -1547,7 +1550,8 @@ Current implementation baseline now covers this phase:
 - `adaos autostart update-defer` can reschedule a planned/countdown update window without losing the current supervisor attempt context
 - `adaos node reliability` now falls back to browser-safe supervisor transition state and reports `runtime_restarting_under_supervisor` instead of only connection failure when runtime `:8777` is temporarily unavailable during a managed transition
 - Infra State surfaces supervisor attempt state alongside runtime readiness, including `planned update`, `root promotion pending`, `root restart in progress`, and `subsequent transition queued`
-- Infra State and Infrascope surface skill runtime migration diagnostics for the current or last core update attempt
+- Desktop System and Development surface skill runtime migration diagnostics
+  for the current or last core update attempt
 - browser header/status surfaces poll a read-only supervisor transition view so controlled restarts are not shown only as generic `offline`
 - canonical control-plane projections keep supervisor-owned restart/promotion phases visible even when runtime API readiness has not converged yet
 

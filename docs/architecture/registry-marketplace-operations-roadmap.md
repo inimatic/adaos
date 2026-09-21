@@ -627,20 +627,23 @@ scenario.
 ### Deliverables
 
 - [x] `[must]` Application Core catalog/inventory adapter service
-- [ ] `[must]` full-screen Applications Installed, Catalog,
+- [x] `[must]` full-screen Applications Installed, Catalog,
   Updates/Operations, and detail views
 - [x] `[must]` filtering against ApplicationInstallation and subscription state
-- [ ] `[must]` remove product Inventory from Infrastate and retain deep-linked
-  technical component/runtime diagnostics
+- [~] `[must]` remove product Inventory from Infrastate and retain deep-linked
+  technical component/runtime diagnostics. The DEV composition is product-
+  inventory free; the published compatibility surface remains until the
+  replacement and zero-use gates pass.
 - [ ] `[should]` advanced component detail and filters that use profiles for semantic selection,
   categories/tags for discovery, and deployment scope for compatibility
 
-Builder dogfood checkpoint, 2026-09-07: Applications revision `011` implements
-the three-zone `Marketplace` / `Installed` / `My developments` candidate and
-selected-detail lifecycle surface over Root MCP. Qualification and wide/compact
-browser checks pass, including an installed stable/prerelease fixture. The
-full-screen UI deliverable remains open until human acceptance and real
-plan/apply/recovery evidence; Infrastate Inventory therefore remains unchanged.
+Builder dogfood checkpoint, 2026-09-21: Applications `0.1.25` is the exact
+active local Beta on the production `desktop` Webspace. Its full-screen
+Installed, Marketplace, My developments, detail, channel, Home pin, component,
+and desired/observed placement projections consume authoritative Root data and
+pass browser materialization without renderer failures. Lifecycle failure and
+recovery qualification remains open; Infrastate retirement is tracked
+separately and does not transfer product authority back to the legacy surface.
 
 ## Phase 3: Async Install Operations
 
@@ -670,8 +673,10 @@ Convert install/update flows from blocking request/response into accepted async 
 Contract/service completion in Phases 0-3 is validated locally by Application
 schema, composition-lock, Core/SDK/MCP, distribution, deployment, retention,
 and recovery regressions. It does not close the open shared registry normalizer,
-stable Application catalog projection, registry CI, Applications UI, or live
-canary items. Infrastate Inventory remains in place until Phase 2 UI acceptance.
+stable Application catalog projection, registry CI, or live canary items. The
+Applications UI read path is qualified; removing the published legacy
+Infrastate surface still requires the retirement roadmap's replacement and
+zero-use evidence.
 
 ## Phase 4: UI Binding and Notifications
 

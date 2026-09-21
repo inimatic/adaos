@@ -27,7 +27,7 @@ Use it as the detailed checklist for:
   envelope, and compatibility rules
 - Phase 4: browser projection subscription runtime and client adapter
 - Phase 5: shared dispatcher behavior
-- Phase 7: Infrascope migration slice
+- Phase 7: product-owned operator surfaces and legacy decomposition
 - Phase 8: follow-up pilots
 - Phase 9: cross-skill rollout and cleanup
 
@@ -306,8 +306,12 @@ Current status:
   the thin operator plane without falling back to full diagnostics
 - [ ] `[must]` `pilot.platform_surfaces_first`: prepare `web_desktop` and the shared platform surfaces first: notifications, diagnostics, workspace manager, and related modals
 - [x] `pilot.platform_emitter_validated`: validate platform-as-emitter semantics before migrating one heavy skill
-- [ ] `[must]` `pilot.infrascope_after_prereqs`: migrate `Infrascope` now that the local core/runtime and client projection gate is closed
-- [ ] `[must]` `pilot.infrastate_aligned`: align `infrastate`-style shared operational overlays with the same contract
+- [ ] `[must]` `pilot.system_surfaces_after_prereqs`: migrate Desktop System,
+  Activity, Development, and shared diagnostics now that the local core/runtime
+  and Client projection gate is closed
+- [ ] `[must]` `pilot.legacy_operator_neutralized`: align useful
+  Infrascope/Infrastate operational projections with neutral system,
+  operations, runtime, and diagnostics contracts before retiring legacy paths
 - [ ] `[deferred]` `pilot.dev_scenario_followup`: choose one dev-oriented scenario such as `prompt_engineer_scenario` after the operator pilots
 - [ ] `[deferred]` `pilot.simple_skills_deferred`: postpone low-churn simple skills until the core contract and adapter behavior are stable
 
@@ -321,16 +325,25 @@ Harvest branch checkpoint:
   covers runtime/guard cards and notifications without `infrastate_skill`;
   deployed stand acceptance remains open.
 - The Infrascope-specific adapter from donor PR #87 is intentionally not
-  accepted into this branch yet. The shared prerequisites are locally accepted,
-  but the heavy-skill pilot and stand rollout are separate follow-up work.
+  accepted. Shared prerequisites are locally accepted; replacement consumers
+  must use neutral projection families instead of making the retiring product
+  the platform contract.
 
-### 8. Infrascope Migration Slice
+### 8. Legacy Operator Decomposition Slice
 
-- [ ] `[must]` `infrascope.split_projection_families`: split `overview`, `inventory`, `inspector`, `topology`, and modal/widget payloads into separate projections
-- [ ] `[must]` `infrascope.stop_full_inspector_snapshot`: stop pre-materializing all inspectors into one Yjs snapshot
-- [ ] `[must]` `infrascope.demanded_only_per_webspace`: publish only the projections actively demanded by each webspace
-- [ ] `[could]` `infrascope.shared_payload_access_metadata`: verify that owner and guest use the same payload but can still receive different display/action treatment through access metadata
-- [ ] `[should]` `infrascope.platform_errors_separate`: publish platform-originated warnings and materialization errors as separate operator-facing projections instead of hiding them inside one skill snapshot
+- [ ] `[must]` `operator.split_projection_families`: split system health,
+  operations, component topology, diagnostics, and on-demand object detail into
+  neutral projection families
+- [ ] `[must]` `operator.stop_full_inspector_snapshot`: stop pre-materializing
+  all inspectors into one Yjs snapshot
+- [ ] `[must]` `operator.demanded_only_per_webspace`: publish only projections
+  actively demanded by each webspace and product surface
+- [ ] `[could]` `operator.shared_payload_access_metadata`: verify that owner and
+  guest can share a bounded payload while receiving policy-appropriate actions
+  and disclosure
+- [ ] `[should]` `operator.platform_errors_separate`: publish platform warnings
+  and materialization errors as separate projections instead of hiding them in
+  a legacy skill snapshot
 
 ### 9. Cross-Skill Rollout
 
@@ -387,10 +400,10 @@ Recommended order:
    The architectural contract should exist before one heavy skill becomes the pilot.
 2. `web_desktop` platform surfaces
    Best place to validate platform-as-emitter semantics for system messages, diagnostics, and shared browser/runtime failures.
-3. `Infrascope`
-   Strongest heavy-skill pressure test after the shared architecture exists.
-4. `infrastate` and similar operational overlays
-   Good follow-up once operator-facing demand dispatch is proven.
+3. Desktop System/Activity/Development plus Applications component detail
+   Strongest product-owned pressure test after the shared architecture exists.
+4. useful legacy Infrascope/Infrastate projections
+   Migrate only as neutral compatibility adapters, then remove them.
 5. one dev-oriented scenario
    Good for testing `dev` audience behavior and more panel-heavy view switching.
 6. voice/media or other bursty interactive surfaces
@@ -417,9 +430,10 @@ Counter-example:
 
 Execution note:
 
-- preparatory inventory for Infrascope is allowed before the platform pilot
-- Infrascope must not introduce its own projection ABI, subscription record, or
-  lifecycle contract ahead of phases 3-6 in the master roadmap
+- preparatory inventory for Infrascope retirement is allowed before the
+  platform pilot
+- legacy Infrascope/Infrastate code must not introduce its own projection ABI,
+  subscription record, or lifecycle contract
 
 ## Acceptance Criteria
 

@@ -155,8 +155,11 @@ Cutover evidence, 2026-09-16:
   Thirty focused tests, the production build, and an active-Beta `0.3.43`
   reorder/unpin/restore browser run pass without direct YJS writes. Wide and
   compact layout conformance also passes for Web Desktop, Applications and
-  Users & Access. External deployed-Client confirmation remains required before
-  the Beta evidence above is superseded.
+  Users & Access. Client `0.0.415+a464f57` completes the two-dimensional grid
+  fix: CDK mixed orientation, stable preview/placeholder identity, and frozen
+  authoritative stream replacement during the gesture. Focused tests and the
+  production build pass; external interactive confirmation on 2026-09-21
+  reports predictable reorder behavior without duplicate or displaced cards.
 
 - [x] `[must]` Qualify scenario-scoped Dev Tickets defaults, an application
   selector with search inside its option surface, bounded image/document

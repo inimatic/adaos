@@ -138,15 +138,27 @@ component-scoped preview slots, for example
 
 ## Current Implementation Boundary
 
-The preparatory implementation covers contracts, Application Core, SDK/MCP,
-remote archive/channel/access rails, Development Report relay, and Builder
-authoring context. It ends when Builder can start Applications using only
-those public contracts. Building the full-screen Applications product and its
-release proof are APP4 and APP6 work.
+Application Core, SDK/MCP, remote archive/channel/access rails, Development
+Report relay, Builder authoring context, and the full-screen Applications
+product now exist. The 2026-09-21 local Trial places
+`applications@0.1.25` on the production `desktop` Webspace as the exclusive
+Beta selection. Browser qualification observes authoritative installed
+Applications, exact release/channel state, Home pin state, and desired versus
+observed component placement without renderer failures.
 
-Until APP4 moves the real product workflow, Infrastate Inventory remains an
-unchanged compatibility UI. It must not gain new Application authority, and it
-must not be removed before Applications has equivalent tested behavior.
+Applications is therefore the only target product inventory authority. The
+current DEV Infrascope composition no longer presents product Inventory, but
+the previously published Infrastate compatibility UI remains installed until
+the replacement lifecycle and diagnostics matrix is complete. It must not gain
+new Application authority. Its retirement is governed by
+[Infrascope Retirement Architecture](infrascope.md), not by copying its
+implementation into Applications.
+
+The same Trial run places `web_desktop@0.3.44` and
+`users_access@0.1.14` as local Betas after access-aware final verification.
+These are active Beta selections, not Stable promotion. APP4/APP6 remain open
+for failure/retry UX, reviewed placement mutations, successive-Beta data proof,
+and exact Beta-to-Stable adoption.
 
 Application Core persists its product records under
 `state/applications/`. Package archives and legacy release plans remain under

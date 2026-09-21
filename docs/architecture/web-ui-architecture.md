@@ -534,6 +534,16 @@ dispatching mutations. `inputs.refresh=true` exposes a localized icon command
 that refreshes only this table's data source. Metadata mutations must invalidate
 both detail and affected catalog sources.
 
+Reorderable grids have an additional interaction contract. A CSS Grid surface
+must use a two-dimensional or mixed-orientation sort strategy; a one-dimensional
+list strategy is not valid merely because the semantic data is a list. Item
+identity, preview size, placeholder size, and drop-list membership stay stable
+for the complete pointer gesture. Authoritative stream replacements are queued
+or frozen from drag start through drop/cancel and reconciled afterward. A
+renderer must never apply both transient drag geometry and a concurrent source
+order as if they were independent user moves. Reorder remains disabled outside
+an explicit customization mode when ordinary click opens the item.
+
 ### Chat-Driven Read Freshness
 
 `ui.chat.inputs.invalidateOnMessages` optionally names data-source invalidation

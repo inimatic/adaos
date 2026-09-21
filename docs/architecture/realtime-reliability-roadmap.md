@@ -1054,7 +1054,8 @@ lifecycle and update attempt state.
 - [x] `[must]` Persist per-skill migration diagnostics (`prepare` / `test` /
   `activate` / `rollback` / `deactivate`) in core-update results.
 - [x] `[must]` Surface skill migration failures and selective post-commit
-  deactivations in Infra State and Infrascope.
+  deactivations in the current legacy operator projections; migrate the target
+  presentation to Desktop System/Development before retiring those adapters.
 - [x] `[must]` Keep supervisor transition state visible in canonical operator
   projections (`active_runtimes`, health strips, recent changes) rather than
   only in ad-hoc browser badges.

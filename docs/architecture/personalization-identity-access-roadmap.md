@@ -347,12 +347,14 @@ Local verification:
 - [x] Audit smoke test for profile/preference updates and denied edits through
   the Phase 2 service tests.
 
-## Phase 5 - AdaOS Connect Join UX and Link Management
+## Phase 5 - Join UX and Link Management
 
 Priority: `must`.
 
-Goal: make Phase 3 join/invite semantics usable through AdaOS Connect and the
-Join Browser, following standard device-flow interaction patterns.
+Goal: make Phase 3 join/invite semantics usable through Users & Access and the
+minimal Join Browser, following standard device-flow interaction patterns.
+AdaOS Connect remains a historical implementation source, not a target
+top-level Application or header surface.
 
 Checklist:
 
@@ -377,14 +379,19 @@ Checklist:
 - [x] List pending, accepted, expired, and revoked links for owner/co-owner,
   with revoke actions.
 - [x] Add audit-history drill-down to the link management panel.
-- [x] Bound short-lived AdaOS Connect preparation results by TTL and item
-  count, with deterministic cleanup; route ongoing user/access administration
-  to Users & Access while retaining join, pairing, and recovery in Connect.
+- [x] Bound short-lived invite preparation results by TTL and item count, with
+  deterministic cleanup; route ongoing user/access administration to Users &
+  Access and device pairing to Desktop Devices.
 - [x] Route AdaOS Connect's administration command to the current webspace by
   the WebUI `$client.webspaceId` contract. Reject NLU-only `$ctx.*` references
   during WebUI validation and retain Client-side routing protection. Browser
   evidence switches `desktop` to exact Trial `users_access@0.1.3`; no literal
   context-token webspace remains.
+- [x] Remove the AdaOS Connect control from Client header chrome. Users &
+  Access now lists and creates invitations with QR, copy, Telegram-share, and
+  revoke actions; Desktop Devices exposes pairing/recovery entry points.
+- [x] Keep the claim form human-facing: visible display name and device label
+  are separate from the server-generated opaque subject/session identity.
 - [x] Wire invite/session revocation to access-link denial and browser/Yjs
   admission so revoked sessions are denied without manual database edits.
 - [ ] Add direct websocket disconnect orchestration for already-connected
@@ -395,7 +402,7 @@ Checklist:
 Exit gate:
 
 - [x] Owner can display a public guest link and later revoke all sessions
-  created from it through AdaOS Connect.
+  created from it through Users & Access.
 - [x] Owner can invite a named user such as Masha with a local profile id,
   scope, role preset, and expiry; the joining browser can preview and accept
   the invite once.
@@ -509,11 +516,15 @@ Local verification:
 - [x] multi-admin grant and denial tests beyond owner/co-owner preset creation.
 - [x] audit query smoke tests.
 
-The 2026-09-17 `users_access@0.1.7` Trial passes the live six-section browser
-journey with Root-backed data and no renderer/network errors. The permission-
-centric Application Access projection is read-only at this checkpoint; subject
-grant/deny toggles and activity-to-person navigation remain open and must not be
-reported as completed access management.
+The 2026-09-21 `users_access@0.1.14` access-verified Trial is the exact active
+local Beta on the production `desktop` Webspace. Browser materialization shows
+Root-backed People data and zero renderer failures; the complete scenario also
+contains Invitations, Devices, Sessions, Application Access, and Activity.
+Invitation create/list now invalidates authoritatively and exposes QR, copy,
+Telegram-share, and revoke actions. The permission-centric Application Access
+projection is still read-only at this checkpoint; subject grant/deny toggles,
+activity-to-person navigation, and a complete routed-browser section matrix
+remain open and must not be reported as completed access management.
 
 ## Phase 8 - Privacy Zone Enforcement and User Data Management
 

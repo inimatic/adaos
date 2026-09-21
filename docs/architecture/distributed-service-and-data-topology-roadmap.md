@@ -193,7 +193,7 @@ membership, topology status, routing and at least one topology operation.
   old epoch, missing partition, stale replica, interrupted transfer,
   incompatible release and partial route.
 - [x] `[should]` `DS4-07` Add topology explain and dry-run tools suitable for
-  Builder and Infrascope consumption.
+  Builder and product-owned Desktop/Application diagnostics consumption.
 
 Project rollout admission is also decoupled from caller RPC lifetime: the
 public deployment SDK accepts reviewed work into a durable serialized worker,

@@ -542,10 +542,12 @@ change actor identity or complete sensitive grants without confirmation.
 
 ## Client settings surface
 
-The client header settings should become the normal entry point for the current
-user's profile and preferences.
+Desktop Settings is the normal entry point for the current user's portable
+profile and preferences. Header UI is intentionally compact and may expose the
+current identity plus device-local shortcuts, but it must not maintain a second
+profile form or a second source of truth.
 
-It should expose:
+Desktop Settings should expose:
 
 - display name and avatar;
 - language and locale;
@@ -558,16 +560,21 @@ It should expose:
 It should not treat role as a profile field. Role and membership belong to
 access policy.
 
-Current implementation note: the browser header/settings panel now consume the
-current-user settings API for profile, locale, timezone, theme, membership, and
-device context. AdaOS Connect currently exposes owner/admin join, device
-pairing, recovery, grant, and revoke controls. Its target boundary is narrower:
-claim an incoming invitation, pair/recover a device, and hand ongoing
-administration to Users & Access. Guest/targeted links extend the AdaOS
-Connect `intent=connect.register&user_code=...&zone=...` flow: root stores invite
-parameters in a temporary purpose-tagged code session, and the URL carries only
-code and zone. Deeper privacy-zone enforcement and skill/tool SDK enforcement
-remain separate roadmap phases.
+Current implementation note: Desktop Settings and the compact header consume
+the same current-user Root service for profile, locale, timezone, theme,
+membership, and device context. Portable values are edited in Desktop;
+device/browser-specific values stay device scoped. Users & Access owns invite,
+grant, recovery, revoke, and audit administration. Desktop Devices owns pairing
+entry points. The former AdaOS Connect header control and product UI are no
+longer target surfaces.
+
+Incoming links remain a minimal unauthenticated claim surface. A targeted
+invite carries an opaque, server-issued subject identity; the recipient enters
+only an understandable display name and device label. Technical profile ids,
+session ids, token material, and browser-key details are not user form fields.
+Root stores invite parameters in a temporary purpose-tagged code session and
+the URL carries only the bounded claim material and route. Deeper privacy-zone
+enforcement and skill/tool SDK enforcement remain separate roadmap phases.
 
 ## Users & Access application
 

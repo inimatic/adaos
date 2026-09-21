@@ -11,7 +11,9 @@ It is not a private shell bridge for Codex and not a one-off endpoint for a sing
 This document defines the target-state architecture and key boundaries.
 Detailed sequencing is tracked in [Root MCP Roadmap](root-mcp-roadmap.md).
 The Builder role and end-to-end capability creation boundary are defined in [AdaOS Builder](builder.md).
-The human-facing control-plane counterpart is described in [Infrascope](infrascope.md).
+Human-facing consumers are Desktop System/Development, Applications, Users &
+Access, and Builder. The legacy control-plane composition and its decomposition
+are described in [Infrascope Retirement Architecture](infrascope.md).
 
 ## Executive Summary
 
@@ -104,12 +106,13 @@ Domain-specific MCP surfaces should evolve as `planes` over that foundation.
 
 ## Placement in AdaOS Target Architecture
 
-`Root MCP Foundation` should sit alongside the future web control plane, not below it and not as an implementation detail of it.
+`Root MCP Foundation` should sit alongside the product-owned human control
+surfaces, not below them and not as an implementation detail of any one product.
 
 ```text
 human operator
-  -> Web Control Plane / Infrascope
-  -> canonical objects, projections, inspector, topology, incidents
+  -> Desktop / Applications / Users & Access / Builder
+  -> task-owned projections, object detail, operations, diagnostics
 
 LLM assistant / automation agent
   -> Root MCP Foundation
@@ -519,7 +522,7 @@ Root MCP Foundation
   -> audits profiler reads and writes
   -> routes tool calls either to root-published profiling evidence or to target-side bounded profiling controls
 
-Codex / automation / Infrascope
+Codex / automation / product-owned control surfaces
   -> consume the same typed profiler operational surface
 ```
 
@@ -643,7 +646,9 @@ Adapters should be the boundary where bounded execution, timeout handling, redac
 
 ### Built-In WebUI
 
-The skill should have a web-facing operational view that can later be embedded in `Infrascope`, with at least:
+The capability should have a web-facing operational view that can be embedded
+in Users & Access or Desktop Development according to actor and purpose, with at
+least:
 
 - `overview`
 - `requests log`
@@ -713,7 +718,10 @@ This web surface is not optional polish. It is needed as:
 - `effectiveness evaluation layer` for MCP-driven workflows
 - first convergence point between human-facing and agent-facing control surfaces
 
-`Infrascope` should eventually treat `infra_access_skill` as a first-class operational object with an inspector, incidents, action history, and capability-usage panels.
+Users & Access and Desktop Development should treat managed Root MCP access as
+a first-class operational object with detail, incidents, action history, and
+capability-usage panels. The underlying service may outlive the legacy
+`infra_access_skill` composition.
 
 ## Capability Model
 
@@ -922,9 +930,12 @@ The eventual goal is to align this model with AdaOS's broader permission and cap
 
 This proposal should be reflected in the current docs set as follows:
 
-- [Infrascope](infrascope.md): add an explicit relationship section between the human-facing control plane and `Root MCP Foundation`
-- [Infrascope Roadmap](infrascope-roadmap.md): add `Root MCP Foundation` as a companion track and note phase alignment points
-- [Architecture Overview](index.md): clarify that target-state control-plane work is documented in both `Infrascope` and `Root MCP Foundation`
+- [Infrascope Retirement Architecture](infrascope.md): keep the migration from
+  legacy access/diagnostic surfaces to product-owned Root MCP consumers explicit
+- [Infrascope Retirement Roadmap](infrascope-roadmap.md): track neutral contract
+  extraction before removing legacy skills and adapters
+- [Architecture Overview](index.md): keep target human surfaces and Root MCP
+  machine surfaces distinct but contract-compatible
 - `sdk_control_plane.md` and `cli/api.md`: keep aligned with the current root-curated descriptor model, managed-target registry, and external client shape as Phase 1 evolves
 
 ## Recommended Terminology
