@@ -1876,7 +1876,10 @@ Handle artifact provenance, scenario UX, and runtime lifecycle after the communi
   `Users & Access` now records one `web_desktop -> target` transition, no
   intermediate return, and no `yjs.provider.destroy` or manual resync. The
   2026-09-21 repeat samples every 40 ms and again records no intermediate
-  return, but target materialization now takes about 8.7-12.3 seconds. This is
+  return. The reusable `npm run scenario-transition` browser check covers both
+  targets, restores `web_desktop`, and records no rebound at about 7.6-11.3
+  seconds in its latest run. Target materialization remains materially slower
+  than an interactive navigation budget. This is
   a measurable projection-latency regression owned by the projection work item
   above, not a reason to destroy a healthy provider or extend transport
   recovery timeouts.

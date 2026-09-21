@@ -299,7 +299,10 @@ unchecked projection items below.
 - [x] `[must]` Make Subscription refresh observable before the Root request
   completes and replace that receipt with the authoritative result. Browser
   evidence for `subscription_status@0.1.11` / skill `0.1.24` observes
-  `refreshing -> refreshed`, the RU Root authority and effective `gpt-5` model;
+  `refreshing -> refreshed`, the RU Root authority and effective Codex model;
+  the 2026-09-21 rerun projects `gpt-5.5`, including fresh input, cached input,
+  output and provider-billable totals. The interaction completes in about 7.5
+  seconds and remains a latency target rather than a correctness gap;
   historical `gpt-4.1` evaluation fixtures are not active-model evidence.
 - [ ] `[must]` Attach external independent Automation review to canonical
   task/source-bound evidence shown by Review. Distinguish automatic Forge

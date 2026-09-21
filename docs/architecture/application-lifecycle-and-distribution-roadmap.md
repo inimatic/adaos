@@ -609,7 +609,7 @@ Builder development and consumes only public contracts.
   to Users & Access. Do not reproduce Marketplace mutations in the shell.
   Beta `web_desktop@0.3.39` proves real wide/compact Home navigation to
   Applications and Users & Access without duplicate embedded product sections.
-- [~] `[must]` `APP4-43` Restore the canonical desktop widget lifecycle in the
+- [x] `[must]` `APP4-43` Restore the canonical desktop widget lifecycle in the
   new shell: catalog, install/remove, pin/unpin, reorder, responsive placement,
   and persisted layout preferences. Qualify parity against the previous
   `desktop-icons`/`desktop-widgets` use cases before replacing the beta. The
@@ -618,9 +618,10 @@ Builder development and consumes only public contracts.
   was ignored when a declarative state key existed. The generic Client fix and
   focused tests pass. A local active-Beta `0.3.43` rerun now passes reorder,
   unpin, repin, exact presentation-order restore, Settings mutation and chat
-  visibility on the authoritative Webspace without direct YJS writes. External
-  deployed-Client confirmation remains open.
-- [~] `[must]` `APP4-44` Keep Home presentation separate from installation and
+  visibility on the authoritative Webspace without direct YJS writes. Client
+  `0.0.414+8b23131` is deployed at `inimatic.com`; the same governed path was
+  requalified against that deployed source revision.
+- [x] `[must]` `APP4-44` Keep Home presentation separate from installation and
   placement: successful install pins by default, Home customization and
   Applications can unpin without uninstalling, uninstall removes the launcher,
   and order/pin state persists in the target Webspace overlay. A 2026-09-21 live
@@ -631,8 +632,8 @@ Builder development and consumes only public contracts.
   pass with canonical and legacy refs. Pin membership is held in
   `pinnedApplications`; reorder mutates only `iconOrder`, so order changes cannot
   replace the membership set. Active-Beta `0.3.43` browser evidence proves the
-  complete atomic reorder/unpin/restore path; external deployed-Client
-  confirmation remains before completion.
+  complete atomic reorder/unpin/restore path against the deployed Client
+  source revision.
   Publisher-local Trial remains an effective installed state and Builder
   placement projects it to Home without creating a Stable installation.
 - [ ] `[must]` `APP4-45` Surface governed action approval in the invoking
