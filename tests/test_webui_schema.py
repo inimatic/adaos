@@ -464,6 +464,29 @@ def test_webui_schema_accepts_responsive_form_layout() -> None:
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_localized_layout_region_label() -> None:
+    schema = _load_schema()
+    layout = _layout(("main", "collection"), ("details", "detail"))
+    layout["regions"][1]["label"] = "Details"
+    layout["regions"][1]["label_i18n"] = {"key": "layout.details"}
+    payload = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "localized-region",
+                        "layout": layout,
+                        "widgets": [],
+                    }
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_accepts_deterministic_tabs_modal_page_and_multistep_behaviors() -> None:
     schema = _load_schema()
     payload = {
