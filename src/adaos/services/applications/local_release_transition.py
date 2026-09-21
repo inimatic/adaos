@@ -137,6 +137,23 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
     archive_value = str(rollback.get("archive") or "").strip()
     if not activation or activation.get("status") != "detached" or not archive_value:
         return {"ok": True, "status": "not_local_or_not_detached"}
+    selections = ApplicationStore(state).list_runtime_selections()
+    expected_root = f"trial:{candidate_id}"
+    if not any(
+        item.runtime_root_ref == expected_root
+        and item.release_digest == release_digest
+        for item in selections
+    ):
+        # Candidate decisions and runtime placement are separate durable
+        # authorities. A newer Beta may replace this Candidate before its
+        # workflow projection resumes; rejecting the stale Candidate must not
+        # roll back that newer selection.
+        return {
+            "ok": True,
+            "status": "superseded_runtime_selection",
+            "candidate_id": candidate_id,
+            "release_digest": release_digest,
+        }
     root = Path(archive_value).resolve()
     archive_root = (state / "artifact_pipeline/trial-rollbacks").resolve()
     if not root.is_dir() or not root.is_relative_to(archive_root):
@@ -153,8 +170,8 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
                                  project_id=release.project_id)
     lifecycle = bind_local_data_lifecycle(owner, runtime, release)
     original_root = Path(str((activation.get("runtime_binding") or {}).get("path") or "")).resolve()
-    expected_root = (workspace.parent / "trials" / candidate_id).resolve()
-    if original_root != expected_root:
+    expected_trial_root = (workspace.parent / "trials" / candidate_id).resolve()
+    if original_root != expected_trial_root:
         raise ValueError("Rejected Trial retained a different original runtime root")
     original_components = tuple(
         replace(component, beta_root=original_root / component.beta_root.relative_to(root))

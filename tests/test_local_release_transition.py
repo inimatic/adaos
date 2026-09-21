@@ -11,7 +11,11 @@ import yaml
 from adaos.domain.application import Application, ApplicationRelease
 from adaos.domain.artifact_release import ArtifactSourceRef, ProjectRelease, ProjectCompositionLock, ProjectMemberLock, WorkspaceLock, WorkspaceSlot
 from adaos.services.applications.data_lifecycle import declared_databases
-from adaos.services.applications.local_release_transition import bind_local_data_lifecycle, promote_with_local_data
+from adaos.services.applications.local_release_transition import (
+    bind_local_data_lifecycle,
+    promote_with_local_data,
+    reconcile_rejected_local_trial,
+)
 from adaos.services.applications.service import ApplicationService
 from adaos.services.applications.store import ApplicationStore
 from adaos.services.applications.trial_runtime import NativeTrialRuntime, TrialRuntimeUnavailable
@@ -86,6 +90,63 @@ def test_unmanaged_project_source_is_not_an_installed_migration_base(
         (runtime.root / ".adaos/data-transition.json").read_text(encoding="utf-8")
     )
     assert binding["stable_release_digest"] is None
+
+
+def test_rejecting_superseded_trial_does_not_replace_newer_runtime_selection(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.services.applications import local_release_transition
+    from adaos.services.artifact_pipeline import trial_activation
+
+    state = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    owner = SimpleNamespace(
+        paths=SimpleNamespace(
+            state_dir=lambda: state,
+            workspace_dir=lambda: workspace,
+        )
+    )
+    old_candidate = "candidate-old"
+    old_digest = "sha256:" + "a" * 64
+    newer_selection = SimpleNamespace(
+        runtime_root_ref="trial:candidate-new",
+        release_digest="sha256:" + "b" * 64,
+    )
+
+    class Store:
+        def list_runtime_selections(self):
+            return (newer_selection,)
+
+    class Activations:
+        def __init__(self, _root):
+            pass
+
+        def load(self, candidate_id):
+            assert candidate_id == old_candidate
+            return {
+                "status": "detached",
+                "rollback": {
+                    "archive": str(
+                        state
+                        / "artifact_pipeline/trial-rollbacks"
+                        / old_candidate
+                        / "trial-old/workspace"
+                    )
+                },
+            }
+
+    monkeypatch.setattr(local_release_transition, "ApplicationStore", lambda _state: Store())
+    monkeypatch.setattr(trial_activation, "TrialActivationStore", Activations)
+
+    result = reconcile_rejected_local_trial(owner, old_candidate, old_digest)
+
+    assert result == {
+        "ok": True,
+        "status": "superseded_runtime_selection",
+        "candidate_id": old_candidate,
+        "release_digest": old_digest,
+    }
+    assert newer_selection.runtime_root_ref == "trial:candidate-new"
 
 
 def test_workspace_slot_without_installation_requires_reconciliation(
