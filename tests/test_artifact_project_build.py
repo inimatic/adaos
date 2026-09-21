@@ -105,6 +105,7 @@ def test_workspace_project_build_persists_exact_dependency_closure(
             "catalog": {
                 "title": "Viewer",
                 "description": "Test viewer",
+                "icon": "eye-outline",
                 "categories": ["test"],
                 "tags": ["viewer"],
             },
@@ -188,6 +189,13 @@ def test_workspace_project_build_persists_exact_dependency_closure(
     )
     assert stored == first.plan
     assert first.plan.release.composition_lock is not None
+    assert first.plan.release.catalog == {
+        "title": "Viewer",
+        "description": "Test viewer",
+        "icon": "eye-outline",
+        "categories": ["test"],
+        "tags": ["viewer"],
+    }
 
 
 def test_workspace_project_build_rejects_empty_builder_draft(tmp_path: Path) -> None:

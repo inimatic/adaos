@@ -24,6 +24,9 @@ _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{6,255}$")
 _COMPONENT_REF_RE = re.compile(r"^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _PROJECT_REF_RE = re.compile(r"^project:[a-z0-9][a-z0-9_.-]{0,127}$")
+_ICON_RE = re.compile(
+    r"^(?:[a-z0-9]+(?:-[a-z0-9]+)*|resource:[A-Za-z0-9][A-Za-z0-9_.-]{0,127})$"
+)
 
 
 class ArtifactReleaseContractError(ValueError):
@@ -109,6 +112,37 @@ def _unique_texts(values: Iterable[Any], *, field: str) -> tuple[str, ...]:
         if value not in merged:
             merged.append(value)
     return tuple(merged)
+
+
+def _project_catalog(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ArtifactReleaseContractError("catalog must be an object")
+    allowed = {
+        "visibility",
+        "title",
+        "title_i18n",
+        "description",
+        "description_i18n",
+        "icon",
+        "categories",
+        "tags",
+    }
+    unknown = sorted(str(key) for key in set(value) - allowed)
+    if unknown:
+        raise ArtifactReleaseContractError(
+            f"catalog contains unsupported fields: {', '.join(unknown)}"
+        )
+    catalog = dict(value)
+    icon = str(catalog.get("icon") or "").strip()
+    if icon and not _ICON_RE.fullmatch(icon):
+        raise ArtifactReleaseContractError("catalog.icon is not a valid icon name or resource reference")
+    for field_name in ("categories", "tags"):
+        values = catalog.get(field_name, [])
+        if not isinstance(values, list):
+            raise ArtifactReleaseContractError(f"catalog.{field_name} must be an array")
+    return catalog
 
 
 def _require_mapping_contract(
@@ -916,6 +950,7 @@ class ProjectRelease:
     validation_evidence_refs: tuple[str, ...] = ()
     contract_locks_present: bool = True
     composition_lock: ProjectCompositionLock | None = None
+    catalog: Mapping[str, Any] | None = None
     release_digest: str | None = None
 
     def __post_init__(self) -> None:
@@ -1003,6 +1038,7 @@ class ProjectRelease:
             )
         if self.release_digest is not None:
             object.__setattr__(self, "release_digest", _digest(self.release_digest, field="release_digest"))
+        object.__setattr__(self, "catalog", _project_catalog(self.catalog))
         if self.composition_lock is not None:
             if not isinstance(self.composition_lock, ProjectCompositionLock):
                 raise ArtifactReleaseContractError(
@@ -1041,6 +1077,8 @@ class ProjectRelease:
             )
         if self.composition_lock is not None:
             payload["composition_lock"] = self.composition_lock.to_dict()
+        if self.catalog is not None:
+            payload["catalog"] = dict(self.catalog)
         return payload
 
     def computed_digest(self) -> str:
@@ -1076,6 +1114,7 @@ class ProjectRelease:
                 "migration_locks",
                 "validation_evidence_refs",
                 "composition_lock",
+                "catalog",
                 "release_digest",
             },
             required={
@@ -1114,6 +1153,8 @@ class ProjectRelease:
         raw_composition_lock = value.get("composition_lock")
         if "composition_lock" in value and not isinstance(raw_composition_lock, Mapping):
             raise ArtifactReleaseContractError("composition_lock must be an object")
+        if "catalog" in value and not isinstance(value.get("catalog"), Mapping):
+            raise ArtifactReleaseContractError("catalog must be an object")
         if not isinstance(dependencies, list):
             raise ArtifactReleaseContractError("resolved_dependencies must be a list")
         if not isinstance(permissions, list):
@@ -1168,6 +1209,11 @@ class ProjectRelease:
             composition_lock=(
                 ProjectCompositionLock.from_mapping(raw_composition_lock)
                 if isinstance(raw_composition_lock, Mapping)
+                else None
+            ),
+            catalog=(
+                dict(value["catalog"])
+                if isinstance(value.get("catalog"), Mapping)
                 else None
             ),
             release_digest=value.get("release_digest"),

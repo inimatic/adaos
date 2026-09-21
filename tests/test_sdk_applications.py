@@ -488,6 +488,9 @@ def test_application_list_reads_home_and_placement_inventory_once(monkeypatch) -
         }
         for application_id in ("notes", "reading_list")
     ]
+    models[0]["active_release"] = {
+        "project_release": {"catalog": {"icon": "document-text-outline"}}
+    }
     snapshot = SimpleNamespace(
         installed=SimpleNamespace(apps=["scenario:notes", "scenario:reading_list"]),
         pinned_applications=["scenario:notes"],
@@ -514,6 +517,10 @@ def test_application_list_reads_home_and_placement_inventory_once(monkeypatch) -
     assert home_reads == ["desktop"]
     assert placement_reads == [("notes", "reading_list")]
     assert [item["home"]["pinned"] for item in listed] == [True, False]
+    assert [item["icon"] for item in listed] == [
+        "document-text-outline",
+        "apps-outline",
+    ]
 
 
 def test_application_show_enriches_only_the_requested_model(monkeypatch) -> None:

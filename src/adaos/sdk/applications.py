@@ -190,6 +190,7 @@ def _release_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
             "migration_locks",
             "validation_evidence_refs",
             "release_digest",
+            "catalog",
         )
         if key in project
     }
@@ -909,11 +910,38 @@ def _enrich_application_models(
         for model in models
     ]
     placements = _execution_placement_index(application_ids)
+    try:
+        project_icons = {
+            str(item.get("id") or "").strip(): str(item.get("icon") or "").strip()
+            for item in ApplicationRegistryProjection(_state_dir()).list_workspace_projects(
+                include_hidden=True
+            )
+            if str(item.get("id") or "").strip()
+        }
+    except (OSError, RuntimeError, ValueError):
+        project_icons = {}
     enriched: list[dict[str, Any]] = []
     for model in models:
         application = model.get("application") or {}
         application_id = str(application.get("application_id") or "")
-        model.setdefault("icon", "apps-outline")
+        release_catalogs = [
+            (((model.get(field) or {}).get("project_release") or {}).get("catalog") or {})
+            for field in ("active_release", "marketplace_release", "installed_release")
+        ]
+        release_icon = next(
+            (
+                str(catalog.get("icon") or "").strip()
+                for catalog in release_catalogs
+                if isinstance(catalog, Mapping) and str(catalog.get("icon") or "").strip()
+            ),
+            "",
+        )
+        model["icon"] = (
+            release_icon
+            or str((application.get("display") or {}).get("icon") or "").strip()
+            or project_icons.get(str(application.get("legacy_project_id") or "").strip(), "")
+            or "apps-outline"
+        )
         local_source = development.get(application_id)
         local = deepcopy(dict(local_source)) if local_source is not None else None
         if local is not None:

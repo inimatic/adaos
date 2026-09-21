@@ -96,16 +96,26 @@ def test_project_release_digest_is_canonical_and_detects_tampering() -> None:
         components=(component,),
         resolved_dependencies=(dependency,),
         permissions=("shopping.read", "shopping.read"),
+        catalog={"icon": "book-outline", "categories": ["Productivity"]},
     ).seal()
 
     assert release.release_digest == release.computed_digest()
     assert release.to_dict()["permissions"] == ["shopping.read"]
+    assert release.to_dict()["catalog"] == {
+        "icon": "book-outline",
+        "categories": ["Productivity"],
+    }
     assert ProjectRelease.from_mapping(release.to_dict()) == release
 
     tampered = release.to_dict()
     tampered["permissions"] = ["shopping.write"]
     with pytest.raises(ArtifactReleaseContractError, match="does not match"):
         ProjectRelease.from_mapping(tampered)
+
+    tampered_catalog = release.to_dict()
+    tampered_catalog["catalog"]["icon"] = "apps-outline"
+    with pytest.raises(ArtifactReleaseContractError, match="does not match"):
+        ProjectRelease.from_mapping(tampered_catalog)
 
 
 def test_project_release_persists_exact_schema_migration_and_evidence_locks() -> None:

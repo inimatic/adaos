@@ -528,6 +528,7 @@ def build_project_release(
         if key not in owned_keys
     )
     composition_lock = None
+    project_catalog = None
     structured_permissions: tuple[str, ...] = ()
     if project_definition is not None:
         source_definition = {
@@ -596,6 +597,10 @@ def build_project_release(
         lifecycle = source_definition.get("lifecycle") or {}
         permission_profile = source_definition.get("permission_profile")
         application_roles = source_definition.get("application_roles") or []
+        catalog_value = source_definition.get("catalog")
+        if catalog_value is not None and not isinstance(catalog_value, Mapping):
+            raise DependencyResolutionError("project_definition catalog must be an object")
+        project_catalog = dict(catalog_value) if isinstance(catalog_value, Mapping) else None
         if permission_profile is None and application_roles:
             raise DependencyResolutionError(
                 "application_roles require a structured permission_profile"
@@ -665,6 +670,7 @@ def build_project_release(
             for lock in package.schema_locks
         ),
         composition_lock=composition_lock,
+        catalog=project_catalog,
     ).seal()
     reverse: dict[str, set[str]] = defaultdict(set)
     for binding in bindings.values():
