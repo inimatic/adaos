@@ -2440,6 +2440,71 @@ def test_automation_rejects_prototype_fixtures_and_dry_run_read_sources(
     assert checks[0]["ok"] is True
 
 
+def test_automation_rejects_unpublished_root_mcp_result_path(tmp_path: Path) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "workspace"
+    scenario = _scenario(workspace / "scenarios", "users_access")
+    webui_path = scenario / "webui.json"
+    document = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "widgets": [
+                            {
+                                "id": "people",
+                                "type": "ui.list",
+                                "dataSource": {
+                                    "kind": "mcp",
+                                    "toolId": "users_access.summary",
+                                    "arguments": {"sections": ["people"]},
+                                    "resultPath": "result.people",
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    webui_path.write_text(json.dumps(document), encoding="utf-8")
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo,
+        dev_skills_root=workspace / "skills",
+        dev_scenarios_root=workspace / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    checks: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    worker._validate_automation_webui_authority(workspace, checks, errors)
+
+    assert checks[0]["issues"] == [
+        {
+            "code": "webui.automation.mcp_result_path_unknown",
+            "pointer": "/ui/application/desktop/pageSchema/widgets/0/dataSource/resultPath",
+            "tool_id": "users_access.summary",
+            "actual": "result.people",
+            "expected": ["response.result.users_access.people"],
+        }
+    ]
+    assert "result.people" in errors[0]
+
+    document["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0][
+        "dataSource"
+    ]["resultPath"] = "response.result.users_access.people"
+    webui_path.write_text(json.dumps(document), encoding="utf-8")
+    checks = []
+    errors = []
+
+    worker._validate_automation_webui_authority(workspace, checks, errors)
+
+    assert errors == []
+    assert checks[0]["ok"] is True
+
+
 def test_worker_rejects_webui_capability_drift_before_browser(tmp_path):
     repo = Path(__file__).resolve().parents[1]
     workspace = tmp_path / "workspace"

@@ -49,6 +49,32 @@ _SUMMARY_SECTIONS = [
     "audit",
 ]
 
+_SUMMARY_WEBUI_RESULT_PATHS = {
+    **{
+        section: f"response.result.users_access.{section}"
+        for section in (
+            "people",
+            "guests",
+            "children",
+            "subjects",
+            "devices",
+            "sessions",
+            "application_access",
+            "permissions",
+        )
+    },
+    **{
+        section: f"response.result.administration.{section}"
+        for section in (
+            "memberships",
+            "grants",
+            "invites",
+            "recovery_actions",
+            "audit",
+        )
+    },
+}
+
 
 def contracts() -> list[RootMcpToolContract]:
     response = deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
@@ -83,7 +109,15 @@ def contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(response),
             required_capability="users_access.read",
-            metadata={**metadata, "handler": "users_access_summary"},
+            metadata={
+                **metadata,
+                "handler": "users_access_summary",
+                "webui_data_binding": {
+                    "schema": "adaos.root_mcp.webui_data_binding.v1",
+                    "transport_envelope": "node_root_mcp_bridge.v1",
+                    "result_paths": deepcopy(_SUMMARY_WEBUI_RESULT_PATHS),
+                },
+            },
         ),
         RootMcpToolContract(
             id="users_access.grant_role",

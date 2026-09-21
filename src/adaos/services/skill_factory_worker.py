@@ -8534,7 +8534,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 # The general JSON validation reports the parse failure.
                 continue
 
-            findings: list[dict[str, str]] = []
+            findings: list[dict[str, Any]] = []
 
             def visit(value: Any, pointer: str) -> None:
                 if isinstance(value, Mapping):
@@ -8564,6 +8564,59 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                                 "pointer": f"{pointer}/dryRun",
                             }
                         )
+                    if (
+                        segment in {"dataSource", "optionsDataSource"}
+                        and str(value.get("kind") or "").strip().lower() == "mcp"
+                    ):
+                        from adaos.services.root_mcp import get_tool_contract
+
+                        tool_id = str(
+                            value.get("toolId") or value.get("name") or ""
+                        ).strip()
+                        contract = get_tool_contract(tool_id) if tool_id else None
+                        binding = (
+                            contract.metadata.get("webui_data_binding")
+                            if contract is not None
+                            and isinstance(contract.metadata, Mapping)
+                            else None
+                        )
+                        result_paths = (
+                            binding.get("result_paths")
+                            if isinstance(binding, Mapping)
+                            and isinstance(binding.get("result_paths"), Mapping)
+                            else {}
+                        )
+                        actual_path = str(value.get("resultPath") or "").strip()
+                        allowed_paths = {
+                            str(item).strip()
+                            for item in result_paths.values()
+                            if str(item).strip()
+                        }
+                        requested_sections = {
+                            str(item).strip()
+                            for item in (
+                                value.get("arguments", {}).get("sections") or []
+                                if isinstance(value.get("arguments"), Mapping)
+                                else []
+                            )
+                            if str(item).strip()
+                        }
+                        requested_paths = {
+                            str(result_paths.get(section) or "").strip()
+                            for section in requested_sections
+                            if str(result_paths.get(section) or "").strip()
+                        }
+                        expected_paths = requested_paths or allowed_paths
+                        if actual_path and expected_paths and actual_path not in expected_paths:
+                            findings.append(
+                                {
+                                    "code": "webui.automation.mcp_result_path_unknown",
+                                    "pointer": f"{pointer}/resultPath",
+                                    "tool_id": tool_id,
+                                    "actual": actual_path,
+                                    "expected": sorted(expected_paths),
+                                }
+                            )
                     for key, item in value.items():
                         visit(item, f"{pointer}/{key}")
                     return
@@ -8581,11 +8634,18 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 }
             )
             for finding in findings:
-                errors.append(
-                    f"{relative}: {finding['code']} at {finding['pointer']}: "
-                    "Automation runtime UI must use authoritative data sources; "
-                    "remove Prototype fixtures and read-source dryRun mode"
-                )
+                if finding["code"] == "webui.automation.mcp_result_path_unknown":
+                    errors.append(
+                        f"{relative}: {finding['code']} at {finding['pointer']}: "
+                        f"{finding['actual']!r} is not a published result path for "
+                        f"{finding['tool_id']}; expected one of {finding['expected']}"
+                    )
+                else:
+                    errors.append(
+                        f"{relative}: {finding['code']} at {finding['pointer']}: "
+                        "Automation runtime UI must use authoritative data sources; "
+                        "remove Prototype fixtures and read-source dryRun mode"
+                    )
 
     def _validate_workspace(
         self,

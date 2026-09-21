@@ -150,6 +150,23 @@ def service(monkeypatch: pytest.MonkeyPatch) -> _Service:
 def test_contracts_publish_owner_governed_read_and_write_tools() -> None:
     items = {item.id: item for item in plane.contracts()}
     assert items["users_access.summary"].required_capability == "users_access.read"
+    assert items["users_access.summary"].metadata["webui_data_binding"][
+        "result_paths"
+    ] == {
+        "people": "response.result.users_access.people",
+        "guests": "response.result.users_access.guests",
+        "children": "response.result.users_access.children",
+        "subjects": "response.result.users_access.subjects",
+        "devices": "response.result.users_access.devices",
+        "sessions": "response.result.users_access.sessions",
+        "application_access": "response.result.users_access.application_access",
+        "permissions": "response.result.users_access.permissions",
+        "memberships": "response.result.administration.memberships",
+        "grants": "response.result.administration.grants",
+        "invites": "response.result.administration.invites",
+        "recovery_actions": "response.result.administration.recovery_actions",
+        "audit": "response.result.administration.audit",
+    }
     assert (
         items["users_access.create_invite"].required_capability == "users_access.invite"
     )
