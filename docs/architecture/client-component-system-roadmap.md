@@ -147,8 +147,12 @@ Cutover evidence, 2026-09-16:
   routes modal-only Application launch targets through the modal runtime, and
   adds a bounded `setLanguage` page action plus data-source `excludeIds`.
   These are ABI behaviors with focused tests, not Web Desktop title/id branches.
-  Browser qualification and release pinning remain required before the Beta
-  evidence above is superseded.
+  A subsequent Home qualification found that the persisted edit-layout
+  preference was ignored whenever the scenario also declared a customization
+  state key. The collection grid now treats either source as enabling edit mode
+  and immediately refreshes its decorated actions; focused tests and the
+  production build pass. Browser qualification against a Root-owned reorder and
+  release pinning remain required before the Beta evidence above is superseded.
 
 - [x] `[must]` Qualify scenario-scoped Dev Tickets defaults, an application
   selector with search inside its option surface, bounded image/document

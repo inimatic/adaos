@@ -609,21 +609,26 @@ Builder development and consumes only public contracts.
   to Users & Access. Do not reproduce Marketplace mutations in the shell.
   Beta `web_desktop@0.3.39` proves real wide/compact Home navigation to
   Applications and Users & Access without duplicate embedded product sections.
-- [x] `[must]` `APP4-43` Restore the canonical desktop widget lifecycle in the
+- [~] `[must]` `APP4-43` Restore the canonical desktop widget lifecycle in the
   new shell: catalog, install/remove, pin/unpin, reorder, responsive placement,
   and persisted layout preferences. Qualify parity against the previous
   `desktop-icons`/`desktop-widgets` use cases before replacing the beta. The
-  generic Client product extension owns catalog presentation; Beta `0.3.39`
-  browser evidence covers install/remove, pin/unpin, reorder, persistence,
-  compact layout, and exact restoration of the pre-test state.
-- [x] `[must]` `APP4-44` Keep Home presentation separate from installation and
+  generic Client product extension owns catalog presentation. Earlier Beta
+  `0.3.39` evidence is no longer sufficient: a persisted edit-layout preference
+  was ignored when a declarative state key existed. The generic Client fix and
+  focused tests pass; active-Beta browser requalification remains open.
+- [~] `[must]` `APP4-44` Keep Home presentation separate from installation and
   placement: successful install pins by default, Home customization and
   Applications can unpin without uninstalling, uninstall removes the launcher,
-  and order/pin state persists in the target Webspace overlay. SDK, Root MCP
-  and Client contracts are implemented and qualified through Applications
-  `0.1.21` and Web Desktop `0.3.39`. Publisher-local Trial is an effective
-  installed state and Builder placement projects it to Home without creating a
-  Stable installation.
+  and order/pin state persists in the target Webspace overlay. A 2026-09-21 live
+  rerun found that skill-worker reorder could read an empty process-local
+  projection and overwrite all Home pins. Core now owns atomic
+  `applications.reorder_home`; Desktop routes Application move and unpin through
+  Root MCP and rejects worker-local Application mutation. SDK and contract tests
+  pass with canonical and legacy refs and preserve the complete pin list.
+  Replacement-Beta browser evidence is still required before completion.
+  Publisher-local Trial remains an effective installed state and Builder
+  placement projects it to Home without creating a Stable installation.
 - [ ] `[must]` `APP4-45` Surface governed action approval in the invoking
   workflow. An `action_approval_required` response must replace indefinite
   progress with a localized explanation, the exact Pending Action, and a

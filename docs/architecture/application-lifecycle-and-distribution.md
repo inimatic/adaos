@@ -787,6 +787,16 @@ same `home.pinned` state and a direct pin/unpin control for installed products.
 This presentation state is not copied into `ProjectDeployment` and is never
 used as evidence that a component is running.
 
+Application pin, unpin, and reorder mutations execute at the Root-owned
+Applications plane. A scenario skill worker may render the projection but must
+not read its process-local workspace index and write that result back: the
+worker can lag the Hub and turn a reorder into replacement by an empty or
+partial list. `applications.set_home_pin` and
+`applications.reorder_home` therefore mutate the authoritative overlay
+atomically. They accept both canonical Application identities and already known
+legacy presentation refs so migration does not require a second catalog model.
+Widget mutations remain on their separately owned desktop widget contract.
+
 The canonical widget catalog is a generic Client product extension over Core
 desktop state, not scenario-owned catalog data. The shell declares the
 `desktop.widgets` placement surface; the extension supplies discover/install,

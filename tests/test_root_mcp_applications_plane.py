@@ -42,6 +42,14 @@ class _StubSdk:
             "pinned": kwargs["pinned"],
         }
 
+    def reorder_home_application(self, *args, **kwargs):
+        self.calls.append(("reorder_home_application", args, kwargs))
+        return {
+            "application_id": args[0],
+            "webspace_id": kwargs["webspace_id"],
+            "home_order": kwargs["to_index"],
+        }
+
     def resolve_trial_link(self, *args, **kwargs):
         self.calls.append(("resolve_trial_link", args, kwargs))
         return {"application_id": "app_recipes", "release_digest": "sha256:" + "c" * 64}
@@ -101,6 +109,7 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.list",
         "applications.show",
         "applications.set_home_pin",
+        "applications.reorder_home",
         "applications.update_settings",
         "applications.access.show",
         "applications.access.users",
@@ -270,6 +279,34 @@ def test_applications_plane_exposes_explicit_home_pin_mutation(monkeypatch) -> N
             "set_home_pinned",
             ("app_recipes",),
             {"pinned": False, "webspace_id": "family"},
+        )
+    ]
+
+
+def test_applications_plane_exposes_authoritative_home_reorder(monkeypatch) -> None:
+    stub = _StubSdk()
+    monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
+
+    result = applications_plane.handlers()["applications.reorder_home"](
+        {
+            "application_id": "app_recipes",
+            "to_index": 4,
+            "webspace_id": "family",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert result["home"] == {
+        "application_id": "app_recipes",
+        "webspace_id": "family",
+        "home_order": 4,
+    }
+    assert stub.calls == [
+        (
+            "reorder_home_application",
+            ("app_recipes",),
+            {"to_index": 4, "webspace_id": "family"},
         )
     ]
 

@@ -1119,14 +1119,28 @@ def set_home_pinned(
     webspace = str(webspace_id or "").strip()
     if not webspace:
         raise ValueError("webspace_id is required")
-    model = get_application(application_id, webspace_id=webspace)
-    if not bool(model.get("installed")):
-        raise ValueError("Only installed Applications can be pinned to Home")
-    aliases = _application_home_aliases(model)
-    if not aliases:
-        raise ValueError("Application has no Home presentation entrypoint")
     service = WebDesktopService()
     snapshot = service.get_snapshot(webspace)
+    token = str(application_id or "").strip()
+    try:
+        model = get_application(token, webspace_id=webspace)
+    except FileNotFoundError:
+        known_refs = {
+            *snapshot.installed.apps,
+            *snapshot.pinned_applications,
+        }
+        if token not in known_refs:
+            raise
+        model = None
+        aliases = (token,)
+        installed_model = token in set(snapshot.installed.apps)
+    else:
+        aliases = _application_home_aliases(model)
+        installed_model = bool(model.get("installed"))
+    if not installed_model:
+        raise ValueError("Only installed Applications can be pinned to Home")
+    if not aliases:
+        raise ValueError("Application has no Home presentation entrypoint")
     installed = set(snapshot.installed.apps)
     pinned_refs = set(snapshot.pinned_applications)
     application_ref = next((item for item in aliases if item in installed), None)
@@ -1157,6 +1171,54 @@ def set_home_pinned(
         "pinnable": True,
         "pinned": bool(pinned),
         "projection_reconciled": projection_reconciled,
+        "status": "ready",
+    }
+
+
+def reorder_home_application(
+    application_id: str,
+    *,
+    to_index: int,
+    webspace_id: str = "desktop",
+) -> dict[str, Any]:
+    """Move one pinned Application without changing subnet installation state."""
+
+    webspace = str(webspace_id or "").strip()
+    if not webspace:
+        raise ValueError("webspace_id is required")
+    service = WebDesktopService()
+    snapshot = service.get_snapshot(webspace)
+    current = list(snapshot.pinned_applications)
+    token = str(application_id or "").strip()
+    try:
+        model = get_application(token, webspace_id=webspace)
+    except FileNotFoundError:
+        if token not in current:
+            raise
+        aliases = (token,)
+    else:
+        if not bool(model.get("installed")):
+            raise ValueError("Only installed Applications can be reordered on Home")
+        aliases = _application_home_aliases(model)
+        if not aliases:
+            raise ValueError("Application has no Home presentation entrypoint")
+    alias_set = set(aliases)
+    application_ref = next((item for item in current if item in alias_set), None)
+    if application_ref is None:
+        raise ValueError("Application is not pinned to Home")
+
+    remaining = [item for item in current if item not in alias_set]
+    bounded_index = max(0, min(int(to_index), len(remaining)))
+    reordered = [*remaining[:bounded_index], application_ref, *remaining[bounded_index:]]
+    service.set_pinned_applications_with_live_room(reordered, webspace)
+    return {
+        "schema": "adaos.application.home_projection.v1",
+        "application_id": application_id,
+        "application_ref": application_ref,
+        "webspace_id": webspace,
+        "pinned": True,
+        "home_order": bounded_index,
+        "pinned_applications": reordered,
         "status": "ready",
     }
 
@@ -2449,6 +2511,7 @@ __all__ = [
     "profile_application_permissions",
     "put_application_connected_account",
     "record_prerelease_health",
+    "reorder_home_application",
     "request_development_report_resync",
     "resolve_development_report_appeal",
     "resolve_trial_link",

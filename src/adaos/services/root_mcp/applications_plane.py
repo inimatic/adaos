@@ -415,6 +415,24 @@ def contracts() -> list[RootMcpToolContract]:
             metadata={**published, "handler": "applications_set_home_pin"},
         ),
         RootMcpToolContract(
+            id="applications.reorder_home",
+            title="Reorder Application on Home",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Move one pinned Application while preserving the complete Home projection.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "to_index": {"type": "integer", "minimum": 0},
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                required=["application_id", "to_index"],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_reorder_home"},
+        ),
+        RootMcpToolContract(
             id="applications.update_settings",
             title="Update Application settings",
             surface=RootMcpSurface.OPERATIONS,
@@ -1318,6 +1336,25 @@ def _handle_set_home_pin(
     }
 
 
+def _handle_reorder_home(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_reorder_home": True,
+            "application_id": _application_id(arguments),
+            "to_index": int(arguments.get("to_index") or 0),
+            "webspace_id": _webspace_id(arguments),
+        }
+    return {
+        "home": _sdk().reorder_home_application(
+            _application_id(arguments),
+            to_index=int(arguments.get("to_index") or 0),
+            webspace_id=_webspace_id(arguments),
+        )
+    }
+
+
 def _handle_update_settings(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
@@ -2186,6 +2223,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.list": _handle_list,
         "applications.show": _handle_show,
         "applications.set_home_pin": _handle_set_home_pin,
+        "applications.reorder_home": _handle_reorder_home,
         "applications.update_settings": _handle_update_settings,
         "applications.access.show": _handle_access_show,
         "applications.access.users": _handle_access_users,

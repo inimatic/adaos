@@ -470,6 +470,129 @@ def test_home_pin_materializes_missing_desktop_projection_for_subnet_install(
     assert pinned_writes == []
 
 
+def test_home_reorder_preserves_complete_authoritative_projection(monkeypatch) -> None:
+    snapshot = SimpleNamespace(
+        pinned_applications=[
+            "scenario:applications",
+            "scenario:reading_list",
+            "scenario:chat",
+        ],
+    )
+    writes = []
+
+    class Desktop:
+        def get_snapshot(self, webspace_id):
+            assert webspace_id == "family"
+            return snapshot
+
+        def set_pinned_applications_with_live_room(self, values, webspace_id):
+            writes.append((values, webspace_id))
+
+    monkeypatch.setattr(
+        applications,
+        "get_application",
+        lambda application_id, **_kwargs: {
+            "application": {
+                "application_id": application_id,
+                "entrypoints": [
+                    {
+                        "entrypoint_id": "main",
+                        "presentation_ref": "scenario:reading_list",
+                    }
+                ],
+            },
+            "installed": True,
+        },
+    )
+    monkeypatch.setattr(applications, "WebDesktopService", Desktop)
+
+    result = applications.reorder_home_application(
+        "reading_list", to_index=0, webspace_id="family"
+    )
+
+    assert result["home_order"] == 0
+    assert result["pinned_applications"] == [
+        "scenario:reading_list",
+        "scenario:applications",
+        "scenario:chat",
+    ]
+    assert writes == [
+        (
+            [
+                "scenario:reading_list",
+                "scenario:applications",
+                "scenario:chat",
+            ],
+            "family",
+        )
+    ]
+
+
+def test_home_reorder_accepts_installed_legacy_presentation_ref(monkeypatch) -> None:
+    snapshot = SimpleNamespace(
+        installed=SimpleNamespace(apps=["legacy_metrics_app"]),
+        pinned_applications=["notes_app", "legacy_metrics_app", "chat_app"],
+    )
+    writes = []
+
+    class Desktop:
+        def get_snapshot(self, webspace_id):
+            return snapshot
+
+        def set_pinned_applications_with_live_room(self, values, webspace_id):
+            writes.append((values, webspace_id))
+
+    monkeypatch.setattr(
+        applications,
+        "get_application",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            FileNotFoundError("legacy launcher")
+        ),
+    )
+    monkeypatch.setattr(applications, "WebDesktopService", Desktop)
+
+    result = applications.reorder_home_application(
+        "legacy_metrics_app", to_index=0, webspace_id="desktop"
+    )
+
+    assert result["application_ref"] == "legacy_metrics_app"
+    assert writes == [
+        (["legacy_metrics_app", "notes_app", "chat_app"], "desktop")
+    ]
+
+
+def test_home_pin_accepts_installed_legacy_presentation_ref(monkeypatch) -> None:
+    snapshot = SimpleNamespace(
+        installed=SimpleNamespace(apps=["legacy_metrics_app", "notes_app"]),
+        pinned_applications=["notes_app", "legacy_metrics_app"],
+    )
+    writes = []
+
+    class Desktop:
+        def get_snapshot(self, webspace_id):
+            return snapshot
+
+        def set_pinned_applications_with_live_room(self, values, webspace_id):
+            writes.append((values, webspace_id))
+
+    monkeypatch.setattr(
+        applications,
+        "get_application",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            FileNotFoundError("legacy launcher")
+        ),
+    )
+    monkeypatch.setattr(applications, "WebDesktopService", Desktop)
+
+    result = applications.set_home_pinned(
+        "legacy_metrics_app", pinned=False, webspace_id="desktop"
+    )
+
+    assert result["application_ref"] == "legacy_metrics_app"
+    assert result["pinned"] is False
+    assert writes == [(["notes_app"], "desktop")]
+
+
 def test_application_list_reads_home_and_placement_inventory_once(monkeypatch) -> None:
     models = [
         {
