@@ -397,6 +397,25 @@ def contracts() -> list[RootMcpToolContract]:
             metadata={**published, "handler": "applications_show"},
         ),
         RootMcpToolContract(
+            id="applications.list_components",
+            title="List Application components",
+            surface=RootMcpSurface.OPERATIONS,
+            summary=(
+                "List the owned and dependency components of one Application "
+                "with bounded desired and observed execution placement."
+            ),
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                required=["application_id"],
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_list_components"},
+        ),
+        RootMcpToolContract(
             id="applications.set_home_pin",
             title="Set Application Home pin",
             surface=RootMcpSurface.OPERATIONS,
@@ -1317,6 +1336,16 @@ def _handle_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     }
 
 
+def _handle_list_components(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    return {
+        "components": _sdk().list_application_components(
+            _application_id(arguments), webspace_id=_webspace_id(arguments)
+        )
+    }
+
+
 def _handle_set_home_pin(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
@@ -2222,6 +2251,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "applications.list": _handle_list,
         "applications.show": _handle_show,
+        "applications.list_components": _handle_list_components,
         "applications.set_home_pin": _handle_set_home_pin,
         "applications.reorder_home": _handle_reorder_home,
         "applications.update_settings": _handle_update_settings,

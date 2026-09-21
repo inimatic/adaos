@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from adaos.services.root_mcp import users_access_plane as plane
@@ -113,6 +115,60 @@ class _Service:
         self.store.invites[invite_id] = invite
         return dict(invite)
 
+    def create_device_pairing_link(
+        self,
+        *,
+        invite_id,
+        subject,
+        scope,
+        role,
+        issued_by,
+        expires_at,
+        device_id,
+        device_name,
+    ):
+        invite = {
+            "invite_id": invite_id,
+            "kind": "device_pairing_link",
+            "subject_id": subject.id,
+            "role": role,
+            "scope": scope.to_dict(),
+            "status": "pending",
+            "expires_at": expires_at,
+            "device_id": device_id,
+            "device_name": device_name,
+        }
+        self.store.invites[invite_id] = invite
+        return dict(invite)
+
+    def create_admin_recovery_link(
+        self,
+        *,
+        invite_id,
+        recovery_id,
+        subject,
+        scope,
+        issued_by,
+        expires_at,
+        replacement_device_id,
+        revoked_device_ids,
+        reason,
+    ):
+        invite = {
+            "invite_id": invite_id,
+            "kind": "admin_recovery_link",
+            "subject_id": subject.id,
+            "role": "member",
+            "scope": scope.to_dict(),
+            "status": "pending",
+            "expires_at": expires_at,
+            "replacement_device_id": replacement_device_id,
+            "revoked_device_ids": list(revoked_device_ids),
+            "reason": reason,
+        }
+        self.store.invites[invite_id] = invite
+        return {"invite": dict(invite), "recovery": {"recovery_id": recovery_id}}
+
     def revoke_invite(self, invite_id: str, *, actor, reason=None):
         return self.store.update_invite(
             invite_id, {"status": "revoked", "reason": reason}
@@ -130,7 +186,41 @@ class _Service:
 @pytest.fixture
 def service(monkeypatch: pytest.MonkeyPatch) -> _Service:
     value = _Service()
+    profile_values = {
+        "display_name": "Owner",
+        "preferred_name": "",
+        "language": "en",
+        "locale": "en-US",
+        "timezone": "UTC",
+    }
+    preferences = {"start_destination": "home", "show_presence": True}
+
+    class _ProfileService:
+        def get_profile(self):
+            return SimpleNamespace(
+                user_id="owner",
+                avatar_ref=None,
+                preferences=dict(preferences),
+                **profile_values,
+            )
+
+        def update_profile(self, patch, *, actor):
+            profile_values.update(patch)
+
+        def update_preferences(self, patch, *, actor):
+            preferences.update(patch)
+
     monkeypatch.setattr(plane, "_service", lambda: value)
+    monkeypatch.setattr(
+        plane.personalization_runtime,
+        "current_user_profile_service",
+        lambda _ctx: _ProfileService(),
+    )
+    monkeypatch.setattr(
+        plane.personalization_runtime,
+        "invalidate_current_user_header_settings",
+        lambda _ctx: None,
+    )
     monkeypatch.setattr(
         plane,
         "_claim_url",
@@ -188,6 +278,11 @@ def test_contracts_publish_owner_governed_read_and_write_tools() -> None:
     assert (
         items["users_access.revoke_device"].required_capability == "users_access.manage"
     )
+    assert items["users_access.current_profile"].required_capability == "profile.read.self"
+    assert items["users_access.update_current_profile"].required_capability == "profile.write.self"
+    assert items["users_access.update_current_profile"].side_effects == "write"
+    assert items["users_access.create_device_pairing"].side_effects == "write"
+    assert items["users_access.create_admin_recovery"].side_effects == "write"
     assert items["users_access.revoke_device"].side_effects == "write"
 
 
@@ -432,7 +527,11 @@ def test_invite_creation_and_revocation_are_replay_safe(service: _Service) -> No
     second = plane.handlers()["users_access.create_invite"](arguments, dry_run=False)
     assert first["duplicate"] is False
     assert second["duplicate"] is True
+    assert first["invite"]["subject_id"].startswith("user-")
+    assert second["invite"]["subject_id"] == first["invite"]["subject_id"]
     assert second["invite"]["claim_url"].startswith("https://app.test/")
+    assert second["invite"]["qr_text"] == second["invite"]["claim_url"]
+    assert second["invite"]["telegram_share_url"].startswith("https://t.me/share/url?")
 
     revoke = {
         "invite_id": first["invite"]["invite_id"],
@@ -451,6 +550,85 @@ def test_invite_creation_and_revocation_are_replay_safe(service: _Service) -> No
         ]
         is True
     )
+
+
+@pytest.mark.parametrize(
+    ("handler_id", "arguments", "kind"),
+    [
+        (
+            "users_access.create_device_pairing",
+            {
+                "subject_id": "owner",
+                "role": "owner",
+                "scope_kind": "subnet",
+                "scope_id": "sn_test",
+                "device_name": "Tablet",
+                "expires_in_minutes": 30,
+                "idempotency_key": "pair-owner-tablet",
+            },
+            "device_pairing_link",
+        ),
+        (
+            "users_access.create_admin_recovery",
+            {
+                "subject_id": "owner",
+                "scope_kind": "subnet",
+                "scope_id": "sn_test",
+                "replacement_device_id": "tablet",
+                "expires_in_minutes": 30,
+                "idempotency_key": "recover-owner-tablet",
+            },
+            "admin_recovery_link",
+        ),
+    ],
+)
+def test_specialized_invites_are_replay_safe(
+    service: _Service, handler_id: str, arguments: dict, kind: str
+) -> None:
+    arguments["_mcp_context"] = _context()
+    first = plane.handlers()[handler_id](arguments, dry_run=False)
+    second = plane.handlers()[handler_id](arguments, dry_run=False)
+
+    assert first["duplicate"] is False
+    assert second["duplicate"] is True
+    assert first["invite"]["kind"] == kind
+    assert first["invite"]["claim_url"].startswith("https://app.test/")
+
+
+def test_summary_enriches_invites_with_shareable_links(service: _Service) -> None:
+    service.store.invites["targeted-1"] = {
+        "invite_id": "targeted-1",
+        "kind": "targeted_invite_link",
+        "status": "pending",
+        "role": "member",
+    }
+
+    result = plane.handlers()["users_access.summary"](
+        {"sections": ["invites"], "_mcp_context": _context()}, dry_run=False
+    )
+    invite = result["administration"]["invites"][0]
+    assert invite["claim_url"] == "https://app.test/?adaos_invite=targeted-1"
+    assert invite["qr_text"] == invite["claim_url"]
+
+
+def test_current_profile_read_and_update_share_one_authority(service: _Service) -> None:
+    read = plane.handlers()["users_access.current_profile"]({}, dry_run=False)
+    assert read["profile"]["display_name"] == "Owner"
+    assert read["profile"]["timezone"] == "UTC"
+
+    updated = plane.handlers()["users_access.update_current_profile"](
+        {
+            "display_name": "Dmitry",
+            "timezone": "Europe/Moscow",
+            "show_presence": False,
+            "idempotency_key": "profile-dmitry-1",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+    assert updated["profile"]["display_name"] == "Dmitry"
+    assert updated["profile"]["timezone"] == "Europe/Moscow"
+    assert updated["profile"]["show_presence"] is False
 
 
 def test_device_and_session_revocation_are_replay_safe(service: _Service) -> None:

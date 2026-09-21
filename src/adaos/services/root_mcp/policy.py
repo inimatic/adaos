@@ -11,6 +11,8 @@ from .targets import get_managed_target
 DEFAULT_BEARER_CAPABILITIES: list[str] = [
     "applications.read",
     "applications.trial.redeem",
+    "profile.read.self",
+    "profile.write.self",
     "development.read.foundation",
     "development.read.contracts",
     "development.read.descriptors",
@@ -91,6 +93,20 @@ def _capability_entry(
 
 def list_capability_classes() -> list[dict[str, Any]]:
     return [
+        _capability_entry(
+            "profile.read.self",
+            surface="operations",
+            risk="low",
+            summary="Read the authenticated user's own profile and portable preferences.",
+            default_grants=["owner_token", "bearer"],
+        ),
+        _capability_entry(
+            "profile.write.self",
+            surface="operations",
+            risk="medium",
+            summary="Update allowlisted fields on the authenticated user's own profile and preferences.",
+            default_grants=["owner_token", "bearer"],
+        ),
         _capability_entry(
             "applications.read",
             surface="operations",

@@ -1067,6 +1067,15 @@ def test_application_list_includes_read_only_workspace_project_projection(
                     ],
                     "permission_profile": {"required": [{"id": "notes.read"}]},
                     "manifest_digest": "sha256:" + "a" * 64,
+                    "components": {
+                        "owned": [
+                            {
+                                "ref": "scenario:legacy_notes",
+                                "role": "primary",
+                            }
+                        ],
+                        "dependencies": [{"ref": "skill:notes_store"}],
+                    },
                 }
             ]
 
@@ -1081,6 +1090,40 @@ def test_application_list_includes_read_only_workspace_project_projection(
     assert listed[0]["installed"] is True
     assert listed[0]["icon"] == "book-outline"
     assert listed[0]["installed_release"]["version"] == "1.2.3"
+    assert listed[0]["application"]["distribution"]["visibility"] == "private"
+    assert listed[0]["application"]["marketplace_listing"] == {
+        "schema": "adaos.application.marketplace_listing.v1",
+        "status": "listed",
+        "listed": True,
+    }
+    assert listed[0]["component_inventory"] == [
+        {
+            "component_ref": "scenario:legacy_notes",
+            "kind": "scenario",
+            "component_id": "legacy_notes",
+            "ownership": "owned",
+            "version": None,
+            "digest": None,
+            "source": "active_release",
+            "placement_mode": None,
+            "desired_node_ids": [],
+            "observed_node_ids": [],
+            "runtime_status": "not_observed",
+        },
+        {
+            "component_ref": "skill:notes_store",
+            "kind": "skill",
+            "component_id": "notes_store",
+            "ownership": "dependency",
+            "version": None,
+            "digest": None,
+            "source": "active_release",
+            "placement_mode": None,
+            "desired_node_ids": [],
+            "observed_node_ids": [],
+            "runtime_status": "not_observed",
+        },
+    ]
 
 
 def test_release_list_projects_read_only_workspace_project(monkeypatch) -> None:

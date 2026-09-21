@@ -93,6 +93,7 @@ class TargetedInviteCreateRequest(BaseModel):
 class InviteClaimRequest(BaseModel):
     subject_kind: str | None = None
     subject_id: str | None = None
+    display_name: str | None = None
     session_id: str | None = None
     device_id: str | None = None
     device_name: str | None = None
@@ -797,9 +798,11 @@ def create_targeted_invite(
             expires_at=_expires_in(body.expires_in_minutes),
             constraints=GrantConstraint(),
         )
-        if body.subject_id:
-            invite["subject_id"] = _safe_id(body.subject_id, fallback=hint)
-        return {"ok": True, "invite": _public_invite_view(invite, request, ctx)}
+        subject_id = _safe_id(
+            body.subject_id or f"user-{uuid4().hex}", fallback=f"user-{uuid4().hex}"
+        )
+        stored = service.store.update_invite(invite_id, {"subject_id": subject_id})
+        return {"ok": True, "invite": _public_invite_view(stored, request, ctx)}
     except Exception as exc:
         raise _http_error(exc) from exc
 
@@ -878,9 +881,10 @@ def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = D
         preview = service.preview_invite(invite_id)
         kind = str(preview.get("kind") or "")
         session_id = str(body.session_id or body.subject_id or f"join-{uuid4().hex}").strip()
+        claim_device_id = str(body.device_id or session_id or "").strip()
         if kind == "guest_join_link":
             subject = SubjectRef("session", _safe_id(session_id, fallback=f"join-{uuid4().hex}"))
-            device_id = str(body.device_id or session_id or "").strip()
+            device_id = claim_device_id
         elif kind == "device_pairing_link":
             subject_id = str(body.subject_id or preview.get("subject_id") or preview.get("profile_hint") or "").strip()
             if not subject_id:
@@ -920,9 +924,11 @@ def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = D
             return {"ok": True, **result}
         else:
             subject_kind = str(body.subject_kind or "user")
-            subject_id = str(body.subject_id or "").strip()
-            if not subject_id:
-                raise ValueError("subject_id is required for targeted invite claim")
+            subject_id = str(
+                body.subject_id
+                or preview.get("subject_id")
+                or f"user-{uuid4().hex}"
+            ).strip()
             subject = SubjectRef(subject_kind, _safe_id(subject_id, fallback="invited-user"))
         data = service.claim_invite(
             invite_id,
@@ -938,7 +944,23 @@ def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = D
                 display_name=body.device_name,
                 expires_at=preview.get("expires_at"),
             )
-        return {"ok": True, "invite": data, "session_id": session_id, "device_id": device_id if kind == "guest_join_link" else None}
+        elif kind == "targeted_invite_link":
+            _sync_browser_device_link(claim_device_id, display_name=body.device_name)
+            display_name = str(
+                body.display_name or preview.get("profile_hint") or ""
+            ).strip()
+            if display_name:
+                _profile(ctx).update_profile(
+                    {"display_name": display_name},
+                    user_id=subject.id,
+                    actor=subject,
+                )
+        return {
+            "ok": True,
+            "invite": data,
+            "session_id": session_id,
+            "device_id": claim_device_id if kind in {"guest_join_link", "targeted_invite_link"} else None,
+        }
     except Exception as exc:
         raise _http_error(exc) from exc
 

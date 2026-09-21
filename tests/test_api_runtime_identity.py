@@ -982,8 +982,12 @@ def test_admin_root_mcp_call_allows_application_workbench_tools(monkeypatch, too
     ("tool_id", "capability"),
     [
         ("users_access.summary", "users_access.read"),
+        ("users_access.current_profile", "profile.read.self"),
+        ("users_access.update_current_profile", "profile.write.self"),
         ("users_access.grant_role", "users_access.manage"),
         ("users_access.create_invite", "users_access.invite"),
+        ("users_access.create_device_pairing", "users_access.manage"),
+        ("users_access.create_admin_recovery", "users_access.manage"),
         ("users_access.revoke_invite", "users_access.manage"),
         ("users_access.revoke_device", "users_access.manage"),
         ("users_access.revoke_session", "users_access.manage"),

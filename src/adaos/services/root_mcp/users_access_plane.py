@@ -136,11 +136,17 @@ _SUMMARY_WEBUI_ITEM_FIELDS = {
     },
     "invite": {
         "invite_id": "string",
+        "kind": "string?",
         "status": "string",
         "role": "string?",
+        "profile_hint": "string?",
+        "scope": "object?",
         "expires_at": "datetime|number?",
         "single_use": "boolean?",
         "max_sessions": "integer?",
+        "claim_url": "string?",
+        "qr_text": "string?",
+        "telegram_share_url": "string?",
     },
     "audit": {
         "audit_id": "string",
@@ -230,6 +236,39 @@ def contracts() -> list[RootMcpToolContract]:
             metadata={**metadata, "handler": "users_access_scope_options"},
         ),
         RootMcpToolContract(
+            id="users_access.current_profile",
+            title="Show current user profile",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Read the authoritative current-user profile and portable preferences.",
+            input_schema=schema_object(),
+            output_schema=deepcopy(response),
+            required_capability="profile.read.self",
+            metadata={**metadata, "handler": "users_access_current_profile"},
+        ),
+        RootMcpToolContract(
+            id="users_access.update_current_profile",
+            title="Update current user profile",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Update allowlisted current-user profile fields and portable preferences.",
+            input_schema=schema_object(
+                properties={
+                    **context,
+                    "display_name": {"type": ["string", "null"], "maxLength": 160},
+                    "preferred_name": {"type": ["string", "null"], "maxLength": 160},
+                    "language": {"type": ["string", "null"], "maxLength": 32},
+                    "locale": {"type": ["string", "null"], "maxLength": 32},
+                    "timezone": {"type": ["string", "null"], "maxLength": 80},
+                    "start_destination": {"type": ["string", "null"], "maxLength": 80},
+                    "show_presence": {"type": ["boolean", "null"]},
+                },
+                required=["idempotency_key"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="profile.write.self",
+            side_effects="write",
+            metadata={**metadata, "handler": "users_access_update_current_profile"},
+        ),
+        RootMcpToolContract(
             id="users_access.grant_role",
             title="Grant platform role",
             surface=RootMcpSurface.OPERATIONS,
@@ -309,6 +348,75 @@ def contracts() -> list[RootMcpToolContract]:
             required_capability="users_access.manage",
             side_effects="write",
             metadata={**metadata, "handler": "users_access_revoke_invite"},
+        ),
+        RootMcpToolContract(
+            id="users_access.create_device_pairing",
+            title="Create personal device pairing",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Create a bounded device-pairing invitation for one user.",
+            input_schema=schema_object(
+                properties={
+                    **context,
+                    **scope,
+                    "subject_id": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "role": {"type": "string", "enum": _ROLE_VALUES},
+                    "device_id": {"type": ["string", "null"], "maxLength": 240},
+                    "device_name": {"type": ["string", "null"], "maxLength": 240},
+                    "expires_in_minutes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10080,
+                    },
+                },
+                required=[
+                    "subject_id",
+                    "role",
+                    "scope_kind",
+                    "scope_id",
+                    "expires_in_minutes",
+                    "idempotency_key",
+                ],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="users_access.manage",
+            side_effects="write",
+            metadata={**metadata, "handler": "users_access_create_device_pairing"},
+        ),
+        RootMcpToolContract(
+            id="users_access.create_admin_recovery",
+            title="Create administrator recovery",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Create a bounded administrator recovery link for one user and replacement device.",
+            input_schema=schema_object(
+                properties={
+                    **context,
+                    **scope,
+                    **reason,
+                    "subject_id": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "replacement_device_id": {"type": ["string", "null"], "maxLength": 240},
+                    "revoke_device_ids": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1, "maxLength": 240},
+                        "uniqueItems": True,
+                    },
+                    "expires_in_minutes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10080,
+                    },
+                },
+                required=[
+                    "subject_id",
+                    "scope_kind",
+                    "scope_id",
+                    "expires_in_minutes",
+                    "idempotency_key",
+                ],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="users_access.manage",
+            side_effects="write",
+            metadata={**metadata, "handler": "users_access_create_admin_recovery"},
         ),
         RootMcpToolContract(
             id="users_access.revoke_device",
@@ -423,6 +531,37 @@ def _claim_url(invite_id: str) -> str:
     return f"{app_base}/?{urlencode(params)}"
 
 
+def _invite_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    invite = deepcopy(dict(value))
+    invite_id = str(invite.get("invite_id") or "").strip()
+    if not invite_id:
+        return invite
+    claim_url = _claim_url(invite_id)
+    invite["claim_url"] = claim_url
+    invite["qr_text"] = claim_url
+    invite["telegram_share_url"] = (
+        "https://t.me/share/url?"
+        + urlencode({"url": claim_url, "text": "AdaOS invitation"})
+    )
+    return invite
+
+
+def _profile_projection() -> dict[str, Any]:
+    profile = personalization_runtime.current_user_profile_service(get_ctx()).get_profile()
+    preferences = dict(profile.preferences)
+    return {
+        "user_id": profile.user_id,
+        "display_name": profile.display_name or profile.user_id,
+        "preferred_name": profile.preferred_name or "",
+        "language": profile.language or "en",
+        "locale": profile.locale or "en-US",
+        "timezone": profile.timezone or "UTC",
+        "avatar_ref": profile.avatar_ref,
+        "start_destination": str(preferences.get("start_destination") or "home"),
+        "show_presence": bool(preferences.get("show_presence", True)),
+    }
+
+
 def _expires_at(arguments: Mapping[str, Any]) -> float | None:
     value = arguments.get("expires_in_minutes")
     if value in (None, ""):
@@ -525,6 +664,8 @@ def _handle_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
         administration[key] = (
             [_audit_projection(item) for item in items if isinstance(item, Mapping)]
             if key == "audit"
+            else [_invite_projection(item) for item in items if isinstance(item, Mapping)]
+            if key == "invites"
             else deepcopy(items)
         )
     return {
@@ -572,6 +713,49 @@ def _handle_scope_options(
         )
     rows.sort(key=lambda item: (str(item["label"]).casefold(), item["id"]))
     return {"items": rows}
+
+
+def _handle_current_profile(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    return {"profile": _profile_projection()}
+
+
+def _handle_update_current_profile(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    profile_fields = (
+        "display_name",
+        "preferred_name",
+        "language",
+        "locale",
+        "timezone",
+    )
+    preference_fields = ("start_destination", "show_presence")
+    profile_patch = {
+        key: arguments.get(key)
+        for key in profile_fields
+        if key in arguments and arguments.get(key) is not None
+    }
+    preference_patch = {
+        key: arguments.get(key)
+        for key in preference_fields
+        if key in arguments and arguments.get(key) is not None
+    }
+    if dry_run:
+        return {
+            "would_update": True,
+            "profile_fields": sorted(profile_patch),
+            "preference_fields": sorted(preference_patch),
+        }
+    service = personalization_runtime.current_user_profile_service(get_ctx())
+    actor = _actor(arguments)
+    if profile_patch:
+        service.update_profile(profile_patch, actor=actor)
+    if preference_patch:
+        service.update_preferences(preference_patch, actor=actor)
+    personalization_runtime.invalidate_current_user_header_settings(get_ctx())
+    return {"profile": _profile_projection()}
 
 
 def _handle_grant_role(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -628,9 +812,7 @@ def _handle_create_invite(
     invite_id = f"{kind}-{uuid4().hex}"
     for item in service.store.iter_invites(status="pending"):
         if str(item.get("idempotency_key") or "") == idempotency_key:
-            invite = dict(item)
-            invite["claim_url"] = _claim_url(str(invite.get("invite_id") or ""))
-            return {"invite": invite, "duplicate": True}
+            return {"invite": _invite_projection(item), "duplicate": True}
     if kind == "guest":
         invite = service.create_guest_join_link(
             invite_id=invite_id,
@@ -654,11 +836,88 @@ def _handle_create_invite(
         )
     # The access store intentionally ignores unknown manifest fields. Persist
     # the idempotency marker as metadata owned by this adapter.
-    stored = service.store.update_invite(
+    metadata = {"idempotency_key": idempotency_key}
+    if kind == "targeted":
+        metadata["subject_id"] = f"user-{uuid4().hex}"
+    stored = service.store.update_invite(invite_id, metadata)
+    return {"invite": _invite_projection(stored), "duplicate": False}
+
+
+def _pending_invite_for_idempotency(idempotency_key: str) -> dict[str, Any] | None:
+    for item in _service().store.iter_invites(status="pending"):
+        if str(item.get("idempotency_key") or "") == idempotency_key:
+            return _invite_projection(item)
+    return None
+
+
+def _handle_create_device_pairing(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_create": True,
+            "kind": "device_pairing_link",
+            "subject_id": arguments.get("subject_id"),
+        }
+    idempotency_key = str(arguments.get("idempotency_key") or "").strip()
+    duplicate = _pending_invite_for_idempotency(idempotency_key)
+    if duplicate:
+        return {"invite": duplicate, "duplicate": True}
+    invite_id = f"device-{uuid4().hex}"
+    stored = _service().create_device_pairing_link(
+        invite_id=invite_id,
+        subject=_user_subject(arguments.get("subject_id")),
+        scope=_scope(arguments),
+        role=str(arguments.get("role") or "member"),
+        issued_by=_actor(arguments),
+        expires_at=_expires_at(arguments),
+        device_id=str(arguments.get("device_id") or "").strip() or None,
+        device_name=str(arguments.get("device_name") or "").strip() or None,
+    )
+    stored = _service().store.update_invite(
         invite_id, {"idempotency_key": idempotency_key}
     )
-    stored["claim_url"] = _claim_url(invite_id)
-    return {"invite": stored, "duplicate": False}
+    return {"invite": _invite_projection(stored), "duplicate": False}
+
+
+def _handle_create_admin_recovery(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_create": True,
+            "kind": "admin_recovery_link",
+            "subject_id": arguments.get("subject_id"),
+        }
+    idempotency_key = str(arguments.get("idempotency_key") or "").strip()
+    duplicate = _pending_invite_for_idempotency(idempotency_key)
+    if duplicate:
+        return {"invite": duplicate, "duplicate": True}
+    invite_id = f"recovery-{uuid4().hex}"
+    recovery_id = f"recovery-{uuid4().hex}"
+    result = _service().create_admin_recovery_link(
+        invite_id=invite_id,
+        recovery_id=recovery_id,
+        subject=_user_subject(arguments.get("subject_id")),
+        scope=_scope(arguments),
+        issued_by=_actor(arguments),
+        expires_at=_expires_at(arguments),
+        replacement_device_id=str(arguments.get("replacement_device_id") or "").strip() or None,
+        revoked_device_ids=tuple(
+            str(item).strip()
+            for item in arguments.get("revoke_device_ids") or ()
+            if str(item).strip()
+        ),
+        reason=str(arguments.get("reason") or "").strip() or None,
+    )
+    stored = _service().store.update_invite(
+        invite_id, {"idempotency_key": idempotency_key}
+    )
+    return {
+        **result,
+        "invite": _invite_projection(stored),
+        "duplicate": False,
+    }
 
 
 def _handle_revoke_invite(
@@ -722,8 +981,12 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "users_access.summary": _handle_summary,
         "users_access.scope_options": _handle_scope_options,
+        "users_access.current_profile": _handle_current_profile,
+        "users_access.update_current_profile": _handle_update_current_profile,
         "users_access.grant_role": _handle_grant_role,
         "users_access.create_invite": _handle_create_invite,
+        "users_access.create_device_pairing": _handle_create_device_pairing,
+        "users_access.create_admin_recovery": _handle_create_admin_recovery,
         "users_access.revoke_invite": _handle_revoke_invite,
         "users_access.revoke_device": _handle_revoke_device,
         "users_access.revoke_session": _handle_revoke_session,

@@ -18,6 +18,10 @@ class _StubSdk:
         self.calls.append(("list_applications", (), kwargs))
         return [{"application": {"application_id": "app_recipes"}}]
 
+    def list_application_components(self, *args, **kwargs):
+        self.calls.append(("list_application_components", args, kwargs))
+        return [{"component_ref": "scenario:recipes", "ownership": "owned"}]
+
     def plan_install(self, *args, **kwargs):
         self.calls.append(("plan_install", args, kwargs))
         return {"operation_id": "appop.1", "plan_digest": "sha256:" + "a" * 64}
@@ -108,6 +112,7 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
     assert {item.id for item in contracts} == {
         "applications.list",
         "applications.show",
+        "applications.list_components",
         "applications.set_home_pin",
         "applications.reorder_home",
         "applications.update_settings",
@@ -251,6 +256,28 @@ def test_applications_plane_forwards_catalog_and_development_filters(monkeypatch
                 "developed_only": True,
                 "webspace_id": "desktop",
             },
+        )
+    ]
+
+
+def test_applications_plane_lists_component_inventory(monkeypatch) -> None:
+    stub = _StubSdk()
+    monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
+
+    result = applications_plane.handlers()["applications.list_components"](
+        {
+            "application_id": "app_recipes",
+            "webspace_id": "home",
+        },
+        dry_run=True,
+    )
+
+    assert result["components"][0]["component_ref"] == "scenario:recipes"
+    assert stub.calls == [
+        (
+            "list_application_components",
+            ("app_recipes",),
+            {"webspace_id": "home"},
         )
     ]
 

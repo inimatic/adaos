@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from adaos.apps.api import personalization
+from adaos.domain.personalization_access import SubjectRef
 from adaos.services.agent_context import get_ctx
 from adaos.services import access_links
 
@@ -338,13 +339,28 @@ def test_phase5_targeted_invite_is_public_preview_and_single_use_claim() -> None
     preview = client.get(f"/api/personalization/invites/{invite_id}/preview")
     assert preview.status_code == 200
     assert preview.json()["preview"]["profile_hint"] == "Masha"
+    assert preview.json()["preview"]["subject_id"] == "masha"
 
     accepted = client.post(
         f"/api/personalization/invites/{invite_id}/claim",
-        json={"subject_kind": "user", "subject_id": "masha", "session_id": "masha-pc"},
+        json={
+            "subject_kind": "user",
+            "subject_id": "masha",
+            "display_name": "Masha",
+            "session_id": "masha-pc",
+            "device_id": "masha-browser",
+            "device_name": "Masha tablet",
+        },
     )
     assert accepted.status_code == 200
     assert accepted.json()["invite"]["status"] == "accepted"
+    assert accepted.json()["device_id"] == "masha-browser"
+    assert access_links.get_link("browser", "masha-browser")["device_display_name"] == "Masha tablet"
+
+    profile = personalization.personalization_runtime.current_user_profile_service(get_ctx()).get_profile(
+        "masha", actor=SubjectRef("user", "masha")
+    )
+    assert profile.display_name == "Masha"
 
     reused = client.post(
         f"/api/personalization/invites/{invite_id}/claim",

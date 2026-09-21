@@ -230,6 +230,43 @@ def _release_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _workspace_project_components(project: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Project legacy ownership into the release component read model."""
+
+    raw = project.get("components")
+    groups = raw if isinstance(raw, Mapping) else {}
+    components: list[dict[str, Any]] = []
+    for ownership, group in (
+        ("owned", groups.get("owned") or ()),
+        ("dependency", groups.get("dependencies") or groups.get("required") or ()),
+    ):
+        for item in group:
+            if not isinstance(item, Mapping):
+                continue
+            component_ref = str(item.get("ref") or "").strip()
+            kind, separator, artifact_id = component_ref.partition(":")
+            if not separator:
+                kind = str(item.get("kind") or "component").strip()
+                artifact_id = str(
+                    item.get("artifact_id") or item.get("id") or component_ref
+                ).strip()
+                component_ref = f"{kind}:{artifact_id}" if artifact_id else kind
+            components.append(
+                {
+                    "kind": kind,
+                    "artifact_id": artifact_id,
+                    "component_ref": component_ref,
+                    "ownership": ownership,
+                    **{
+                        key: deepcopy(item[key])
+                        for key in ("version", "digest", "optional", "role")
+                        if key in item
+                    },
+                }
+            )
+    return components
+
+
 def _application_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
     model = deepcopy(dict(value))
     application = model.get("application")
@@ -662,6 +699,7 @@ def _workspace_project_read_models(
             if isinstance(item, Mapping) and str(item.get("presentation") or "").strip()
         ]
         version = str(project.get("version") or "").strip()
+        project_components = _workspace_project_components(project)
         models.append(
             {
                 "application": {
@@ -713,6 +751,12 @@ def _workspace_project_read_models(
                     "project_release": {
                         "project_id": project_id,
                         "version": version,
+                        "components": project_components,
+                        "resolved_dependencies": [
+                            item
+                            for item in project_components
+                            if item.get("ownership") == "dependency"
+                        ],
                     },
                 },
                 "effective_release": {
@@ -734,6 +778,7 @@ def _workspace_project_read_models(
                         "manifest_digest",
                         "permission_profile",
                         "application_roles",
+                        "components",
                     )
                     if key in project
                 },
@@ -892,6 +937,82 @@ def _application_models(
     return models
 
 
+def _marketplace_listing(application: Mapping[str, Any]) -> dict[str, Any]:
+    raw = str(application.get("catalog_visibility") or "").strip().lower()
+    if not raw:
+        raw = "listed" if str(application.get("visibility") or "") == "public" else "unlisted"
+    status = "listed" if raw in {"listed", "public"} else "unlisted"
+    return {
+        "schema": "adaos.application.marketplace_listing.v1",
+        "status": status,
+        "listed": status == "listed",
+    }
+
+
+def _application_component_inventory(model: Mapping[str, Any]) -> list[dict[str, Any]]:
+    release: Mapping[str, Any] = {}
+    release_source = "unavailable"
+    for field in ("active_release", "installed_release", "marketplace_release"):
+        candidate = model.get(field)
+        if isinstance(candidate, Mapping):
+            project_release = candidate.get("project_release")
+            if isinstance(project_release, Mapping) and project_release.get("components"):
+                release = project_release
+                release_source = field
+                break
+
+    desired = {
+        str(item.get("component_ref") or ""): dict(item)
+        for item in (model.get("execution_placement") or {}).get("desired", ())
+        if isinstance(item, Mapping) and str(item.get("component_ref") or "")
+    }
+    observed: dict[str, list[dict[str, Any]]] = {}
+    for item in (model.get("execution_placement") or {}).get("observed", ()):
+        if not isinstance(item, Mapping):
+            continue
+        component_ref = str(item.get("component_ref") or "")
+        if component_ref:
+            observed.setdefault(component_ref, []).append(dict(item))
+
+    rows: list[dict[str, Any]] = []
+    for raw in release.get("components") or ():
+        if not isinstance(raw, Mapping):
+            continue
+        kind = str(raw.get("kind") or "component").strip()
+        component_id = str(raw.get("artifact_id") or raw.get("id") or "").strip()
+        component_ref = str(raw.get("component_ref") or "").strip()
+        if not component_ref:
+            component_ref = f"{kind}:{component_id}" if component_id else kind
+        actual = observed.get(component_ref, [])
+        plan = desired.get(component_ref, {})
+        rows.append(
+            {
+                "component_ref": component_ref,
+                "kind": kind,
+                "component_id": component_id,
+                "ownership": str(raw.get("ownership") or "owned"),
+                "version": raw.get("version"),
+                "digest": raw.get("digest") or raw.get("package_digest"),
+                "source": release_source,
+                "placement_mode": plan.get("mode"),
+                "desired_node_ids": list(plan.get("selected_node_ids") or ()),
+                "observed_node_ids": sorted(
+                    {
+                        str(item.get("node_id") or "")
+                        for item in actual
+                        if str(item.get("node_id") or "")
+                    }
+                ),
+                "runtime_status": (
+                    "active"
+                    if any(str(item.get("status") or "") == "active" for item in actual)
+                    else str((actual[0] if actual else {}).get("status") or "not_observed")
+                ),
+            }
+        )
+    return rows
+
+
 def _enrich_application_models(
     models: Sequence[dict[str, Any]],
     *,
@@ -1035,9 +1156,14 @@ def _enrich_application_models(
                 partial=False,
             ),
         )
+        application["distribution"] = {
+            "visibility": str(application.get("visibility") or "private")
+        }
+        application["marketplace_listing"] = _marketplace_listing(application)
         model["active_release"] = _active_release_for_webspace(
             model, webspace_id=webspace_id
         ) or None
+        model["component_inventory"] = _application_component_inventory(model)
         home = _home_projection(model, webspace_id, snapshot=home_snapshot)
         model["home"] = home
         model["pinned"] = bool(home.get("pinned"))
@@ -1106,6 +1232,18 @@ def get_application(
                 webspace_id=webspace_id,
             )[0]
     raise FileNotFoundError(f"Application not found: {token}")
+
+
+def list_application_components(
+    application_id: str, *, webspace_id: str | None = None
+) -> list[dict[str, Any]]:
+    """Return the bounded component and placement projection for one Application."""
+
+    return list(
+        get_application(application_id, webspace_id=webspace_id).get(
+            "component_inventory", ()
+        )
+    )
 
 
 def set_home_pinned(
