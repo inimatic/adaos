@@ -1868,6 +1868,15 @@ Handle artifact provenance, scenario UX, and runtime lifecycle after the communi
   projection still performs about 1.0-1.6 seconds of CPU work over an
   approximately 670 KiB payload. Remove that event-loop pressure without
   increasing transport timeouts.
+- [x] `[must]` Keep a healthy browser Yjs provider attached while an accepted
+  background scenario projection is pending. The Client observes the expected
+  scenario for up to the measured transition envelope and invokes reconnect
+  recovery only when the provider is actually disconnected; projection lag is
+  not a transport failure. Local click-path evidence for `Applications` and
+  `Users & Access` now records one `web_desktop -> target` transition, no
+  intermediate return, and no `yjs.provider.destroy` or manual resync. The
+  remaining 5.5-8.2 second projection latency belongs to the projection work
+  item above rather than to Client timeout tuning.
 - [ ] `[must]` Give runtime beacon, direct reliability details, and aggregate
   reliability summary one explicit freshness contract. A browser with fresh
   sync and ready commands may show a transitional sidecar handoff, but the

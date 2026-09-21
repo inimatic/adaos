@@ -887,6 +887,14 @@ surface the phase as `materialization=transition:<state>` rather than showing
 full materialization readiness; that guard belongs to the action/data layer,
 not to link availability.
 
+The same distinction applies to Client recovery. An accepted target that has
+not reached render materialization within the ordinary observation window does
+not authorize provider recreation while Yjs remains connected. The Client may
+continue bounded target-aware observation and HTTP materialization repair; it
+may recreate the provider only after independent connection evidence reports
+it disconnected. This prevents a late target projection from racing an
+unnecessary replay of the previous scenario.
+
 The compact browser endpoint `/api/node/reliability/summary` must preserve the
 same signal as `stateSync.materialization.transitionExpected` with
 `readinessState`, `currentScenario`, `targetScenario`, and `missingBranches`.
