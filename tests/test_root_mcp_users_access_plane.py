@@ -216,6 +216,7 @@ def test_scope_options_use_authoritative_context_and_workspace_index(
         plane.workspace_index,
         "list_workspaces",
         lambda: [
+            Workspace("$ctx.webspace_id", "$ctx.webspace_id", False),
             Workspace("desktop", "Desktop", False),
             Workspace("desktop-dev", "DEV: Desktop", True),
         ],

@@ -557,11 +557,14 @@ def _handle_scope_options(
 
     rows = []
     for item in workspace_index.list_workspaces():
+        workspace_id = str(item.workspace_id or "").strip()
+        if not workspace_id or workspace_id.startswith("$"):
+            continue
         if kind == "workspace" and item.is_dev:
             continue
         rows.append(
             {
-                "id": item.workspace_id,
+                "id": workspace_id,
                 "label": item.title,
                 "kind": kind,
                 "development": item.is_dev,
