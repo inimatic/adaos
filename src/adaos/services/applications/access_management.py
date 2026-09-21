@@ -167,6 +167,57 @@ def _redacted_session(value: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _person_projection(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Add stable presentation fields without inventing profile data."""
+    result = deepcopy(dict(value))
+    profile = value.get("profile")
+    profile = profile if isinstance(profile, Mapping) else {}
+    subject_ref = str(value.get("subject_ref") or "").strip()
+    fallback_label = subject_ref.partition(":")[2] or subject_ref
+    display_label = str(
+        profile.get("display_name")
+        or profile.get("preferred_name")
+        or fallback_label
+    ).strip()
+    display_source = (
+        "profile"
+        if profile.get("display_name") or profile.get("preferred_name")
+        else "subject_ref"
+    )
+    words = [part for part in display_label.replace("_", " ").split() if part]
+    initials = "".join(part[0].upper() for part in words[:2])
+
+    memberships = [
+        dict(item)
+        for item in value.get("memberships") or ()
+        if isinstance(item, Mapping)
+    ]
+    roles = list(
+        dict.fromkeys(
+            str(item.get("role") or "").strip()
+            for item in memberships
+            if str(item.get("role") or "").strip()
+        )
+    )
+    access = [
+        dict(item)
+        for item in value.get("application_access") or ()
+        if isinstance(item, Mapping)
+    ]
+    result.update(
+        {
+            "display_label": display_label or subject_ref,
+            "display_label_source": display_source,
+            "initials": initials,
+            "membership_summary": ", ".join(roles),
+            "membership_count": len(memberships),
+            "primary_role": roles[0] if roles else "",
+            "application_access_count": len(access),
+        }
+    )
+    return result
+
+
 class ApplicationAccessManagementService:
     """Shared read/write model for Applications, Users & Access, Builder and chat."""
 
@@ -831,7 +882,11 @@ class ApplicationAccessManagementService:
         ]
         audit_limit = max(1, min(int(activity_limit), 200))
         activity_values = self.store.list_application_access_audit(limit=audit_limit + 1)
-        person_values = sorted(people.values(), key=lambda item: item["subject_ref"])
+        person_values = sorted(
+            (_person_projection(item) for item in people.values()),
+            key=lambda item: item["subject_ref"],
+        )
+        pending_guests = [_person_projection(item) for item in pending_guests]
         return {
             "schema": "adaos.users_access.surface.v1",
             "people": [item for item in person_values if item["kind"] == "user"],

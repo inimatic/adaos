@@ -75,6 +75,70 @@ _SUMMARY_WEBUI_RESULT_PATHS = {
     },
 }
 
+_SUMMARY_WEBUI_ITEM_FIELDS = {
+    "person": {
+        "subject_ref": "string",
+        "kind": "string",
+        "display_label": "string",
+        "display_label_source": "profile|subject_ref",
+        "initials": "string",
+        "profile": "object",
+        "memberships": "array<object>",
+        "membership_summary": "string",
+        "membership_count": "integer",
+        "primary_role": "string",
+        "application_access": "array<object>",
+        "application_access_count": "integer",
+        "invite": "object?",
+    },
+    "device": {
+        "device_id": "string",
+        "label": "string?",
+        "status": "string",
+        "subject_ref": "string?",
+        "created_at": "datetime?",
+        "expires_at": "datetime?",
+        "last_seen_at": "datetime?",
+    },
+    "session": {
+        "session_id": "string",
+        "device_id": "string?",
+        "status": "string",
+        "subject_ref": "string?",
+        "scope_ref": "string?",
+        "opened_at": "datetime?",
+        "expires_at": "datetime?",
+        "revoked_at": "datetime?",
+        "authentication_source": "string?",
+    },
+    "permission": {
+        "permission_id": "string",
+        "application_count": "integer",
+        "active_grant_count": "integer",
+        "explicit_deny_count": "integer",
+        "applications": "array<object>",
+        "applications_summary": "string",
+    },
+    "invite": {
+        "invite_id": "string",
+        "status": "string",
+        "role": "string?",
+        "expires_at": "datetime|number?",
+        "single_use": "boolean?",
+        "max_sessions": "integer?",
+    },
+    "audit": {
+        "audit_id": "string",
+        "event_type": "string",
+        "actor_ref": "string?",
+        "scope_ref": "string?",
+        "decision": "object",
+        "resource": "string?",
+        "occurred_at": "datetime?",
+        "source": "string?",
+    },
+}
+
 
 def contracts() -> list[RootMcpToolContract]:
     response = deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
@@ -116,6 +180,18 @@ def contracts() -> list[RootMcpToolContract]:
                     "schema": "adaos.root_mcp.webui_data_binding.v1",
                     "transport_envelope": "node_root_mcp_bridge.v1",
                     "result_paths": deepcopy(_SUMMARY_WEBUI_RESULT_PATHS),
+                    "section_item_types": {
+                        **{
+                            section: "person"
+                            for section in ("people", "guests", "children", "subjects")
+                        },
+                        "devices": "device",
+                        "sessions": "session",
+                        "permissions": "permission",
+                        "invites": "invite",
+                        "audit": "audit",
+                    },
+                    "item_fields": deepcopy(_SUMMARY_WEBUI_ITEM_FIELDS),
                 },
             },
         ),
@@ -378,32 +454,24 @@ def _handle_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
         for raw in items:
             if not isinstance(raw, Mapping):
                 continue
-            access = raw.get("application_access")
-            memberships = raw.get("memberships")
-            membership_roles = list(
-                dict.fromkeys(
-                    str(item.get("role") or "").strip()
-                    for item in memberships or []
-                    if isinstance(item, Mapping) and str(item.get("role") or "").strip()
-                )
-            )
             rows.append(
                 {
                     key: deepcopy(raw.get(key))
                     for key in (
                         "subject_ref",
                         "kind",
+                        "display_label",
+                        "display_label_source",
+                        "initials",
                         "profile",
                         "memberships",
+                        "membership_summary",
+                        "membership_count",
+                        "primary_role",
+                        "application_access_count",
                         "invite",
                     )
                     if key in raw
-                }
-                | {
-                    "membership_summary": ", ".join(membership_roles),
-                    "application_access_count": len(access)
-                    if isinstance(access, list)
-                    else 0,
                 }
             )
         return rows

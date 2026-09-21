@@ -490,6 +490,23 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
         "explicit_deny_count": 0,
     }
     assert any(item["subject_ref"] == "user:sasha" for item in users_view["children"])
+    sasha = next(
+        item for item in users_view["children"] if item["subject_ref"] == "user:sasha"
+    )
+    assert sasha["display_label"] == "Sasha"
+    assert sasha["display_label_source"] == "profile"
+    assert sasha["initials"] == "S"
+    assert sasha["membership_summary"] == "child"
+    assert sasha["membership_count"] == 1
+    assert sasha["primary_role"] == "child"
+    assert sasha["application_access_count"] == 0
+    masha = next(
+        item for item in users_view["people"] if item["subject_ref"] == "user:masha"
+    )
+    assert masha["display_label"] == "masha"
+    assert masha["display_label_source"] == "subject_ref"
+    assert masha["initials"] == "M"
+    assert masha["application_access_count"] == 1
     assert any(item["subject_ref"] == "invite:guest-link-1" for item in users_view["guests"])
     assert account["status"] == "connected"
     assert "secret_value" not in account

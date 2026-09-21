@@ -167,6 +167,11 @@ def test_contracts_publish_owner_governed_read_and_write_tools() -> None:
         "recovery_actions": "response.result.administration.recovery_actions",
         "audit": "response.result.administration.audit",
     }
+    binding = items["users_access.summary"].metadata["webui_data_binding"]
+    assert binding["section_item_types"]["people"] == "person"
+    assert binding["section_item_types"]["sessions"] == "session"
+    assert binding["item_fields"]["person"]["memberships"] == "array<object>"
+    assert binding["item_fields"]["person"]["display_label"] == "string"
     assert (
         items["users_access.create_invite"].required_capability == "users_access.invite"
     )
@@ -200,6 +205,9 @@ def test_summary_projects_requested_compact_sections(
                 {
                     "subject_ref": "user:owner",
                     "kind": "user",
+                    "display_label": "Owner",
+                    "display_label_source": "profile",
+                    "initials": "O",
                     "profile": {"display_name": "Owner"},
                     "memberships": [
                         {"role": "owner", "scope": {"kind": "subnet", "id": "home"}},
@@ -208,7 +216,11 @@ def test_summary_projects_requested_compact_sections(
                             "scope": {"kind": "workspace", "id": "desktop"},
                         },
                     ],
+                    "membership_summary": "owner",
+                    "membership_count": 2,
+                    "primary_role": "owner",
                     "application_access": [{"grant_id": "grant-1"}],
+                    "application_access_count": 1,
                 }
             ],
             "devices": [{"device_id": "phone"}],
@@ -230,12 +242,17 @@ def test_summary_projects_requested_compact_sections(
         {
             "subject_ref": "user:owner",
             "kind": "user",
+            "display_label": "Owner",
+            "display_label_source": "profile",
+            "initials": "O",
             "profile": {"display_name": "Owner"},
             "memberships": [
                 {"role": "owner", "scope": {"kind": "subnet", "id": "home"}},
                 {"role": "owner", "scope": {"kind": "workspace", "id": "desktop"}},
             ],
             "membership_summary": "owner",
+            "membership_count": 2,
+            "primary_role": "owner",
             "application_access_count": 1,
         }
     ]
