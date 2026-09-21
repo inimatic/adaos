@@ -8516,6 +8516,77 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             }
         )
 
+    def _validate_automation_webui_authority(
+        self,
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Reject Prototype-only data fallbacks from executable Automation UI."""
+
+        for path in sorted(workspace.glob("scenarios/*/webui.json")):
+            if not self._candidate_file(path, workspace):
+                continue
+            relative = path.relative_to(workspace).as_posix()
+            try:
+                payload = _read_json(path)
+            except Exception:
+                # The general JSON validation reports the parse failure.
+                continue
+
+            findings: list[dict[str, str]] = []
+
+            def visit(value: Any, pointer: str) -> None:
+                if isinstance(value, Mapping):
+                    if "prototypeFixtures" in value:
+                        findings.append(
+                            {
+                                "code": "webui.automation.prototype_fixtures",
+                                "pointer": f"{pointer}/prototypeFixtures",
+                            }
+                        )
+                    if str(value.get("prototypeFixture") or "").strip():
+                        findings.append(
+                            {
+                                "code": "webui.automation.prototype_fixture",
+                                "pointer": f"{pointer}/prototypeFixture",
+                            }
+                        )
+                    segment = pointer.rsplit("/", 1)[-1]
+                    if (
+                        segment in {"dataSource", "optionsDataSource"}
+                        and str(value.get("kind") or "").strip().lower() == "mcp"
+                        and value.get("dryRun") is True
+                    ):
+                        findings.append(
+                            {
+                                "code": "webui.automation.mcp_data_source_dry_run",
+                                "pointer": f"{pointer}/dryRun",
+                            }
+                        )
+                    for key, item in value.items():
+                        visit(item, f"{pointer}/{key}")
+                    return
+                if isinstance(value, list):
+                    for index, item in enumerate(value):
+                        visit(item, f"{pointer}/{index}")
+
+            visit(payload, "")
+            checks.append(
+                {
+                    "kind": "webui.automation.authoritative_sources",
+                    "path": relative,
+                    "ok": not findings,
+                    "issues": findings,
+                }
+            )
+            for finding in findings:
+                errors.append(
+                    f"{relative}: {finding['code']} at {finding['pointer']}: "
+                    "Automation runtime UI must use authoritative data sources; "
+                    "remove Prototype fixtures and read-source dryRun mode"
+                )
+
     def _validate_workspace(
         self,
         assignment: Mapping[str, Any],
@@ -8563,6 +8634,12 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             checks,
             errors,
         )
+        if workflow_transition != "return_to_prototype":
+            self._validate_automation_webui_authority(
+                workspace,
+                checks,
+                errors,
+            )
         for path in sorted(workspace.rglob("*.json")):
             if not self._candidate_file(path, workspace):
                 continue

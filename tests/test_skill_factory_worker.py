@@ -2357,6 +2357,89 @@ def test_worker_rejects_unreachable_form_success_action_before_browser(tmp_path)
     )
 
 
+def test_automation_rejects_prototype_fixtures_and_dry_run_read_sources(
+    tmp_path: Path,
+) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "workspace"
+    scenario = _scenario(workspace / "scenarios", "applications")
+    webui_path = scenario / "webui.json"
+    document = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "initialState": {"prototypeFixtures": {"applications": []}},
+                        "widgets": [
+                            {
+                                "id": "applications",
+                                "type": "ui.list",
+                                "dataSource": {
+                                    "kind": "mcp",
+                                    "toolId": "applications.list",
+                                    "dryRun": True,
+                                    "prototypeFixture": "$state.prototypeFixtures.applications",
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+    webui_path.write_text(json.dumps(document), encoding="utf-8")
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo,
+        dev_skills_root=workspace / "skills",
+        dev_scenarios_root=workspace / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    checks: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    worker._validate_automation_webui_authority(workspace, checks, errors)
+
+    assert checks == [
+        {
+            "kind": "webui.automation.authoritative_sources",
+            "path": "scenarios/applications/webui.json",
+            "ok": False,
+            "issues": [
+                {
+                    "code": "webui.automation.prototype_fixtures",
+                    "pointer": "/ui/application/desktop/pageSchema/initialState/prototypeFixtures",
+                },
+                {
+                    "code": "webui.automation.prototype_fixture",
+                    "pointer": "/ui/application/desktop/pageSchema/widgets/0/dataSource/prototypeFixture",
+                },
+                {
+                    "code": "webui.automation.mcp_data_source_dry_run",
+                    "pointer": "/ui/application/desktop/pageSchema/widgets/0/dataSource/dryRun",
+                },
+            ],
+        }
+    ]
+    assert len(errors) == 3
+
+    document["ui"]["application"]["desktop"]["pageSchema"].pop("initialState")
+    source = document["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0][
+        "dataSource"
+    ]
+    source.pop("dryRun")
+    source.pop("prototypeFixture")
+    webui_path.write_text(json.dumps(document), encoding="utf-8")
+    checks = []
+    errors = []
+
+    worker._validate_automation_webui_authority(workspace, checks, errors)
+
+    assert errors == []
+    assert checks[0]["ok"] is True
+
+
 def test_worker_rejects_webui_capability_drift_before_browser(tmp_path):
     repo = Path(__file__).resolve().parents[1]
     workspace = tmp_path / "workspace"
