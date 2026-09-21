@@ -2357,7 +2357,7 @@ def test_worker_rejects_unreachable_form_success_action_before_browser(tmp_path)
     )
 
 
-def test_automation_rejects_prototype_fixtures_and_dry_run_read_sources(
+def test_automation_rejects_prototype_fixtures_but_allows_dry_run_reads(
     tmp_path: Path,
 ) -> None:
     repo = Path(__file__).resolve().parents[1]
@@ -2415,20 +2415,15 @@ def test_automation_rejects_prototype_fixtures_and_dry_run_read_sources(
                     "code": "webui.automation.prototype_fixture",
                     "pointer": "/ui/application/desktop/pageSchema/widgets/0/dataSource/prototypeFixture",
                 },
-                {
-                    "code": "webui.automation.mcp_data_source_dry_run",
-                    "pointer": "/ui/application/desktop/pageSchema/widgets/0/dataSource/dryRun",
-                },
             ],
         }
     ]
-    assert len(errors) == 3
+    assert len(errors) == 2
 
     document["ui"]["application"]["desktop"]["pageSchema"].pop("initialState")
     source = document["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0][
         "dataSource"
     ]
-    source.pop("dryRun")
     source.pop("prototypeFixture")
     webui_path.write_text(json.dumps(document), encoding="utf-8")
     checks = []

@@ -477,6 +477,11 @@ def test_home_reorder_preserves_complete_authoritative_projection(monkeypatch) -
             "scenario:reading_list",
             "scenario:chat",
         ],
+        icon_order=[
+            "scenario:applications",
+            "scenario:reading_list",
+            "scenario:chat",
+        ],
     )
     writes = []
 
@@ -485,7 +490,7 @@ def test_home_reorder_preserves_complete_authoritative_projection(monkeypatch) -
             assert webspace_id == "family"
             return snapshot
 
-        def set_pinned_applications_with_live_room(self, values, webspace_id):
+        def set_icon_order_with_live_room(self, values, webspace_id):
             writes.append((values, webspace_id))
 
     monkeypatch.setattr(
@@ -512,6 +517,11 @@ def test_home_reorder_preserves_complete_authoritative_projection(monkeypatch) -
 
     assert result["home_order"] == 0
     assert result["pinned_applications"] == [
+        "scenario:applications",
+        "scenario:reading_list",
+        "scenario:chat",
+    ]
+    assert result["icon_order"] == [
         "scenario:reading_list",
         "scenario:applications",
         "scenario:chat",
@@ -532,6 +542,7 @@ def test_home_reorder_accepts_installed_legacy_presentation_ref(monkeypatch) -> 
     snapshot = SimpleNamespace(
         installed=SimpleNamespace(apps=["legacy_metrics_app"]),
         pinned_applications=["notes_app", "legacy_metrics_app", "chat_app"],
+        icon_order=["notes_app", "legacy_metrics_app", "chat_app"],
     )
     writes = []
 
@@ -539,7 +550,7 @@ def test_home_reorder_accepts_installed_legacy_presentation_ref(monkeypatch) -> 
         def get_snapshot(self, webspace_id):
             return snapshot
 
-        def set_pinned_applications_with_live_room(self, values, webspace_id):
+        def set_icon_order_with_live_room(self, values, webspace_id):
             writes.append((values, webspace_id))
 
     monkeypatch.setattr(

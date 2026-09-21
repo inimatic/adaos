@@ -1327,6 +1327,12 @@ Its materialized projection removes `prototypeFixture` bindings and the
 corresponding `prototypeFixtures` payload without rewriting the accepted
 Prototype or DEV source. Reads must therefore settle through the declared MCP
 or SDK authority. A `-dev` Webspace suffix alone never authorizes fixture use.
+For an MCP data source, `dryRun: true` is the transport-level read intent: it
+forbids modifying effects but still returns live authoritative data. It is not
+a fixture or a mock marker and remains valid in Automation and Trial. Only an
+explicit `prototypeFixture`/fixture binding can satisfy a Prototype without the
+declared authority. Validators and implementing agents must preserve this
+distinction.
 If an authoritative read remains loading or fails, Builder first compares the
 declared binding, direct tool diagnostics and transport state; it must not ask
 the implementing model to manufacture fixture data to make the browser gate

@@ -1188,12 +1188,13 @@ def reorder_home_application(
         raise ValueError("webspace_id is required")
     service = WebDesktopService()
     snapshot = service.get_snapshot(webspace)
-    current = list(snapshot.pinned_applications)
+    pinned_applications = list(snapshot.pinned_applications)
+    current = list(snapshot.icon_order)
     token = str(application_id or "").strip()
     try:
         model = get_application(token, webspace_id=webspace)
     except FileNotFoundError:
-        if token not in current:
+        if token not in pinned_applications:
             raise
         aliases = (token,)
     else:
@@ -1203,14 +1204,16 @@ def reorder_home_application(
         if not aliases:
             raise ValueError("Application has no Home presentation entrypoint")
     alias_set = set(aliases)
-    application_ref = next((item for item in current if item in alias_set), None)
+    application_ref = next(
+        (item for item in pinned_applications if item in alias_set), None
+    )
     if application_ref is None:
         raise ValueError("Application is not pinned to Home")
 
     remaining = [item for item in current if item not in alias_set]
     bounded_index = max(0, min(int(to_index), len(remaining)))
     reordered = [*remaining[:bounded_index], application_ref, *remaining[bounded_index:]]
-    service.set_pinned_applications_with_live_room(reordered, webspace)
+    service.set_icon_order_with_live_room(reordered, webspace)
     return {
         "schema": "adaos.application.home_projection.v1",
         "application_id": application_id,
@@ -1218,7 +1221,8 @@ def reorder_home_application(
         "webspace_id": webspace,
         "pinned": True,
         "home_order": bounded_index,
-        "pinned_applications": reordered,
+        "pinned_applications": pinned_applications,
+        "icon_order": reordered,
         "status": "ready",
     }
 

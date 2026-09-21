@@ -205,12 +205,15 @@ or shorter isolated answers. Do not hide infrastructure failures with more retri
   produced an exact one-value change that passed full validation and wide/compact
   browser review. Detailed scope and evidence remain in BIP-14.
 - [x] `[must]` Keep Automation authority distinct from Prototype presentation.
-  Finalization rejects runtime `dryRun`/fixture authority, verifies exact Root
-  MCP result paths, and admits bounded semantic manifest edits instead of
+  Finalization rejects Prototype fixtures in runtime authority, verifies exact
+  Root MCP result paths, and admits bounded semantic manifest edits instead of
   classifying every structural rewrite as source loss. Applications `0.1.21`
   and Users & Access `0.1.11` complete Builder Automation, independent tests,
   Beta materialization, and real-data wide/compact browser verification under
-  these gates.
+  these gates. MCP read sources retain `dryRun: true`: this is a side-effect
+  policy for an authoritative read, not fixture authority. The validator has a
+  regression test for this distinction after an incorrect finding caused an
+  unnecessary second Codex repair attempt on Web Desktop `0.3.43`.
 - [ ] `[must]` Extend measured context composition to broad additions and
   cross-cutting changes without treating them as surgical patches. Compare
   accepted outcome, repair count, cached/fresh tokens and wall time before

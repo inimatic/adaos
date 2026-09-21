@@ -795,6 +795,12 @@ partial list. `applications.set_home_pin` and
 `applications.reorder_home` therefore mutate the authoritative overlay
 atomically. They accept both canonical Application identities and already known
 legacy presentation refs so migration does not require a second catalog model.
+`data.desktop.pinnedApplications` is the membership set and MUST NOT be
+rewritten as a side effect of ordering. `data.desktop.iconOrder` is the
+presentation sequence for pinned launchers. Reorder mutates only `iconOrder`;
+pin/unpin mutates membership atomically and lets materialization reconcile the
+presentation sequence. Treating membership order as presentation order loses
+concurrent pins and makes a stale Client capable of replacing the complete set.
 Widget mutations remain on their separately owned desktop widget contract.
 
 The canonical widget catalog is a generic Client product extension over Core

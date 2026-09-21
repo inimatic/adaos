@@ -616,7 +616,10 @@ Builder development and consumes only public contracts.
   generic Client product extension owns catalog presentation. Earlier Beta
   `0.3.39` evidence is no longer sufficient: a persisted edit-layout preference
   was ignored when a declarative state key existed. The generic Client fix and
-  focused tests pass; active-Beta browser requalification remains open.
+  focused tests pass. A local active-Beta `0.3.43` rerun now passes reorder,
+  unpin, repin, exact presentation-order restore, Settings mutation and chat
+  visibility on the authoritative Webspace without direct YJS writes. External
+  deployed-Client confirmation remains open.
 - [~] `[must]` `APP4-44` Keep Home presentation separate from installation and
   placement: successful install pins by default, Home customization and
   Applications can unpin without uninstalling, uninstall removes the launcher,
@@ -625,8 +628,11 @@ Builder development and consumes only public contracts.
   projection and overwrite all Home pins. Core now owns atomic
   `applications.reorder_home`; Desktop routes Application move and unpin through
   Root MCP and rejects worker-local Application mutation. SDK and contract tests
-  pass with canonical and legacy refs and preserve the complete pin list.
-  Replacement-Beta browser evidence is still required before completion.
+  pass with canonical and legacy refs. Pin membership is held in
+  `pinnedApplications`; reorder mutates only `iconOrder`, so order changes cannot
+  replace the membership set. Active-Beta `0.3.43` browser evidence proves the
+  complete atomic reorder/unpin/restore path; external deployed-Client
+  confirmation remains before completion.
   Publisher-local Trial remains an effective installed state and Builder
   placement projects it to Home without creating a Stable installation.
 - [ ] `[must]` `APP4-45` Surface governed action approval in the invoking

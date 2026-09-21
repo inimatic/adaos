@@ -150,9 +150,13 @@ Cutover evidence, 2026-09-16:
   A subsequent Home qualification found that the persisted edit-layout
   preference was ignored whenever the scenario also declared a customization
   state key. The collection grid now treats either source as enabling edit mode
-  and immediately refreshes its decorated actions; focused tests and the
-  production build pass. Browser qualification against a Root-owned reorder and
-  release pinning remain required before the Beta evidence above is superseded.
+  and immediately refreshes its decorated actions. Application pin/unpin now
+  uses atomic Root MCP instead of replacing a complete YJS membership array.
+  Thirty focused tests, the production build, and an active-Beta `0.3.43`
+  reorder/unpin/restore browser run pass without direct YJS writes. Wide and
+  compact layout conformance also passes for Web Desktop, Applications and
+  Users & Access. External deployed-Client confirmation remains required before
+  the Beta evidence above is superseded.
 
 - [x] `[must]` Qualify scenario-scoped Dev Tickets defaults, an application
   selector with search inside its option surface, bounded image/document

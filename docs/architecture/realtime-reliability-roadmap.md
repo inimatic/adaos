@@ -1875,8 +1875,11 @@ Handle artifact provenance, scenario UX, and runtime lifecycle after the communi
   not a transport failure. Local click-path evidence for `Applications` and
   `Users & Access` now records one `web_desktop -> target` transition, no
   intermediate return, and no `yjs.provider.destroy` or manual resync. The
-  remaining 5.5-8.2 second projection latency belongs to the projection work
-  item above rather than to Client timeout tuning.
+  2026-09-21 repeat samples every 40 ms and again records no intermediate
+  return, but target materialization now takes about 8.7-12.3 seconds. This is
+  a measurable projection-latency regression owned by the projection work item
+  above, not a reason to destroy a healthy provider or extend transport
+  recovery timeouts.
 - [ ] `[must]` Give runtime beacon, direct reliability details, and aggregate
   reliability summary one explicit freshness contract. A browser with fresh
   sync and ready commands may show a transitional sidecar handoff, but the

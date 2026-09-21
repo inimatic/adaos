@@ -8651,17 +8651,6 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     if (
                         segment in {"dataSource", "optionsDataSource"}
                         and str(value.get("kind") or "").strip().lower() == "mcp"
-                        and value.get("dryRun") is True
-                    ):
-                        findings.append(
-                            {
-                                "code": "webui.automation.mcp_data_source_dry_run",
-                                "pointer": f"{pointer}/dryRun",
-                            }
-                        )
-                    if (
-                        segment in {"dataSource", "optionsDataSource"}
-                        and str(value.get("kind") or "").strip().lower() == "mcp"
                     ):
                         from adaos.services.root_mcp import get_tool_contract
 
@@ -8739,7 +8728,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                     errors.append(
                         f"{relative}: {finding['code']} at {finding['pointer']}: "
                         "Automation runtime UI must use authoritative data sources; "
-                        "remove Prototype fixtures and read-source dryRun mode"
+                        "remove Prototype fixtures"
                     )
 
     def _validate_workspace(
