@@ -22,6 +22,7 @@ __all__ = [
     "resources",
     "status",
     "subscriptions",
+    "system",
     "web",
     "workflow",
     "validate_self",
@@ -47,6 +48,7 @@ def __getattr__(name: str):
         "resources",
         "status",
         "subscriptions",
+        "system",
         "web",
         "workflow",
     ):

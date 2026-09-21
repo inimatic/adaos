@@ -1914,9 +1914,9 @@
               "protected": {
                 "prototype_state_id": "protected-system",
                 "application": {
-                  "application_id": "prototype.infrastate",
+                  "application_id": "prototype.system-monitor",
                   "display": {
-                    "title": "Infrastate",
+                    "title": "System Monitor",
                     "summary": "Prototype example for a protected active system Application.",
                     "categories": [
                       "System"
@@ -1937,16 +1937,16 @@
                 "auto_update_enabled": true,
                 "installed_release": {
                   "version": "6.2.0",
-                  "release_digest": "sha256:prototype-infrastate-620"
+                  "release_digest": "sha256:prototype-system-monitor-620"
                 },
                 "marketplace_release": {
                   "version": "6.2.0",
-                  "release_digest": "sha256:prototype-infrastate-620",
+                  "release_digest": "sha256:prototype-system-monitor-620",
                   "published_at": "2026-09-01T07:00:00Z"
                 },
                 "effective_release": {
                   "version": "6.2.0",
-                  "release_digest": "sha256:prototype-infrastate-620"
+                  "release_digest": "sha256:prototype-system-monitor-620"
                 },
                 "installation": {
                   "status": "active",
@@ -2052,7 +2052,7 @@
                 },
                 {
                   "when": {
-                    "application_id": "prototype.infrastate"
+                    "application_id": "prototype.system-monitor"
                   },
                   "result": "$state.prototypeFixtures.samples.protected"
                 }
@@ -2369,7 +2369,7 @@
         "Keep DEV preview in `dev/.runtime`, Trial source/runtime in the top-level `trials` tree, and stable installation/runtime in `workspace`; do not introduce alpha or place Trial state below Workspace.",
         "Publish only an accepted immutable Candidate. First stable promotes its exact link-only Trial digest; later stable promotes the exact current prerelease digest and retires that prerelease pointer.",
         "Bind every mutation to actor, publisher subnet, required capability, expected revision, idempotency key, and its durable operation and plan digests. An unknown outcome must be reconciled before retry.",
-        "Applications owns product inventory and Development Report UX, but do not remove Infrastate Inventory until the Applications system release has passed the replacement acceptance gate."
+        "Applications owns product inventory and Development Report UX. Deprecated compatibility products remain read-only until their documented replacement and zero-use gates pass."
       ]
     }
   ]

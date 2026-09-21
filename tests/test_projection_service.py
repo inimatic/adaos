@@ -303,36 +303,6 @@ def test_projection_service_uses_local_bridge_before_detached_fallback(monkeypat
     assert bridge_calls == [("desktop-dev", "data/root_mgmnt", {"ok": True})]
 
 
-def test_projection_service_mirrors_local_infrastate_to_node_scope(monkeypatch) -> None:
-    fake_state = {"data": _FakeMap()}
-    payload = {"value": "preparing", "target_version": "rev-next"}
-    target = SimpleNamespace(backend="yjs", path="data/infrastate/summary", webspace_id=None)
-    registry = SimpleNamespace(resolve=lambda scope, slot: [target])  # noqa: ARG005
-    service = projection_service_module.ProjectionService(
-        ctx=SimpleNamespace(config=SimpleNamespace(node_id="node-1")),
-        registry=registry,
-    )
-
-    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
-    monkeypatch.setattr(
-        projection_service_module,
-        "run_detached_ydoc_mutation",
-        _fake_run_detached_ydoc_mutation(fake_state),
-    )
-
-    asyncio.run(
-        service.apply(
-            "runtime",
-            "infrastate.summary",
-            payload,
-            webspace_id="desktop",
-        )
-    )
-
-    assert fake_state["data"]["infrastate"]["summary"] == payload
-    assert fake_state["data"]["nodes"]["node-1"]["infrastate"]["summary"] == payload
-
-
 def test_projection_service_skips_identical_flat_yjs_update(monkeypatch) -> None:
     class _CountingMap(_FakeMap):
         def __init__(self) -> None:

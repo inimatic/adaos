@@ -5294,8 +5294,17 @@ async def node_memory_diagnostics(force_gc: bool = Query(False)) -> dict[str, An
     }
 
 
-@router.get("/infrastate/snapshot", dependencies=[Depends(require_token)])
+@router.get(
+    "/infrastate/snapshot",
+    dependencies=[Depends(require_token)],
+    deprecated=True,
+)
 async def node_infrastate_snapshot(webspace_id: str | None = None) -> dict[str, Any]:
+    """Compatibility adapter for the legacy Stable desktop.
+
+    New consumers must use the typed control-plane and ``adaos.sdk.system``
+    surfaces. Remove this route after the replacement Desktop beta is accepted.
+    """
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
@@ -5329,10 +5338,10 @@ async def node_infrastate_snapshot(webspace_id: str | None = None) -> dict[str, 
         }
     snapshot = {
         "summary": {
-            "label": "Infra State",
+            "label": "System",
             "value": str(lifecycle.get("node_state") or "ready"),
             "subtitle": f"webspace {target_webspace_id}",
-            "description": "Full Infra State snapshot is disabled; use YJS control projection and webio streams.",
+            "description": "Legacy adapter; use typed system SDK projections.",
             "updated_at": time.time(),
         },
         "lifecycle": lifecycle,
@@ -5510,8 +5519,13 @@ async def node_skill_event_publish(payload: SkillEventPublishRequest) -> dict[st
     }
 
 
-@router.post("/infrastate/action", dependencies=[Depends(require_token)])
+@router.post(
+    "/infrastate/action",
+    dependencies=[Depends(require_token)],
+    deprecated=True,
+)
 async def node_infrastate_action(payload: InfrastateActionRequest) -> dict[str, Any]:
+    """Compatibility action adapter for the legacy Stable desktop."""
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(payload.webspace_id)
     if str(getattr(conf, "role", "") or "").strip().lower() != "hub":

@@ -80,8 +80,8 @@ _DEFAULT_DESKTOP_NLU: dict[str, Any] = {
             "description": "Activate a published AdaOS voice capability or nested UI affordance through an activation plan.",
             "scope": "scenario",
             "examples": [
-                "activate [infrastate.inventory.installed_skills.query](capability_id)",
-                "show published tool [infrastate.inventory.installed_skills.query](capability_id)",
+                "activate [weather.current.query](capability_id)",
+                "show published tool [weather.current.query](capability_id)",
             ],
             "actions": [
                 {

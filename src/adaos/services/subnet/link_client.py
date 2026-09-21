@@ -1116,7 +1116,7 @@ class MemberLinkClient:
         channel = str(metadata.get("channel") or "").strip().lower()
         # Skill/subnet data projections are already replicated through the
         # lightweight yjs.node_state message below. Forcing a full node snapshot
-        # for every such write creates an infrastate/catalog rebuild loop on the
+        # for every such write creates a control-plane/catalog rebuild loop on the
         # hub and can starve the member link under pressure.
         if source in {"projection_service", "async_get_ydoc", "yjs.gateway_ws"}:
             return False
@@ -1219,7 +1219,7 @@ class MemberLinkClient:
         try:
             get_ctx().bus.publish(
                 DomainEvent(
-                    type="infrastate.refresh",
+                    type="control_plane.refresh",
                     payload={
                         "webspace_id": str(webspace_id or "").strip() or None,
                         "reason": str(reason or "subnet_sync"),

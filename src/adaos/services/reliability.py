@@ -8656,6 +8656,64 @@ def _run_bounded_runtime_section(
     return payload if isinstance(payload, dict) else dict(fallback)
 
 
+def _run_bounded_runtime_sections(
+    specs: dict[str, tuple[float, Any, dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    """Collect independent runtime diagnostics within one shared time window."""
+
+    results: dict[str, dict[str, Any]] = {}
+    threads: dict[str, threading.Thread] = {}
+
+    def _collect(
+        section: str,
+        timeout_sec: float,
+        fn: Any,
+        fallback: dict[str, Any],
+    ) -> None:
+        results[section] = _run_bounded_runtime_section(
+            section=section,
+            timeout_sec=timeout_sec,
+            fn=fn,
+            fallback=fallback,
+        )
+
+    for section, (timeout_sec, fn, fallback) in specs.items():
+        thread = threading.Thread(
+            target=_collect,
+            args=(section, timeout_sec, fn, fallback),
+            name=f"adaos-reliability-collector-{section}",
+            daemon=True,
+        )
+        threads[section] = thread
+        thread.start()
+
+    deadline = time.monotonic() + max(
+        (max(0.1, float(spec[0])) for spec in specs.values()),
+        default=0.1,
+    ) + 0.25
+    for thread in threads.values():
+        thread.join(max(0.0, deadline - time.monotonic()))
+
+    for section, (timeout_sec, _fn, fallback) in specs.items():
+        if section not in results:
+            results[section] = {
+                **fallback,
+                "available": False,
+                "assessment": {
+                    "state": "unknown",
+                    "reason": (
+                        f"{section} diagnostic collection exceeded the shared "
+                        f"{round(float(timeout_sec), 3)}s window"
+                    ),
+                },
+                "diagnostic_status": "timed_out",
+                "readiness_impact": "none",
+                "_timed_out": True,
+                "_section": section,
+            }
+    return results
+
+
 def reliability_snapshot(
     *,
     node_id: str,
@@ -8716,11 +8774,12 @@ def reliability_snapshot(
         transport_strategy=transport_strategy,
     )
     section_timeout = _runtime_snapshot_timeout_sec()
-    sync_runtime = _run_bounded_runtime_section(
-        section="sync",
-        timeout_sec=section_timeout,
-        fn=lambda: yjs_sync_runtime_snapshot(role=role, webspace_id=webspace_id),
-        fallback={
+    runtime_sections = _run_bounded_runtime_sections(
+        {
+            "sync": (
+                section_timeout,
+                lambda: yjs_sync_runtime_snapshot(role=role, webspace_id=webspace_id),
+                {
             "available": False,
             "scope": "hub_local_only",
             "selected_webspace_id": str(webspace_id or "").strip() or None,
@@ -8735,17 +8794,16 @@ def reliability_snapshot(
             "webspace_total": 0,
             "active_webspace_total": 0,
             "webspaces": {},
-        },
-    )
-    media_runtime = _run_bounded_runtime_section(
-        section="media",
-        timeout_sec=section_timeout,
-        fn=lambda: media_plane_runtime_snapshot(
-            role=role,
-            route_mode=route_mode,
-            connected_to_hub=connected_to_hub,
-        ),
-        fallback={
+                },
+            ),
+            "media": (
+                section_timeout,
+                lambda: media_plane_runtime_snapshot(
+                    role=role,
+                    route_mode=route_mode,
+                    connected_to_hub=connected_to_hub,
+                ),
+                {
             "available": False,
             "transport": {
                 "role": str(role or "").strip().lower() or None,
@@ -8754,15 +8812,14 @@ def reliability_snapshot(
                 "connected_to_hub": connected_to_hub,
                 "control_readiness_impact": "none",
             },
-        },
-    )
-    supervisor_runtime = _run_bounded_runtime_section(
-        section="supervisor",
-        timeout_sec=section_timeout,
-        fn=lambda: supervisor_transition_runtime_snapshot(
-            timeout_sec=min(0.35, max(0.1, section_timeout / 2.0))
-        ),
-        fallback={
+                },
+            ),
+            "supervisor": (
+                section_timeout,
+                lambda: supervisor_transition_runtime_snapshot(
+                    timeout_sec=min(0.35, max(0.1, section_timeout / 2.0))
+                ),
+                {
             "available": False,
             "status": {},
             "attempt": {},
@@ -8776,8 +8833,13 @@ def reliability_snapshot(
                 "warm_switch_visible": False,
                 "blockers": ["supervisor.runtime.unavailable"],
             },
-        },
+                },
+            ),
+        }
     )
+    sync_runtime = runtime_sections["sync"]
+    media_runtime = runtime_sections["media"]
+    supervisor_runtime = runtime_sections["supervisor"]
     sidecar_runtime = sidecar_runtime_snapshot(
         role=role,
         readiness_tree=readiness_tree,

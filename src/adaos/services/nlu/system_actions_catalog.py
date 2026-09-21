@@ -93,9 +93,9 @@ _SYSTEM_ACTIONS: tuple[dict[str, Any], ...] = (
                     "show [widgets_catalog](modal_id)",
                     "open modal [nlu_teacher_modal](modal_id)",
                     "show [Browsers](modal_id)",
-                    "open [Infra State](modal_id)",
+                    "open [Applications](modal_id)",
                     "\u043f\u043e\u043a\u0430\u0436\u0438 [\u0431\u0440\u0430\u0443\u0437\u0435\u0440\u044b](modal_id)",
-                    "\u043e\u0442\u043a\u0440\u043e\u0439 [infra state](modal_id)",
+                    "\u043e\u0442\u043a\u0440\u043e\u0439 [\u0441\u0438\u0441\u0442\u0435\u043c\u043d\u044b\u0439 \u043c\u043e\u043d\u0438\u0442\u043e\u0440](modal_id)",
                 ],
                 "actions": _call_host(
                     "desktop.modal.open",
@@ -258,8 +258,8 @@ _SYSTEM_ACTIONS: tuple[dict[str, Any], ...] = (
                 "intent": "voice.capability.activate",
                 "description": "Activate a published voice capability/affordance binding.",
                 "examples": [
-                    "activate [infrastate.inventory.installed_skills.query](capability_id)",
-                    "show published tool [infrastate.inventory.installed_skills.query](capability_id)",
+                    "activate [weather.current.query](capability_id)",
+                    "show published tool [weather.current.query](capability_id)",
                 ],
                 "actions": _call_host(
                     "voice.capability.activate",

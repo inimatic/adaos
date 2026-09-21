@@ -163,12 +163,12 @@ def test_load_mark_stream_payload_includes_owner_and_root_rows() -> None:
 def test_load_mark_subscription_unwraps_nested_webspace_id() -> None:
     _reset_load_mark_state()
     assert getattr(load_mark_module.on_webio_stream_subscription_changed, "_adaos_receiver_patterns") == (
-        "infrastate.yjs.load_mark",
+        "system.yjs.load_mark",
     )
 
     load_mark_module.on_webio_stream_subscription_changed(
         {
-            "receiver": "infrastate.yjs.load_mark",
+            "receiver": "system.yjs.load_mark",
             "webspace_id": {"webspace_id": "default"},
             "action": "subscribed",
         }
@@ -181,12 +181,12 @@ def test_load_mark_subscription_tracks_connection_specific_unsubscribe() -> None
     _reset_load_mark_state()
 
     payload = {
-        "receiver": "infrastate.yjs.load_mark",
+        "receiver": "system.yjs.load_mark",
         "webspace_id": "default",
-        "topic": "webio.stream.default.infrastate.yjs.load_mark",
+        "topic": "webio.stream.default.system.yjs.load_mark",
         "transport": "ws",
         "connection_id": "client-1",
-        "subscription_id": "ws:client-1:webio.stream.default.infrastate.yjs.load_mark",
+        "subscription_id": "ws:client-1:webio.stream.default.system.yjs.load_mark",
     }
 
     load_mark_module.on_webio_stream_subscription_changed({**payload, "action": "subscribed"})
@@ -249,7 +249,7 @@ def test_load_mark_stream_payload_adds_heartbeat_for_active_idle_subscription() 
             "byte_status": "idle",
             "write_status": "nominal",
             "last_source": "load_mark.stream_ticker",
-            "last_channel": "infrastate.yjs.load_mark",
+            "last_channel": "system.yjs.load_mark",
             "last_changed_at": mark_ts,
             "last_changed_ago_s": round(45.0 - mark_ts, 3),
             "webspace_id": "default",

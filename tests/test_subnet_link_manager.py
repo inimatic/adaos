@@ -588,7 +588,7 @@ def test_update_member_snapshot_reconnect_reuses_cached_material_fingerprint(mon
         "connected_to_hub": True,
         "build": {"runtime_git_short_commit": "8b6e40e"},
         "slots": {"active_slot": "B", "active_manifest": {"git_short_commit": "8b6e40e"}},
-        "desktop_catalog": {"apps": [{"id": "infrastate"}], "widgets": []},
+        "desktop_catalog": {"apps": [{"id": "applications"}], "widgets": []},
     }
 
     first = asyncio.run(manager.update_member_snapshot("member-1", snapshot=snapshot))
@@ -608,7 +608,7 @@ def test_update_member_snapshot_reconnect_reuses_cached_material_fingerprint(mon
     assert first["changed"] is True
     assert second["changed"] is False
     assert len(changed_events) == 1
-    assert manager._links["member-1"].node_snapshot["desktop_catalog"]["apps"][0]["id"] == "infrastate"
+    assert manager._links["member-1"].node_snapshot["desktop_catalog"]["apps"][0]["id"] == "applications"
     assert fake_directory.calls == [("member-1", snapshot)]
     assert fake_directory.heartbeats == [("member-1", 130.0, "ready")]
 
@@ -635,7 +635,7 @@ def test_update_member_snapshot_heartbeat_refreshes_runtime_snapshot(monkeypatch
                     "active_slot": "A",
                     "active_manifest": {"git_short_commit": "78a00fe"},
                 },
-                "desktop_catalog": {"apps": [{"id": "infrastate"}], "widgets": []},
+                "desktop_catalog": {"apps": [{"id": "applications"}], "widgets": []},
             },
         )
     )
@@ -667,7 +667,7 @@ def test_update_member_snapshot_heartbeat_refreshes_runtime_snapshot(monkeypatch
     assert result["changed"] is True
     assert link.node_snapshot["build"]["runtime_git_short_commit"] == "6ae4ddb"
     assert link.node_snapshot["slots"]["active_manifest"]["build_version"] == "0.1.0+1.6ae4ddb"
-    assert link.node_snapshot["desktop_catalog"]["apps"][0]["id"] == "infrastate"
+    assert link.node_snapshot["desktop_catalog"]["apps"][0]["id"] == "applications"
     assert fake_directory.calls[-1][0] == "member-1"
     assert fake_directory.calls[-1][1]["build"]["runtime_git_short_commit"] == "6ae4ddb"
     changed_events = [event for event in fake_bus.events if event.type == "subnet.member.snapshot.changed"]
@@ -693,7 +693,7 @@ def test_update_member_snapshot_heartbeat_does_not_publish_refresh_event_for_unc
             "active_slot": "A",
             "active_manifest": {"git_short_commit": "78a00fe"},
         },
-        "desktop_catalog": {"apps": [{"id": "infrastate_app"}], "widgets": [{"id": "infrastate_widget"}]},
+        "desktop_catalog": {"apps": [{"id": "applications"}], "widgets": [{"id": "weather"}]},
     }
 
     asyncio.run(manager.update_member_snapshot("member-1", snapshot=snapshot))
@@ -719,168 +719,28 @@ def test_update_member_snapshot_heartbeat_does_not_publish_refresh_event_for_unc
     assert refreshed_events == []
 
 
-def test_member_infrastate_projection_carries_core_slot_version() -> None:
-    projection = mod._member_infrastate_projection(
-        "member-1",
-        node_names=["Mediapoint"],
-        captured_at=120.0,
-        snapshot={
-            "node_id": "member-1",
-            "node_names": ["Mediapoint"],
-            "node_state": "ready",
-            "build": {
-                "runtime_build_version": "0.1.0+1.16fcc7a",
-                "runtime_git_short_commit": "16fcc7a",
-            },
-            "update_status": {"state": "succeeded", "phase": "validate", "action": "update"},
-            "slots": {
-                "active_slot": "B",
-                "active_manifest": {
-                    "slot": "B",
-                    "build_version": "0.1.0+1.16fcc7a",
-                    "git_short_commit": "16fcc7a",
-                },
-            },
-        },
-    )
-
-    assert projection["summary"]["subtitle"] == "slot B | 0.1.0 | 16fcc7a"
-    assert projection["summary"]["label"] == "Core update"
-    assert projection["summary"]["label_i18n"] == {"key": "infrastate.text.core_update"}
-    assert projection["summary"]["value"] == "succeeded"
-    assert projection["summary"]["value_i18n"] == {"key": "infrastate.state.succeeded"}
-    assert projection["summary"]["selected_node_id"] == "member-1"
-    assert projection["slots_meta"]["active_slot"] == "B"
-    assert projection["build_meta"]["runtime_build_version"] == "0.1.0+1.16fcc7a"
-
-
-def test_member_infrastate_projection_infers_version_for_stale_default_manifest() -> None:
-    projection = mod._member_infrastate_projection(
-        "member-1",
-        node_names=["Mediapoint"],
-        captured_at=120.0,
-        snapshot={
-            "node_id": "member-1",
-            "node_names": ["Mediapoint"],
-            "node_state": "ready",
-            "build": {
-                "runtime_build_version": "0.1.0+1.b10da50",
-                "runtime_git_short_commit": "b10da50",
-            },
-            "update_status": {"state": "succeeded", "phase": "validate", "action": "update"},
-            "slots": {
-                "active_slot": "A",
-                "active_manifest": {
-                    "slot": "A",
-                    "build_version": "0.1.0+1.b10da50",
-                    "git_short_commit": "b10da50",
-                    "git_subject": "chore: bump adaos version to 0.1.217",
-                },
-            },
-        },
-    )
-
-    assert projection["summary"]["subtitle"] == "slot A | 0.1.217 | b10da50"
-
-
-def test_member_node_state_ingest_preserves_hub_infrastate_projection() -> None:
+def test_member_node_state_ingest_uses_incoming_snapshot_as_single_source() -> None:
     existing = {
         "desktop": {"theme": "dark"},
-        "infrastate": {
-            "last_refresh_ts": 140.0,
-            "summary": {
-                "subtitle": "slot A | 0.1.2 | 72c87e4",
-                "source": "subnet.member.snapshot",
-                "updated_at": 140.0,
-            },
-            "projection_diag": {"source": "subnet.link_manager.member_snapshot"},
-        },
+        "legacy_projection": {"state": "stale"},
     }
     incoming = {
         "desktop": {"theme": "light"},
-        "infrastate": {
-            "summary": {
-                "subtitle": "slot A | 78a00fe",
-                "source": "skill.infrastate_skill",
-            },
-            "projection_diag": {"source": "skill_infrastate_skill"},
-        },
+        "status": {"state": "ready"},
     }
 
-    merged = mod._member_node_state_for_ingest(existing, incoming, now=150.0)
+    ingested = mod._member_node_state_for_ingest(existing, incoming)
 
-    assert merged["desktop"]["theme"] == "light"
-    assert merged["infrastate"]["summary"]["subtitle"] == "slot A | 0.1.2 | 72c87e4"
-
-
-def test_member_node_state_ingest_drops_stale_hub_infrastate_projection() -> None:
-    existing = {
-        "desktop": {"theme": "dark"},
-        "infrastate": {
-            "last_refresh_ts": 10.0,
-            "summary": {
-                "subtitle": "slot B | 0.1.191 | 84f6164",
-                "source": "subnet.member.snapshot",
-                "updated_at": 10.0,
-            },
-            "projection_diag": {"source": "subnet.link_manager.member_snapshot", "captured_at": 10.0},
-        },
-    }
-    incoming = {
-        "desktop": {"theme": "light"},
-        "infrastate": {
-            "summary": {
-                "subtitle": "slot A | 78a00fe",
-                "source": "skill.infrastate_skill",
-            },
-            "projection_diag": {"source": "skill_infrastate_skill"},
-        },
-    }
-
-    merged = mod._member_node_state_for_ingest(existing, incoming, now=300.0)
-
-    assert merged == {"desktop": {"theme": "light"}}
-
-
-def test_member_node_state_ingest_drops_timestampless_hub_infrastate_projection() -> None:
-    existing = {
-        "desktop": {"theme": "dark"},
-        "infrastate": {
-            "summary": {
-                "subtitle": "slot B | 0.1.191 | 84f6164",
-                "source": "subnet.member.snapshot",
-            },
-            "projection_diag": {"source": "subnet.link_manager.member_snapshot"},
-        },
-    }
-    incoming = {"desktop": {"theme": "light"}}
-
-    merged = mod._member_node_state_for_ingest(existing, incoming, now=300.0)
-
-    assert merged == {"desktop": {"theme": "light"}}
-
-
-def test_member_node_state_ingest_drops_untrusted_infrastate_without_hub_projection() -> None:
-    incoming = {
-        "desktop": {"theme": "light"},
-        "infrastate": {
-            "summary": {
-                "subtitle": "slot A | 78a00fe",
-                "source": "skill.infrastate_skill",
-            }
-        },
-    }
-
-    merged = mod._member_node_state_for_ingest({}, incoming)
-
-    assert merged == {"desktop": {"theme": "light"}}
+    assert ingested == incoming
+    assert ingested is not incoming
+    assert "legacy_projection" not in ingested
 
 
 def test_member_node_state_material_match_ignores_volatile_timestamps() -> None:
     existing = {
         "desktop": {"theme": "dark", "updated_at": 100.0},
         "status": {"state": "ready", "last_seen": 100.0},
-        "infrastate": {
+        "operational": {
             "summary": {"value": "ready", "updated_at": 100.0},
             "last_refresh_ts": 100.0,
             "projection_diag": {"captured_at": 100.0},
@@ -889,7 +749,7 @@ def test_member_node_state_material_match_ignores_volatile_timestamps() -> None:
     incoming = {
         "desktop": {"theme": "dark", "updated_at": 200.0},
         "status": {"state": "ready", "last_seen": 200.0},
-        "infrastate": {
+        "operational": {
             "summary": {"value": "ready", "updated_at": 200.0},
             "last_refresh_ts": 200.0,
             "projection_diag": {"captured_at": 200.0},
@@ -980,164 +840,6 @@ def test_member_node_state_ingest_skips_cached_same_material_before_live_room(mo
     assert live_calls == []
     assert manager._yjs_ingest_total == 1
     assert manager._yjs_live_apply_total == 0
-
-
-def test_update_member_snapshot_heartbeat_publishes_member_infrastate_projection(monkeypatch) -> None:
-    fake_bus = _FakeBus()
-    fake_directory = _FakeDirectory()
-    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
-    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
-
-    manager = mod.HubLinkManager()
-    manager._links["member-1"] = mod.HubMemberLink(
-        node_id="member-1",
-        websocket=_FakeWebSocket(),
-        node_names=["Mediapoint"],
-    )
-    projections: list[dict] = []
-
-    async def _capture_projection(node_id: str, **kwargs) -> None:
-        projections.append({"node_id": node_id, **kwargs})
-
-    monkeypatch.setattr(manager, "_publish_member_infrastate_projection", _capture_projection)
-
-    asyncio.run(
-        manager.update_member_snapshot_heartbeat(
-            "member-1",
-            snapshot={
-                "captured_at": 120.0,
-                "node_id": "member-1",
-                "node_names": ["Mediapoint"],
-                "node_state": "ready",
-                "build": {
-                    "runtime_build_version": "0.1.0+1.16fcc7a",
-                    "runtime_git_short_commit": "16fcc7a",
-                },
-                "update_status": {"state": "succeeded", "phase": "validate", "action": "update"},
-                "slots": {
-                    "active_slot": "B",
-                    "active_manifest": {
-                        "build_version": "0.1.0+1.16fcc7a",
-                        "git_short_commit": "16fcc7a",
-                    },
-                },
-            },
-        )
-    )
-
-    assert projections
-    assert projections[-1]["node_id"] == "member-1"
-    assert projections[-1]["captured_at"] == 120.0
-    projection = mod._member_infrastate_projection(
-        projections[-1]["node_id"],
-        node_names=projections[-1]["node_names"],
-        snapshot=projections[-1]["snapshot"],
-        captured_at=projections[-1]["captured_at"],
-    )
-    assert projection["summary"]["subtitle"] == "slot B | 0.1.0 | 16fcc7a"
-
-
-def test_member_infrastate_projection_skips_same_material_heartbeat(monkeypatch) -> None:
-    class _FakeMap:
-        def __init__(self) -> None:
-            self.data: dict[str, object] = {}
-            self.set_total = 0
-
-        def get(self, key: str) -> object:
-            return self.data.get(key)
-
-        def set(self, _txn: object, key: str, value: object) -> None:
-            self.set_total += 1
-            self.data[key] = value
-
-    class _FakeDoc:
-        def __init__(self) -> None:
-            self.data_map = _FakeMap()
-
-        def get_map(self, name: str) -> _FakeMap:
-            assert name == "data"
-            return self.data_map
-
-        class _Txn:
-            def __enter__(self) -> object:
-                return object()
-
-            def __exit__(self, exc_type, exc, tb) -> bool:
-                return False
-
-        def begin_transaction(self) -> "_FakeDoc._Txn":
-            return _FakeDoc._Txn()
-
-    class _AsyncDocCtx:
-        def __init__(self, doc: _FakeDoc) -> None:
-            self.doc = doc
-
-        async def __aenter__(self) -> _FakeDoc:
-            return self.doc
-
-        async def __aexit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-    class _AsyncMetaCtx:
-        async def __aenter__(self) -> None:
-            return None
-
-        async def __aexit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-    fake_doc = _FakeDoc()
-    opened: list[str] = []
-    monkeypatch.setattr(mod, "mutate_live_room", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(mod, "ystore_write_metadata", lambda **_kwargs: _AsyncMetaCtx())
-    monkeypatch.setattr(
-        mod,
-        "async_get_ydoc",
-        lambda webspace_id, **_kwargs: (opened.append(str(webspace_id)) or _AsyncDocCtx(fake_doc)),
-    )
-
-    manager = mod.HubLinkManager()
-    snapshot = {
-        "node_id": "member-1",
-        "node_state": "ready",
-        "build": {"runtime_build_version": "0.1.0+1.16fcc7a", "runtime_git_short_commit": "16fcc7a"},
-        "slots": {"active_slot": "B", "active_manifest": {"build_version": "0.1.0+1.16fcc7a"}},
-    }
-
-    async def _exercise() -> None:
-        await manager._publish_member_infrastate_projection(
-            "member-1",
-            node_names=["Mediapoint"],
-            snapshot={**snapshot, "captured_at": 120.0},
-            captured_at=120.0,
-        )
-        await manager._publish_member_infrastate_projection(
-            "member-1",
-            node_names=["Mediapoint"],
-            snapshot={**snapshot, "captured_at": 200.0},
-            captured_at=200.0,
-        )
-
-    asyncio.run(_exercise())
-
-    assert opened == ["desktop"]
-    assert manager._member_infrastate_projection_total == 1
-    assert fake_doc.data_map.set_total == 1
-
-    manager_after_restart = mod.HubLinkManager()
-
-    async def _exercise_after_restart() -> None:
-        await manager_after_restart._publish_member_infrastate_projection(
-            "member-1",
-            node_names=["Mediapoint"],
-            snapshot={**snapshot, "captured_at": 300.0},
-            captured_at=300.0,
-        )
-
-    asyncio.run(_exercise_after_restart())
-
-    assert opened == ["desktop", "desktop"]
-    assert fake_doc.data_map.set_total == 1
-    assert manager_after_restart._member_infrastate_projection_total == 0
 
 
 def test_update_member_snapshot_ignores_nested_capacity_timestamps(monkeypatch) -> None:
@@ -1405,7 +1107,6 @@ def test_update_member_status_reconciles_stale_core_version(monkeypatch) -> None
     fake_directory = _FakeDirectory()
     monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
     monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
-    monkeypatch.setattr(manager, "_publish_member_infrastate_projection", _noop_push)
     monkeypatch.setattr(
         "adaos.services.core_update.read_status",
         lambda: {
@@ -1454,7 +1155,6 @@ def test_update_member_status_does_not_reconcile_current_core_version(monkeypatc
     fake_directory = _FakeDirectory()
     monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
     monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
-    monkeypatch.setattr(manager, "_publish_member_infrastate_projection", _noop_push)
     monkeypatch.setattr(
         "adaos.services.core_update.read_status",
         lambda: {
@@ -1493,7 +1193,6 @@ def test_update_member_status_does_not_downgrade_newer_member(monkeypatch) -> No
     fake_directory = _FakeDirectory()
     monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
     monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
-    monkeypatch.setattr(manager, "_publish_member_infrastate_projection", _noop_push)
     monkeypatch.setattr(
         "adaos.services.core_update.read_status",
         lambda: {
@@ -1574,7 +1273,6 @@ def test_update_member_status_retries_failed_member_control_request(monkeypatch)
     fake_directory = _FakeDirectory()
     monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
     monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
-    monkeypatch.setattr(manager, "_publish_member_infrastate_projection", _noop_push)
     monkeypatch.setattr(
         "adaos.services.core_update.read_status",
         lambda: {

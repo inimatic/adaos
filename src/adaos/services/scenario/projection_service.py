@@ -283,19 +283,6 @@ def _context_local_node_id(ctx: Any) -> str:
     return _local_node_id()
 
 
-def _local_infrastate_projection_paths(path: str, node_id: str | None) -> list[str]:
-    raw = str(path or "").strip()
-    if not raw:
-        return []
-    parts = [part for part in raw.removeprefix("y:").split("/") if part]
-    if len(parts) < 2 or parts[0] != "data" or parts[1] != "infrastate":
-        return [raw]
-    scoped = node_scope_data_path(raw, node_id)
-    if not scoped or scoped == raw:
-        return [raw]
-    return [raw, scoped]
-
-
 def _positive_int(value: Any) -> int | None:
     try:
         result = int(value)
@@ -1737,7 +1724,7 @@ class ProjectionService:
             uid = user_id or UserProfileService(self.ctx).current_user_id()
             path = path.replace("{user_id}", uid)
 
-        write_paths = _local_infrastate_projection_paths(path, _context_local_node_id(self.ctx))
+        write_paths = [path]
         segments = [s for s in path.split("/") if s]
         if len(segments) < 2:
             return

@@ -24,7 +24,6 @@ DEFAULT_PRESET = InstallPreset(
         "taiga_ui_demo_scenario",
     ),
     skills=(
-        "infrastate_skill",
         "web_desktop_skill",
         "prompt_engineer_skill",
         "browsers_skill",

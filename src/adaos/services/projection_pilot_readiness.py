@@ -51,7 +51,7 @@ def projection_pilot_readiness_contract_snapshot(*, now: float | None = None) ->
             "status_cards_first",
             "platform_surfaces_first",
             "platform_emitter_validated",
-            "infrastate_aligned",
+            "system_surfaces_aligned",
             "infrascope_after_prereqs",
             "prompt_engineer_scenario_followup",
             "simple_skills_deferred",
