@@ -636,7 +636,17 @@ Builder development and consumes only public contracts.
   When changing the effective track requires migration, snapshot restore, or
   another risky runtime transition, retain the lifecycle safety boundary and
   show its resulting operation without treating the preference itself as an
-  irreversible approval.
+  irreversible approval. Core and the Applications DEV scenario now expose one
+  `applications.update_settings` command that atomically creates and applies
+  its own reviewed plan with the same idempotency identity. The declarative
+  toggles update optimistically and invalidate the authoritative summary; this
+  item remains open until the new Beta proves pending, failure/retry, migration
+  handoff and exact persisted values in the browser.
+- [x] `[must]` `APP4-47` Carry universal Application icon metadata from
+  `project.yaml` through Project composition, registry projection and SDK read
+  models. Home and Applications consume the same value; product ids and titles
+  are not icon lookup keys. Raster/generated variants remain a compatible media
+  extension rather than a Desktop-only contract.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
 - [ ] `[could]` `APP4-38` Store UI revisions as base plus content-addressed

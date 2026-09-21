@@ -107,6 +107,12 @@ Evidence:
   source tests, four live reversible Root MCP checks, Final Verification, local
   Trial placement, and wide/compact browser review against its full release
   digest.
+- The next Users & Access Beta resolves subnet/workspace/webspace choices from
+  Root authority instead of asking users to type opaque scope ids. Selecting a
+  person in Application access now exposes revision-checked Application-role,
+  permission-ceiling and explicit-deny editing plus revoke through the shared
+  Applications access service. These controls require fresh wide/compact live
+  browser qualification before replacing the retained Trial evidence above.
 - `src/adaos/services/builder/domain_packs/application_manager_legacy.py` and
   `applications.compatibility.v1.json` publish the DEV Applications and Users
   & Access surfaces, including assignment/change/revoke, simulation, privacy,

@@ -282,6 +282,7 @@ application:
   display:
     title: Research Workbench
     summary: Governed research workspace
+    icon: flask-outline
   visibility: private | link | public
   entrypoints:
     - entrypoint_id: main
@@ -292,6 +293,12 @@ application:
 `application_id` is opaque and immutable. Human-readable slug and publisher
 display name may change. The publisher relation is separate so deferred
 ownership transfer does not require changing release or installation identity.
+The icon is universal catalog metadata owned by the Application/Project
+declaration. It is projected unchanged into registry, Applications and Home;
+scenario-specific code must not infer it from an id, title, Webspace or owning
+skill. The initial value may be a known vector icon name. Future raster or
+generated artwork extends the same metadata object with media identity and crop
+information rather than adding a product-specific desktop field.
 
 ### ApplicationRelease
 

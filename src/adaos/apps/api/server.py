@@ -2439,6 +2439,7 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
         "applications.plan": "applications.plan",
         "applications.apply": "applications.apply",
         "users_access.summary": "users_access.read",
+        "users_access.scope_options": "users_access.read",
         "users_access.grant_role": "users_access.manage",
         "users_access.create_invite": "users_access.invite",
         "users_access.revoke_invite": "users_access.manage",

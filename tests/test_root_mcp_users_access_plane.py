@@ -150,6 +150,10 @@ def service(monkeypatch: pytest.MonkeyPatch) -> _Service:
 def test_contracts_publish_owner_governed_read_and_write_tools() -> None:
     items = {item.id: item for item in plane.contracts()}
     assert items["users_access.summary"].required_capability == "users_access.read"
+    assert (
+        items["users_access.scope_options"].required_capability
+        == "users_access.read"
+    )
     assert items["users_access.summary"].metadata["webui_data_binding"][
         "result_paths"
     ] == {
@@ -197,6 +201,51 @@ def test_summary_combines_personalization_and_application_access(
     assert result["users_access"]["people"][0]["user_id"] == "owner"
     assert result["administration"]["invites"] == []
     assert service.calls == [("summary", "user:owner", 20)]
+
+
+def test_scope_options_use_authoritative_context_and_workspace_index(
+    service: _Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Workspace:
+        def __init__(self, workspace_id: str, title: str, is_dev: bool) -> None:
+            self.workspace_id = workspace_id
+            self.title = title
+            self.is_dev = is_dev
+
+    monkeypatch.setattr(
+        plane.workspace_index,
+        "list_workspaces",
+        lambda: [
+            Workspace("desktop", "Desktop", False),
+            Workspace("desktop-dev", "DEV: Desktop", True),
+        ],
+    )
+
+    handler = plane.handlers()["users_access.scope_options"]
+    assert handler(
+        {"scope_kind": "subnet", "_mcp_context": _context()}, dry_run=False
+    )["items"] == [
+        {
+            "id": "sn_test",
+            "label": "Subnet sn_test",
+            "kind": "subnet",
+            "current": True,
+        }
+    ]
+    assert [
+        item["id"]
+        for item in handler(
+            {"scope_kind": "workspace", "_mcp_context": _context()},
+            dry_run=False,
+        )["items"]
+    ] == ["desktop"]
+    assert [
+        item["id"]
+        for item in handler(
+            {"scope_kind": "webspace", "_mcp_context": _context()},
+            dry_run=False,
+        )["items"]
+    ] == ["desktop", "desktop-dev"]
 
 
 def test_summary_projects_requested_compact_sections(

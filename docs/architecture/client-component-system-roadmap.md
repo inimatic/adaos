@@ -141,6 +141,14 @@ Cutover evidence, 2026-09-16:
   124 focused Client tests plus Core schema/catalog suites pass. Adaptive
   section overflow and `desktop.widgets` placement remain shared generic
   responsibilities, not product-specific CSS.
+- The follow-up generic Client tranche keeps page-size controls visible even
+  when one page contains every record, re-reads scenario-scoped table
+  preferences after data refresh, honors declarative Home reorder/state keys,
+  routes modal-only Application launch targets through the modal runtime, and
+  adds a bounded `setLanguage` page action plus data-source `excludeIds`.
+  These are ABI behaviors with focused tests, not Web Desktop title/id branches.
+  Browser qualification and release pinning remain required before the Beta
+  evidence above is superseded.
 
 - [x] `[must]` Qualify scenario-scoped Dev Tickets defaults, an application
   selector with search inside its option surface, bounded image/document

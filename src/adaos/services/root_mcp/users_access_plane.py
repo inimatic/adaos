@@ -12,6 +12,7 @@ from adaos.sdk import applications as applications_sdk
 from adaos.sdk import navigation as sdk_navigation
 from adaos.services.agent_context import get_ctx
 from adaos.services import personalization_runtime
+from adaos.services.workspaces import index as workspace_index
 
 from .model import (
     ROOT_MCP_RESPONSE_SCHEMA,
@@ -209,6 +210,24 @@ def contracts() -> list[RootMcpToolContract]:
                     "item_fields": deepcopy(_SUMMARY_WEBUI_ITEM_FIELDS),
                 },
             },
+        ),
+        RootMcpToolContract(
+            id="users_access.scope_options",
+            title="List access scope options",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Resolve selectable subnet, workspace, or webspace scopes for access forms.",
+            input_schema=schema_object(
+                properties={
+                    "scope_kind": {
+                        "type": "string",
+                        "enum": ["subnet", "workspace", "webspace"],
+                    }
+                },
+                required=["scope_kind"],
+            ),
+            output_schema=deepcopy(response),
+            required_capability="users_access.read",
+            metadata={**metadata, "handler": "users_access_scope_options"},
         ),
         RootMcpToolContract(
             id="users_access.grant_role",
@@ -514,6 +533,44 @@ def _handle_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
     }
 
 
+def _handle_scope_options(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    kind = str(arguments.get("scope_kind") or "").strip()
+    context = _mcp_context(arguments)
+    if kind == "subnet":
+        subnet_id = str(context.get("subnet_id") or "").strip()
+        return {
+            "items": [
+                {
+                    "id": subnet_id,
+                    "label": f"Subnet {subnet_id}",
+                    "kind": "subnet",
+                    "current": True,
+                }
+            ]
+            if subnet_id
+            else []
+        }
+    if kind not in {"workspace", "webspace"}:
+        raise ValueError("scope_kind must be subnet, workspace, or webspace")
+
+    rows = []
+    for item in workspace_index.list_workspaces():
+        if kind == "workspace" and item.is_dev:
+            continue
+        rows.append(
+            {
+                "id": item.workspace_id,
+                "label": item.title,
+                "kind": kind,
+                "development": item.is_dev,
+            }
+        )
+    rows.sort(key=lambda item: (str(item["label"]).casefold(), item["id"]))
+    return {"items": rows}
+
+
 def _handle_grant_role(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {
@@ -661,6 +718,7 @@ def _handle_revoke_session(
 def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "users_access.summary": _handle_summary,
+        "users_access.scope_options": _handle_scope_options,
         "users_access.grant_role": _handle_grant_role,
         "users_access.create_invite": _handle_create_invite,
         "users_access.revoke_invite": _handle_revoke_invite,
