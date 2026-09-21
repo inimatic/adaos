@@ -65,6 +65,13 @@ checked.
   code session, joining clients resolve `/v1/connect/sessions/{user_code}`,
   and local hub APIs stop falling back to long links when root session
   registration is unavailable.
+- [x] 2026-09-21: incoming invite preview and claim were separated from the
+  authenticated runtime lifecycle gate. Canonical code links and legacy
+  `adaos_invite` links can now resolve, preview, and claim through the target
+  Hub before a browser has credentials; legacy `intent=auth.login` metadata no
+  longer starts a WebAuthn login while an invite claim is pending. Targeted
+  claim completion now enters the same admitted browser runtime as guest claim
+  completion instead of falling back to an authenticated refresh.
 
 ## Execution rules
 
@@ -404,6 +411,10 @@ Checklist:
   still references it.
 - [x] Keep the claim form human-facing: visible display name and device label
   are separate from the server-generated opaque subject/session identity.
+- [x] Keep public invite preview/claim outside the authenticated runtime
+  lifecycle gate: those calls are prerequisites for admission, not ordinary
+  post-login API reads. A direct invite takes precedence over legacy
+  `auth.login`/`auto_login` URL metadata until it is accepted or dismissed.
 - [x] Wire invite/session revocation to access-link denial and browser/Yjs
   admission so revoked sessions are denied without manual database edits.
 - [ ] Add direct websocket disconnect orchestration for already-connected
