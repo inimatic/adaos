@@ -165,6 +165,7 @@ def test_webui_schema_accepts_grouped_filterable_image_cards() -> None:
                                     "variant": "cards",
                                     "titleKey": "title",
                                     "imageKey": "media.src",
+                                    "initialsKey": "owner.initials",
                                     "imageAltKey": "media.alt",
                                     "groupBy": "category",
                                     "groupDisplay": "accordion",
@@ -745,6 +746,7 @@ def test_webui_schema_accepts_details_image_mapping() -> None:
                                 "inputs": {
                                     "selectedStateKey": "selectedId",
                                     "imageKey": "media.url",
+                                    "initialsKey": "owner.initials",
                                     "imageAltKey": "title",
                                     "imageRatio": "4 / 3",
                                 },

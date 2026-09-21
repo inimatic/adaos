@@ -75,7 +75,7 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     catalog = ui_capability_catalog()
     component_ids = {item["id"] for item in catalog["components"]}
 
-    assert catalog["catalog_version"] == "3.3.9"
+    assert catalog["catalog_version"] == "3.3.12"
     assert {
         "navigation.tabs",
         "navigation.breadcrumbs",
@@ -95,7 +95,12 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     assert actions["manifest"]["button_overflow_values"] == ["auto", "never"]
     assert "passive status text" in actions["manifest"]["scope"]
     list_capability = get_ui_capability("ui.list")
+    assert "initialsKey" in list_capability["manifest"]["optional_inputs"]
+    assert "textual avatar" in list_capability["manifest"]["projection"]
     assert "separate sibling ui.actions" in list_capability["manifest"]["button_shape"]
+    details = get_ui_capability("item.details")
+    assert "initialsKey" in details["manifest"]["media"]
+    assert "technical field id is never a visible heading" in form["manifest"]["static_content"]
     assert "object keyed by the literal modal id" in form["manifest"]["modal_composition"]
     assert "params:{modalId:'<literal-id>'}" in form["manifest"]["modal_composition"]
 

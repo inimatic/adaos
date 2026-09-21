@@ -1739,6 +1739,7 @@
         "subtitleKey": { "$ref": "#/$defs/fieldPath" },
         "previewKey": { "$ref": "#/$defs/fieldPath" },
         "imageKey": { "$ref": "#/$defs/fieldPath" },
+        "initialsKey": { "$ref": "#/$defs/fieldPath" },
         "imageAltKey": { "$ref": "#/$defs/fieldPath" },
         "imageShape": { "type": "string", "enum": ["thumbnail", "avatar"] },
         "badgeKey": { "$ref": "#/$defs/fieldPath" },
@@ -2129,6 +2130,7 @@
         "stateKey": { "type": "string", "minLength": 1 },
         "fields": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
         "imageKey": { "$ref": "#/$defs/fieldPath" },
+        "initialsKey": { "$ref": "#/$defs/fieldPath" },
         "imageAltKey": { "$ref": "#/$defs/fieldPath" },
         "imageShape": { "type": "string", "enum": ["default", "avatar"] },
         "imageRatio": {
