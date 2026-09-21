@@ -16,7 +16,7 @@ Current scope:
 - the AdaOS `y-py` fork as a CPython 3.11 Android arm64 wheel;
 - a real `desktop` YDoc with a bounded SQLite snapshot/update YStore;
 - the verified, immutable `android_poc_v1` install profile;
-- fixed in-process Weather, AdaOS Connect, Browsers, local Voice Assistant with
+- fixed in-process Weather, Desktop connections, Browsers, local Voice Assistant with
   a bounded five-agent dialog roster, Notebook, subnet environment, and Taiga
   demo-metrics handlers, with no subprocess or runtime package install;
 - always-on offline Rasa NLU exported from the same promoted model used by
@@ -29,10 +29,10 @@ Current scope:
   the same stationary control WebSocket contract;
 - optional `AudioRecord(VOICE_COMMUNICATION)` diagnostics with Android
   AEC/NS/AGC, kept exclusive from native speech and browser capture;
-- allowlisted member RPC to canonical `conversation_companions` and AdaOS
-  Connect tools, including the Root-configured external LLM, plus
+- allowlisted member RPC to canonical `conversation_companions` and
+  Desktop-owned connection tools, including the Root-configured external LLM, plus
   low-confidence evidence forwarding to the canonical LLM Teacher;
-- fixed UI descriptors for Weather, AdaOS Connect, Browsers, Voice Assistant,
+- fixed UI descriptors for Weather, Desktop connections, Browsers, Voice Assistant,
   Notebook, and the Taiga UI demo scenario;
 - browser-compatible home navigation: `desktop.webspace.go_home` restores the
   complete `web_desktop` materialization, while unsupported control commands
@@ -156,7 +156,7 @@ retained CRDT history exceeds the WebSocket library's 1 MiB default.
 `-OpenBrowser` then launches the hosted client with explicit LO intent. The
 browser should show the seven fixed apps, two widgets, and a green YJS status
 without login or a development token.
-`-VerifySkills` runs Weather offline/recovery, AdaOS Connect member state,
+`-VerifySkills` runs Weather offline/recovery, Desktop connection state,
 Browsers registration, the dialog roster/agent/channel paths, a local Voice
 Assistant turn, Rasa-controlled long-form Notebook recording, Notebook
 create/delete/stream/restart, and the Taiga scenario/event round trip against
@@ -262,7 +262,7 @@ The PoC14 debug APK is 22,661,983 bytes with SHA-256
 On the API 36 Samsung, a deliberately stale Yjs reader no longer blocked the
 control channel: a new registration and ping completed in 0.109 seconds. The
 complete Yjs-restart and fixed-skill smoke passed, the preserved member link
-reconnected through the deployed Hub AdaOS API, AdaOS Connect returned a
+reconnected through the deployed Hub AdaOS API, Desktop connections returned a
 Hub-delegated remote Browser invitation, and Arseni used the canonical Root
 LLM route. Supervisor was involved only as the stationary Hub process
 watchdog; it is not part of the Android member protocol.

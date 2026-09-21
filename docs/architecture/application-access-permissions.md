@@ -725,10 +725,12 @@ Users & Access
   -> Access reviews
   -> Activity
 
-AdaOS Connect
+Unauthenticated Client claim surface
   -> claim an incoming invitation
+
+Desktop Devices
   -> pair or recover a device
-  -> hand off ongoing administration to Users & Access
+  -> prepare Browser, Telegram, or Node connections
 
 Pending Actions
   -> per-decision card
@@ -743,9 +745,10 @@ Builder
 
 Applications owns the Application-centric projection. Users & Access owns the
 subject-centric projection and the owner-governed platform-role, invitation,
-device, session, and access-review controls. AdaOS Connect is the bounded entry
-surface for joining, pairing, and recovery; it is not a second administration
-console. Pending Actions owns time-sensitive decisions. Builder owns authoring
+device, session, and access-review controls. Desktop Devices owns pairing,
+recovery, and connection preparation through the Desktop Project's runtime
+skill; the Client retains only the bounded incoming-invitation claim surface.
+Pending Actions owns time-sensitive decisions. Builder owns authoring
 observability. All of these surfaces call the same policy services and must not
 persist independent authorization facts.
 

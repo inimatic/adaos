@@ -6038,7 +6038,7 @@ def test_phase3_resolver_outputs_are_explicit_and_reusable(monkeypatch) -> None:
                     "ydoc_defaults": {"data/prompt": {"status": "idle"}},
                 }
             ],
-            desktop_scenarios=[("other_scenario", "Other Scenario")],
+            desktop_scenarios=[("other_scenario", "Other Scenario", "planet-outline")],
         )
     )
 
@@ -6081,6 +6081,9 @@ def test_phase3_resolver_outputs_are_explicit_and_reusable(monkeypatch) -> None:
     assert resolved.application["modals"]["apps_catalog"]["load"]["focus"] == "off_focus"
     assert resolved.application["modals"]["apps_catalog"]["schema"]["load"]["data"] == "deferred"
     assert resolved.application["modals"]["widgets_catalog"]["schema"]["widgets"][0]["load"]["offFocusReadyState"] == "hydrating"
+    assert next(
+        item for item in resolved.catalog["apps"] if item["id"] == "scenario:other_scenario"
+    )["icon"] == "planet-outline"
     assert resolved.desktop["installed"]["apps"] == ["scenario-app", "scenario:other_scenario", "skill-app"]
     assert resolved.routing["routes"] == {}
 

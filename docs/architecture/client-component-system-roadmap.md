@@ -160,6 +160,12 @@ Cutover evidence, 2026-09-16:
   authoritative stream replacement during the gesture. Focused tests and the
   production build pass; external interactive confirmation on 2026-09-21
   reports predictable reorder behavior without duplicate or displaced cards.
+- Client `0.0.416` makes widget membership a single Pin/Unpin lifecycle:
+  catalog actions no longer install or remove widgets, Home renders only the
+  pinned set, and the obsolete Installed badge is absent. Node placement stays
+  available in the Widgets catalog for diagnosis but is not repeated in the
+  compact Home heading. Reserved `skill_preview` entries are excluded from
+  Home by scenario data policy rather than renderer-specific title checks.
 
 - [x] `[must]` Qualify scenario-scoped Dev Tickets defaults, an application
   selector with search inside its option surface, bounded image/document
@@ -549,7 +555,7 @@ machine-checked impact set.
   NLU-dispatch-only namespace. The WebUI contract now rejects `$ctx.*` action
   parameters, while the Client refuses to turn an unresolved routing token into
   a real webspace id and falls back to the attached live webspace. The retained
-  AdaOS Connect browser smoke proves `desktop` switches to the exact Users &
+  Desktop connection browser smoke proves `desktop` switches to the exact Users &
   Access Trial instead of creating a literal `$ctx.webspace_id` webspace; 82
   focused Client action tests and 17 Core contract/Connect tests pass.
 

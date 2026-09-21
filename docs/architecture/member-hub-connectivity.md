@@ -263,12 +263,13 @@ Target later capability:
 
 - sidecar can keep selected member-hub realtime channels alive across runtime slot change
 
-## Skill boundary: AdaOS Connect
+## Product boundary: Desktop connections
 
-`AdaOS Connect` should remain a user-facing orchestration skill, not the owner of
-transport truth.
+Connection preparation belongs to the Desktop Project runtime skill and its
+Desktop Devices presentation. It is not an independently installed Application
+and it does not own transport truth.
 
-The skill is responsible for:
+The Desktop-owned surface is responsible for:
 
 - showing join options
 - creating join sessions
@@ -286,7 +287,7 @@ The skill is not responsible for:
 In other words:
 
 - core owns connectivity truth
-- the skill owns the user workflow and presentation
+- Desktop owns the user workflow and presentation
 
 ## Join flows
 
@@ -304,7 +305,7 @@ Target behavior:
 
 Target behavior:
 
-1. member node opens `AdaOS Connect -> Join node`
+1. member node opens `Desktop -> Devices -> Add node`
 2. local runtime creates a short-lived Root join session
 3. browser shows QR that contains a Root session URL or session id, not the final member token
 4. owner scans QR from a trusted device with Root access
@@ -382,7 +383,7 @@ Success criteria:
 ### Phase 4 - QR join session flow
 
 - add Root-backed join session creation
-- add skill/UI path in `AdaOS Connect`
+- add the UI path in Desktop Devices and the project-owned runtime skill
 - show QR that points to Root session approval flow
 - add member polling for approval completion
 - activate connectivity immediately after approval payload is claimed

@@ -198,7 +198,7 @@ skill set without git, `pip`, venvs, or subprocess preparation.
 - [x] `[must]` include `web_desktop` as the `desktop` home scenario.
 - [x] `[must]` include `taiga_ui_demo_scenario` as an alternate scenario.
 - [x] `[must]` include these in-process skills:
-  `web_desktop_skill`, `subnet_env`, `weather_skill`, `adaos_connect`,
+  `web_desktop_skill`, `subnet_env`, `weather_skill`, `web_desktop_runtime_skill`,
   `notebook_skill`, and `demo_metrics_skill`.
 - [ ] `[must]` convert the `web_desktop` manifest so only
   `web_desktop_skill` is required and greeting, device pairing, and voice
@@ -324,7 +324,7 @@ the PoC.
 - [ ] `[deferred]` require Telegram export; it is not part of the local-node
   proof.
 
-### AdaOS Connect
+### Desktop connections
 
 - [x] `[must]` open the modal and render its Yjs state.
 - [x] `[must]` keep the already-trusted LO browser behind the native `Open
@@ -394,7 +394,7 @@ Gate A5:
 - unavailable optional behavior degrades without blocking desktop readiness.
 
 Physical evidence (2026-08-08): the PoC4 device smoke exercised Weather
-through Open-Meteo, AdaOS Connect's bounded offline state, Notebook
+through Open-Meteo, the Desktop connection surface's bounded offline state, Notebook
 create/delete and stream snapshots, the demo stream, and the Taiga scenario
 round trip. A Yjs marker and the created Notebook note both survived separate
 forced process restarts. The final scenario was `web_desktop`, the process was
@@ -443,7 +443,7 @@ member of an existing subnet.
   that boundary.
 - [x] `[must]` store member credentials separately from the local API token.
 - [x] `[must]` join using the existing short-lived join contract; a temporary
-  manual provisioning step is acceptable before AdaOS Connect owns the whole
+  manual provisioning step is acceptable before Desktop owns the whole
   flow.
 - [x] `[must]` start the outbound member-link client only after the local
   runtime is ready.
@@ -457,7 +457,7 @@ member of an existing subnet.
   reconnect without merging the phone's raw desktop YDoc into the Hub YDoc.
 - [x] `[must]` apply bounded exponential reconnect backoff and cancel it during
   an explicit service stop.
-- [x] `[should]` complete member onboarding through the bundled AdaOS Connect
+- [x] `[should]` complete member onboarding through the bundled Desktop connection
   UI.
 - [x] `[must]` acknowledge join submission immediately and publish the final
   result or precise Root error asynchronously through Yjs.
@@ -473,7 +473,7 @@ Gate A6:
 - no inbound LAN listener or supervisor is required.
 
 Protocol evidence (2026-08-08): PoC5 joined a protocol-compatible Root/Hub
-fixture through AdaOS Connect's Root URL and one-time-code contract. The phone
+fixture through the Desktop connection surface's Root URL and one-time-code contract. The phone
 retained membership across a forced process restart, kept LO ready through a
 hub outage, reconnected with bounded backoff, and exchanged Yjs updates in
 both directions. The temporary token never appeared in status/Yjs evidence
@@ -651,12 +651,12 @@ two misleading mobile-only behaviors.
   not the backend container listener protocol.
 - [x] `[must]` canonicalize public Inimatic membership routes to HTTPS on
   Android and migrate an older persisted plaintext URL without another join.
-- [x] `[must]` remove the LO browser link from AdaOS Connect; LO remains the
+- [x] `[must]` remove the LO browser link from Desktop connections; LO remains the
   native Activity's local `Open AdaOS` path.
 - [x] `[must]` expose a distinct `Connect this phone` flow for member
   enrollment.
 - [x] `[must]` delegate remote browser, Telegram, and other-node invitations
-  to the canonical Hub `adaos_connect:prepare` tool through the bounded member
+  to the canonical Hub `web_desktop_runtime_skill:prepare_connection` tool through the bounded member
   RPC allowlist.
 - [x] `[must]` acknowledge invitation preparation immediately and finish it
   as a single-flight background RPC so Hub latency cannot starve control
@@ -736,7 +736,7 @@ It contains CPython 3.11.14, portable Rasa 3.6.21 model
 `362b6f47acb743658d8cd4bb8f538a41`, install descriptor `1.7.1`, and the
 generation-aware member worker. On the Samsung SM-F721N (API 36), a fresh
 Root code produced a public TLS member route and `hello.ack=true`; a second
-join while connected completed with `connect_attempts=2`. AdaOS Connect
+join while connected completed with `connect_attempts=2`. Desktop connections
 returned `ready`, `source=hub_delegated`, and non-empty remote Browser link and
 code. Arseni returned `response_source=hub_skill_llm`, `used_llm=true`, and
 `llm_route=root_llm` with no route error. Root backend `0.1.172` reports commit
@@ -776,11 +776,11 @@ On the Samsung SM-F721N (API 36), the stale-reader regression left a Yjs socket
 registered with a 4 KiB receive buffer; a fresh control ping completed in
 0.109 seconds. The full smoke then passed native Yjs/SQLite restart
 persistence, Weather, Notebook, subnet environment, Browsers, voice/dialog,
-the five-agent roster, AdaOS Connect, and the Taiga scenario. The preserved
+the five-agent roster, Desktop connections, and the Taiga scenario. The preserved
 member configuration independently returned to `connected` in two attempts
 with no link error.
 
-AdaOS Connect returned a real `hub_delegated` Browser invitation and Arseni
+Desktop connections returned a real `hub_delegated` Browser invitation and Arseni
 returned `hub_skill_llm`, `used_llm=true`, and `llm_route=root_llm` after the
 canonical `conversation_companions` 0.1.13 migration passed all of its tests.
 Three concurrent Hub snapshot requests also returned successfully after the

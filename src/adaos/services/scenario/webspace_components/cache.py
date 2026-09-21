@@ -155,7 +155,7 @@ class WebspaceCacheState:
         self._materialized_webspaces: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._desktop_scenarios: dict[
             str,
-            tuple[float, tuple[tuple[str, int, int], ...], list[tuple[str, str]]],
+            tuple[float, tuple[tuple[str, int, int], ...], list[tuple[str, ...]]],
         ] = {}
         self._local_node_display: tuple[float, dict[str, Any]] = (0.0, {})
 
@@ -222,7 +222,7 @@ class WebspaceCacheState:
     def get_desktop_scenarios(
         self,
         key: str,
-    ) -> tuple[float, tuple[tuple[str, int, int], ...], list[tuple[str, str]]] | None:
+    ) -> tuple[float, tuple[tuple[str, int, int], ...], list[tuple[str, ...]]] | None:
         return self._desktop_scenarios.get(key)
 
     def put_desktop_scenarios(
@@ -230,7 +230,7 @@ class WebspaceCacheState:
         key: str,
         cached_at: float,
         stamp: tuple[tuple[str, int, int], ...],
-        entries: list[tuple[str, str]],
+        entries: list[tuple[str, ...]],
     ) -> None:
         self._desktop_scenarios[key] = (float(cached_at), stamp, list(entries))
 

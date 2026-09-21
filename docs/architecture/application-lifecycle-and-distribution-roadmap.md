@@ -593,7 +593,14 @@ Builder development and consumes only public contracts.
   Project release operation does expensive work. Report the required
   `checkpoint -> push -> trial` order, the stale component ref, and the last
   confirmed Change id; offer an explicit composed command without collapsing
-  the review boundary between component checkpoint and ProjectRelease.
+  the review boundary between component checkpoint and ProjectRelease. A
+  2026-09-21 Desktop/Users & Access release exposed a sharper ordering defect:
+  `project push --bump patch` mutates owned component versions after their
+  checkpoint, so Trial rejects the now-stale primary ref; checkpointing again
+  then changes the ProjectRelease source ref under an already immutable Project
+  version. The composed operation must reserve/bump versions first, checkpoint
+  every owned component second, and build the ProjectRelease without another
+  source mutation.
 - [ ] `[should]` `APP4-40` Preflight immutable Project versions against Root
   before building or uploading a registry batch. Reserve or advance every
   conflicting version first, then checkpoint the batch under one reachable
@@ -615,8 +622,11 @@ Builder development and consumes only public contracts.
   Beta `web_desktop@0.3.39` proves real wide/compact Home navigation to
   Applications and Users & Access without duplicate embedded product sections.
 - [x] `[must]` `APP4-43` Restore the canonical desktop widget lifecycle in the
-  new shell: catalog, install/remove, pin/unpin, reorder, responsive placement,
-  and persisted layout preferences. Qualify parity against the previous
+  new shell: catalog, pin/unpin, reorder, responsive placement, and persisted
+  layout preferences. Widgets are capabilities offered by installed
+  Applications, not independently installed packages; Home membership is the
+  pinned set and the catalog retains node placement only as diagnostic detail.
+  Qualify parity against the previous
   `desktop-icons`/`desktop-widgets` use cases before replacing the beta. The
   generic Client product extension owns catalog presentation. Earlier Beta
   `0.3.39` evidence is no longer sufficient: a persisted edit-layout preference
@@ -628,7 +638,10 @@ Builder development and consumes only public contracts.
   mixed-orientation strategy for the CSS grid, freezes authoritative stream
   replacement during a gesture, and keeps stable preview/placeholder identity.
   Focused tests and production build pass; external interactive confirmation
-  on 2026-09-21 reports predictable reorder behavior.
+  on 2026-09-21 reports predictable reorder behavior. Client `0.0.416` removes
+  obsolete Install/Remove and Installed/Pinned duplication, keeps one
+  Pin/Unpin action, hides node labels on Home, and excludes the reserved Skill
+  Preview scenario through declarative data policy.
 - [x] `[must]` `APP4-44` Keep Home presentation separate from installation and
   placement: successful install pins by default, Home customization and
   Applications can unpin without uninstalling, uninstall removes the launcher,
@@ -670,11 +683,14 @@ Builder development and consumes only public contracts.
   models. `ProjectRelease.catalog` is the immutable ABI boundary, so build,
   publication, installation, Home and Applications consume one release-owned
   value; product ids and titles are not icon lookup keys. The local ABI and SDK
-  contract tests pass. Publishing the first releases that contain this field is
-  intentionally gated on deploying a Root that admits the extended release
-  schema; the older RU Root rejects the unknown field instead of silently
-  dropping it. Raster/generated variants remain a compatible media extension
-  rather than a Desktop-only contract.
+  contract tests pass. The Webspace launcher resolver now maps workspace/dev
+  primary scenario refs back to Application Registry metadata and reads Trial
+  icons from the signed `ProjectRelease.catalog`; its legacy fallback is used
+  only when metadata is absent. Publishing the first releases that contain
+  this field is intentionally gated on deploying a Root that admits the
+  extended release schema; the older RU Root rejects the unknown field instead
+  of silently dropping it. Raster/generated variants remain a compatible media
+  extension rather than a Desktop-only contract.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
 - [ ] `[could]` `APP4-38` Store UI revisions as base plus content-addressed
@@ -690,15 +706,15 @@ Application operations without Infrastate owning the workflow.
 2026-09-21 checkpoint: access-aware final verification and Builder
 `place_local_trial` selected exact Betas on `desktop`:
 
-- `web_desktop@0.3.44`, candidate
-  `web_desktop-0-3-44-eef5c0b47989`, digest
-  `sha256:288cb18f1017917149542f0fa8d0860525a5250f2b9d023a7606eef5c0b47989`;
+- `web_desktop@0.3.48`, candidate
+  `web_desktop-0-3-48-b92fd39aa512`, digest
+  `sha256:a4d3d571ca3d93ecf3d7ec213b6d490b0d719b213b04b5e3dc24b92fd39aa512`;
 - `applications@0.1.25`, candidate
   `applications-0-1-25-ec695c66fc49`, digest
   `sha256:43ec06f838884aab106cb14f5a570fd86e26aae25f8a89f1142dec695c66fc49`;
-- `users_access@0.1.14`, candidate
-  `users_access-0-1-14-a0955e85a54c`, digest
-  `sha256:97eb53fd3432a68dc90863fdfc5e47f8e8574c62af6c562cbba6a0955e85a54c`.
+- `users_access@0.1.19`, candidate
+  `users_access-0-1-19-02fe0d7f04a0`, digest
+  `sha256:88b70517a628b3ece2420b22a9ed656a71d06d244c83d68d4f4902fe0d7f04a0`.
 
 The Applications and Users & Access browser transitions materialize exact
 scenario ids, authoritative records, and zero renderer failures. This evidence

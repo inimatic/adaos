@@ -622,7 +622,7 @@ Exit/remaining work: Qualify one action success/cancel/failure contract across u
   assertion cannot replace a rendered outcome. Keep tests/component fixes generic.
   Progress: WebUI action validation now rejects the NLU-only `$ctx.*` namespace,
   the Client prevents unresolved routing references from becoming resource ids,
-  and AdaOS Connect -> Users & Access is browser-proven against the exact Trial.
+  and Desktop -> Users & Access is browser-proven against the exact Trial.
   The item remains open for the other expression namespaces, settings hydration,
   rendered media states and generated action outcomes.
 - [x] `[must]` Reject conflicting state writes, unreachable controlled values,

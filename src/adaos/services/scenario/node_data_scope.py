@@ -12,6 +12,7 @@ _RESERVED_DATA_ROOTS = {
     "scenarios",
     "tts",
     "webio",
+    "web_desktop",
     "webspaces",
 }
 

@@ -591,7 +591,13 @@ class WebspaceResolutionService:
                 operations.mark_entry(trial_app, source=f"scenario:{trial_app['scenario_id']}", dev=False),
                 local_display, node_id=operations.local_node_id()))
             auto_app_ids.add(trial_app["id"])
-        for sid, title in inputs.desktop_scenarios:
+        for desktop_scenario in inputs.desktop_scenarios:
+            sid, title = desktop_scenario[:2]
+            icon = (
+                str(desktop_scenario[2]).strip()
+                if len(desktop_scenario) > 2 and str(desktop_scenario[2]).strip()
+                else "apps-outline"
+            )
             if sid == scenario_id:
                 continue
             app_id = f"scenario:{sid}"
@@ -602,7 +608,7 @@ class WebspaceResolutionService:
                             {
                                 "id": app_id,
                                 "title": title,
-                                "icon": "apps-outline",
+                                "icon": icon,
                                 "scenario_id": sid,
                             },
                             source=f"scenario:{sid}",

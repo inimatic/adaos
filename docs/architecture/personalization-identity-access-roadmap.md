@@ -390,6 +390,18 @@ Checklist:
 - [x] Remove the AdaOS Connect control from Client header chrome. Users &
   Access now lists and creates invitations with QR, copy, Telegram-share, and
   revoke actions; Desktop Devices exposes pairing/recovery entry points.
+- [x] Move browser, Telegram, and node connection preparation into the
+  project-owned `web_desktop_runtime_skill`; remove `skill:adaos_connect` from
+  the Desktop Project, default install preset, Android bundle, and current
+  Client data/action contracts. Retain only the minimal incoming-invitation
+  claim surface in unauthenticated Client chrome. The old member-RPC tool name
+  and YJS root reservation remain passive cutover adapters for published Stable
+  and older Android nodes; no current UI or bundle invokes them.
+- [ ] Remove the historically published standalone `adaos_connect` package and
+  its retained Workspace state, member-RPC allowlist entry, and YJS root
+  reservation only after the Desktop Beta is accepted as Stable and runtime
+  inventory proves that no active installation, member, or rollback target
+  still references it.
 - [x] Keep the claim form human-facing: visible display name and device label
   are separate from the server-generated opaque subject/session identity.
 - [x] Wire invite/session revocation to access-link denial and browser/Yjs
@@ -413,7 +425,8 @@ Local verification:
 
 - [x] API tests for create/preview/claim/revoke flows.
 - [x] Browser build smoke test for guest link and targeted invite panel.
-- [x] Targeted browser test for AdaOS Connect QR/audit panel compilation.
+- [x] Targeted browser tests for Users & Access invitation actions, Desktop
+  connection actions, and the minimal incoming-invitation claim surface.
 - [x] Revoked-session admission/cutoff test through the access-link runtime
   path, not only the service hook.
 - [x] Audit query smoke tests for issuer, subject, scope, role preset,
@@ -516,15 +529,18 @@ Local verification:
 - [x] multi-admin grant and denial tests beyond owner/co-owner preset creation.
 - [x] audit query smoke tests.
 
-The 2026-09-21 `users_access@0.1.14` access-verified Trial is the exact active
+The 2026-09-21 `users_access@0.1.19` access-verified Trial is the exact active
 local Beta on the production `desktop` Webspace. Browser materialization shows
 Root-backed People data and zero renderer failures; the complete scenario also
 contains Invitations, Devices, Sessions, Application Access, and Activity.
 Invitation create/list now invalidates authoritatively and exposes QR, copy,
-Telegram-share, and revoke actions. The permission-centric Application Access
-projection is still read-only at this checkpoint; subject grant/deny toggles,
-activity-to-person navigation, and a complete routed-browser section matrix
-remain open and must not be reported as completed access management.
+Telegram-share, and revoke actions. Device pairing uses authoritative user and
+scope options, while person details expose the platform-role grant action.
+Browser acceptance exercises these controls through the declarative action ABI.
+The permission-centric Application Access projection is still read-only at
+this checkpoint; subject grant/deny toggles, activity-to-person navigation, and
+a complete routed-browser section matrix remain open and must not be reported
+as completed access management.
 
 ## Phase 8 - Privacy Zone Enforcement and User Data Management
 

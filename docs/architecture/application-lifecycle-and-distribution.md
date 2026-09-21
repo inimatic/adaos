@@ -154,8 +154,8 @@ new Application authority. Its retirement is governed by
 [Infrascope Retirement Architecture](infrascope.md), not by copying its
 implementation into Applications.
 
-The same Trial run places `web_desktop@0.3.44` and
-`users_access@0.1.14` as local Betas after access-aware final verification.
+The current Trial run places `web_desktop@0.3.48` and
+`users_access@0.1.19` as local Betas after access-aware final verification.
 These are active Beta selections, not Stable promotion. APP4/APP6 remain open
 for failure/retry UX, reviewed placement mutations, successive-Beta data proof,
 and exact Beta-to-Stable adoption.
@@ -294,7 +294,6 @@ application:
   display:
     title: Research Workbench
     summary: Governed research workspace
-    icon: flask-outline
   visibility: private | link | public
   entrypoints:
     - entrypoint_id: main
@@ -306,7 +305,8 @@ application:
 display name may change. The publisher relation is separate so deferred
 ownership transfer does not require changing release or installation identity.
 The icon is universal catalog metadata owned by the Application/Project
-declaration. It is projected unchanged into registry, Applications and Home;
+declaration and sealed into `ApplicationRelease.project_release.catalog`. It
+is projected unchanged into registry, Applications and Home;
 scenario-specific code must not infer it from an id, title, Webspace or owning
 skill. The initial value may be a known vector icon name. Future raster or
 generated artwork extends the same metadata object with media identity and crop
@@ -318,6 +318,7 @@ An `ApplicationRelease` is immutable and includes:
 
 - Application definition and composition digest;
 - semantic version and exact release digest;
+- release-owned catalog metadata, including the universal Application icon;
 - exact component package and Application dependency locks;
 - source revision and deterministic builder/build-policy identity;
 - launch-target bindings and required AdaOS/core ABI;
@@ -817,10 +818,11 @@ Widget mutations remain on their separately owned desktop widget contract.
 
 The canonical widget catalog is a generic Client product extension over Core
 desktop state, not scenario-owned catalog data. The shell declares the
-`desktop.widgets` placement surface; the extension supplies discover/install,
-remove, pin/unpin, reorder, responsive presentation and persisted Webspace
-overlay behavior. Scenario manifests must not duplicate that catalog or infer
-installation from visible cards.
+`desktop.widgets` placement surface; the extension supplies discovery, one
+Pin/Unpin lifecycle, reorder, responsive presentation and persisted Webspace
+overlay behavior. A widget is a capability of an installed Application, not a
+separately installed package. Scenario manifests must not duplicate that
+catalog or infer Application installation from visible or pinned cards.
 
 Commands that require governed approval, such as external-channel pairing,
 return an exact Pending Action. The invoking modal must stop generic progress,

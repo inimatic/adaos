@@ -2,23 +2,23 @@
   "$schema": "../../../../src/adaos/abi/webui.v1.schema.json",
   "apps": [
     {
-      "id": "adaos_connect_app",
-      "title": "AdaOS Connect",
+      "id": "desktop_connections_app",
+      "title": "Devices & Connections",
       "icon": "git-network-outline",
-      "launchModal": "adaos_connect_modal",
+      "launchModal": "desktop_connections_modal",
       "action": {
-        "navigate": "adaos_connect.adaos_connect_modal"
+        "navigate": "web_desktop_runtime_skill.desktop_connections_modal"
       }
     }
   ],
   "registry": {
     "modals": {
-      "adaos_connect_modal": {
-        "title": "AdaOS Connect",
+      "desktop_connections_modal": {
+        "title": "Devices & Connections",
         "schema": {
-          "id": "adaos_connect_modal",
+          "id": "desktop_connections_modal",
           "initialState": {
-            "adaosConnectMode": "member"
+            "desktopConnectionMode": "member"
           },
           "layout": {
             "version": 2,
@@ -79,13 +79,13 @@
                   "on": "click:member",
                   "type": "updateState",
                   "params": {
-                    "adaosConnectMode": "member"
+                    "desktopConnectionMode": "member"
                   }
                 },
                 {
                   "on": "click:member",
                   "type": "callHost",
-                  "target": "adaos_connect.prepare",
+                  "target": "web_desktop_runtime_skill.prepare_connection",
                   "params": {
                     "mode": "member",
                     "refresh": true
@@ -95,13 +95,13 @@
                   "on": "click:browser",
                   "type": "updateState",
                   "params": {
-                    "adaosConnectMode": "browser"
+                    "desktopConnectionMode": "browser"
                   }
                 },
                 {
                   "on": "click:browser",
                   "type": "callHost",
-                  "target": "adaos_connect.prepare.browser",
+                  "target": "web_desktop_runtime_skill.prepare_connection.browser",
                   "params": {
                     "mode": "browser",
                     "refresh": true
@@ -111,13 +111,13 @@
                   "on": "click:telegram",
                   "type": "updateState",
                   "params": {
-                    "adaosConnectMode": "telegram"
+                    "desktopConnectionMode": "telegram"
                   }
                 },
                 {
                   "on": "click:telegram",
                   "type": "callHost",
-                  "target": "adaos_connect.prepare.telegram",
+                  "target": "web_desktop_runtime_skill.prepare_connection.telegram",
                   "params": {
                     "mode": "telegram",
                     "refresh": true
@@ -127,13 +127,13 @@
                   "on": "click:node",
                   "type": "updateState",
                   "params": {
-                    "adaosConnectMode": "node"
+                    "desktopConnectionMode": "node"
                   }
                 },
                 {
                   "on": "click:node",
                   "type": "callHost",
-                  "target": "adaos_connect.prepare.node",
+                  "target": "web_desktop_runtime_skill.prepare_connection.node",
                   "params": {
                     "mode": "node",
                     "refresh": true
@@ -144,7 +144,7 @@
                   "type": "callHost",
                   "target": "skill.event.publish",
                   "params": {
-                    "event_type": "adaos_connect.member.disconnect",
+                    "event_type": "web_desktop_runtime_skill.member.disconnect",
                     "payload": {
                       "forget": true
                     }
@@ -159,7 +159,7 @@
               "title": "Root URL",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current",
+                "path": "data/web_desktop/connect/current",
                 "observeRoot": true
               },
               "inputs": {
@@ -170,24 +170,24 @@
               },
               "interaction": {
                 "submit": {
-                  "defaultAction": "adaos_connect.set_root_url"
+                  "defaultAction": "web_desktop_runtime_skill.set_root_url"
                 }
               },
               "actions": [
                 {
-                  "id": "adaos_connect.set_root_url",
+                  "id": "web_desktop_runtime_skill.set_root_url",
                   "on": "change",
                   "type": "callHost",
                   "target": "skill.event.publish",
                   "params": {
-                    "event_type": "adaos_connect.member.root_url.set",
+                    "event_type": "web_desktop_runtime_skill.member.root_url.set",
                     "payload": {
                       "root_url": "$event.value"
                     }
                   }
                 }
               ],
-              "visibleIf": "$state.adaosConnectMode === 'member'"
+              "visibleIf": "$state.desktopConnectionMode === 'member'"
             },
             {
               "id": "adaos-connect-join-code-input",
@@ -196,7 +196,7 @@
               "title": "One-time join code",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current",
+                "path": "data/web_desktop/connect/current",
                 "observeRoot": true
               },
               "inputs": {
@@ -207,24 +207,24 @@
               },
               "interaction": {
                 "submit": {
-                  "defaultAction": "adaos_connect.join_member"
+                  "defaultAction": "web_desktop_runtime_skill.join_member"
                 }
               },
               "actions": [
                 {
-                  "id": "adaos_connect.join_member",
+                  "id": "web_desktop_runtime_skill.join_member",
                   "on": "change",
                   "type": "callHost",
                   "target": "skill.event.publish",
                   "params": {
-                    "event_type": "adaos_connect.member.join",
+                    "event_type": "web_desktop_runtime_skill.member.join",
                     "payload": {
                       "code": "$event.value"
                     }
                   }
                 }
               ],
-              "visibleIf": "$state.adaosConnectMode === 'member'"
+              "visibleIf": "$state.desktopConnectionMode === 'member'"
             },
             {
               "id": "adaos-connect-summary",
@@ -233,7 +233,7 @@
               "title": "Instructions",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "summary",
@@ -248,7 +248,7 @@
               "title": "Valid until",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "expires_at",
@@ -264,7 +264,7 @@
               "title": "QR code",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "qr_text",
@@ -272,7 +272,7 @@
                 "emptyText": "Select an action to generate a QR code",
                 "width": 240
               },
-              "visibleIf": "$state.adaosConnectMode === 'browser'"
+              "visibleIf": "$state.desktopConnectionMode === 'browser'"
             },
             {
               "id": "adaos-connect-qr-node",
@@ -281,7 +281,7 @@
               "title": "QR code",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "qr_text",
@@ -289,7 +289,7 @@
                 "emptyText": "Generate a node join code to display its QR code",
                 "width": 240
               },
-              "visibleIf": "$state.adaosConnectMode === 'node'"
+              "visibleIf": "$state.desktopConnectionMode === 'node'"
             },
             {
               "id": "adaos-connect-qr-tg",
@@ -298,7 +298,7 @@
               "title": "QR code",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "qr_text",
@@ -306,7 +306,7 @@
                 "emptyText": "Select an action to generate a QR code",
                 "width": 240
               },
-              "visibleIf": "$state.adaosConnectMode === 'telegram'"
+              "visibleIf": "$state.desktopConnectionMode === 'telegram'"
             },
             {
               "id": "adaos-connect-link",
@@ -315,14 +315,14 @@
               "title": "Link",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "link",
                 "languageField": "link_language",
                 "copyButton": true
               },
-              "visibleIf": "$state.adaosConnectMode === 'browser'"
+              "visibleIf": "$state.desktopConnectionMode === 'browser'"
             },
             {
               "id": "adaos-connect-link-node",
@@ -331,14 +331,14 @@
               "title": "Link",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "link",
                 "languageField": "link_language",
                 "copyButton": true
               },
-              "visibleIf": "$state.adaosConnectMode === 'node'"
+              "visibleIf": "$state.desktopConnectionMode === 'node'"
             },
             {
               "id": "adaos-connect-link-tg",
@@ -347,14 +347,14 @@
               "title": "Link",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "link",
                 "languageField": "link_language",
                 "copyButton": true
               },
-              "visibleIf": "$state.adaosConnectMode === 'telegram'"
+              "visibleIf": "$state.desktopConnectionMode === 'telegram'"
             },
             {
               "id": "adaos-connect-code",
@@ -363,7 +363,7 @@
               "title": "Code",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "code",
@@ -378,14 +378,14 @@
               "title": "CLI",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "node_connect_command",
                 "languageField": "node_connect_language",
                 "copyButton": true
               },
-              "visibleIf": "$state.adaosConnectMode === 'node'"
+              "visibleIf": "$state.desktopConnectionMode === 'node'"
             },
             {
               "id": "adaos-connect-linux",
@@ -394,14 +394,14 @@
               "title": "Linux",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "linux_command",
                 "languageField": "linux_language",
                 "copyButton": true
               },
-              "visibleIf": "$state.adaosConnectMode === 'node'"
+              "visibleIf": "$state.desktopConnectionMode === 'node'"
             },
             {
               "id": "adaos-connect-windows-ps",
@@ -410,14 +410,14 @@
               "title": "Windows (PowerShell)",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "windows_ps_command",
                 "languageField": "windows_ps_language",
                 "copyButton": true
               },
-              "visibleIf": "$state.adaosConnectMode === 'node'"
+              "visibleIf": "$state.desktopConnectionMode === 'node'"
             },
             {
               "id": "adaos-connect-windows-cmd",
@@ -426,38 +426,38 @@
               "title": "Windows (CMD / .bat)",
               "dataSource": {
                 "kind": "y",
-                "path": "data/adaos_connect/current"
+                "path": "data/web_desktop/connect/current"
               },
               "inputs": {
                 "bindField": "windows_cmd_command",
                 "languageField": "windows_cmd_language",
                 "copyButton": true
               },
-              "visibleIf": "$state.adaosConnectMode === 'node'"
+              "visibleIf": "$state.desktopConnectionMode === 'node'"
             }
           ],
           "interface": {
             "schema": "adaos.ui.modal.interface.v1",
             "routes": {
-              "adaos_connect": {
-                "view": "adaos_connect.adaos_connect_modal"
+              "web_desktop_runtime_skill": {
+                "view": "web_desktop_runtime_skill.desktop_connections_modal"
               }
             },
-            "defaultRoute": "adaos_connect"
+            "defaultRoute": "web_desktop_runtime_skill"
           }
         },
         "implements": [
-          "adaos_connect.adaos_connect_modal"
+          "web_desktop_runtime_skill.desktop_connections_modal"
         ]
       }
     },
     "widgets": {}
   },
   "ydoc_defaults": {
-    "data/adaos_connect": {
+    "data/web_desktop/connect": {
       "current": {
         "mode": "member",
-        "summary": "Connect this phone to a Hub with a Root URL and one-time code. After that, AdaOS Connect can create remote browser, Telegram, and node invitations through the canonical Hub skill.",
+        "summary": "Connect this phone to a Hub with a Root URL and one-time code. After that, Devices & Connections can create remote browser, Telegram, and node invitations through the canonical Hub skill.",
         "summary_language": "text",
         "expires_at": "",
         "expires_at_display": "",
@@ -494,21 +494,21 @@
     {
       "extensionPoint": "desktop.apps",
       "type": "app",
-      "id": "adaos_connect_app",
+      "id": "desktop_connections_app",
       "autoInstall": true
     }
   ],
   "interface": {
     "schema": "adaos.ui.skill_interface.v1",
     "views": {
-      "adaos_connect.adaos_connect_modal": {
-        "title": "AdaOS Connect",
+      "web_desktop_runtime_skill.desktop_connections_modal": {
+        "title": "Devices & Connections",
         "surfaces": [
           "modal"
         ],
         "params": {}
       }
     },
-    "defaultView": "adaos_connect.adaos_connect_modal"
+    "defaultView": "web_desktop_runtime_skill.desktop_connections_modal"
   }
 }

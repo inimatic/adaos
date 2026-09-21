@@ -322,8 +322,9 @@ subject-centric six-section workbench through shared services without direct
 database edits. Install/update plans now carry structured permission rows and
 an added/elevated-permission gate; complete disclosure (`AAPR4-01`), Pending Action
 routing (`AAPR4-05`), keyboard/long-label qualification (`AAPR4-07`), and the
-child/guest end-to-end matrix remain open. AdaOS Connect retains join, pairing,
-and recovery entry flows and links ongoing administration to Users & Access.
+  child/guest end-to-end matrix remain open. Users & Access owns invitation and
+  access administration, Desktop Devices owns pairing and recovery, and the
+  Desktop Project runtime skill prepares Browser, Telegram, and Node links.
 
 ## AAPR5. Builder Final Verification
 

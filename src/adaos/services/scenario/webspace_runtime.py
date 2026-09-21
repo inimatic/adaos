@@ -1144,7 +1144,7 @@ class WebspaceResolverInputs:
     live_state: Dict[str, Any] = field(default_factory=dict)
     compatibility_cache_presence: Dict[str, bool] = field(default_factory=dict)
     skill_decls: List[Dict[str, Any]] = field(default_factory=list)
-    desktop_scenarios: List[Tuple[str, str]] = field(default_factory=list)
+    desktop_scenarios: List[Tuple[str, ...]] = field(default_factory=list)
     scenario_source: str = "legacy_yjs"
     legacy_scenario_fallback: bool = False
     skill_decls_fingerprint: str = ""
@@ -5101,7 +5101,7 @@ class WebspaceScenarioRuntime:
     def __init__(self, ctx: Optional[AgentContext] = None) -> None:
         self.ctx: AgentContext = ctx or get_ctx()
         # Cached snapshot of desktop scenarios discovered on disk.
-        self._desktop_scenarios: Optional[List[Tuple[str, str]]] = None
+        self._desktop_scenarios: Optional[List[Tuple[str, ...]]] = None
         self._last_rebuild_timings_ms: Dict[str, float] | None = None
         self._last_rebuild_ydoc_timings_ms: Dict[str, float] | None = None
         self._last_resolver_debug: Dict[str, Any] | None = None
@@ -5115,18 +5115,20 @@ class WebspaceScenarioRuntime:
 
     # --- scenario helpers -------------------------------------------------
 
-    def _list_desktop_scenarios(self, space: str) -> List[Tuple[str, str]]:
+    def _list_desktop_scenarios(self, space: str) -> List[Tuple[str, ...]]:
         """
         Discover scenarios with ``type: desktop`` under the workspace
-        scenarios directory. Returns a list of ``(scenario_id, title)``
-        tuples. The ``web_desktop`` scenario itself is excluded so that it
-        does not create a recursive launcher icon.
+        scenarios directory. Returns ``(scenario_id, title, icon)`` tuples.
+        Application metadata is resolved by primary component so launchers do
+        not invent presentation details independently. The ``web_desktop``
+        scenario itself is excluded so that it does not create a recursive
+        launcher icon.
 
         ``space`` controls which manifest metadata is preferred:
-          - ``workspace`` ¢?" use workspace manifests only,
-          - ``dev``       ¢?" prefer dev manifests, fallback to workspace.
+          - ``workspace`` - use workspace manifests only,
+          - ``dev`` - prefer dev manifests, fallback to workspace.
         """
-        entries: List[Tuple[str, str]] = []
+        entries: List[Tuple[str, ...]] = []
         try:
             root = self.ctx.paths.scenarios_dir()
             now = time.monotonic()
@@ -5145,9 +5147,37 @@ class WebspaceScenarioRuntime:
                     for child in children
                 )
             )
-            if cached is not None and cached[1] == stamp:
-                _RUNTIME.cache.put_desktop_scenarios(cache_key, now, stamp, cached[2])
-                return list(cached[2])
+            project_rows: list[tuple[int, dict[str, Any]]] = []
+            try:
+                from adaos.services.application_registry_projection import ApplicationRegistryProjection
+
+                projection = ApplicationRegistryProjection(Path(self.ctx.paths.state_dir()))
+                project_rows.extend(
+                    (0, project)
+                    for project in projection.list_workspace_projects(include_hidden=True, limit=5000)
+                )
+                if space == "dev":
+                    project_rows.extend(
+                        (1, project)
+                        for project in projection.list_development_projects(limit=5000)
+                    )
+            except (OSError, RuntimeError, ValueError):
+                _log.debug("failed to resolve desktop Application metadata", exc_info=True)
+            application_by_scenario: dict[str, tuple[tuple[int, int, int], dict[str, Any]]] = {}
+            for source_priority, project in project_rows:
+                primary_ref = str(project.get("primary_ref") or "").strip()
+                kind, separator, component_id = primary_ref.partition(":")
+                if separator and kind == "scenario" and component_id:
+                    icon = str(project.get("icon") or "").strip()
+                    rank = (
+                        source_priority,
+                        int(str(project.get("visibility") or "") == "listed"),
+                        int(bool(icon and icon != "apps-outline")),
+                    )
+                    current = application_by_scenario.get(component_id)
+                    if current is None or rank > current[0]:
+                        application_by_scenario[component_id] = (rank, project)
+
             for child in children:
                 scenario_id = child.name
                 if scenario_id == "web_desktop":
@@ -5162,8 +5192,16 @@ class WebspaceScenarioRuntime:
                     continue
                 if manifest.get("type") != "desktop":
                     continue
-                title = str(manifest.get("title") or manifest.get("name") or scenario_id)
-                entries.append((scenario_id, title))
+                selected_project = application_by_scenario.get(scenario_id)
+                project = selected_project[1] if selected_project is not None else {}
+                title = str(
+                    project.get("title")
+                    or manifest.get("title")
+                    or manifest.get("name")
+                    or scenario_id
+                )
+                icon = str(project.get("icon") or "apps-outline").strip() or "apps-outline"
+                entries.append((scenario_id, title, icon))
             _RUNTIME.cache.put_desktop_scenarios(cache_key, now, stamp, entries)
         except Exception:
             _log.debug("failed to list desktop scenarios", exc_info=True)

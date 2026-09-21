@@ -76,6 +76,8 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
             continue
         application = store.get_application(selection.application_id)
         release = store.get_release(selection.application_id, selection.release_digest)
+        release_catalog = release.project_release.catalog or {}
+        icon = str(release_catalog.get("icon") or "apps-outline").strip() or "apps-outline"
         for entrypoint in application.entrypoints:
             kind, component = entrypoint["presentation_ref"].split(":", 1)
             if kind != "scenario":
@@ -93,7 +95,7 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
                 # Keep other applications usable; opening this selection still fails closed.
                 availability = {"status": "unavailable", "reason": str(exc)}
             entries.append({"id": f"scenario:{component}", "scenario_id": component,
-                            "title": application.display["title"], "icon": "apps-outline",
+                            "title": application.display["title"], "icon": icon,
                             "release_stage": "beta", "version": release.project_release.version,
                             "application_id": application.application_id,
                             "runtime_selection": selection.to_dict(),

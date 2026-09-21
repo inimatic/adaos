@@ -27,7 +27,6 @@ DEFAULT_PRESET = InstallPreset(
         "infrastate_skill",
         "web_desktop_skill",
         "prompt_engineer_skill",
-        "adaos_connect",
         "browsers_skill",
         "infra_access_skill",
         "mediaserver",

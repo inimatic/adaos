@@ -232,7 +232,7 @@ class AndroidSkillRuntime:
         "web_desktop_skill",
         "subnet_env",
         "weather_skill",
-        "adaos_connect",
+        "web_desktop_runtime_skill",
         "browsers_skill",
         "voice_assistant",
         "notebook_skill",
@@ -364,14 +364,14 @@ class AndroidSkillRuntime:
             },
             "runtime/environment/nlu": self._nlu_status(),
         }
-        connect = _plain_at_path(snapshot, "data/adaos_connect")
+        connect = _plain_at_path(snapshot, "data/web_desktop/connect")
         connect_current = connect.get("current") if isinstance(connect, dict) else {}
         connect_mode = (
             str(connect_current.get("mode") or "member")
             if isinstance(connect_current, dict)
             else "member"
         )
-        updates["data/adaos_connect"] = self._connect_snapshot(connect_mode)
+        updates["data/web_desktop/connect"] = self._connect_snapshot(connect_mode)
         voice_chat = _plain_at_path(snapshot, "data/voice_chat")
         if not isinstance(voice_chat, dict) or not isinstance(
             voice_chat.get("messages"), list
@@ -461,10 +461,10 @@ class AndroidSkillRuntime:
             "weather_skill.get_weather": self._weather_event,
             "subnet_env.get_snapshot": lambda _args: self._subnet_snapshot(),
             "subnet_env.set_node_label": self._subnet_set_node_label,
-            "adaos_connect.get_snapshot": lambda _args: self._connect_current(),
-            "adaos_connect.configure_member": self._configure_member,
-            "adaos_connect.join_member": self._join_member,
-            "adaos_connect.disconnect_member": self._disconnect_member,
+            "web_desktop_runtime_skill.get_snapshot": lambda _args: self._connect_current(),
+            "web_desktop_runtime_skill.configure_member": self._configure_member,
+            "web_desktop_runtime_skill.join_member": self._join_member,
+            "web_desktop_runtime_skill.disconnect_member": self._disconnect_member,
             "browsers_skill.refresh_snapshot": lambda _args: self._browser_current(),
             "voice_assistant.get_snapshot": lambda _args: self._voice_current(),
         }
@@ -507,16 +507,16 @@ class AndroidSkillRuntime:
             return snapshot
         if normalized == "subnet_env.node_label.changed":
             return self._subnet_set_node_label(payload)
-        if normalized.startswith("adaos_connect.prepare"):
+        if normalized.startswith("web_desktop_runtime_skill.prepare_connection"):
             mode = normalized.rsplit(".", 1)[-1]
             if mode == "prepare":
                 mode = str(payload.get("mode") or "browser")
             return self._prepare_connect(mode, payload)
-        if normalized == "adaos_connect.member.root_url.set":
+        if normalized == "web_desktop_runtime_skill.member.root_url.set":
             return self._set_member_root_url(payload)
-        if normalized == "adaos_connect.member.join":
+        if normalized == "web_desktop_runtime_skill.member.join":
             return self._join_member(payload)
-        if normalized == "adaos_connect.member.disconnect":
+        if normalized == "web_desktop_runtime_skill.member.disconnect":
             return self._disconnect_member(payload)
         if normalized == "browsers.refresh":
             return self._browser_current()
@@ -779,12 +779,12 @@ class AndroidSkillRuntime:
         ):
             # PoC9 used "node" for this phone's own member link. Migrate the
             # persisted projection now that "node" means an invitation for a
-            # different node, matching the canonical AdaOS Connect skill.
+            # different node, matching the Desktop-owned connection contract.
             selected_mode = "member"
         snapshot = self._connect_snapshot(selected_mode, member_status=member_status)
         self._set_paths(
             {
-                "data/adaos_connect": snapshot,
+                "data/web_desktop/connect": snapshot,
                 "data/subnet_env/current": self._subnet_snapshot(),
                 "data/dialog": self._dialog_snapshot(event="member_link_state"),
             }
@@ -948,7 +948,7 @@ class AndroidSkillRuntime:
         }
 
     def _connect_current(self) -> dict[str, Any]:
-        current = _plain_at_path(self.store.snapshot_json(), "data/adaos_connect")
+        current = _plain_at_path(self.store.snapshot_json(), "data/web_desktop/connect")
         return current if isinstance(current, dict) else self._connect_snapshot("member")
 
     def _prepare_connect(self, mode: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -956,14 +956,14 @@ class AndroidSkillRuntime:
         request_id = str(payload.get("request_id") or f"android-connect-{uuid.uuid4().hex}")
         if selected_mode == "member":
             snapshot = self._connect_snapshot("member", request_id)
-            self._set_paths({"data/adaos_connect": snapshot})
+            self._set_paths({"data/web_desktop/connect": snapshot})
             return snapshot
         if selected_mode not in {"browser", "telegram", "node"}:
-            raise AndroidSkillError(f"adaos_connect_mode_invalid:{selected_mode}")
+            raise AndroidSkillError(f"web_desktop_runtime_skill_mode_invalid:{selected_mode}")
         member = self.member_link.snapshot() if self.member_link is not None else {}
         if not bool(member.get("connected")):
             snapshot = self._connect_snapshot(selected_mode, request_id, member_status=member)
-            self._set_paths({"data/adaos_connect": snapshot})
+            self._set_paths({"data/web_desktop/connect": snapshot})
             return snapshot
         with self._lock:
             active = self._connect_prepare_thread
@@ -997,7 +997,7 @@ class AndroidSkillRuntime:
                 "source": "hub_delegated",
             }
         )
-        self._set_paths({"data/adaos_connect": snapshot})
+        self._set_paths({"data/web_desktop/connect": snapshot})
         worker.start()
         return snapshot
 
@@ -1014,7 +1014,7 @@ class AndroidSkillRuntime:
             if self.member_link is None:
                 raise AndroidSkillError("android_member_link_not_ready")
             result = self.member_link.call_hub_tool(
-                "adaos_connect:prepare", arguments, timeout=45.0
+                "web_desktop_runtime_skill:prepare_connection", arguments, timeout=45.0
             )
         except Exception as exc:
             error = exc
@@ -1027,7 +1027,7 @@ class AndroidSkillRuntime:
                     dict(result.get("current") or {}) if isinstance(result, dict) else {}
                 )
                 if not remote_current:
-                    error = AndroidSkillError("adaos_connect_hub_result_invalid")
+                    error = AndroidSkillError("web_desktop_runtime_skill_hub_result_invalid")
             if error is None:
                 remote_current.update(
                     {
@@ -1064,12 +1064,12 @@ class AndroidSkillRuntime:
                     }
                 )
             self._connect_prepare_thread = None
-        self._set_paths({"data/adaos_connect": snapshot})
+        self._set_paths({"data/web_desktop/connect": snapshot})
 
     def _set_member_root_url(self, arguments: dict[str, Any]) -> dict[str, Any]:
         root_url = str(arguments.get("root_url") or arguments.get("value") or "").strip()
         if not root_url.startswith(("http://", "https://")):
-            raise AndroidSkillError("adaos_connect_root_url_invalid")
+            raise AndroidSkillError("web_desktop_runtime_skill_root_url_invalid")
         with self._lock:
             self._database.execute(
                 """
@@ -1083,7 +1083,7 @@ class AndroidSkillRuntime:
             )
             self._database.commit()
         snapshot = self._connect_snapshot("member")
-        self._set_paths({"data/adaos_connect": snapshot})
+        self._set_paths({"data/web_desktop/connect": snapshot})
         return snapshot
 
     def _configure_member(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1109,7 +1109,7 @@ class AndroidSkillRuntime:
         ).strip()
         code = str(arguments.get("code") or arguments.get("join_code") or "").strip()
         if not root_url.startswith(("http://", "https://")):
-            raise AndroidSkillError("adaos_connect_root_url_invalid")
+            raise AndroidSkillError("web_desktop_runtime_skill_root_url_invalid")
         if not code:
             raise AndroidSkillError("member_join_code_required")
         request_id = str(
@@ -1144,7 +1144,7 @@ class AndroidSkillRuntime:
                 "source": "android_member_join",
             }
         )
-        self._set_paths({"data/adaos_connect": snapshot})
+        self._set_paths({"data/web_desktop/connect": snapshot})
         worker.start()
         return snapshot
 
@@ -1212,7 +1212,7 @@ class AndroidSkillRuntime:
                     }
                 )
             self._member_join_thread = None
-        self._set_paths({"data/adaos_connect": snapshot})
+        self._set_paths({"data/web_desktop/connect": snapshot})
 
     def _disconnect_member(self, arguments: dict[str, Any]) -> dict[str, Any]:
         if self.member_link is None:

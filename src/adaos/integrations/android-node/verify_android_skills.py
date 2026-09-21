@@ -257,14 +257,14 @@ def main() -> int:
         connect_result, _ = _command(
             websocket,
             "connect-smoke",
-            "adaos_connect.prepare",
+            "web_desktop_runtime_skill.prepare_connection",
             {"mode": "member", "refresh": True},
         )
         connect_current = connect_result.get("result", {}).get("current", {})
         if connect_current.get("status") not in {"offline", "connecting", "connected"}:
-            raise RuntimeError("AdaOS Connect did not publish member enrollment state")
+            raise RuntimeError("Desktop did not publish member enrollment state")
         if connect_current.get("link"):
-            raise RuntimeError("AdaOS Connect must not present LO as a remote invitation")
+            raise RuntimeError("Desktop must not present LO as a remote invitation")
 
         registration, _ = _command(
             websocket,
@@ -539,7 +539,7 @@ def main() -> int:
                 "weather_error": weather_state.get("error") or "",
                 "weather_offline_recovered": True,
                 "subnet_env_round_trip": True,
-                "adaos_connect_member_state": True,
+                "desktop_connection_member_state": True,
                 "browsers_projection": True,
                 "voice_assistant_turn": True,
                 "voice_long_form_note": True,

@@ -18,7 +18,7 @@
       "iconOrder": [
         "android_node_settings_app",
         "weather_app",
-        "adaos_connect_app",
+        "desktop_connections_app",
         "notebook_skill_app",
         "scenario:taiga_ui_demo_scenario"
       ],
@@ -104,7 +104,7 @@
     "apps": [
       "android_node_settings_app",
       "weather_app",
-      "adaos_connect_app",
+      "desktop_connections_app",
       "notebook_skill_app",
       "scenario:taiga_ui_demo_scenario"
     ],

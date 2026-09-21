@@ -9,3 +9,5 @@ def test_node_scope_data_path_scopes_node_owned_media_state() -> None:
 def test_node_scope_data_path_keeps_shared_desktop_roots() -> None:
     assert node_scope_data_path("data/catalog/widgets", "member-1") == "data/catalog/widgets"
     assert node_scope_data_path("data/desktop/widgetOrder", "member-1") == "data/desktop/widgetOrder"
+    assert node_scope_data_path("data/web_desktop/connect", "member-1") == "data/web_desktop/connect"
+    assert node_scope_data_path("data/adaos_connect/current", "member-1") == "data/adaos_connect/current"

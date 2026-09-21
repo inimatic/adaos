@@ -48,7 +48,7 @@
       "files": [
         {
           "path": "web_desktop.seed.json",
-          "sha256": "594362bf7cc89aea43fa2e170150a2acddf7fc254435c56485c9a547052c4195"
+          "sha256": "d4eba96913d25348fb6a0e57283f33b47a7ea1c2b7d657847b0130a3d9d4c1a7"
         },
         {
           "path": "web_desktop.seed.yjs.b64",
@@ -88,10 +88,10 @@
       "sha256": "bb87a0a31ebe8aff2c55b7f71e292c8ceaceae51b732610f9d73c2fef6729ed2"
     },
     {
-      "id": "adaos_connect",
-      "version": "android-poc.5",
-      "descriptor": "adaos_connect.webui.json",
-      "sha256": "28208e1ba4967cfc8d9d74351f0ad3f29bea6da65e396f58c706dd207986ab95"
+      "id": "web_desktop_runtime_skill",
+      "version": "android-poc.6",
+      "descriptor": "web_desktop_runtime_skill.webui.json",
+      "sha256": "941ec992a9b37ca7c1b88f8e7a92935f87877cb370b944b3bd783491a38026a8"
     },
     {
       "id": "browsers_skill",

@@ -27,11 +27,12 @@ Together they prove the Android lifecycle, embedded CPython
 browser control channel, native Android `y-py`, an SQLite-backed YStore, and
 `web_desktop` rendering from the real local YDoc. The YDoc has been updated
 over `/yws/desktop` and recovered after a forced process stop. The immutable
-`android_poc_v1` profile executes Weather, AdaOS Connect, Browsers, a local
+`android_poc_v1` profile executes Weather, the Desktop-owned connection
+surface, Browsers, a local
 Voice Assistant with a bounded dialog roster, full offline Rasa NLU, Notebook,
 subnet environment, and Taiga demo metrics
 in-process. The browser has rendered persisted Notebook data, the editable
-subnet environment, routed AdaOS Connect state, active browser sessions, bounded
+subnet environment, routed Desktop connection state, active browser sessions, bounded
 voice-chat turns, and the Taiga metrics table/tree/chart/selection from that
 profile. The outbound
 member client has also joined a protocol-compatible Root/Hub fixture, survived
@@ -112,7 +113,7 @@ optimize for learning rather than breadth.
 | Skill execution | Curated in-process skills only |
 | NLU | Always-on, offline Rasa inference; training and promotion off-device |
 | Model-backed companions | Canonical Hub skills over an allowlisted member RPC |
-| AdaOS Connect | This phone joins through Root; browser/Telegram/other-node invitations are created by the canonical Hub skill |
+| Desktop-owned connections | This phone joins through Root; browser/Telegram/other-node invitations are created by the canonical Hub runtime skill |
 | LLM secrets | Hub/Root only; never packaged or projected by the phone |
 | Local API | `127.0.0.1:8777`, HTTP and WebSocket |
 | Browser UI | Hosted `https://inimatic.com`, deployment zone `LO` |
@@ -360,7 +361,7 @@ second mobile implementation of each skill:
 | Class | Execution owner | Mobile rule | Examples |
 | --- | --- | --- | --- |
 | Portable local | Phone process | No subprocess, runtime `pip`, desktop signals, unbounded memory, or unavailable native wheel; uses the normal tool/event/Yjs contracts | Weather, Notebook, subnet environment, portable Rasa inference |
-| Hub delegated | Canonical Hub skill | Phone may project the UI and invoke only an explicitly allowlisted public tool over authenticated member RPC | conversation companions, LLM Teacher admission, AdaOS Connect invitations |
+| Hub delegated | Canonical Hub skill | Phone may project the UI and invoke only an explicitly allowlisted public tool over authenticated member RPC | conversation companions, LLM Teacher admission, Desktop connection invitations |
 | Android adapted | Existing AdaOS port with native Android adapter | Permissions and lifecycle are explicit; domain contract stays shared | future camera, location, notification, Keystore, foreground audio adapters |
 | Unsupported service | Desktop/service runtime | Reject activation and expose a capability error | shell, Docker, arbitrary child processes, service skills, runtime package installation |
 
@@ -399,7 +400,7 @@ skills:
   - web_desktop_skill
   - subnet_env
   - weather_skill
-  - adaos_connect
+  - web_desktop_runtime_skill
   - notebook_skill
   - demo_metrics_skill
 
@@ -411,7 +412,8 @@ runtime:
 
 `demo_metrics_skill` is the required runtime companion of
 `taiga_ui_demo_scenario`. The standard desktop preset already includes
-`adaos_connect` and `taiga_ui_demo_scenario`; it does not include
+the `web_desktop` Project, which owns `web_desktop_runtime_skill`, and includes
+`taiga_ui_demo_scenario`; it does not include
 `weather_skill` or `notebook_skill`. The Android profile is intentionally not a
 copy of the standard preset because that preset also activates heavyweight or
 unsupported content.
@@ -432,8 +434,8 @@ also tests pointer-first scenario switching and Yjs reconciliation.
   dependency.
 - `weather_skill` exercises browser geolocation, outbound HTTP, bounded caches,
   and a visible Yjs projection under `data/weather`.
-- `adaos_connect` exercises Root/member-link orchestration and the
-  `data/adaos_connect/current` projection. `Connect this phone` consumes a
+- `web_desktop_runtime_skill` exercises Root/member-link orchestration and the
+  `data/web_desktop/connect/current` projection. `Connect this phone` consumes a
   Root one-time code; `Add browser`, `Add Telegram`, and `Add node` delegate to
   the canonical Hub skill and therefore create remotely usable invitations.
   Root-dependent actions degrade visibly while offline instead of blocking
@@ -559,8 +561,8 @@ The first vertical proof covers several paths rather than a synthetic page:
   list -> restart rehydration;
 - Taiga UI: demo snapshot -> Yjs table/tree/chart -> selection -> live stream
   event;
-- AdaOS Connect: prepare action -> Root/member orchestration -> Yjs QR and
-  instructions. LO is deliberately absent from AdaOS Connect: the native
+- Desktop connections: prepare action -> Root/member orchestration -> Yjs QR and
+  instructions. LO is deliberately absent from Desktop connections: the native
   Activity's `Open AdaOS` action owns the already-trusted local-browser path,
   while Connect creates authenticated remote invitations;
 - Browsers: control-channel registration -> bounded read-only session
@@ -651,7 +653,7 @@ Dialogue execution is split by ownership, not duplicated by platform:
   `nlp.intent.not_obtained` events forwarded by the member link.
 
 The member RPC is not a generic remote executor. Its allowlist contains the
-public `conversation_companions` operations and `adaos_connect:prepare`;
+public `conversation_companions` operations and `web_desktop_runtime_skill:prepare_connection`;
 requests carry the authenticated member identity, use bounded timeouts, and
 cannot invoke shell, installation, or arbitrary skill tools. Teacher delivery
 similarly allows only the named NLU feedback event. The optional Teacher
@@ -683,7 +685,7 @@ The PoC9 Android profile implements:
 - bounded member-to-Hub RPC for canonical companion tools;
 - bounded forwarding of low-confidence NLU evidence to the canonical Teacher.
 
-AdaOS Connect's `Connect this phone` mode accepts a Root URL and one-time join
+The Desktop connection surface's `Connect this phone` mode accepts a Root URL and one-time join
 code, calls the existing join contract (with the compatibility endpoint as
 fallback), and persists the resolved Hub URL, subnet id, and credential in a
 separate app-private member configuration. Join validation is single-flight
@@ -692,7 +694,7 @@ then Yjs publishes `joined` or the precise Root error such as an expired or
 invalid code. Join-code expiry is an absolute epoch/UTC instant; UIs must
 render it with an explicit timezone rather than implying that the displayed
 wall-clock value is timezone-free. Once connected, the other modes call the
-canonical Hub `adaos_connect:prepare` tool to add a remote browser, Telegram
+canonical Hub `web_desktop_runtime_skill:prepare_connection` tool to add a remote browser, Telegram
 endpoint, or another node. The secret is never projected into Yjs or status
 responses.
 
@@ -736,7 +738,7 @@ removed, the phone completed `hello.ack` over TLS and published bounded
 `yjs.node_state` records for `android-735eaebcdddb`. A second join while the
 first member worker was alive also completed, proving the PoC13 generation
 replacement path. The canonical Hub returned a ready remote-browser
-invitation through `adaos_connect:prepare`, and an Arseni turn reported
+invitation through `web_desktop_runtime_skill:prepare_connection`, and an Arseni turn reported
 `response_source=hub_skill_llm`, `used_llm=true`, and `llm_route=root_llm`.
 
 This run exposed two stationary-Hub defects which are not Android supervisor

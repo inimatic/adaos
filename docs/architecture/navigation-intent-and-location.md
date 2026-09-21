@@ -4,7 +4,7 @@ Status: target contract with the same-Webspace navigation correction validated
 locally on 2026-08-04.
 
 This document defines cross-zone, cross-subnet, cross-Webspace navigation for
-AdaOS. It covers links produced by AdaOS Connect, Builder, notifications, chat
+AdaOS. It covers links produced by Desktop connections, Builder, notifications, chat
 controls, and future skills. It does not grant access and does not replace the
 authorization or workflow models.
 
@@ -32,7 +32,7 @@ not assemble these query strings themselves.
 The dependency direction is:
 
 ```text
-AdaOS Connect / Builder / another skill
+Desktop runtime / Builder / another skill
   -> adaos.sdk.navigation
      -> NavigationDestination ABI
         -> client resolver and presentation adapter
@@ -40,8 +40,8 @@ AdaOS Connect / Builder / another skill
 ```
 
 - Core and SDK own meaning, validation, ordering, and reason codes.
-- AdaOS Connect is a thin registration/invite producer. It may acquire a code,
-  but delegates destination construction to the SDK.
+- The Desktop Project runtime skill is a thin connection/invite producer. It
+  may acquire a code, but delegates destination construction to the SDK.
 - Builder adds its selected `proto:` / `active:` / `public:` materialization
   expectations, then delegates link construction to the same SDK.
 - The Web client is an adapter. It observes current state, renders the proposed
@@ -236,13 +236,13 @@ The 2026-08-03 local slice includes:
 
 - Python SDK round-trip and ordered-resolution tests;
 - Builder SDK tests proving full Preview expectations in the URL;
-- AdaOS Connect tests proving SDK-owned registration destinations;
+- Desktop connection tests proving SDK-owned registration destinations;
 - backend TypeScript compilation after removal of legacy `mode` generation;
 - client Navigation/App/YDoc regression tests (238/238), including the exact
   `ruhub` to `sn_6acf0c01` same-zone mismatch, and a successful Ionic build;
 - localized English/Russian navigation explanations; no new shell-written
   Cyrillic fixtures;
-- published `adaos_connect@0.16.5`, DEV `builder_skill@0.3.36`, and Workspace
+- historically published `adaos_connect@0.16.5`, DEV `builder_skill@0.3.36`, and Workspace
   `builder_skill@0.3.30`; both Builder runtimes are active locally;
 - live calls through the real tool bridge: Workspace Builder resolved
   `desktop-dev` / `builder` / Prototype `047`, while DEV Builder resolved

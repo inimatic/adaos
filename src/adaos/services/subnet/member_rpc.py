@@ -15,6 +15,7 @@ MEMBER_RPC_ALLOWED_TOOLS = frozenset(
         "conversation_companions:talk",
         "conversation_companions:update_profile",
         "adaos_connect:prepare",
+        "web_desktop_runtime_skill:prepare_connection",
     }
 )
 

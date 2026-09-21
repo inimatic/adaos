@@ -565,8 +565,11 @@ the same current-user Root service for profile, locale, timezone, theme,
 membership, and device context. Portable values are edited in Desktop;
 device/browser-specific values stay device scoped. Users & Access owns invite,
 grant, recovery, revoke, and audit administration. Desktop Devices owns pairing
-entry points. The former AdaOS Connect header control and product UI are no
-longer target surfaces.
+entry points. Browser, Telegram, and node connection preparation is implemented
+by the project-owned `web_desktop_runtime_skill`; it is not an independently
+installed application or a second access-control service. The former AdaOS
+Connect header control, standalone skill, and product UI are no longer target
+surfaces.
 
 Incoming links remain a minimal unauthenticated claim surface. A targeted
 invite carries an opaque, server-issued subject identity; the recipient enters
@@ -587,7 +590,8 @@ the subject-centric cross-application projection.
 Capabilities:
 
 - list users, devices, memberships, and pending invites;
-- create targeted invites;
+- create guest and targeted invites and expose bounded QR, copy, Telegram-share,
+  and revoke actions;
 - approve public guest joins when required;
 - bind a session to an existing profile;
 - create local profiles;
@@ -595,6 +599,11 @@ Capabilities:
 - revoke devices and sessions;
 - inspect policy decisions and audit trails;
 - manage child-mode constraints and temporary access expiry.
+
+Desktop Devices complements this subject-centric surface with Browser,
+Telegram, and Node connection actions. Both surfaces call the canonical Root
+identity/access services. Neither owns invite credentials, authorization
+policy, or a parallel persistence model.
 
 The default UI should expose simple access presets first. Expanded capability
 editing, policy simulation, and enterprise group synchronization are advanced

@@ -45,7 +45,7 @@ _SKILL_WEBUI_FILES = (
     ("web_desktop_skill", "web_desktop_skill.webui.json"),
     ("subnet_env", "subnet_env.webui.json"),
     ("weather_skill", "weather_skill.webui.json"),
-    ("adaos_connect", "adaos_connect.webui.json"),
+    ("web_desktop_runtime_skill", "web_desktop_runtime_skill.webui.json"),
     ("browsers_skill", "browsers_skill.webui.json"),
     ("voice_assistant", "voice_assistant.webui.json"),
     ("notebook_skill", "notebook_skill.webui.json"),
@@ -454,9 +454,9 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/node/member/disconnect",
         }:
             tool = {
-                "/api/node/member/configure": "adaos_connect.configure_member",
-                "/api/node/member/join": "adaos_connect.join_member",
-                "/api/node/member/disconnect": "adaos_connect.disconnect_member",
+                "/api/node/member/configure": "web_desktop_runtime_skill.configure_member",
+                "/api/node/member/join": "web_desktop_runtime_skill.join_member",
+                "/api/node/member/disconnect": "web_desktop_runtime_skill.disconnect_member",
             }[path]
             try:
                 if _skills is None:
@@ -1093,7 +1093,7 @@ def _execute_control_message(
                     event_payload,
                 ),
             }
-        elif kind.startswith("adaos_connect.prepare") or kind in {
+        elif kind.startswith("web_desktop_runtime_skill.prepare_connection") or kind in {
             "browsers.refresh",
             "demo_metrics.host_action",
             "demo_metrics.selection.changed",

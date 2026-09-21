@@ -772,7 +772,7 @@ def test_android_connect_delegates_remote_invitations_to_canonical_hub_skill(
         result = bootstrap._skills._connect_current()
         assert member_link.call_thread_ids == [worker.ident]
         assert member_link.call_thread_ids[0] != caller_thread_id
-        assert member_link.calls[0][0] == "adaos_connect:prepare"
+        assert member_link.calls[0][0] == "web_desktop_runtime_skill:prepare_connection"
         assert member_link.calls[0][1]["mode"] == "browser"
         assert result["current"]["status"] == "ready"
         assert result["current"]["source"] == "hub_delegated"
@@ -1096,7 +1096,7 @@ def test_loopback_runtime_serves_no_auth_web_desktop_materialization(tmp_path: P
         assert {
             "android_node_settings_app",
             "weather_app",
-            "adaos_connect_app",
+            "desktop_connections_app",
             "browsers",
             "voice_assistant_app",
             "notebook_skill_app",
@@ -1252,7 +1252,7 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
         assert status["runtime"]["install_profile"] == "android_poc_v1"
         assert {
                 "weather_skill",
-                "adaos_connect",
+                "web_desktop_runtime_skill",
                 "browsers_skill",
                 "voice_assistant",
                 "notebook_skill",
@@ -1407,7 +1407,7 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             ack, _ = _control_command(
                 websocket,
                 "connect-proof",
-                "adaos_connect.prepare.browser",
+                "web_desktop_runtime_skill.prepare_connection.browser",
                 {"mode": "browser", "refresh": True},
             )
             connect_current = ack["data"]["result"]["current"]
@@ -1585,7 +1585,7 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             snapshot = json.load(response)["snapshot"]
         assert snapshot["data"]["weather"]["current"]["source"] == "offline"
         assert snapshot["data"]["weather"]["current"]["request_id"] == "weather-offline-request"
-        assert snapshot["data"]["adaos_connect"]["current"]["status"] == "offline"
+        assert snapshot["data"]["web_desktop"]["connect"]["current"]["status"] == "offline"
         assert snapshot["data"]["browsers"]["summary"]["value"] == 0
         assert any(
             item["from"] == "hub" and "локальный ассистент" in item["text"]

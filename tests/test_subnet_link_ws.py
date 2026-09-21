@@ -224,8 +224,11 @@ def test_member_rpc_rejects_non_allowlisted_tools_before_context_access() -> Non
         )
 
 
-def test_member_rpc_allows_canonical_adaos_connect_prepare() -> None:
-    assert "adaos_connect:prepare" in member_rpc.MEMBER_RPC_ALLOWED_TOOLS
+def test_member_rpc_allows_desktop_owned_connection_prepare() -> None:
+    assert (
+        "web_desktop_runtime_skill:prepare_connection"
+        in member_rpc.MEMBER_RPC_ALLOWED_TOOLS
+    )
 
 
 def test_member_rpc_voice_activation_claim_uses_authenticated_node_id(monkeypatch) -> None:
