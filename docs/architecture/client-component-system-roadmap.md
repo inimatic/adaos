@@ -2,7 +2,7 @@
 
 Status: active prerequisite and growth roadmap for the universal AdaOS Client.
 
-Last reviewed: 2026-09-19.
+Last reviewed: 2026-09-21.
 
 Architecture owner: [Web UI Architecture](web-ui-architecture.md).
 Builder dependency: [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
@@ -131,11 +131,16 @@ Cutover evidence, 2026-09-16:
   was corrected generically: toolbar spans row one, primary/auxiliary content
   occupies row two and footer occupies row three, with the equivalent compact
   ordering. Product-specific renderer logic was not introduced.
-  Exact local Trial reruns on 2026-09-17 bind Applications `0.1.13` and Users &
-  Access `0.1.7` to their complete release fingerprints. Both render live data,
-  scoped search/pagination and compact detail disclosure without renderer
-  failure. Adaptive section overflow is a shared semantic-tabs responsibility,
-  not product-specific CSS.
+  Exact local Beta reruns on 2026-09-21 bind Applications `0.1.21`, Users &
+  Access `0.1.11`, and Web Desktop `0.3.39` to their complete release
+  fingerprints. They render authoritative data, scoped search/pagination,
+  compact detail disclosure, application-centric Home navigation, and the
+  complete desktop widget lifecycle without renderer failure. Client `0.0.409`
+  and catalog `3.3.12` add declarative `imageKey`/`initialsKey` avatar fallback
+  and presentation-safe static content without product-specific branches;
+  124 focused Client tests plus Core schema/catalog suites pass. Adaptive
+  section overflow and `desktop.widgets` placement remain shared generic
+  responsibilities, not product-specific CSS.
 
 - [x] `[must]` Qualify scenario-scoped Dev Tickets defaults, an application
   selector with search inside its option surface, bounded image/document

@@ -3,7 +3,7 @@
 Status: active target delivery roadmap; implemented mechanisms do not imply
 complete user, lifecycle or production acceptance.
 
-Last reviewed: 2026-09-19.
+Last reviewed: 2026-09-21.
 
 ## Document Ownership Audit
 
@@ -204,6 +204,13 @@ or shorter isolated answers. Do not hide infrastructure failures with more retri
   The retained Web Desktop correction reduced actual GPT-5 input by 75.0% and
   produced an exact one-value change that passed full validation and wide/compact
   browser review. Detailed scope and evidence remain in BIP-14.
+- [x] `[must]` Keep Automation authority distinct from Prototype presentation.
+  Finalization rejects runtime `dryRun`/fixture authority, verifies exact Root
+  MCP result paths, and admits bounded semantic manifest edits instead of
+  classifying every structural rewrite as source loss. Applications `0.1.21`
+  and Users & Access `0.1.11` complete Builder Automation, independent tests,
+  Beta materialization, and real-data wide/compact browser verification under
+  these gates.
 - [ ] `[must]` Extend measured context composition to broad additions and
   cross-cutting changes without treating them as surgical patches. Compare
   accepted outcome, repair count, cached/fresh tokens and wall time before

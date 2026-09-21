@@ -2,7 +2,7 @@
 
 Status: target implementation roadmap.
 
-Last reviewed: 2026-09-19.
+Last reviewed: 2026-09-21.
 
 Target architecture:
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
@@ -474,13 +474,14 @@ Builder development and consumes only public contracts.
   Prototype resources, verify both locales during qualification, bind their
   exact digest into acceptance, and invalidate acceptance after locale changes.
 - [x] `[must]` `APP4-16` Present direct lifecycle intent (`Install`, `Update`,
-  `Save update settings`, `Uninstall`) while retaining plan digest and apply as
-  the internal reviewed protocol. Default auto-update to `true` and
-  prerelease-following to `false`.
-  Applications `0.1.13` qualifies the corresponding review modal, uninstall
-  data decision, adaptive section overflow, and search/pagination across the
-  potentially large local projections. It does not close the unchecked
-  permission-toggle, registry-completeness, or public-Root delivery work.
+  `Uninstall`) while retaining plan digest and apply as the internal reviewed
+  protocol. Treat auto-update and prerelease-following as direct idempotent
+  preferences rather than a separately reviewed plan. Default auto-update to
+  `true` and prerelease-following to `false`. Applications `0.1.21` qualifies
+  authoritative inventory, placement metadata, Home pin state, adaptive
+  section overflow, and search/pagination. Direct preference mutation remains
+  `APP4-46`; permission-toggle, registry-completeness, and public-Root delivery
+  work remain separately open.
 - [x] `[must]` `APP4-18` Keep scenario creation subject-neutral. Builder starts
   Applications from the universal `scenario_default`; `recipe.application_manager`
   supplies only versioned capability compositions, phase dependencies, and
@@ -596,26 +597,46 @@ Builder development and consumes only public contracts.
   placement in Applications. Keep the default summary Application-centric and
   provide an expandable component/node drill-down with desired versus observed
   state and reviewed relocation/drain entry points. The SDK/Root read model now
-  projects existing deployment/activation authorities; Applications browser
-  qualification and reviewed placement mutations remain open.
-- [~] `[must]` `APP4-42` Make `web_desktop` the application-centric launch and
+  projects existing deployment/activation authorities, and Applications Beta
+  `0.1.21` browser evidence proves the real desired/observed read model.
+  Versions also projects the current immutable Workspace manifest for legacy
+  read-only applications that have not migrated to an Application aggregate;
+  it does not grant lifecycle mutation authority. Reviewed placement mutations
+  and relocation/drain qualification remain open.
+- [x] `[must]` `APP4-42` Make `web_desktop` the application-centric launch and
   overview shell: Home contains pinned Applications only, complete inventory
   and lifecycle navigate to Applications, and people/role management navigates
   to Users & Access. Do not reproduce Marketplace mutations in the shell.
-  The DEV shell removes the embedded reduced products and renders the canonical
-  pin projection; updated Beta browser qualification remains open.
-- [ ] `[must]` `APP4-43` Restore the canonical desktop widget lifecycle in the
+  Beta `web_desktop@0.3.39` proves real wide/compact Home navigation to
+  Applications and Users & Access without duplicate embedded product sections.
+- [x] `[must]` `APP4-43` Restore the canonical desktop widget lifecycle in the
   new shell: catalog, install/remove, pin/unpin, reorder, responsive placement,
   and persisted layout preferences. Qualify parity against the previous
-  `desktop-icons`/`desktop-widgets` use cases before replacing the beta.
-- [~] `[must]` `APP4-44` Keep Home presentation separate from installation and
+  `desktop-icons`/`desktop-widgets` use cases before replacing the beta. The
+  generic Client product extension owns catalog presentation; Beta `0.3.39`
+  browser evidence covers install/remove, pin/unpin, reorder, persistence,
+  compact layout, and exact restoration of the pre-test state.
+- [x] `[must]` `APP4-44` Keep Home presentation separate from installation and
   placement: successful install pins by default, Home customization and
   Applications can unpin without uninstalling, uninstall removes the launcher,
   and order/pin state persists in the target Webspace overlay. SDK, Root MCP
-  and Client contracts are implemented. Publisher-local Trial is now an
-  effective installed state and Builder placement projects it to Home without
-  creating a Stable installation; Applications and beta browser proof remain
-  open.
+  and Client contracts are implemented and qualified through Applications
+  `0.1.21` and Web Desktop `0.3.39`. Publisher-local Trial is an effective
+  installed state and Builder placement projects it to Home without creating a
+  Stable installation.
+- [ ] `[must]` `APP4-45` Surface governed action approval in the invoking
+  workflow. An `action_approval_required` response must replace indefinite
+  progress with a localized explanation, the exact Pending Action, and a
+  resumable deep link. Browser and Node pairing already complete inline;
+  Telegram pairing correctly creates a network-risk Pending Action but still
+  leaves its originating modal in a generic preparing state.
+- [ ] `[must]` `APP4-46` Apply auto-update and prerelease-following changes as
+  direct idempotent commands with disabled/in-progress/error/retry states. Do
+  not expose `Save update settings` or a plan-review modal for preferences.
+  When changing the effective track requires migration, snapshot restore, or
+  another risky runtime transition, retain the lifecycle safety boundary and
+  show its resulting operation without treating the preference itself as an
+  irreversible approval.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
 - [ ] `[could]` `APP4-38` Store UI revisions as base plus content-addressed

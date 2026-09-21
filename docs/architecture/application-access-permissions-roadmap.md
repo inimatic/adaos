@@ -292,13 +292,19 @@ Application-centric and subject-centric views.
   and show affected child/guest constraints.
 - [x] `[must]` `AAPR4-04` Add Users & Access V1 with People, Guests, Children,
   Devices/Sessions, User Detail, Application Access, and Activity projections.
-- [ ] `[must]` `AAPR4-05` Connect Pending Actions to Application permission
-  and Users & Access detail instead of showing only raw tool ids.
+- [ ] `[must]` `AAPR4-05` Connect Pending Actions to Application permission,
+  Users & Access detail, and the exact invoking modal instead of showing only
+  raw tool ids. Telegram pairing already fails closed with a network-risk
+  Pending Action; inline explanation, deep link, and exact-command resume are
+  still open.
 - [x] `[must]` `AAPR4-06` Add Builder permission profiler: declared,
   statically inferred, observed, undeclared observed, unused, child/guest
   compatibility, role diff, and inputs for Builder final verification.
 - [ ] `[should]` `AAPR4-07` Add responsive compact/wide UI, keyboard flows, and
   EN/RU i18n fixtures for long permission, role, provider, and denial labels.
+  Users & Access Beta `0.1.11` passes real-data wide/compact browser journeys
+  and generic avatar-initial fallback. Keyboard traversal, long-label and
+  denial-state matrices remain open.
 - [ ] `[could]` `AAPR4-08` Add app-embedded role management component that
   delegates all writes to platform APIs.
 

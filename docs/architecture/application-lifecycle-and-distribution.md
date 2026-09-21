@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-09-15.
+Last reviewed: 2026-09-21.
 
 This document defines the canonical AdaOS model for creating, testing,
 publishing, discovering, installing, updating, removing, and improving an
@@ -730,13 +730,15 @@ Project, Builder session, or preview topology.
 The selected detail starts with product identity, bounded summary, publisher,
 installed version, and current Marketplace version. A compact lifecycle bar
 then exposes only commands valid for the current state: `Install`, `Update`,
-`Save update settings`, `Uninstall` when policy permits it, and `Open in
-Builder` for an existing local development. `Plan install`, `Plan update`, and
-`Apply reviewed plan` are protocol concepts, not primary user commands. A
-direct command obtains a bounded plan and opens `Review`; confirmation applies
-that exact plan digest. Pre-release following and automatic update are explicit
-toggles. New intent defaults to prerelease following `false` and automatic
-update `true`. `Details`, `Versions`, `Operations`, and `Reports` are peer tabs.
+`Uninstall` when policy permits it, and `Open in Builder` for an existing local
+development. `Plan install`, `Plan update`, and `Apply reviewed plan` are
+protocol concepts, not primary user commands. A direct lifecycle command
+obtains a bounded plan and opens `Review`; confirmation applies that exact plan
+digest. Pre-release following and automatic update are explicit direct
+preferences. They apply idempotently without a separate `Save update settings`
+command or review modal, disable while pending, and expose failure/retry state.
+New intent defaults to prerelease following `false` and automatic update
+`true`. `Details`, `Versions`, `Operations`, and `Reports` are peer tabs.
 The pre-release toggle selects the one effective Application version; it never
 adds a parallel Beta launcher. Turning it off requests an admitted transition,
 not an unconditional downgrade of the current data schema. A required snapshot
@@ -744,12 +746,20 @@ restore shows its recovery point and possible newer-write loss before consent.
 
 Every potentially large Applications projection is searchable and paginated;
 the Client may persist page size and filter presentation only in the owning
-scenario scope. `Save update settings` and `Uninstall` use explicit review
-modals, including the uninstall data decision, while section navigation uses
-adaptive overflow rather than an unstable horizontal scroll position. Local
-Workspace, Trial and DEV records may be combined by the Application read model,
-but public catalog/Root delivery remains separately authoritative. A local
-fallback is not evidence that the public `inimatic.com` path is healthy.
+scenario scope. Install, update and uninstall use explicit review modals,
+including the uninstall data decision. A preference change that causes a real
+version transition still enters the governed lifecycle and reports its
+operation; migration, restore, or potential data loss is never hidden behind a
+toggle. Section navigation uses adaptive overflow rather than an unstable
+horizontal scroll position. Local Workspace, Trial and DEV records may be
+combined by the Application read model, but public catalog/Root delivery
+remains separately authoritative. A local fallback is not evidence that the
+public `inimatic.com` path is healthy.
+
+For an installed Workspace project that predates the Application aggregate,
+Versions exposes one read-only stable projection identified by its immutable
+manifest digest. This preserves truthful inspection while `aggregate_backed =
+false` keeps install, update, track and removal mutations unavailable.
 
 `web_desktop` is an application-centric shell over this inventory. Home shows
 only pinned Application entry points and user-selected widgets; the complete
@@ -769,6 +779,19 @@ uninstall removes the obsolete launcher projection. Applications exposes the
 same `home.pinned` state and a direct pin/unpin control for installed products.
 This presentation state is not copied into `ProjectDeployment` and is never
 used as evidence that a component is running.
+
+The canonical widget catalog is a generic Client product extension over Core
+desktop state, not scenario-owned catalog data. The shell declares the
+`desktop.widgets` placement surface; the extension supplies discover/install,
+remove, pin/unpin, reorder, responsive presentation and persisted Webspace
+overlay behavior. Scenario manifests must not duplicate that catalog or infer
+installation from visible cards.
+
+Commands that require governed approval, such as external-channel pairing,
+return an exact Pending Action. The invoking modal must stop generic progress,
+explain the risk-bound approval, link to that action, and resume only the same
+idempotency-bound command after approval. A global Pending Actions indicator is
+useful recovery, but is not sufficient feedback for the initiating workflow.
 
 An active publisher-local Trial is also an effective installed Application for
 the user-facing inventory, although it deliberately has no Stable
