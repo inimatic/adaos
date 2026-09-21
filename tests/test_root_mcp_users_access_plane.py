@@ -170,8 +170,14 @@ def test_contracts_publish_owner_governed_read_and_write_tools() -> None:
     binding = items["users_access.summary"].metadata["webui_data_binding"]
     assert binding["section_item_types"]["people"] == "person"
     assert binding["section_item_types"]["sessions"] == "session"
+    assert binding["section_item_types"]["application_access"] == (
+        "application_access"
+    )
     assert binding["item_fields"]["person"]["memberships"] == "array<object>"
     assert binding["item_fields"]["person"]["display_label"] == "string"
+    assert binding["item_fields"]["application_access"]["application_roles"] == (
+        "array<string>"
+    )
     assert (
         items["users_access.create_invite"].required_capability == "users_access.invite"
     )
