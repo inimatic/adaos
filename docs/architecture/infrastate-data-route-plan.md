@@ -49,8 +49,9 @@ New consumers use these neutral owners:
   removed from active Core paths.
 - [x] Default setup activation and tool-bridge special routing are removed.
 - [x] New Infrascope installations no longer depend on Infrastate.
-- [ ] Publish and qualify the replacement Desktop beta locally and through the
-  routed external client.
+- [~] Publish and qualify the replacement Desktop beta. `web_desktop@0.3.51`
+  passed immutable checkpoint, isolated Trial, and local acceptance on
+  2026-09-21; routed external-client qualification remains open.
 - [ ] Add compatibility-use telemetry and prove zero use.
 - [ ] Remove the Workspace skill, Client extension, deprecated Node API aliases,
   Stable NLU references, and retained runtime data.

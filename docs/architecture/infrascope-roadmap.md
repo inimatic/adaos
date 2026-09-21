@@ -36,8 +36,9 @@ Status markers: `[x]` complete, `[~]` partial, `[ ]` open.
 - [~] `[must]` Move compact reliability, update, service, connection, quota,
   and incident status to Desktop System and Activity without copying the
   complete operator cockpit. The section-driven `adaos.sdk.system` read model
-  and DEV Desktop views are implemented; beta and routed browser acceptance
-  remain open.
+  and Desktop views are implemented; `web_desktop@0.3.51` passed immutable
+  checkpoint, isolated Trial, and local Beta acceptance. Routed browser
+  acceptance remains open.
 - [ ] `[must]` Move typed environment/configuration views to Desktop Settings
   and System with policy, audit, drift, restart impact, and opaque secrets.
 - [ ] `[must]` Move Root MCP/Codex leases and operator access workflows to
