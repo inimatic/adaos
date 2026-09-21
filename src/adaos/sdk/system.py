@@ -29,7 +29,7 @@ _ALL_SECTIONS = frozenset(
     }
 )
 _RELIABILITY_CACHE_TTL_S = 2.0
-_RELIABILITY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_RELIABILITY_CACHE: dict[str, tuple[float, int, dict[str, Any]]] = {}
 _RELIABILITY_CACHE_LOCK = threading.Lock()
 _RELIABILITY_BUILD_LOCKS: dict[str, threading.Lock] = {}
 
@@ -68,21 +68,34 @@ def _bounded_limit(value: int) -> int:
 
 def _reliability_projection(*, webspace_id: str | None) -> dict[str, Any]:
     cache_key = str(webspace_id or "").strip()
+    source_identity = id(control_plane.get_reliability_projection)
     now = time.monotonic()
     cached = _RELIABILITY_CACHE.get(cache_key)
-    if cached is not None and now - cached[0] <= _RELIABILITY_CACHE_TTL_S:
-        return dict(cached[1])
+    if (
+        cached is not None
+        and cached[1] == source_identity
+        and now - cached[0] <= _RELIABILITY_CACHE_TTL_S
+    ):
+        return dict(cached[2])
     with _RELIABILITY_CACHE_LOCK:
         build_lock = _RELIABILITY_BUILD_LOCKS.setdefault(cache_key, threading.Lock())
     with build_lock:
         now = time.monotonic()
         cached = _RELIABILITY_CACHE.get(cache_key)
-        if cached is not None and now - cached[0] <= _RELIABILITY_CACHE_TTL_S:
-            return dict(cached[1])
+        if (
+            cached is not None
+            and cached[1] == source_identity
+            and now - cached[0] <= _RELIABILITY_CACHE_TTL_S
+        ):
+            return dict(cached[2])
         projection = _mapping(
             control_plane.get_reliability_projection(webspace_id=webspace_id)
         )
-        _RELIABILITY_CACHE[cache_key] = (time.monotonic(), projection)
+        _RELIABILITY_CACHE[cache_key] = (
+            time.monotonic(),
+            source_identity,
+            projection,
+        )
         return dict(projection)
 
 
