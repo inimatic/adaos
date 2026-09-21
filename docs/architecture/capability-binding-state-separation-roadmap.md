@@ -169,26 +169,26 @@ before schemas or runtime behavior change.
 relational storage, package, lock, and evidence records to the target terms
 without modifying runtime state.
 
-- [ ] `[must]` `CBS0-01` Adopt the normative vocabulary and ownership boundaries
+- [x] `[must]` `CBS0-01` Adopt the normative vocabulary and ownership boundaries
   in the architecture and roadmap inventory.
-- [ ] `[must]` `CBS0-02` Inventory every current use of “capability” and classify
+- [x] `[must]` `CBS0-02` Inventory every current use of “capability” and classify
   it as semantic capability, requested SDK permission, provider feature, UI
   affordance, deployment feature, or legacy ambiguous use.
-- [ ] `[must]` `CBS0-03` Inventory current state identities, owners, database
+- [x] `[must]` `CBS0-03` Inventory current state identities, owners, database
   paths, `data_lifecycle`, schema locks, migration locks, relational bindings,
   and destructive lifecycle operations for the selected CRUD fixture.
-- [ ] `[must]` `CBS0-04` Inventory current `ProjectCompositionLock`,
+- [x] `[must]` `CBS0-04` Inventory current `ProjectCompositionLock`,
   `ProjectRelease`, `WorkspaceLock`, activation-operation, and lock-history
   fields; identify additive extension points and reject a second authority.
-- [ ] `[must]` `CBS0-05` Reserve unambiguous schema and reference namespaces for
+- [x] `[must]` `CBS0-05` Reserve unambiguous schema and reference namespaces for
   capability contracts, state contracts, binding definitions/instances, state
   spaces, resolutions, plans, claims, and assessments.
-- [ ] `[must]` `CBS0-06` Define canonical JSON normalization, digest, stable-ref,
+- [x] `[must]` `CBS0-06` Define canonical JSON normalization, digest, stable-ref,
   version, compatibility, and unknown-field rejection rules shared by the new
   records.
-- [ ] `[must]` `CBS0-07` Select one existing real CRUD resource with fixture
-  data, access rules, optimistic revision behavior, and migrations for the
-  vertical proof.
+- [x] `[must]` `CBS0-07` Select one existing real CRUD resource with fixture
+  data, access rules, optimistic revision behavior, and an explicit migration
+  boundary for the vertical proof.
 - [ ] `[should]` `CBS0-08` Publish a terminology lint or schema-review check that
   flags persistent `state_ref` and ambiguous new manifest `capabilities`
   declarations.
@@ -196,6 +196,17 @@ without modifying runtime state.
   current package, semantic, binding, and state refs for one installation.
 - [ ] `[deferred]` `CBS0-10` Rename all legacy skill, Project, provider, and
   permission identifiers to the new vocabulary.
+
+Validated-local checkpoint, 2026-09-21:
+
+- the selected fixture, current authority/state/package surfaces, reserved
+  namespaces, compatibility rules, and canonical digest vector are fixed in
+  [CBS0 Capability, Binding, and State Compatibility Inventory](capability-binding-state-cbs0-inventory.md)
+  and its
+  [machine-readable inventory](capability-binding-state-cbs0-inventory.json);
+- focused inventory, local/prototype CRUD, and artifact contract tests pass;
+- CBS0 changed no runtime state and introduced no new runtime ABI. Schema names
+  are reserved for CBS1, not reported as implemented.
 
 ## Milestone CBS1: Portable Contract Spine
 

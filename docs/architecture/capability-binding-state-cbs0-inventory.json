@@ -1,0 +1,662 @@
+{
+  "schema": "adaos.architecture.capability_binding_state_inventory.v1",
+  "inventory_id": "cbs0-flowboard-work-items-20260921",
+  "observed_at": "2026-09-21",
+  "source": {
+    "repository": "inimatic/adaos",
+    "revision": "bf0d21a6714f5ef810ec027f9aeb1db96c6b8d2f",
+    "working_tree_policy": "Inventory the tracked Core source at the pinned revision; unrelated uncommitted user and integration-worktree changes are excluded.",
+    "runtime_mutated": false
+  },
+  "selected_fixture": {
+    "fixture_id": "flowboard-work-items",
+    "selection_status": "selected_for_cbs1_through_cbs5",
+    "semantic_name": "Flowboard work items",
+    "current_resource_type": "skill.flowboard_skill.work_items",
+    "current_owner_ref": "skill:flowboard_skill",
+    "current_authority": {
+      "provider": "local_crud",
+      "binding": "flowboard_skill",
+      "writes": "optimistic",
+      "source_of_truth": "local_skill_state"
+    },
+    "operations": [
+      "list",
+      "show",
+      "create",
+      "update",
+      "delete"
+    ],
+    "production_materialization": {
+      "service": "adaos.services.resources.local.LocalCrudResourceService",
+      "declaration_schema": "adaos.resource.local_crud.v1",
+      "state_schema": "adaos.resource.local_crud_state.v1",
+      "storage_format": "atomic_json_registry",
+      "state_locator_template": "<state_dir>/resources/local/registry.json",
+      "mutation_lock_template": "<state_dir>/resources/local/.local-resources.lock",
+      "record_identity": "record.id",
+      "record_revision": "record.revision when declared, otherwise resource generation",
+      "resource_generation": "state.generation",
+      "persistence": "survives service reconstruction and declaration refresh",
+      "schema_change": "existing records are revalidated; incompatible change is rejected as requiring migration"
+    },
+    "simulation_materialization": {
+      "service": "adaos.services.resources.prototype.PrototypeResourceService",
+      "declaration_schema": "adaos.builder.prototype_resource.v1",
+      "state_schema": "adaos.builder.prototype_resource_state.v1",
+      "storage_format": "sqlite_resource_states",
+      "state_locator_template": "<state_dir>/resources/prototypes/resources.sqlite3",
+      "lifecycle": "disposable Builder Preview state",
+      "identity_rule": "must not reuse the production state_space_ref"
+    },
+    "current_guarantees": {
+      "schema_validation": true,
+      "optimistic_record_revision": true,
+      "single_host_mutation_serialization": true,
+      "atomic_whole_registry_replace": true,
+      "independent_state_space_identity": false,
+      "writer_fencing_epoch": false,
+      "package_independent_binding_definition": false,
+      "explicit_migration_execution": false
+    },
+    "data_lifecycle": {
+      "fixture_declaration": "absent",
+      "reason": "The generic local CRUD registry is Core-owned and not a skill-owned database path declared through skill.yaml:data_lifecycle.",
+      "existing_platform_contract": "adaos.skill.data_lifecycle.v1",
+      "cbs1_rule": "StateContract references existing lifecycle/schema locks where present and records this fixture's absence explicitly; it does not invent migration SQL."
+    },
+    "destructive_and_identity_sensitive_operations": [
+      {
+        "operation": "delete_record",
+        "current_guard": "optional expected record revision plus local mutation lock",
+        "effect": "removes one record and increments resource generation"
+      },
+      {
+        "operation": "refresh_declaration",
+        "current_guard": "owner_ref and resource_type namespace must match; existing records must validate",
+        "effect": "updates declaration metadata while preserving records"
+      },
+      {
+        "operation": "incompatible_schema_change",
+        "current_guard": "existing-record validation",
+        "effect": "rejected; no migration is executed"
+      },
+      {
+        "operation": "remove_declaration_or_package",
+        "current_guard": "none in LocalCrudResourceService",
+        "effect": "existing registry state is retained; detach/archive/destroy semantics are not represented"
+      }
+    ],
+    "target_projection": {
+      "requirement_ref": "requirement:flowboard/manage-work-items",
+      "capability_ref": "capability:resource.records.manage",
+      "state_contract_ref": "state-contract:flowboard.work-items",
+      "simulation_binding_definition_ref": "binding-definition:resource.records.prototype",
+      "production_binding_definition_ref": "binding-definition:resource.records.local-json",
+      "simulation_state_space_ref_template": "state-space:preview/<change-id>/flowboard/work-items",
+      "production_state_space_ref_template": "state-space:workspace/flowboard/work-items",
+      "environment_profile_ref": "profile:local/default"
+    },
+    "source_paths": [
+      "tests/test_local_resource_workbench.py",
+      "tests/test_prototype_resource_workbench.py",
+      "src/adaos/services/resources/local.py",
+      "src/adaos/services/resources/prototype.py",
+      "src/adaos/services/resources/storage.py",
+      "src/adaos/abi/resource.local_crud.v1.schema.json",
+      "src/adaos/abi/resource.definition.v1.schema.json"
+    ]
+  },
+  "capability_usages": [
+    {
+      "usage_id": "skill-runtime-authority",
+      "classification": "requested_sdk_authority",
+      "meaning": "Fine-grained runtime/SDK authority requested by a skill and admitted by policy.",
+      "examples": [
+        "storage.relational",
+        "storage.blob"
+      ],
+      "authoritative_sources": [
+        "src/adaos/abi/skill.schema.json",
+        "src/adaos/services/skill/skill_schema.json"
+      ],
+      "collision_rule": "skill.yaml:capabilities remains an authority request and never means a provided CapabilityContract."
+    },
+    {
+      "usage_id": "application-role-capability",
+      "classification": "actor_authorization",
+      "meaning": "Application and component capability labels used in effective access decisions.",
+      "examples": [
+        "application role grants",
+        "component capability evidence",
+        "observed high-risk capability reconciliation"
+      ],
+      "authoritative_sources": [
+        "src/adaos/domain/application_access.py",
+        "docs/architecture/application-access-permissions.md"
+      ],
+      "collision_rule": "Authorization labels may be required by a semantic capability but do not satisfy it."
+    },
+    {
+      "usage_id": "resource-operation-capability",
+      "classification": "actor_authorization",
+      "meaning": "Role/actor permissions required to invoke Resource Workbench operations or view fields.",
+      "examples": [
+        "required_capabilities on resource operations",
+        "role fixtures"
+      ],
+      "authoritative_sources": [
+        "src/adaos/abi/resource.definition.v1.schema.json",
+        "src/adaos/services/resources/workbench.py"
+      ],
+      "collision_rule": "Operation authorization is evaluated after binding selection and remains independent of CapabilityContract identity."
+    },
+    {
+      "usage_id": "ui-capability-catalog",
+      "classification": "ui_affordance",
+      "meaning": "Builder-searchable Client components, recipes, and UI support descriptions.",
+      "examples": [
+        "adaos.ui.capability_catalog.v1",
+        "capability gaps in UI qualification"
+      ],
+      "authoritative_sources": [
+        "src/adaos/services/ui_capabilities.py",
+        "src/adaos/abi/ui.capability_catalog.v1.schema.json"
+      ],
+      "collision_rule": "UI capability IDs remain presentation/compiler vocabulary and are not semantic service contracts."
+    },
+    {
+      "usage_id": "relational-provider-capabilities",
+      "classification": "provider_feature",
+      "meaning": "Machine-readable storage guarantees and provider features used during relational binding negotiation.",
+      "examples": [
+        "durability",
+        "transactions",
+        "isolation",
+        "backup_restore"
+      ],
+      "authoritative_sources": [
+        "src/adaos/domain/relational_storage.py",
+        "src/adaos/ports/relational_storage.py"
+      ],
+      "collision_rule": "Provider features contribute to EffectiveGuarantees but are not CapabilityContract identities."
+    },
+    {
+      "usage_id": "deployment-node-capabilities",
+      "classification": "placement_feature",
+      "meaning": "Node and endpoint features used for deployment placement and admission.",
+      "examples": [
+        "NodeInventoryRecord.capabilities",
+        "PlacementPolicy.required_capabilities"
+      ],
+      "authoritative_sources": [
+        "src/adaos/domain/project_deployment.py",
+        "src/adaos/domain/distributed_runtime.py"
+      ],
+      "collision_rule": "Placement features constrain an environment; they do not identify Application semantics."
+    },
+    {
+      "usage_id": "distributed-service-contracts",
+      "classification": "runtime_service_advertisement",
+      "meaning": "Runtime service definitions advertise transport/service contracts and required node capabilities for topology resolution.",
+      "examples": [
+        "ServiceDefinition.provided_contracts",
+        "ServiceDefinition.required_capabilities"
+      ],
+      "authoritative_sources": [
+        "src/adaos/domain/distributed_runtime.py"
+      ],
+      "collision_rule": "A later BindingDefinition may reference an admitted service contract, but does not alias ServiceDefinition identity."
+    },
+    {
+      "usage_id": "builder-capability-gaps",
+      "classification": "planning_diagnostic",
+      "meaning": "Builder and qualification diagnostics describing missing UI/runtime support.",
+      "examples": [
+        "capability_gaps"
+      ],
+      "authoritative_sources": [
+        "src/adaos/services/ui_capabilities.py",
+        "src/adaos/services/builder/semantic_prototype.py"
+      ],
+      "collision_rule": "A diagnostic may propose an ApplicationRequirement but is not itself a durable contract."
+    }
+  ],
+  "state_and_binding_surfaces": [
+    {
+      "surface_id": "local-crud-registry",
+      "current_identity": "resource_type under one Core local registry",
+      "owner": "bundle.owner_ref, constrained to skill:<skill-name>",
+      "locator": "<state_dir>/resources/local/registry.json",
+      "schema_authority": "inline record_schema plus definition/declaration digests",
+      "migration_authority": "none; incompatible existing records reject declaration refresh",
+      "target_interpretation": "legacy projection into a production StateSpace and local-json BindingInstance revision",
+      "source_paths": [
+        "src/adaos/services/resources/local.py"
+      ]
+    },
+    {
+      "surface_id": "prototype-resource-store",
+      "current_identity": "prototype.<resource> plus project/change/UI revision metadata",
+      "owner": "project_ref",
+      "locator": "<state_dir>/resources/prototypes/resources.sqlite3",
+      "schema_authority": "prototype data and resource definition schemas",
+      "migration_authority": "disposable rematerialization",
+      "target_interpretation": "separate disposable simulation StateSpace and prototype BindingInstance revision",
+      "source_paths": [
+        "src/adaos/services/resources/prototype.py",
+        "src/adaos/services/resources/storage.py"
+      ]
+    },
+    {
+      "surface_id": "skill-data-lifecycle",
+      "current_identity": "skill package, relative database path, and ordered migration chain",
+      "owner": "owning skill/Application component",
+      "locator": "package-declared safe relative path materialized under runtime data root",
+      "schema_authority": "skill.yaml:data_lifecycle and package migration locks",
+      "migration_authority": "LocalApplicationDataLifecycle with retained intent and explicit Beta/Stable transition",
+      "target_interpretation": "StateContract references lifecycle and locks; StateSpace remains an independent local identity",
+      "source_paths": [
+        "src/adaos/abi/skill.schema.json",
+        "src/adaos/services/applications/data_lifecycle.py",
+        "src/adaos/services/applications/local_release_transition.py"
+      ]
+    },
+    {
+      "surface_id": "relational-storage-binding",
+      "current_identity": "binding_id plus owner_ref and logical_name",
+      "owner": "owner_ref equals migration_owner for private bindings",
+      "locator": "opaque AdaOS locator; DSNs and inline credentials rejected",
+      "schema_authority": "consumer requirements negotiated against provider capabilities",
+      "migration_authority": "owner-supplied checksum-pinned migrations",
+      "target_interpretation": "input to BindingInstance projection and EffectiveGuarantees; not a StateSpace identity",
+      "source_paths": [
+        "src/adaos/domain/relational_storage.py",
+        "src/adaos/ports/relational_storage.py"
+      ]
+    },
+    {
+      "surface_id": "package-schema-and-migration-locks",
+      "current_identity": "ArtifactContractLock.lock_id plus exact digest",
+      "owner": "ArtifactPackageRef and ProjectRelease",
+      "locator": "immutable package/release metadata",
+      "schema_authority": "schema_locks",
+      "migration_authority": "migration_locks derived from canonical migration content",
+      "target_interpretation": "StateContract references exact locks without duplicating schema or migration content",
+      "source_paths": [
+        "src/adaos/domain/artifact_release.py"
+      ]
+    }
+  ],
+  "package_and_authority_surfaces": [
+    {
+      "surface_id": "artifact-package-ref",
+      "authority": "exact immutable package identity and physical materialization target",
+      "target_role": "PackageRelease delivery facts",
+      "source_paths": [
+        "src/adaos/domain/artifact_release.py"
+      ]
+    },
+    {
+      "surface_id": "project-release",
+      "authority": "immutable dependency-locked release and package set",
+      "target_role": "existing package closure authority retained by semantic resolution",
+      "source_paths": [
+        "src/adaos/domain/artifact_release.py",
+        "src/adaos/services/artifact_pipeline/releases.py"
+      ]
+    },
+    {
+      "surface_id": "project-composition-lock",
+      "authority": "exact members, roles, dependencies, entry points, compatibility, lifecycle, and access declarations",
+      "target_role": "package composition remains authoritative; capability resolution explains selection",
+      "source_paths": [
+        "src/adaos/domain/artifact_release.py"
+      ]
+    },
+    {
+      "surface_id": "workspace-lock",
+      "authority": "active workspace slots, exact packages, and dependency bindings",
+      "target_role": "sole active authority, extended or digest-linked with admitted resolution and local revision pins",
+      "source_paths": [
+        "src/adaos/domain/artifact_release.py",
+        "src/adaos/services/artifact_pipeline/activation.py"
+      ]
+    },
+    {
+      "surface_id": "artifact-activation-plan",
+      "authority": "read-only package transition bound to observed WorkspaceLock digest",
+      "target_role": "execution substrate below ResolutionPlan; not semantic admission",
+      "source_paths": [
+        "src/adaos/services/artifact_pipeline/activation.py"
+      ]
+    },
+    {
+      "surface_id": "activation-operation-and-lock-history",
+      "authority": "durable phase journal, previous/desired locks, rollback and recovery status",
+      "target_role": "existing activation/recovery mechanism pins and executes one ResolutionPlan digest",
+      "source_paths": [
+        "src/adaos/services/artifact_pipeline/activation.py"
+      ]
+    }
+  ],
+  "target_mappings": [
+    {
+      "target": "ApplicationRequirement",
+      "status": "missing",
+      "current_sources": [],
+      "decision": "CBS3 introduces an implementation-free semantic requirement ABI."
+    },
+    {
+      "target": "CapabilityContract",
+      "status": "missing",
+      "current_sources": [],
+      "decision": "Do not alias any current capability field; CBS1 introduces a new namespace."
+    },
+    {
+      "target": "StateContract",
+      "status": "partial",
+      "current_sources": [
+        "resource record_schema",
+        "ArtifactContractLock schema/migration locks",
+        "skill.yaml:data_lifecycle",
+        "RelationalStorageRequirements"
+      ],
+      "decision": "CBS1 references and composes these facts without copying their authority."
+    },
+    {
+      "target": "BindingDefinition",
+      "status": "partial",
+      "current_sources": [
+        "resource definition authority.provider/binding",
+        "skill handler/tool entry points",
+        "distributed ServiceDefinition"
+      ],
+      "decision": "CBS1 creates a package-independent logical definition; physical package member moves to delivery metadata."
+    },
+    {
+      "target": "PackageRelease",
+      "status": "existing_authority",
+      "current_sources": [
+        "ArtifactPackageRef",
+        "ProjectRelease",
+        "ProjectCompositionLock"
+      ],
+      "decision": "Reuse exact existing package records; do not create a competing package aggregate."
+    },
+    {
+      "target": "BindingInstance",
+      "status": "partial",
+      "current_sources": [
+        "RelationalStorageBinding",
+        "resource authority binding",
+        "installed runtime/package selection"
+      ],
+      "decision": "CBS2 projects local attachments into stable refs with immutable revisions."
+    },
+    {
+      "target": "StateSpace",
+      "status": "missing",
+      "current_sources": [
+        "local CRUD resource_type and registry path",
+        "prototype resource state",
+        "skill data roots"
+      ],
+      "decision": "CBS2 adds independent local identity; persistent UI state_ref is prohibited."
+    },
+    {
+      "target": "EvidenceClaim",
+      "status": "partial",
+      "current_sources": [
+        "ProjectRelease.validation_evidence_refs",
+        "package attestations",
+        "activation health and delayed verification records"
+      ],
+      "decision": "CBS1 adds typed immutable subjects, environment, dependency observations, and freshness policy."
+    },
+    {
+      "target": "ApplicationResolution",
+      "status": "missing",
+      "current_sources": [
+        "package ReleasePlan as a lower-level exact closure"
+      ],
+      "decision": "CBS3 admits only after semantic candidate, package closure, and evidence/policy checks."
+    },
+    {
+      "target": "ResolutionPlan",
+      "status": "partial",
+      "current_sources": [
+        "adaos.artifact.activation_plan.v1"
+      ],
+      "decision": "CBS4 wraps semantic/local state transition intent around the existing package activation plan."
+    },
+    {
+      "target": "WorkspaceLock",
+      "status": "existing_authority",
+      "current_sources": [
+        "adaos.workspace.lock.v1"
+      ],
+      "decision": "Extend or digest-link; never introduce another active-workspace authority."
+    },
+    {
+      "target": "SemanticGraph",
+      "status": "derived_not_implemented",
+      "current_sources": [],
+      "decision": "Deferred until CBS8 and always rebuildable from portable/local facts."
+    }
+  ],
+  "reserved_namespaces": {
+    "status": "reserved_not_implemented",
+    "schema_names": [
+      {
+        "kind": "ApplicationRequirement",
+        "name": "adaos.application.requirement.v1",
+        "plane": "portable"
+      },
+      {
+        "kind": "EnvironmentProfile",
+        "name": "adaos.environment.profile.v1",
+        "plane": "local"
+      },
+      {
+        "kind": "CapabilityContract",
+        "name": "adaos.capability.contract.v1",
+        "plane": "portable"
+      },
+      {
+        "kind": "StateContract",
+        "name": "adaos.state.contract.v1",
+        "plane": "portable"
+      },
+      {
+        "kind": "BindingDefinition",
+        "name": "adaos.binding.definition.v1",
+        "plane": "portable"
+      },
+      {
+        "kind": "BindingDelivery",
+        "name": "adaos.binding.delivery.v1",
+        "plane": "portable_package_metadata"
+      },
+      {
+        "kind": "EvidenceClaim",
+        "name": "adaos.evidence.claim.v1",
+        "plane": "portable_or_local"
+      },
+      {
+        "kind": "BindingInstance",
+        "name": "adaos.binding.instance.v1",
+        "plane": "local"
+      },
+      {
+        "kind": "StateSpace",
+        "name": "adaos.state.space.v1",
+        "plane": "local"
+      },
+      {
+        "kind": "ApplicationResolution",
+        "name": "adaos.application.resolution.v1",
+        "plane": "local"
+      },
+      {
+        "kind": "ResolutionPlan",
+        "name": "adaos.resolution.plan.v1",
+        "plane": "local"
+      },
+      {
+        "kind": "EvidenceAssessment",
+        "name": "adaos.evidence.assessment.v1",
+        "plane": "derived"
+      }
+    ],
+    "reference_prefixes": [
+      {
+        "kind": "ApplicationRequirement",
+        "prefix": "requirement:",
+        "scope": "semantic_application",
+        "example": "requirement:flowboard/manage-work-items"
+      },
+      {
+        "kind": "CapabilityContract",
+        "prefix": "capability:",
+        "scope": "portable",
+        "example": "capability:resource.records.manage"
+      },
+      {
+        "kind": "StateContract",
+        "prefix": "state-contract:",
+        "scope": "portable",
+        "example": "state-contract:flowboard.work-items"
+      },
+      {
+        "kind": "BindingDefinition",
+        "prefix": "binding-definition:",
+        "scope": "portable",
+        "example": "binding-definition:resource.records.local-json"
+      },
+      {
+        "kind": "EnvironmentProfile",
+        "prefix": "profile:",
+        "scope": "local_or_policy",
+        "example": "profile:local/default"
+      },
+      {
+        "kind": "BindingInstance",
+        "prefix": "binding-instance:",
+        "scope": "local",
+        "example": "binding-instance:workspace/flowboard-local-json"
+      },
+      {
+        "kind": "StateSpace",
+        "prefix": "state-space:",
+        "scope": "local",
+        "example": "state-space:workspace/flowboard/work-items"
+      },
+      {
+        "kind": "EvidenceClaim",
+        "prefix": "evidence-claim:",
+        "scope": "portable_or_local",
+        "example": "evidence-claim:sha256:<64-lowercase-hex>"
+      },
+      {
+        "kind": "ApplicationResolution",
+        "prefix": "application-resolution:",
+        "scope": "local",
+        "example": "application-resolution:sha256:<64-lowercase-hex>"
+      },
+      {
+        "kind": "ResolutionPlan",
+        "prefix": "resolution-plan:",
+        "scope": "local",
+        "example": "resolution-plan:sha256:<64-lowercase-hex>"
+      }
+    ],
+    "prohibited_aliases": [
+      {
+        "value": "skill.yaml:capabilities",
+        "reason": "requested SDK authority, not provided semantic capability"
+      },
+      {
+        "value": "state_ref",
+        "reason": "already owned by Web UI component/query state"
+      },
+      {
+        "value": "binding_id",
+        "reason": "existing provider-specific binding identity; it may be projected but not silently reinterpreted"
+      }
+    ]
+  },
+  "canonicalization": {
+    "algorithm": "sha256 over canonical UTF-8 JSON bytes",
+    "existing_implementation": "adaos.domain.artifact_release.canonical_payload_digest",
+    "rules": [
+      "Validate against the exact supported schema before digesting.",
+      "Serialize JSON objects with keys sorted lexicographically at every depth.",
+      "Use UTF-8, ensure_ascii=false, and separators ',' and ':' with no insignificant whitespace.",
+      "Preserve array order; a model must normalize semantic sets before canonical serialization.",
+      "Permit only finite JSON values; NaN and Infinity are invalid even though the current generic helper does not enforce this by itself.",
+      "Include schema name and every canonical semantic field in the digest input.",
+      "Exclude only the record's computed self-digest field; referenced digests remain included.",
+      "Render the digest as sha256 followed by 64 lowercase hexadecimal characters."
+    ],
+    "test_vector": {
+      "payload": {
+        "schema": "adaos.cbs0.digest_vector.v1",
+        "name": "flowboard",
+        "nested": {
+          "z": 2,
+          "a": 1
+        },
+        "items": [
+          "b",
+          "a"
+        ]
+      },
+      "canonical_json": "{\"items\":[\"b\",\"a\"],\"name\":\"flowboard\",\"nested\":{\"a\":1,\"z\":2},\"schema\":\"adaos.cbs0.digest_vector.v1\"}",
+      "digest": "sha256:6984cc9177ce86eb2a8d56b9eb13c7ab4d06de2c7de7b1715b9619976a3efef8"
+    }
+  },
+  "compatibility_rules": [
+    {
+      "rule_id": "schema-major",
+      "decision": "Schema name contains the major version; an unknown major fails closed."
+    },
+    {
+      "rule_id": "unknown-fields",
+      "decision": "New v1 records reject unknown fields except inside an explicitly typed extensions object."
+    },
+    {
+      "rule_id": "stable-ref-vs-digest",
+      "decision": "Stable refs identify lineage; digests identify exact immutable revisions. Runtime selection pins digests."
+    },
+    {
+      "rule_id": "semantic-version",
+      "decision": "Portable contract versions use SemVer, but compatibility is never inferred from a mutable alias or package version alone."
+    },
+    {
+      "rule_id": "exact-by-default",
+      "decision": "Admission is exact-digest by default; compatible ranges or explicit compatibility edges are evaluated only by the resolver."
+    },
+    {
+      "rule_id": "definition-package-independence",
+      "decision": "BindingDefinition contains a logical entry point. BindingDelivery maps it to a physical package member."
+    },
+    {
+      "rule_id": "local-revision",
+      "decision": "BindingInstance and StateSpace stable refs have append-only immutable revisions; health/readiness are observations."
+    },
+    {
+      "rule_id": "single-active-authority",
+      "decision": "WorkspaceLock remains the sole active-workspace authority."
+    }
+  ],
+  "known_gaps": [
+    "Flowboard local CRUD state has no independent state_space_ref, revision chain, authority epoch, or writer fencing token.",
+    "Flowboard production state is an atomic JSON registry, not the SQLite ResourceStorage used by prototype resources.",
+    "Local CRUD owner, resource namespace, and authority binding are all derived from the skill name.",
+    "The selected fixture has no skill.yaml:data_lifecycle declaration or executable schema migration path.",
+    "The existing artifact activation plan is package-oriented and has no semantic resolution or state-space attachment authority.",
+    "Existing evidence and attestations do not uniformly model environment, external dependency observations, or freshness.",
+    "No current record is silently reclassified as CapabilityContract, StateContract, BindingDefinition, StateSpace, ApplicationResolution, or ResolutionPlan."
+  ]
+}

@@ -1111,6 +1111,7 @@ alone:
 ## Related Documents
 
 - [Capability, Binding, and State Separation Roadmap](capability-binding-state-separation-roadmap.md)
+- [CBS0 Capability, Binding, and State Compatibility Inventory](capability-binding-state-cbs0-inventory.md)
 - [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md)
 - [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md)
 - [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md)
