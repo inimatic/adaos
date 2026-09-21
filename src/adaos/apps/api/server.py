@@ -2416,6 +2416,7 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
         "nlu_authoring.check_phrase": "development.read.descriptors",
         "applications.list": "applications.read",
         "applications.set_home_pin": "applications.apply",
+        "applications.update_settings": "applications.apply",
         "applications.show": "applications.read",
         "applications.access.show": "applications.read",
         "applications.access.users": "applications.read",

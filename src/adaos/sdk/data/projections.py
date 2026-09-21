@@ -666,6 +666,7 @@ class ProjectionRuntime:
         self._clock = clock or time.monotonic
         self._fingerprints: dict[tuple[str, str], str] = {}
         self._last_write_at: dict[tuple[str, str], float] = {}
+        self._write_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._pending_refresh: dict[tuple[str, tuple[str, ...]], asyncio.Task[ProjectionRefreshResult]] = {}
         self._projections: dict[str, ProjectionSlot] = {}
         self._dispatcher_handlers: set[str] = set()
@@ -1095,6 +1096,38 @@ class ProjectionRuntime:
                 self._diagnostics.record(result)
             return result
 
+        with self._lock:
+            write_lock = self._write_locks.get(key)
+            if write_lock is None:
+                write_lock = asyncio.Lock()
+                self._write_locks[key] = write_lock
+
+        async with write_lock:
+            return await self._set_if_changed_serialized(
+                slot_name=slot_name,
+                ws_id=ws_id,
+                key=key,
+                fingerprint=fingerprint,
+                value=value,
+                slot_decl=slot_decl,
+                force=force,
+                reason=reason,
+            )
+
+    async def _set_if_changed_serialized(
+        self,
+        *,
+        slot_name: str,
+        ws_id: str,
+        key: tuple[str, str],
+        fingerprint: str,
+        value: Any,
+        slot_decl: ProjectionSlot | None,
+        force: bool,
+        reason: str | None,
+    ) -> ProjectionWriteResult:
+        # Recheck after acquiring the per-slot lock. Another caller may have
+        # completed the same write while this coroutine was waiting.
         with self._lock:
             previous = self._fingerprints.get(key)
             if previous == fingerprint:

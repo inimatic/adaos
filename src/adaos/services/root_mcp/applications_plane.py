@@ -415,6 +415,34 @@ def contracts() -> list[RootMcpToolContract]:
             metadata={**published, "handler": "applications_set_home_pin"},
         ),
         RootMcpToolContract(
+            id="applications.update_settings",
+            title="Update Application settings",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Atomically update auto-update and public pre-release preferences without a separate review dialog.",
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "auto_update_enabled": {"type": "boolean"},
+                    "use_prerelease": {"type": "boolean"},
+                    "paused": {"type": "boolean"},
+                    "expected_revision": {"type": "integer", "minimum": 0},
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                required=[
+                    "application_id",
+                    "auto_update_enabled",
+                    "use_prerelease",
+                    "expected_revision",
+                    "idempotency_key",
+                ],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_update_settings"},
+        ),
+        RootMcpToolContract(
             id="applications.access.show",
             title="Show Application access",
             surface=RootMcpSurface.OPERATIONS,
@@ -1290,6 +1318,48 @@ def _handle_set_home_pin(
     }
 
 
+def _handle_update_settings(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_update_settings": True, "request": request}
+    actor_ref, subnet_ref = _context(arguments)
+    idempotency_key = str(arguments.get("idempotency_key") or "").strip()
+    application_id = _application_id(arguments)
+    sdk = _sdk()
+    planned = sdk.plan_update_track(
+        application_id,
+        update_track="prerelease" if bool(arguments.get("use_prerelease")) else "stable",
+        update_policy=(
+            "auto_compatible" if bool(arguments.get("auto_update_enabled")) else "notify"
+        ),
+        paused=bool(arguments.get("paused", False)),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        actor_ref=actor_ref,
+        subnet_ref=subnet_ref,
+        capability="applications.plan",
+        idempotency_key=idempotency_key,
+    )
+    applied = sdk.apply_operation(
+        str(planned.get("operation_id") or ""),
+        plan_digest=str(planned.get("plan_digest") or ""),
+        actor_ref=actor_ref,
+        subnet_ref=subnet_ref,
+        capability="applications.apply",
+        idempotency_key=idempotency_key,
+        webspace_id=_webspace_id(arguments),
+    )
+    return {
+        "operation": applied,
+        "settings": {
+            "auto_update_enabled": bool(arguments.get("auto_update_enabled")),
+            "use_prerelease": bool(arguments.get("use_prerelease")),
+            "paused": bool(arguments.get("paused", False)),
+        },
+    }
+
+
 def _handle_access_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     return {
         "access": _sdk().get_application_access_surface(
@@ -2116,6 +2186,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.list": _handle_list,
         "applications.show": _handle_show,
         "applications.set_home_pin": _handle_set_home_pin,
+        "applications.update_settings": _handle_update_settings,
         "applications.access.show": _handle_access_show,
         "applications.access.users": _handle_access_users,
         "applications.access.reviews": _handle_access_reviews,

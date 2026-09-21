@@ -148,7 +148,9 @@ def test_project_manifest_lists_by_profile_and_resolves_entrypoint(
 
 
 def test_project_search_filters_before_limit_and_matches_unicode(project_space):
-    for project_id, title in [("aaa", "First"), ("zzz", "Пример [TEST]-20260911-uid")]:
+    # The catalog is ordered by most recently updated. Keep the Unicode target
+    # outside the unfiltered limit so this proves filtering happens first.
+    for project_id, title in [("zzz", "Пример [TEST]-20260911-uid"), ("aaa", "First")]:
         value = _project(project_id, project_id)
         value["catalog"]["title"] = title
         compositions.create(value)
@@ -638,6 +640,7 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(
         "en": "Candidate description",
         "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430",
     }
+    value["catalog"]["icon"] = "flask-outline"
     value["install"] = {
         "default": True,
         "features": [
@@ -696,9 +699,11 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(
         "en": "Candidate description",
         "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430",
     }
+    assert normalized["catalog"]["icon"] == "flask-outline"
     assert normalized["compatibility"]["required_entrypoints"] == ["research"]
     assert listed[0]["stage"] == "beta"
     assert listed[0]["visibility"] == "listed"
+    assert listed[0]["icon"] == "flask-outline"
     assert listed[0]["default_install"] is True
     assert listed[0]["title_i18n"] == {
         "en": "Candidate Project",

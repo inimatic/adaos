@@ -157,6 +157,7 @@ def _project_row(
         "ref": f"project:{project_id}",
         "title": str(catalog.get("title") or project_id),
         "description": str(catalog.get("description") or ""),
+        "icon": str(catalog.get("icon") or "apps-outline"),
         "profiles": list(payload.get("profiles") or []),
         "categories": list(catalog.get("categories") or []),
         "tags": list(catalog.get("tags") or []),

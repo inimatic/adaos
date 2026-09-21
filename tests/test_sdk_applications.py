@@ -915,6 +915,7 @@ def test_application_list_includes_read_only_workspace_project_projection(
                     "version": "1.2.3",
                     "title": "Legacy Notes",
                     "description": "Indexed from the Workspace project manifest.",
+                    "icon": "book-outline",
                     "visibility": "listed",
                     "categories": ["productivity"],
                     "entrypoints": [
@@ -937,6 +938,7 @@ def test_application_list_includes_read_only_workspace_project_projection(
     assert listed[0]["application"]["application_id"] == "legacy_notes"
     assert listed[0]["application"]["aggregate_backed"] is False
     assert listed[0]["installed"] is True
+    assert listed[0]["icon"] == "book-outline"
     assert listed[0]["installed_release"]["version"] == "1.2.3"
 
 

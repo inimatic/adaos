@@ -26,6 +26,14 @@ class _StubSdk:
         self.calls.append(("apply_operation", args, kwargs))
         return {"operation_id": args[0], "status": "succeeded"}
 
+    def plan_update_track(self, *args, **kwargs):
+        self.calls.append(("plan_update_track", args, kwargs))
+        return {
+            "operation_id": "appop.settings",
+            "plan_digest": "sha256:" + "d" * 64,
+            "idempotency_key": kwargs["idempotency_key"],
+        }
+
     def set_home_pinned(self, *args, **kwargs):
         self.calls.append(("set_home_pinned", args, kwargs))
         return {
@@ -93,6 +101,7 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.list",
         "applications.show",
         "applications.set_home_pin",
+        "applications.update_settings",
         "applications.access.show",
         "applications.access.users",
         "applications.access.reviews",
@@ -262,6 +271,59 @@ def test_applications_plane_exposes_explicit_home_pin_mutation(monkeypatch) -> N
             ("app_recipes",),
             {"pinned": False, "webspace_id": "family"},
         )
+    ]
+
+
+def test_applications_plane_updates_preferences_in_one_atomic_command(monkeypatch) -> None:
+    stub = _StubSdk()
+    monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
+
+    result = applications_plane.handlers()["applications.update_settings"](
+        {
+            "application_id": "app_recipes",
+            "auto_update_enabled": False,
+            "use_prerelease": True,
+            "expected_revision": 3,
+            "idempotency_key": "settings-1",
+            "webspace_id": "desktop",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert result["operation"]["status"] == "succeeded"
+    assert result["settings"] == {
+        "auto_update_enabled": False,
+        "use_prerelease": True,
+        "paused": False,
+    }
+    assert stub.calls == [
+        (
+            "plan_update_track",
+            ("app_recipes",),
+            {
+                "update_track": "prerelease",
+                "update_policy": "notify",
+                "paused": False,
+                "expected_revision": 3,
+                "actor_ref": "user:owner",
+                "subnet_ref": "subnet:sn_home",
+                "capability": "applications.plan",
+                "idempotency_key": "settings-1",
+            },
+        ),
+        (
+            "apply_operation",
+            ("appop.settings",),
+            {
+                "plan_digest": "sha256:" + "d" * 64,
+                "actor_ref": "user:owner",
+                "subnet_ref": "subnet:sn_home",
+                "capability": "applications.apply",
+                "idempotency_key": "settings-1",
+                "webspace_id": "desktop",
+            },
+        ),
     ]
 
 

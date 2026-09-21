@@ -720,7 +720,7 @@ def _workspace_project_read_models(
                     "update_track": "stable",
                     "reason": "workspace_project_projection",
                 },
-                "icon": "apps-outline",
+                "icon": str(project.get("icon") or "apps-outline"),
                 "workspace_project": {
                     key: deepcopy(project[key])
                     for key in (

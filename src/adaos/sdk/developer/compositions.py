@@ -315,6 +315,8 @@ def normalized_definition(value: Mapping[str, Any]) -> dict[str, Any]:
         "categories": sorted(str(item) for item in catalog.get("categories") or []),
         "tags": sorted(str(item) for item in catalog.get("tags") or []),
     }
+    if str(catalog.get("icon") or "").strip():
+        catalog_payload["icon"] = str(catalog["icon"]).strip()
     for field in ("title_i18n", "description_i18n"):
         value = catalog.get(field)
         if isinstance(value, Mapping):

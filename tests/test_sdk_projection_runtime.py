@@ -37,6 +37,18 @@ class _FakeSubnet:
         self.calls.append((slot, value, webspace_id))
 
 
+class _BlockingSubnet(_FakeSubnet):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def set_async(self, slot: str, value: object, *, webspace_id: str | None = None) -> None:
+        self.started.set()
+        await self.release.wait()
+        await super().set_async(slot, value, webspace_id=webspace_id)
+
+
 @dataclass
 class _Payload:
     name: str
@@ -118,6 +130,36 @@ def test_projection_runtime_writes_when_payload_changes() -> None:
     assert first.written is True
     assert second.written is True
     assert [call[1] for call in subnet.calls] == [{"state": "ok"}, {"state": "warn"}]
+
+
+def test_projection_runtime_serializes_concurrent_identical_slot_writes() -> None:
+    async def exercise() -> tuple[object, object, _BlockingSubnet]:
+        subnet = _BlockingSubnet()
+        runtime = ProjectionRuntime("infrastate_skill", ctx_subnet=subnet)
+        runtime.remember_projection(
+            "infrastate.summary", webspace_id="desktop", subscription_id="test"
+        )
+        first = asyncio.create_task(
+            runtime.set_if_changed(
+                "infrastate.summary", {"state": "ok"}, webspace_id="desktop"
+            )
+        )
+        await subnet.started.wait()
+        second = asyncio.create_task(
+            runtime.set_if_changed(
+                "infrastate.summary", {"state": "ok"}, webspace_id="desktop"
+            )
+        )
+        await asyncio.sleep(0)
+        subnet.release.set()
+        return await first, await second, subnet
+
+    first, second, subnet = asyncio.run(exercise())
+
+    assert first.written is True
+    assert second.skipped is True
+    assert second.reason == "unchanged"
+    assert subnet.calls == [("infrastate.summary", {"state": "ok"}, "desktop")]
 
 
 def test_projection_runtime_skips_yjs_write_without_active_demand() -> None:
