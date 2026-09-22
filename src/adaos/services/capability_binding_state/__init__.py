@@ -67,6 +67,16 @@ from .skill_inventory import (
     inventory_installed_skills,
     render_skill_inventory_markdown,
 )
+from .graphs import (
+    DerivedGraphError,
+    DerivedGraphStore,
+    build_evolver_observations,
+    build_impact_projection,
+    build_semantic_graph,
+    build_viability_projection,
+    create_evolver_proposal,
+    promote_evolver_proposal,
+)
 
 __all__ = [
     "CBSActivationCoordinator",
@@ -123,4 +133,12 @@ __all__ = [
     "discover_dev_skills_root",
     "inventory_installed_skills",
     "render_skill_inventory_markdown",
+    "DerivedGraphError",
+    "DerivedGraphStore",
+    "build_evolver_observations",
+    "build_impact_projection",
+    "build_semantic_graph",
+    "build_viability_projection",
+    "create_evolver_proposal",
+    "promote_evolver_proposal",
 ]
