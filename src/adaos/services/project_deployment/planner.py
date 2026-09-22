@@ -350,6 +350,8 @@ class ProjectDeploymentPlanner:
         targets: Mapping[str, tuple[str, ...]],
         reservations: Mapping[str, Mapping[str, int]],
     ) -> tuple[list[str], str | None]:
+        if placement.mode == "disabled":
+            return [], None
         if placement.mode == "co_located_with":
             candidates = list(targets.get(str(placement.co_located_with), ()))
             if not candidates:

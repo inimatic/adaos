@@ -974,6 +974,7 @@ def contracts() -> list[RootMcpToolContract]:
                     },
                     "token_expires_at": {"type": ["string", "null"]},
                     "scope_changed_at": {"type": ["string", "null"]},
+                    "expected_revision": {"type": "integer", "minimum": 0},
                     "idempotency_key": {"type": "string"},
                 },
                 required=[
@@ -984,6 +985,7 @@ def contracts() -> list[RootMcpToolContract]:
                     "subject_ref",
                     "mode",
                     "status",
+                    "expected_revision",
                     "idempotency_key",
                 ],
             ),
@@ -1481,11 +1483,25 @@ def contracts() -> list[RootMcpToolContract]:
             id="applications.plan",
             title="Plan Application mutation",
             surface=RootMcpSurface.OPERATIONS,
-            summary="Persist a reviewable install, update, remove, or update-track plan without applying it.",
+            summary=(
+                "Persist a reviewable lifecycle, component relocation, or component "
+                "uninstall plan without applying it."
+            ),
             input_schema=schema_object(
                 properties={
                     **identity,
-                    "kind": {"enum": ["install", "update", "remove", "select_track"]},
+                    "kind": {
+                        "enum": [
+                            "install",
+                            "update",
+                            "remove",
+                            "select_track",
+                            "relocate_component",
+                            "remove_component",
+                        ]
+                    },
+                    "component_ref": {"type": ["string", "null"]},
+                    "target_node_id": {"type": ["string", "null"]},
                     "release_digest": {"type": ["string", "null"]},
                     "data_policy": {
                         "enum": ["retain", "delete", "snapshot_then_delete"]
@@ -2249,6 +2265,7 @@ def _handle_access_connected_account(
         "connected_account": _sdk().put_application_connected_account(
             _application_id(arguments),
             account,
+            expected_revision=int(arguments.get("expected_revision") or 0),
             **mutation,
         )
     }
@@ -2805,8 +2822,33 @@ def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
             or None,
             **common,
         )
+    elif kind == "relocate_component":
+        component_ref = str(arguments.get("component_ref") or "").strip()
+        target_node_id = str(arguments.get("target_node_id") or "").strip()
+        if not component_ref or not target_node_id:
+            raise ValueError(
+                "relocate_component requires component_ref and target_node_id"
+            )
+        operation = sdk.plan_relocate_component(
+            application_id,
+            component_ref=component_ref,
+            target_node_id=target_node_id,
+            **common,
+        )
+    elif kind == "remove_component":
+        component_ref = str(arguments.get("component_ref") or "").strip()
+        if not component_ref:
+            raise ValueError("remove_component requires component_ref")
+        operation = sdk.plan_remove_component(
+            application_id,
+            component_ref=component_ref,
+            **common,
+        )
     else:
-        raise ValueError("kind must be install, update, remove, or select_track")
+        raise ValueError(
+            "kind must be install, update, remove, select_track, "
+            "relocate_component, or remove_component"
+        )
     return {"operation": operation}
 
 

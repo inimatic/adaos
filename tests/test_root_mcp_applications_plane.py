@@ -83,6 +83,20 @@ class _StubSdk:
         self.calls.append(("plan_install", args, kwargs))
         return {"operation_id": "appop.1", "plan_digest": "sha256:" + "a" * 64}
 
+    def plan_relocate_component(self, *args, **kwargs):
+        self.calls.append(("plan_relocate_component", args, kwargs))
+        return {
+            "operation_id": "appop.relocate",
+            "plan_digest": "sha256:" + "e" * 64,
+        }
+
+    def plan_remove_component(self, *args, **kwargs):
+        self.calls.append(("plan_remove_component", args, kwargs))
+        return {
+            "operation_id": "appop.remove-component",
+            "plan_digest": "sha256:" + "f" * 64,
+        }
+
     def apply_operation(self, *args, **kwargs):
         self.calls.append(("apply_operation", args, kwargs))
         return {"operation_id": args[0], "status": "succeeded"}
@@ -603,6 +617,8 @@ def test_application_access_contracts_are_secret_free_and_reads_share_sdk_projec
     assert {"secret", "token", "credential", "value"}.isdisjoint(
         connected.input_schema["properties"]
     )
+    assert "expected_revision" in connected.input_schema["required"]
+    assert connected.input_schema["properties"]["expected_revision"]["minimum"] == 0
     app_result = applications_plane.handlers()["applications.access.show"](
         {"application_id": "app_recipes", "activity_limit": 25}, dry_run=True
     )
@@ -635,6 +651,7 @@ def test_application_access_connected_account_dry_run_never_mutates(
             "subject_ref": "user:owner",
             "mode": "delegated_user",
             "status": "connected",
+            "expected_revision": 0,
             "idempotency_key": "calendar-connect-1",
         },
         dry_run=True,
@@ -646,6 +663,47 @@ def test_application_access_connected_account_dry_run_never_mutates(
         "account_id": "calendar-user",
     }
     assert stub.calls == []
+
+
+def test_applications_plane_plans_reviewed_component_relocation(monkeypatch) -> None:
+    stub = _StubSdk()
+    monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
+    contract = {item.id: item for item in applications_plane.contracts()}[
+        "applications.plan"
+    ]
+
+    assert {"relocate_component", "remove_component"}.issubset(
+        set(contract.input_schema["properties"]["kind"]["enum"])
+    )
+    result = applications_plane.handlers()["applications.plan"](
+        {
+            "application_id": "app_recipes",
+            "kind": "relocate_component",
+            "component_ref": "scenario:recipes",
+            "target_node_id": "node-office",
+            "expected_revision": 4,
+            "idempotency_key": "relocate-1",
+            "_mcp_context": _context(),
+        },
+        dry_run=False,
+    )
+
+    assert result["operation"]["operation_id"] == "appop.relocate"
+    assert stub.calls == [
+        (
+            "plan_relocate_component",
+            ("app_recipes",),
+            {
+                "component_ref": "scenario:recipes",
+                "target_node_id": "node-office",
+                "expected_revision": 4,
+                "actor_ref": "user:owner",
+                "subnet_ref": "subnet:sn_home",
+                "capability": "applications.plan",
+                "idempotency_key": "relocate-1",
+            },
+        )
+    ]
 
 
 def test_application_access_form_lists_normalize_without_splitting_identifiers() -> (

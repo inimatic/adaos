@@ -52,7 +52,7 @@
       ],
       "properties": {
         "component_ref": { "$ref": "#/$defs/componentRef" },
-        "mode": { "enum": ["singleton", "selected_nodes", "all_matching", "per_endpoint", "co_located_with"] },
+        "mode": { "enum": ["singleton", "selected_nodes", "all_matching", "per_endpoint", "co_located_with", "disabled"] },
         "selected_node_ids": { "$ref": "#/$defs/stringSet" },
         "required_capabilities": { "$ref": "#/$defs/stringSet" },
         "required_labels": {
@@ -89,6 +89,16 @@
             "properties": {
               "min_instances": { "const": 1 },
               "max_instances": { "enum": [1, null] }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "disabled" } } },
+          "then": {
+            "properties": {
+              "selected_node_ids": { "maxItems": 0 },
+              "min_instances": { "const": 0 },
+              "max_instances": { "type": "null" }
             }
           }
         }

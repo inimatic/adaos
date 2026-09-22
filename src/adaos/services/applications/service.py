@@ -85,45 +85,88 @@ class ApplicationService:
             }
         )
 
-    def register(self, application: Application, *, expected_revision: int = 0) -> Application:
-        return self.store.save_application(application, expected_revision=expected_revision)
+    def register(
+        self, application: Application, *, expected_revision: int = 0
+    ) -> Application:
+        return self.store.save_application(
+            application, expected_revision=expected_revision
+        )
 
     def register_release(self, release: ApplicationRelease) -> ApplicationRelease:
         return self.store.put_release(release)
 
-    def reconcile_workspace_installation(self, application_id: str, release_digest: str,
-                                         workspace_lock: WorkspaceLock) -> ApplicationInstallation:
+    def reconcile_workspace_installation(
+        self, application_id: str, release_digest: str, workspace_lock: WorkspaceLock
+    ) -> ApplicationInstallation:
         """Adopt a native publication only after its exact closure is active."""
         application = self.store.get_application(application_id)
         release = self.store.get_release(application_id, release_digest)
         packages = {item.key: item.digest for item in workspace_lock.components}
-        if not any(slot.project_id == application.legacy_project_id and slot.release_digest == release_digest
-                   for slot in workspace_lock.slots):
-            raise ApplicationServiceError("Workspace does not contain this exact Application release")
-        if any(packages.get(item.key) != item.digest for item in release.project_release.components):
-            raise ApplicationServiceError("Workspace Application package closure differs from the release")
+        if not any(
+            slot.project_id == application.legacy_project_id
+            and slot.release_digest == release_digest
+            for slot in workspace_lock.slots
+        ):
+            raise ApplicationServiceError(
+                "Workspace does not contain this exact Application release"
+            )
+        if any(
+            packages.get(item.key) != item.digest
+            for item in release.project_release.components
+        ):
+            raise ApplicationServiceError(
+                "Workspace Application package closure differs from the release"
+            )
         refs = tuple(self._release_components(release))
         try:
             current = self.store.get_installation(application_id)
         except FileNotFoundError:
             current = None
-        if (current and current.status == "active" and current.installed_release_digest == release_digest
-                and current.component_refs == refs):
+        if (
+            current
+            and current.status == "active"
+            and current.installed_release_digest == release_digest
+            and current.component_refs == refs
+        ):
             return current
         if current and current.status not in {"active", "removed"}:
-            raise ApplicationServiceError("Resolve the in-progress Application installation first")
-        value = (replace(current, installed_release_digest=release_digest, component_refs=refs,
-                         status="active", revision=current.revision + 1, updated_at=utc_now()) if current else
-                 ApplicationInstallation(installation_id=f"installation:{application_id}", application_id=application_id,
-                     installed_release_digest=release_digest, component_refs=refs, data_policy="retain", status="active", revision=1))
-        return self.store.save_installation(value, expected_revision=current.revision if current else 0)
+            raise ApplicationServiceError(
+                "Resolve the in-progress Application installation first"
+            )
+        value = (
+            replace(
+                current,
+                installed_release_digest=release_digest,
+                component_refs=refs,
+                status="active",
+                revision=current.revision + 1,
+                updated_at=utc_now(),
+            )
+            if current
+            else ApplicationInstallation(
+                installation_id=f"installation:{application_id}",
+                application_id=application_id,
+                installed_release_digest=release_digest,
+                component_refs=refs,
+                data_policy="retain",
+                status="active",
+                revision=1,
+            )
+        )
+        return self.store.save_installation(
+            value, expected_revision=current.revision if current else 0
+        )
 
     def list_releases(self, application_id: str) -> list[dict[str, Any]]:
         channels = self.store.get_channels(application_id).get("channels") or {}
         return [
             {
                 **release.to_dict(),
-                "channels": [name for name, digest in channels.items() if digest == release.release_digest],
+                "channels": [
+                    name
+                    for name, digest in channels.items()
+                    if digest == release.release_digest
+                ],
             }
             for release in self.store.list_releases(application_id)
         ]
@@ -139,24 +182,33 @@ class ApplicationService:
     ) -> dict[str, Any]:
         application = self.store.get_application(application_id)
         if application.publisher_ref != publisher_ref:
-            raise ApplicationServiceError("only the Application publisher may move channels")
+            raise ApplicationServiceError(
+                "only the Application publisher may move channels"
+            )
         release = self.store.get_release(application_id, release_digest)
         if release.publisher_ref != publisher_ref:
             raise ApplicationServiceError("release publisher does not own Application")
         channels = self.store.get_channels(application_id).get("channels") or {}
         channel_id = str(channel or "").strip().lower()
         if channel_id == "prerelease" and not channels.get("stable"):
-            raise ApplicationServiceError("public prerelease requires an existing stable release")
+            raise ApplicationServiceError(
+                "public prerelease requires an existing stable release"
+            )
         if channel_id == "stable" and channels.get("stable"):
             if channels.get("prerelease") != release_digest:
-                raise ApplicationServiceError("later stable must promote the exact current prerelease digest")
+                raise ApplicationServiceError(
+                    "later stable must promote the exact current prerelease digest"
+                )
         updated = self.store.set_channel(
             application_id,
             channel_id,
             release_digest,
             expected_release_digest=expected_release_digest,
         )
-        if channel_id == "stable" and updated.get("channels", {}).get("prerelease") == release_digest:
+        if (
+            channel_id == "stable"
+            and updated.get("channels", {}).get("prerelease") == release_digest
+        ):
             updated = self.store.set_channel(
                 application_id,
                 "prerelease",
@@ -213,7 +265,10 @@ class ApplicationService:
                 update_policy="auto_compatible",
                 revision=1,
             )
-        if subscription.update_policy == "pinned" and subscription.pinned_release_digest:
+        if (
+            subscription.update_policy == "pinned"
+            and subscription.pinned_release_digest
+        ):
             digest = subscription.pinned_release_digest
             effective_channel = "pinned"
         elif subscription.update_track == "prerelease" and channels.get("prerelease"):
@@ -256,7 +311,9 @@ class ApplicationService:
             "update_track": subscription.update_track,
             "effective_channel": effective_channel,
             "release_digest": digest,
-            "reason": "resolved" if rollout is None or rollout["eligible"] else "stable_rollout_fallback",
+            "reason": "resolved"
+            if rollout is None or rollout["eligible"]
+            else "stable_rollout_fallback",
             "rollout": rollout,
             "release": self.store.get_release(application_id, digest).to_dict(),
         }
@@ -308,7 +365,9 @@ class ApplicationService:
                 release_digest=release_digest,
                 runtime_root_ref=runtime_root_ref,
             )
-        return self.store.save_runtime_selection(value, expected_revision=expected_revision)
+        return self.store.save_runtime_selection(
+            value, expected_revision=expected_revision
+        )
 
     def reconcile_runtime_selection(
         self,
@@ -320,7 +379,11 @@ class ApplicationService:
     ) -> dict[str, Any]:
         selection = self.store.get_runtime_selection(webspace_id, application_id)
         if runtime_root_exists(selection.runtime_root_ref):
-            return {"status": "ready", "selection": selection.to_dict(), "repaired": False}
+            return {
+                "status": "ready",
+                "selection": selection.to_dict(),
+                "repaired": False,
+            }
         if rematerialize is None:
             return {
                 "status": "missing_runtime_root",
@@ -336,7 +399,12 @@ class ApplicationService:
                 "repaired": False,
                 "result": result,
             }
-        return {"status": "ready", "selection": selection.to_dict(), "repaired": True, "result": result}
+        return {
+            "status": "ready",
+            "selection": selection.to_dict(),
+            "repaired": True,
+            "result": result,
+        }
 
     def component_references(self) -> dict[str, Any]:
         references: dict[str, list[dict[str, Any]]] = {}
@@ -351,9 +419,13 @@ class ApplicationService:
                         "installation_id": installation.installation_id,
                         "package_digest": component["package_digest"],
                         "lifecycle": component["lifecycle"],
-                        "active_runtime_leases": list(installation.active_runtime_leases),
+                        "active_runtime_leases": list(
+                            installation.active_runtime_leases
+                        ),
                         "rollback_holds": list(installation.rollback_holds),
-                        "uncertain_operation_refs": list(installation.uncertain_operation_refs),
+                        "uncertain_operation_refs": list(
+                            installation.uncertain_operation_refs
+                        ),
                     }
                 )
         return {
@@ -365,7 +437,9 @@ class ApplicationService:
         lifecycle_by_ref: dict[str, str] = {}
         composition = release.project_release.composition_lock
         if composition is not None:
-            lifecycle_by_ref = {member.ref: member.lifecycle for member in composition.members}
+            lifecycle_by_ref = {
+                member.ref: member.lifecycle for member in composition.members
+            }
         return [
             {
                 "component_ref": component.key,
@@ -383,7 +457,10 @@ class ApplicationService:
         target = {item["component_ref"]: item["package_digest"] for item in components}
         conflicts: list[dict[str, Any]] = []
         for installation in self.store.list_installations():
-            if installation.application_id == application_id or installation.status == "removed":
+            if (
+                installation.application_id == application_id
+                or installation.status == "removed"
+            ):
                 continue
             for current in installation.component_refs:
                 requested = target.get(current["component_ref"])
@@ -397,12 +474,17 @@ class ApplicationService:
                             "reason": "side_by_side_component_versions_not_supported",
                         }
                     )
-        return sorted(conflicts, key=lambda item: (item["component_ref"], item["active_application_id"]))
+        return sorted(
+            conflicts,
+            key=lambda item: (item["component_ref"], item["active_application_id"]),
+        )
 
     @staticmethod
     def _compatibility_summary(release: ApplicationRelease) -> dict[str, Any]:
         composition = release.project_release.composition_lock
-        compatibility = dict(composition.compatibility) if composition is not None else {}
+        compatibility = (
+            dict(composition.compatibility) if composition is not None else {}
+        )
         return {
             "platform": compatibility,
             "permissions": list(release.project_release.permissions),
@@ -412,7 +494,9 @@ class ApplicationService:
                 "rollback_mode": "snapshot_restore",
             },
             "contract_locks_present": release.project_release.contract_locks_present,
-            "validation_evidence_count": len(release.project_release.validation_evidence),
+            "validation_evidence_count": len(
+                release.project_release.validation_evidence
+            ),
         }
 
     @staticmethod
@@ -474,6 +558,8 @@ class ApplicationService:
         paused: bool = False,
         pinned_release_digest: str | None = None,
         access_redemption_id: str | None = None,
+        component_ref: str | None = None,
+        target_node_id: str | None = None,
     ) -> ApplicationOperation:
         authority = _require_authority(
             actor_ref=actor_ref,
@@ -482,9 +568,17 @@ class ApplicationService:
             required_capability="applications.plan",
         )
         operation_kind = str(kind or "").strip().lower()
-        if operation_kind not in {"install", "update", "remove", "select_track"}:
+        if operation_kind not in {
+            "install",
+            "update",
+            "remove",
+            "select_track",
+            "relocate_component",
+            "remove_component",
+        }:
             raise ApplicationServiceError(
-                "Core operation kind must be install, update, remove, or select_track"
+                "Core operation kind must be install, update, remove, select_track, "
+                "relocate_component, or remove_component"
             )
         if data_policy not in {"retain", "delete", "snapshot_then_delete"}:
             raise ApplicationServiceError("data_policy is invalid")
@@ -493,9 +587,33 @@ class ApplicationService:
             current_subscription = self.store.get_subscription(application_id)
         except FileNotFoundError:
             current_subscription = None
+        deployment_snapshot: dict[str, Any] | None = None
+        installation_revision: int | None = None
         if operation_kind == "select_track":
             current = None
-            observed_revision = current_subscription.revision if current_subscription is not None else 0
+            observed_revision = (
+                current_subscription.revision if current_subscription is not None else 0
+            )
+        elif operation_kind in {"relocate_component", "remove_component"}:
+            try:
+                current = self.store.get_installation(application_id)
+            except FileNotFoundError:
+                current = None
+            if current is None or current.status != "active":
+                raise ApplicationServiceError(
+                    "Application must be installed before changing component placement"
+                )
+            installation_revision = current.revision
+            snapshot_provider = getattr(self.executor, "deployment_snapshot", None)
+            if not callable(snapshot_provider):
+                raise ApplicationServiceError(
+                    "Application placement planning is not configured"
+                )
+            raw_snapshot = snapshot_provider(application_id)
+            if not isinstance(raw_snapshot, Mapping):
+                raise ApplicationServiceError("Application deployment is missing")
+            deployment_snapshot = dict(raw_snapshot)
+            observed_revision = int(deployment_snapshot.get("revision") or 0)
         else:
             try:
                 current = self.store.get_installation(application_id)
@@ -505,14 +623,73 @@ class ApplicationService:
         if observed_revision != expected_revision:
             from .store import ApplicationRevisionConflict
 
-            raise ApplicationRevisionConflict(expected=expected_revision, observed=observed_revision)
-        if operation_kind == "install" and current is not None and current.status != "removed":
-            raise ApplicationServiceError("Application is already installed")
-        if operation_kind in {"update", "remove"} and (current is None or current.status == "removed"):
-            raise ApplicationServiceError(f"Application must be installed before {operation_kind}")
+            raise ApplicationRevisionConflict(
+                expected=expected_revision, observed=observed_revision
+            )
         if (
-            operation_kind == "remove"
-            and not bool(application.protection.get("active_installation_removable", True))
+            operation_kind == "install"
+            and current is not None
+            and current.status != "removed"
+        ):
+            raise ApplicationServiceError("Application is already installed")
+        if operation_kind in {"update", "remove"} and (
+            current is None or current.status == "removed"
+        ):
+            raise ApplicationServiceError(
+                f"Application must be installed before {operation_kind}"
+            )
+        placement_change = None
+        if operation_kind in {"relocate_component", "remove_component"}:
+            selected_component = str(component_ref or "").strip()
+            if not selected_component:
+                raise ApplicationServiceError("component_ref is required")
+            placements = [
+                dict(item)
+                for item in (deployment_snapshot or {}).get("placements") or ()
+                if isinstance(item, Mapping)
+            ]
+            current_placement = next(
+                (
+                    item
+                    for item in placements
+                    if str(item.get("component_ref") or "") == selected_component
+                ),
+                None,
+            )
+            if current_placement is None:
+                raise ApplicationServiceError(
+                    "component_ref is absent from the current Application deployment"
+                )
+            if str(current_placement.get("mode") or "") == "disabled":
+                raise ApplicationServiceError(
+                    "component_ref is already uninstalled from the Application deployment"
+                )
+            active_placements = [
+                item for item in placements if str(item.get("mode") or "") != "disabled"
+            ]
+            if operation_kind == "remove_component" and len(active_placements) == 1:
+                raise ApplicationServiceError(
+                    "The final Application component requires full Application removal"
+                )
+            selected_target = str(target_node_id or "").strip()
+            if operation_kind == "relocate_component" and not selected_target:
+                raise ApplicationServiceError(
+                    "target_node_id is required for component relocation"
+                )
+            placement_change = {
+                "component_ref": selected_component,
+                "from": current_placement,
+                "target_node_id": (
+                    selected_target if operation_kind == "relocate_component" else None
+                ),
+                "effect": (
+                    "relocate"
+                    if operation_kind == "relocate_component"
+                    else "uninstall"
+                ),
+            }
+        if operation_kind == "remove" and not bool(
+            application.protection.get("active_installation_removable", True)
         ):
             raise ApplicationServiceError(
                 "active protected system Application cannot remove itself; use a declared recovery surface"
@@ -530,17 +707,16 @@ class ApplicationService:
                 )
                 release_digest = str(effective.get("release_digest") or "")
             if not release_digest:
-                raise ApplicationServiceError("no exact release is available for operation")
+                raise ApplicationServiceError(
+                    "no exact release is available for operation"
+                )
             release = self.store.get_release(application_id, release_digest)
             channels = self.store.get_channels(application_id).get("channels") or {}
-            public_release = (
-                application.visibility == "public"
-                and (
-                    channels.get("stable") == release_digest
-                    or (
-                        channels.get("stable") is not None
-                        and channels.get("prerelease") == release_digest
-                    )
+            public_release = application.visibility == "public" and (
+                channels.get("stable") == release_digest
+                or (
+                    channels.get("stable") is not None
+                    and channels.get("prerelease") == release_digest
                 )
             )
             publisher_local = subnet_ref == application.publisher_ref
@@ -566,7 +742,11 @@ class ApplicationService:
                 previous_release = self.store.get_release(
                     application_id, current.installed_release_digest
                 )
-        removal = self.simulate_removal(application_id, data_policy=data_policy) if operation_kind == "remove" else None
+        removal = (
+            self.simulate_removal(application_id, data_policy=data_policy)
+            if operation_kind == "remove"
+            else None
+        )
         subscription_change = None
         if operation_kind == "select_track":
             subscription_change = ApplicationSubscription(
@@ -593,9 +773,15 @@ class ApplicationService:
         snapshot = {
             "required": operation_kind == "update",
             "mode": "snapshot_restore" if operation_kind == "update" else "none",
-            "consistency_boundary": "artifact_activation_transaction" if operation_kind == "update" else None,
-            "source_release_digest": current.installed_release_digest if current is not None and operation_kind == "update" else None,
-            "retention": "until_successor_release_verified" if operation_kind == "update" else None,
+            "consistency_boundary": "artifact_activation_transaction"
+            if operation_kind == "update"
+            else None,
+            "source_release_digest": current.installed_release_digest
+            if current is not None and operation_kind == "update"
+            else None,
+            "retention": "until_successor_release_verified"
+            if operation_kind == "update"
+            else None,
         }
         plan = {
             "schema": "adaos.application.operation_plan.v1",
@@ -612,9 +798,7 @@ class ApplicationService:
                 f"Review {operation_kind} for Application {application_id}."
             ),
             "permissions": (
-                list(release.project_release.permissions)
-                if release is not None
-                else []
+                list(release.project_release.permissions) if release is not None else []
             ),
             "permission_review": (
                 self._permission_review(
@@ -632,6 +816,8 @@ class ApplicationService:
             "data_policy": data_policy,
             "subscription_change": subscription_change,
             "subscription_default": subscription_default,
+            "placement_change": placement_change,
+            "installation_revision": installation_revision,
             "access": {
                 "mode": (
                     "publisher_local"
@@ -646,7 +832,9 @@ class ApplicationService:
             else None,
         }
         plan_digest = canonical_payload_digest(plan)
-        identity = hashlib.sha256(f"{plan_digest}:{idempotency_key}".encode("utf-8")).hexdigest()[:32]
+        identity = hashlib.sha256(
+            f"{plan_digest}:{idempotency_key}".encode("utf-8")
+        ).hexdigest()[:32]
         operation = ApplicationOperation(
             operation_id=f"appop.{identity}",
             application_id=application_id,
@@ -702,20 +890,31 @@ class ApplicationService:
             required_capability="applications.apply",
         )
         if operation.actor_ref != actor_ref or operation.subnet_ref != subnet_ref:
-            raise ApplicationServiceError("operation authority does not match reviewed plan")
-        if operation.plan_digest != plan_digest or operation.idempotency_key != idempotency_key:
-            raise ApplicationServiceError("reviewed plan or idempotency identity does not match")
+            raise ApplicationServiceError(
+                "operation authority does not match reviewed plan"
+            )
+        if (
+            operation.plan_digest != plan_digest
+            or operation.idempotency_key != idempotency_key
+        ):
+            raise ApplicationServiceError(
+                "reviewed plan or idempotency identity does not match"
+            )
         if operation.status == "succeeded":
             return operation
         if operation.status != "planned":
-            raise ApplicationServiceError(f"operation cannot apply from {operation.status}")
+            raise ApplicationServiceError(
+                f"operation cannot apply from {operation.status}"
+            )
         conflicts = list(operation.plan.get("conflicts") or [])
         if conflicts:
             raise ApplicationPlanConflict(conflicts)
         if operation.kind == "select_track":
             raw_subscription = operation.plan.get("subscription_change")
             if not isinstance(raw_subscription, Mapping):
-                raise ApplicationServiceError("select_track plan is missing subscription state")
+                raise ApplicationServiceError(
+                    "select_track plan is missing subscription state"
+                )
             subscription = ApplicationSubscription.from_mapping(raw_subscription)
             self.store.save_subscription(
                 subscription, expected_revision=operation.expected_revision
@@ -726,7 +925,9 @@ class ApplicationService:
                 result={"subscription": subscription.to_dict()},
             )
         if self.executor is None:
-            raise ApplicationServiceError("Application operation executor is not configured")
+            raise ApplicationServiceError(
+                "Application operation executor is not configured"
+            )
         applying = self._transition_operation(operation, "applying")
         try:
             result = dict(self.executor(operation.plan))
@@ -757,7 +958,11 @@ class ApplicationService:
                 )
             snapshot_ref = str(receipt["snapshot_ref"])
             self.store.put_snapshot_receipt(snapshot_ref, receipt)
-        if not bool(result.get("ok")) or str(result.get("status") or "") not in {"succeeded", "active", "removed"}:
+        if not bool(result.get("ok")) or str(result.get("status") or "") not in {
+            "succeeded",
+            "active",
+            "removed",
+        }:
             if snapshot_ref is not None:
                 restore = result.get("restore_receipt")
                 if (
@@ -783,6 +988,69 @@ class ApplicationService:
                 result=result,
                 recovery_reason=str(result.get("reason") or "executor_rejected"),
             )
+        if operation.kind == "relocate_component":
+            return self._transition_operation(
+                applying,
+                "succeeded",
+                result=result,
+            )
+        if operation.kind == "remove_component":
+            try:
+                current_installation = self.store.get_installation(
+                    operation.application_id
+                )
+            except FileNotFoundError:
+                return self._transition_operation(
+                    applying,
+                    "unknown",
+                    result=result,
+                    recovery_reason="installation_missing_after_component_removal",
+                )
+            reviewed_installation_revision = int(
+                operation.plan.get("installation_revision") or 0
+            )
+            if current_installation.revision != reviewed_installation_revision:
+                return self._transition_operation(
+                    applying,
+                    "unknown",
+                    result=result,
+                    recovery_reason="installation_revision_changed_after_component_removal",
+                )
+            change = operation.plan.get("placement_change")
+            component_ref = (
+                str(change.get("component_ref") or "").strip()
+                if isinstance(change, Mapping)
+                else ""
+            )
+            remaining_components = tuple(
+                item
+                for item in current_installation.component_refs
+                if str(item.get("component_ref") or "") != component_ref
+            )
+            if not component_ref or len(remaining_components) >= len(
+                current_installation.component_refs
+            ):
+                return self._transition_operation(
+                    applying,
+                    "unknown",
+                    result=result,
+                    recovery_reason="removed_component_absent_from_installation",
+                )
+            installation = replace(
+                current_installation,
+                component_refs=remaining_components,
+                revision=current_installation.revision + 1,
+                updated_at=utc_now(),
+            )
+            self.store.save_installation(
+                installation,
+                expected_revision=current_installation.revision,
+            )
+            return self._transition_operation(
+                applying,
+                "succeeded",
+                result={**result, "installation": installation.to_dict()},
+            )
         current: ApplicationInstallation | None
         try:
             current = self.store.get_installation(operation.application_id)
@@ -798,7 +1066,9 @@ class ApplicationService:
             )
         if operation.kind in {"install", "update"}:
             installation = ApplicationInstallation(
-                installation_id=current.installation_id if current else f"installation:{operation.application_id}",
+                installation_id=current.installation_id
+                if current
+                else f"installation:{operation.application_id}",
                 application_id=operation.application_id,
                 installed_release_digest=str(operation.plan["release_digest"]),
                 component_refs=tuple(operation.plan.get("components") or ()),
@@ -815,14 +1085,18 @@ class ApplicationService:
             installation = replace(
                 current,
                 status="removed",
-                data_policy=str(operation.plan.get("data_policy") or current.data_policy),
+                data_policy=str(
+                    operation.plan.get("data_policy") or current.data_policy
+                ),
                 revision=current.revision + 1,
                 updated_at=utc_now(),
             )
         self.store.save_installation(installation, expected_revision=observed_revision)
         subscription_result = None
         raw_subscription_default = operation.plan.get("subscription_default")
-        if operation.kind == "install" and isinstance(raw_subscription_default, Mapping):
+        if operation.kind == "install" and isinstance(
+            raw_subscription_default, Mapping
+        ):
             try:
                 subscription_result = self.store.get_subscription(
                     operation.application_id
@@ -839,7 +1113,8 @@ class ApplicationService:
                             or "auto_compatible"
                         ),  # type: ignore[arg-type]
                         observed_release_digest=str(
-                            raw_subscription_default.get("observed_release_digest") or ""
+                            raw_subscription_default.get("observed_release_digest")
+                            or ""
                         )
                         or None,
                         paused=bool(raw_subscription_default.get("paused", False)),
@@ -865,7 +1140,11 @@ class ApplicationService:
         operation = self.store.get_operation(operation_id)
         if operation.status not in {"unknown", "applying", "reconciling"}:
             return operation
-        reconciling = operation if operation.status == "reconciling" else self._transition_operation(operation, "reconciling")
+        reconciling = (
+            operation
+            if operation.status == "reconciling"
+            else self._transition_operation(operation, "reconciling")
+        )
         observed = dict(observer(reconciling))
         status = str(observed.get("status") or "unknown")
         if status not in {"succeeded", "failed", "unknown"}:
@@ -874,10 +1153,14 @@ class ApplicationService:
             reconciling,
             status,
             result=observed,
-            recovery_reason=None if status != "unknown" else str(observed.get("reason") or "authoritative_state_inconclusive"),
+            recovery_reason=None
+            if status != "unknown"
+            else str(observed.get("reason") or "authoritative_state_inconclusive"),
         )
 
-    def simulate_removal(self, application_id: str, *, data_policy: str = "retain") -> dict[str, Any]:
+    def simulate_removal(
+        self, application_id: str, *, data_policy: str = "retain"
+    ) -> dict[str, Any]:
         installation = self.store.get_installation(application_id)
         index = self.component_references()["components"]
         components: list[dict[str, Any]] = []
@@ -890,7 +1173,11 @@ class ApplicationService:
             holds = [
                 hold
                 for item in index.get(component["component_ref"], [])
-                for field_name in ("active_runtime_leases", "rollback_holds", "uncertain_operation_refs")
+                for field_name in (
+                    "active_runtime_leases",
+                    "rollback_holds",
+                    "uncertain_operation_refs",
+                )
                 for hold in item.get(field_name, [])
             ]
             components.append(
@@ -898,7 +1185,9 @@ class ApplicationService:
                     "component_ref": component["component_ref"],
                     "package_digest": component["package_digest"],
                     "remove_package": not others and not holds,
-                    "retained_by_applications": sorted({item["application_id"] for item in others}),
+                    "retained_by_applications": sorted(
+                        {item["application_id"] for item in others}
+                    ),
                     "retained_by_holds": sorted(set(holds)),
                 }
             )
@@ -1041,8 +1330,14 @@ class ApplicationService:
         installed_only: bool = False,
         subscriber_subnet_ref: str | None = None,
     ) -> list[dict[str, Any]]:
-        installations = {item.application_id: item for item in self.store.list_installations() if item.status != "removed"}
-        subscriptions = {item.application_id: item for item in self.store.list_subscriptions()}
+        installations = {
+            item.application_id: item
+            for item in self.store.list_installations()
+            if item.status != "removed"
+        }
+        subscriptions = {
+            item.application_id: item for item in self.store.list_subscriptions()
+        }
         selections: dict[str, list[RuntimeSelection]] = {}
         for selection in self.store.list_runtime_selections():
             selections.setdefault(selection.application_id, []).append(selection)
@@ -1054,8 +1349,10 @@ class ApplicationService:
             installation = installations.get(application.application_id)
             subscription = subscriptions.get(application.application_id)
             runtime_selections = selections.get(application.application_id, [])
-            if installed_only and installation is None and not any(
-                item.source == "local_trial" for item in runtime_selections
+            if (
+                installed_only
+                and installation is None
+                and not any(item.source == "local_trial" for item in runtime_selections)
             ):
                 continue
             models.append(

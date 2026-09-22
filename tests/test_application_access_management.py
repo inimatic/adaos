@@ -269,7 +269,10 @@ def test_project_release_binds_structured_application_contract(tmp_path: Path) -
     assert restored.permission_profile == release.permission_profile
     assert [item.role_id for item in restored.application_roles] == ["editor", "viewer"]
     assert restored.project_release.composition_lock is not None
-    assert restored.project_release.composition_lock.permission_profile == _profile().to_dict()
+    assert (
+        restored.project_release.composition_lock.permission_profile
+        == _profile().to_dict()
+    )
 
 
 def test_access_surface_uses_latest_release_without_installation_or_channel(
@@ -283,7 +286,9 @@ def test_access_surface_uses_latest_release_without_installation_or_channel(
     assert surface["installation"] is None
 
 
-def test_trial_runtime_context_resolves_without_stable_installation(tmp_path: Path) -> None:
+def test_trial_runtime_context_resolves_without_stable_installation(
+    tmp_path: Path,
+) -> None:
     applications, management, release = _services(tmp_path)
     applications.store.save_runtime_selection(
         RuntimeSelection(
@@ -377,6 +382,7 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
             "token_expires_at": _expires(24),
             "secret_value": "must-never-be-persisted",
         },
+        expected_revision=0,
     )
 
     application_view = management.application_detail("family_tasks")
@@ -452,15 +458,17 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
         for person in users_view[group]
         for grant_value in person["application_access"]
     }
-    assert app_grant_ids == user_grant_ids == {
-        member.grant_id,
-        child.grant_id,
-        guest.grant_id,
-    }
+    assert (
+        app_grant_ids
+        == user_grant_ids
+        == {
+            member.grant_id,
+            child.grant_id,
+            guest.grant_id,
+        }
+    )
     assert users_view["diagnostics"]["content_redacted"] is True
-    assert users_view["devices"] == [
-        {"device_id": "phone-1", "status": "active"}
-    ]
+    assert users_view["devices"] == [{"device_id": "phone-1", "status": "active"}]
     assert users_view["sessions"] == [
         {
             "session_id": "session-1",
@@ -507,7 +515,9 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
     assert masha["display_label_source"] == "subject_ref"
     assert masha["initials"] == "M"
     assert masha["application_access_count"] == 1
-    assert any(item["subject_ref"] == "invite:guest-link-1" for item in users_view["guests"])
+    assert any(
+        item["subject_ref"] == "invite:guest-link-1" for item in users_view["guests"]
+    )
     assert account["status"] == "connected"
     assert "secret_value" not in account
     persisted_accounts = "\n".join(
@@ -527,6 +537,7 @@ def test_applications_and_users_access_share_grants_roles_and_redacted_accounts(
                 "scopes": ["calendar.write"],
                 "status": "connected",
             },
+            expected_revision=0,
         )
     assert {item["id"] for item in application_view["sections"]["roles"]} == {
         "editor",
@@ -581,9 +592,12 @@ def test_profiler_update_review_simulation_reviews_anomalies_and_snapshots(
     assert profiler["role_matrix"][1]["compatible"]["guest"] is True
     assert profiler["preview_modes"]["guest"] == ["viewer"]
     assert profiler["preview_modes"]["custom"] == ["editor", "viewer"]
-    assert {item["kind"] for item in management.anomalies(
-        "family_tasks", release_digest=release.release_digest
-    )} == {"unexpected_permission", "unexpected_network_destination"}
+    assert {
+        item["kind"]
+        for item in management.anomalies(
+            "family_tasks", release_digest=release.release_digest
+        )
+    } == {"unexpected_permission", "unexpected_network_destination"}
     assert "stale_device" in management.access_reviews()[0]["reasons"]
 
     updated = _release(applications, version="1.1.0", updated=True)
@@ -627,9 +641,7 @@ def test_profiler_update_review_simulation_reviews_anomalies_and_snapshots(
     snapshot = management.export_snapshot("family_tasks")
     preview = management.import_snapshot(snapshot, issuer_ref="user:owner", apply=False)
     assert preview["valid"] is True
-    assert grant.grant_id in {
-        item["grant_id"] for item in preview["planned_grants"]
-    }
+    assert grant.grant_id in {item["grant_id"] for item in preview["planned_grants"]}
     assert set(ROLE_TEMPLATES) == {
         "classroom",
         "dashboard",
@@ -640,7 +652,9 @@ def test_profiler_update_review_simulation_reviews_anomalies_and_snapshots(
     }
 
 
-def test_final_verification_blocks_drift_and_admits_scoped_release(tmp_path: Path) -> None:
+def test_final_verification_blocks_drift_and_admits_scoped_release(
+    tmp_path: Path,
+) -> None:
     _, management, release = _services(tmp_path)
 
     failed = _verification(
@@ -670,7 +684,9 @@ def test_final_verification_blocks_drift_and_admits_scoped_release(tmp_path: Pat
     admitted_publication = management.admit_release_stage(
         "family_tasks", release_digest=release.release_digest, stage="publication"
     )
-    assert admitted_publication["report_digest"] == publication["report"]["report_digest"]
+    assert (
+        admitted_publication["report_digest"] == publication["report"]["report_digest"]
+    )
     assert publication["attestation"]["_type"] == "https://in-toto.io/Statement/v1"
     assert publication["attestation"]["statement_digest"].startswith("sha256:")
 
@@ -890,6 +906,7 @@ def test_application_access_v1_end_to_end_evidence_bundle(tmp_path: Path) -> Non
             "token_expires_at": _expires(24),
             "secret_value": "must-never-enter-evidence",
         },
+        expected_revision=0,
     )
     missing_account = management.put_connected_account(
         "family_tasks",
@@ -902,6 +919,7 @@ def test_application_access_v1_end_to_end_evidence_bundle(tmp_path: Path) -> Non
             "scopes": ["calendar.read"],
             "status": "missing",
         },
+        expected_revision=0,
     )
     revoked_account = management.put_connected_account(
         "family_tasks",
@@ -914,6 +932,7 @@ def test_application_access_v1_end_to_end_evidence_bundle(tmp_path: Path) -> Non
             "scopes": ["calendar.read"],
             "status": "revoked",
         },
+        expected_revision=1,
     )
     denied_account = management.put_connected_account(
         "family_tasks",
@@ -926,6 +945,7 @@ def test_application_access_v1_end_to_end_evidence_bundle(tmp_path: Path) -> Non
             "scopes": ["calendar.read"],
             "status": "denied",
         },
+        expected_revision=0,
     )
     expired_account = management.put_connected_account(
         "family_tasks",
@@ -939,13 +959,30 @@ def test_application_access_v1_end_to_end_evidence_bundle(tmp_path: Path) -> Non
             "status": "connected",
             "token_expires_at": "2020-01-01T00:00:00+00:00",
         },
+        expected_revision=0,
     )
     assert connected_account["status"] == "connected"
+    assert connected_account["revision"] == 1
     assert "secret_value" not in connected_account
     assert missing_account["status"] == "missing"
     assert revoked_account["status"] == "revoked"
+    assert revoked_account["revision"] == 2
     assert denied_account["status"] == "denied"
     assert expired_account["status"] == "expired"
+    with pytest.raises(ApplicationAccessError, match="revision conflict"):
+        management.put_connected_account(
+            "family_tasks",
+            {
+                "release_digest": release.release_digest,
+                "account_id": "calendar-e2e",
+                "provider_id": "calendar",
+                "subject_ref": "user:owner",
+                "mode": "delegated_user",
+                "scopes": ["calendar.read"],
+                "status": "connected",
+            },
+            expected_revision=1,
+        )
     persisted_accounts = "\n".join(
         path.read_text(encoding="utf-8")
         for path in (applications.store.root / "connected_accounts").glob("*.json")
@@ -980,7 +1017,9 @@ def test_application_access_v1_end_to_end_evidence_bundle(tmp_path: Path) -> Non
 
     users = management.users_access()
     assert {item["subject_ref"] for item in users["children"]} == {child.subject_ref}
-    assert any(item["grant_id"] == owner.grant_id for item in users["application_access"])
+    assert any(
+        item["grant_id"] == owner.grant_id for item in users["application_access"]
+    )
 
     verification = _verification(management, release, scope="publication")
     assert verification["ci_status"] == "passed"
@@ -997,6 +1036,4 @@ def test_application_access_v1_end_to_end_evidence_bundle(tmp_path: Path) -> Non
             / "application.release-evidence-bundle.v1.schema.json"
         ).read_text(encoding="utf-8")
     )
-    jsonschema.Draft202012Validator(schema).validate(
-        verification["evidence_bundle"]
-    )
+    jsonschema.Draft202012Validator(schema).validate(verification["evidence_bundle"])

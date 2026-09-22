@@ -20,6 +20,7 @@ PLACEMENT_MODES = {
     "all_matching",
     "per_endpoint",
     "co_located_with",
+    "disabled",
 }
 DEPLOYMENT_STATUSES = {
     "draft",
@@ -525,6 +526,10 @@ class ComponentPlacementPolicy:
         if mode == "singleton" and (minimum != 1 or maximum not in {None, 1}):
             raise ProjectDeploymentContractError(
                 "singleton placement requires exactly one instance"
+            )
+        if mode == "disabled" and (selected or minimum != 0 or maximum is not None):
+            raise ProjectDeploymentContractError(
+                "disabled placement requires no nodes and zero instances"
             )
         object.__setattr__(self, "min_instances", minimum)
         object.__setattr__(self, "max_instances", maximum)

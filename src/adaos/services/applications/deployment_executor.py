@@ -18,7 +18,10 @@ from adaos.domain.project_deployment import (
     RolloutPolicy,
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
-from adaos.services.project_deployment import DeploymentPrincipal, ProjectDeploymentRuntime
+from adaos.services.project_deployment import (
+    DeploymentPrincipal,
+    ProjectDeploymentRuntime,
+)
 
 
 class ApplicationDeploymentExecutorError(RuntimeError):
@@ -28,7 +31,13 @@ class ApplicationDeploymentExecutorError(RuntimeError):
 class ApplicationDataSnapshotStore:
     """Bounded snapshots of the canonical per-Application data namespace."""
 
-    def __init__(self, state_dir: Path, *, max_bytes: int = 512 * 1024 * 1024, max_files: int = 10_000) -> None:
+    def __init__(
+        self,
+        state_dir: Path,
+        *,
+        max_bytes: int = 512 * 1024 * 1024,
+        max_files: int = 10_000,
+    ) -> None:
         self.state_dir = Path(state_dir).expanduser().resolve()
         self.max_bytes = int(max_bytes)
         self.max_files = int(max_files)
@@ -55,9 +64,13 @@ class ApplicationDataSnapshotStore:
         if (
             not token
             or token[0] not in "abcdefghijklmnopqrstuvwxyz0123456789"
-            or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_.-" for char in token)
+            or any(
+                char not in "abcdefghijklmnopqrstuvwxyz0123456789_.-" for char in token
+            )
         ):
-            raise ApplicationDeploymentExecutorError("application_id is invalid for data snapshot")
+            raise ApplicationDeploymentExecutorError(
+                "application_id is invalid for data snapshot"
+            )
         return token
 
     def _inventory(self, root: Path) -> tuple[list[dict[str, Any]], int]:
@@ -66,14 +79,18 @@ class ApplicationDataSnapshotStore:
         if root.is_dir():
             for path in sorted(root.rglob("*")):
                 if path.is_symlink():
-                    raise ApplicationDeploymentExecutorError("Application data snapshots reject symbolic links")
+                    raise ApplicationDeploymentExecutorError(
+                        "Application data snapshots reject symbolic links"
+                    )
                 if not path.is_file():
                     continue
                 relative = path.relative_to(root).as_posix()
                 size = path.stat().st_size
                 total += size
                 if len(records) >= self.max_files or total > self.max_bytes:
-                    raise ApplicationDeploymentExecutorError("Application data exceeds snapshot bounds")
+                    raise ApplicationDeploymentExecutorError(
+                        "Application data exceeds snapshot bounds"
+                    )
                 hasher = hashlib.sha256()
                 with path.open("rb") as stream:
                     while True:
@@ -82,14 +99,24 @@ class ApplicationDataSnapshotStore:
                             break
                         hasher.update(chunk)
                 digest = hasher.hexdigest()
-                records.append({"path": relative, "size_bytes": size, "digest": f"sha256:{digest}"})
+                records.append(
+                    {"path": relative, "size_bytes": size, "digest": f"sha256:{digest}"}
+                )
         return records, total
 
-    def create(self, application_id: str, *, source_release_digest: str, consistency_boundary: str) -> dict[str, Any]:
+    def create(
+        self,
+        application_id: str,
+        *,
+        source_release_digest: str,
+        consistency_boundary: str,
+    ) -> dict[str, Any]:
         token = self._token(application_id)
         source = (self.data_root / token).resolve()
         if source.parent != self.data_root:
-            raise ApplicationDeploymentExecutorError("Application data path escaped authority root")
+            raise ApplicationDeploymentExecutorError(
+                "Application data path escaped authority root"
+            )
         records, total = self._inventory(source)
         identity = canonical_payload_digest(
             {
@@ -103,7 +130,9 @@ class ApplicationDataSnapshotStore:
         target = self.snapshots_root / identity.split(":", 1)[1]
         with mutation_lock(self.lock_path, timeout_s=30.0):
             if not target.is_dir():
-                temporary = self.snapshots_root / f".{target.name}.tmp-{uuid.uuid4().hex}"
+                temporary = (
+                    self.snapshots_root / f".{target.name}.tmp-{uuid.uuid4().hex}"
+                )
                 temporary.mkdir(parents=True, exist_ok=False)
                 try:
                     if source.is_dir():
@@ -117,8 +146,11 @@ class ApplicationDataSnapshotStore:
                         "source_release_digest": source_release_digest,
                         "consistency_boundary": consistency_boundary,
                         "snapshot_digest": identity,
-                        "file_count": len(records), "size_bytes": total,
-                        "files": records, "created_at": utc_now(), "status": "captured",
+                        "file_count": len(records),
+                        "size_bytes": total,
+                        "files": records,
+                        "created_at": utc_now(),
+                        "status": "captured",
                     }
                     atomic_write_json(temporary / "receipt.json", receipt)
                     temporary.replace(target)
@@ -134,13 +166,20 @@ class ApplicationDataSnapshotStore:
             raise ApplicationDeploymentExecutorError("snapshot_ref is invalid")
         application_id = self._token(parts[1])
         snapshot = (self.snapshots_root / parts[2]).resolve()
-        if snapshot.parent != self.snapshots_root or not (snapshot / "receipt.json").is_file():
-            raise ApplicationDeploymentExecutorError("Application data snapshot is unavailable")
+        if (
+            snapshot.parent != self.snapshots_root
+            or not (snapshot / "receipt.json").is_file()
+        ):
+            raise ApplicationDeploymentExecutorError(
+                "Application data snapshot is unavailable"
+            )
         receipt = json.loads((snapshot / "receipt.json").read_text(encoding="utf-8"))
         source = snapshot / "data"
         observed, _ = self._inventory(source)
         if observed != receipt.get("files"):
-            raise ApplicationDeploymentExecutorError("Application data snapshot integrity check failed")
+            raise ApplicationDeploymentExecutorError(
+                "Application data snapshot integrity check failed"
+            )
         target = (self.data_root / application_id).resolve()
         backup = self.data_root / f".{application_id}.restore-{uuid.uuid4().hex}"
         temporary = self.data_root / f".{application_id}.tmp-{uuid.uuid4().hex}"
@@ -162,14 +201,17 @@ class ApplicationDataSnapshotStore:
             "application_id": application_id,
             "restored_release_digest": receipt["source_release_digest"],
             "snapshot_digest": receipt["snapshot_digest"],
-            "status": "restored", "restored_at": utc_now(),
+            "status": "restored",
+            "restored_at": utc_now(),
         }
 
     def delete_data(self, application_id: str) -> None:
         token = self._token(application_id)
         target = (self.data_root / token).resolve()
         if target.parent != self.data_root:
-            raise ApplicationDeploymentExecutorError("Application data path escaped authority root")
+            raise ApplicationDeploymentExecutorError(
+                "Application data path escaped authority root"
+            )
         with mutation_lock(self.lock_path, timeout_s=30.0):
             if target.exists():
                 shutil.rmtree(target)
@@ -185,16 +227,37 @@ class ApplicationDeploymentExecutor:
         return DeploymentPrincipal.create(
             actor_ref=actor_ref,
             permissions={
-                "project.deployment.manage", "project.deployment.inspect",
-                "project.deployment.apply", "project.deployment.reconcile",
-                "project.component.install.remote", "project.component.drain",
-                "project.component.remove", "project.data.runtime.delete",
+                "project.deployment.manage",
+                "project.deployment.inspect",
+                "project.deployment.apply",
+                "project.deployment.reconcile",
+                "project.component.install.remote",
+                "project.component.drain",
+                "project.component.remove",
+                "project.data.runtime.delete",
                 "project.data.derived.delete",
             },
-            approvals={"remote_install", "component_drain", "component_remove", "runtime_data_delete", "derived_data_delete"},
+            approvals={
+                "remote_install",
+                "component_drain",
+                "component_remove",
+                "runtime_data_delete",
+                "derived_data_delete",
+            },
         )
 
-    def _desired(self, plan: Mapping[str, Any], *, status: str = "planned") -> tuple[ProjectDeployment, int, ProjectDeployment | None]:
+    def deployment_snapshot(self, application_id: str) -> dict[str, Any] | None:
+        """Return the current desired placement revision used for reviewed CAS."""
+
+        deployment_id = f"application-deployment:{str(application_id or '').strip()}"
+        try:
+            return self.runtime.store.get_deployment(deployment_id).to_dict()
+        except FileNotFoundError:
+            return None
+
+    def _desired(
+        self, plan: Mapping[str, Any], *, status: str = "planned"
+    ) -> tuple[ProjectDeployment, int, ProjectDeployment | None]:
         application_id = str(plan["application_id"])
         deployment_id = f"application-deployment:{application_id}"
         try:
@@ -207,31 +270,123 @@ class ApplicationDeploymentExecutor:
             expected_revision = 0
             revision = 1
             created_at = utc_now()
+        operation_kind = str(plan.get("kind") or "")
+        if operation_kind in {"relocate_component", "remove_component"}:
+            if previous is None:
+                raise ApplicationDeploymentExecutorError(
+                    "Application deployment is missing"
+                )
+            reviewed_revision = int(plan.get("expected_revision") or 0)
+            if previous.revision != reviewed_revision:
+                raise ApplicationDeploymentExecutorError(
+                    "Application deployment revision changed after review: "
+                    f"expected {reviewed_revision}, observed {previous.revision}"
+                )
+            change = plan.get("placement_change")
+            if not isinstance(change, Mapping):
+                raise ApplicationDeploymentExecutorError(
+                    "Application placement plan is missing its reviewed change"
+                )
+            component_ref = str(change.get("component_ref") or "").strip()
+            placements = list(previous.placements)
+            index = next(
+                (
+                    offset
+                    for offset, placement in enumerate(placements)
+                    if placement.component_ref == component_ref
+                ),
+                None,
+            )
+            if index is None:
+                raise ApplicationDeploymentExecutorError(
+                    "Application component is absent from desired placement"
+                )
+            if operation_kind == "relocate_component":
+                target_node_id = str(change.get("target_node_id") or "").strip()
+                if not target_node_id:
+                    raise ApplicationDeploymentExecutorError(
+                        "Application relocation target is required"
+                    )
+                placements[index] = ComponentPlacementPolicy(
+                    component_ref=component_ref,
+                    mode="selected_nodes",
+                    selected_node_ids=(target_node_id,),
+                    required_capabilities=placements[index].required_capabilities,
+                    required_labels=placements[index].required_labels,
+                    required_capacity=placements[index].required_capacity,
+                    min_instances=1,
+                    max_instances=1,
+                )
+            else:
+                active_placements = [
+                    placement
+                    for placement in placements
+                    if placement.mode != "disabled"
+                ]
+                if len(active_placements) == 1:
+                    raise ApplicationDeploymentExecutorError(
+                        "The final Application component requires full Application removal"
+                    )
+                placements[index] = ComponentPlacementPolicy(
+                    component_ref=component_ref,
+                    mode="disabled",
+                    min_instances=0,
+                    max_instances=None,
+                )
+            desired = replace(
+                previous,
+                revision=previous.revision + 1,
+                placements=tuple(placements),
+                status=status,
+                updated_at=utc_now(),
+            )
+            return desired, previous.revision, previous
         placements = tuple(
             ComponentPlacementPolicy(
-                component_ref=str(item["component_ref"]), mode="singleton",
-                required_capabilities=("project.activate",), min_instances=1, max_instances=1,
+                component_ref=str(item["component_ref"]),
+                mode="singleton",
+                required_capabilities=("project.activate",),
+                min_instances=1,
+                max_instances=1,
             )
             for item in plan.get("components") or ()
         )
         if not placements and previous is not None:
             placements = previous.placements
         if not placements:
-            raise ApplicationDeploymentExecutorError("Application deployment has no components")
+            raise ApplicationDeploymentExecutorError(
+                "Application deployment has no components"
+            )
         data_policy = str(plan.get("data_policy") or "retain")
         desired = ProjectDeployment(
-            deployment_id=deployment_id, project_ref=f"project:{plan['legacy_project_id']}",
-            release_digest=str(plan.get("release_digest") or (previous.release_digest if previous else "")),
-            subnet_id=str(plan["subnet_ref"]).split(":", 1)[-1], revision=revision,
+            deployment_id=deployment_id,
+            project_ref=f"project:{plan['legacy_project_id']}",
+            release_digest=str(
+                plan.get("release_digest")
+                or (previous.release_digest if previous else "")
+            ),
+            subnet_id=str(plan["subnet_ref"]).split(":", 1)[-1],
+            revision=revision,
             placements=placements,
             compatibility=DeploymentCompatibilityPolicy(),
-            rollout=RolloutPolicy(batch_size=1, max_unavailable=1, stop_on_failure=True, rollback_on_failure=True),
+            rollout=RolloutPolicy(
+                batch_size=1,
+                max_unavailable=1,
+                stop_on_failure=True,
+                rollback_on_failure=True,
+            ),
             retention=DataRetentionPolicy(
-                runtime_data="delete" if data_policy in {"delete", "snapshot_then_delete"} else "retain",
-                derived_data="delete" if data_policy in {"delete", "snapshot_then_delete"} else "retain",
+                runtime_data="delete"
+                if data_policy in {"delete", "snapshot_then_delete"}
+                else "retain",
+                derived_data="delete"
+                if data_policy in {"delete", "snapshot_then_delete"}
+                else "retain",
                 external_data="retain",
             ),
-            status=status, created_at=created_at, updated_at=utc_now(),
+            status=status,
+            created_at=created_at,
+            updated_at=utc_now(),
         )
         return desired, expected_revision, previous
 
@@ -240,7 +395,8 @@ class ApplicationDeploymentExecutor:
         self.runtime.define(
             replace(previous, revision=current.revision + 1, updated_at=utc_now()),
             expected_revision=current.revision,
-            principal=self._principal(actor_ref), reason="application_operation_rollback",
+            principal=self._principal(actor_ref),
+            reason="application_operation_rollback",
         )
 
     def __call__(self, plan: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -249,44 +405,100 @@ class ApplicationDeploymentExecutor:
         principal = self._principal(actor_ref)
         snapshot_receipt: dict[str, Any] | None = None
         if kind == "update":
-            snapshot = plan.get("snapshot") if isinstance(plan.get("snapshot"), Mapping) else {}
+            snapshot = (
+                plan.get("snapshot")
+                if isinstance(plan.get("snapshot"), Mapping)
+                else {}
+            )
             snapshot_receipt = self.snapshots.create(
                 str(plan["application_id"]),
                 source_release_digest=str(snapshot.get("source_release_digest") or ""),
-                consistency_boundary=str(snapshot.get("consistency_boundary") or "artifact_activation_transaction"),
+                consistency_boundary=str(
+                    snapshot.get("consistency_boundary")
+                    or "artifact_activation_transaction"
+                ),
             )
         if kind == "remove":
             return self._remove(plan, principal=principal)
-        if kind not in {"install", "update"}:
-            raise ApplicationDeploymentExecutorError("unsupported Application deployment operation")
+        if kind not in {
+            "install",
+            "update",
+            "relocate_component",
+            "remove_component",
+        }:
+            raise ApplicationDeploymentExecutorError(
+                "unsupported Application deployment operation"
+            )
         desired, expected_revision, previous = self._desired(plan)
         self.runtime.define(
-            desired, expected_revision=expected_revision, principal=principal,
+            desired,
+            expected_revision=expected_revision,
+            principal=principal,
             reason=f"application_{kind}",
         )
         deployment_plan = self.runtime.plan(desired.deployment_id, principal=principal)
         if deployment_plan.status == "blocked":
-            restore = self.snapshots.restore(snapshot_receipt["snapshot_ref"]) if snapshot_receipt is not None else None
+            restore = (
+                self.snapshots.restore(snapshot_receipt["snapshot_ref"])
+                if snapshot_receipt is not None
+                else None
+            )
             if previous is not None:
                 self._restore_desired(previous, actor_ref=actor_ref)
-            return {"ok": False, "status": "failed", "reason": "deployment_plan_blocked", "warnings": list(deployment_plan.warnings), "snapshot_receipt": snapshot_receipt, "restore_receipt": restore}
+            return {
+                "ok": False,
+                "status": "failed",
+                "reason": "deployment_plan_blocked",
+                "warnings": list(deployment_plan.warnings),
+                "snapshot_receipt": snapshot_receipt,
+                "restore_receipt": restore,
+            }
         operation = self.runtime.apply(
-            str(deployment_plan.plan_digest), principal=principal,
+            str(deployment_plan.plan_digest),
+            principal=principal,
             idempotency_key=f"application:{plan['idempotency_key']}",
         )
         if operation.state == "succeeded":
-            return {"ok": True, "status": "active", "deployment": desired.to_dict(), "deployment_plan": deployment_plan.to_dict(), "deployment_operation": operation.to_dict(), "snapshot_receipt": snapshot_receipt}
+            return {
+                "ok": True,
+                "status": "active",
+                "deployment": desired.to_dict(),
+                "deployment_plan": deployment_plan.to_dict(),
+                "deployment_operation": operation.to_dict(),
+                "snapshot_receipt": snapshot_receipt,
+            }
         if operation.uncertain or operation.state in {"uncertain", "partial"}:
-            return {"ok": False, "status": "unknown", "reason": "deployment_outcome_uncertain", "deployment_operation": operation.to_dict(), "snapshot_receipt": snapshot_receipt}
-        restore = self.snapshots.restore(snapshot_receipt["snapshot_ref"]) if snapshot_receipt is not None else None
+            return {
+                "ok": False,
+                "status": "unknown",
+                "reason": "deployment_outcome_uncertain",
+                "deployment_operation": operation.to_dict(),
+                "snapshot_receipt": snapshot_receipt,
+            }
+        restore = (
+            self.snapshots.restore(snapshot_receipt["snapshot_ref"])
+            if snapshot_receipt is not None
+            else None
+        )
         if previous is not None:
             self._restore_desired(previous, actor_ref=actor_ref)
-        return {"ok": False, "status": "failed", "reason": "deployment_failed", "deployment_operation": operation.to_dict(), "snapshot_receipt": snapshot_receipt, "restore_receipt": restore}
+        return {
+            "ok": False,
+            "status": "failed",
+            "reason": "deployment_failed",
+            "deployment_operation": operation.to_dict(),
+            "snapshot_receipt": snapshot_receipt,
+            "restore_receipt": restore,
+        }
 
-    def _remove(self, plan: Mapping[str, Any], *, principal: DeploymentPrincipal) -> Mapping[str, Any]:
+    def _remove(
+        self, plan: Mapping[str, Any], *, principal: DeploymentPrincipal
+    ) -> Mapping[str, Any]:
         desired, _, previous = self._desired(plan, status="removing")
         if previous is None:
-            raise ApplicationDeploymentExecutorError("Application deployment is missing")
+            raise ApplicationDeploymentExecutorError(
+                "Application deployment is missing"
+            )
         activations = []
         cursor = None
         while True:
@@ -309,24 +521,52 @@ class ApplicationDeploymentExecutor:
             if activation.status in {"removed", "inactive"}:
                 continue
             result = self.runtime.remove(
-                activation.activation_id, principal=principal,
+                activation.activation_id,
+                principal=principal,
                 idempotency_key=f"application:{plan['idempotency_key']}:{activation.activation_id}",
             )
             results.append(result.to_dict())
             if result.uncertain or result.state in {"uncertain", "partial"}:
-                return {"ok": False, "status": "unknown", "reason": "deployment_remove_uncertain", "deployment_operations": results}
+                return {
+                    "ok": False,
+                    "status": "unknown",
+                    "reason": "deployment_remove_uncertain",
+                    "deployment_operations": results,
+                }
             if result.state != "succeeded":
-                return {"ok": False, "status": "failed", "reason": "deployment_remove_failed", "deployment_operations": results}
+                return {
+                    "ok": False,
+                    "status": "failed",
+                    "reason": "deployment_remove_failed",
+                    "deployment_operations": results,
+                }
         snapshot_receipt = None
         data_policy = str(plan.get("data_policy") or "retain")
         if data_policy == "snapshot_then_delete":
             snapshot_receipt = self.snapshots.create(
-                str(plan["application_id"]), source_release_digest=previous.release_digest,
+                str(plan["application_id"]),
+                source_release_digest=previous.release_digest,
                 consistency_boundary="application_remove",
             )
         if data_policy in {"delete", "snapshot_then_delete"}:
             self.snapshots.delete_data(str(plan["application_id"]))
         current = self.runtime.store.get_deployment(previous.deployment_id)
-        removed = replace(current, revision=current.revision + 1, status="removed", updated_at=utc_now())
-        self.runtime.define(removed, expected_revision=current.revision, principal=principal, reason="application_remove_completed")
-        return {"ok": True, "status": "removed", "deployment": removed.to_dict(), "deployment_operations": results, "snapshot_receipt": snapshot_receipt}
+        removed = replace(
+            current,
+            revision=current.revision + 1,
+            status="removed",
+            updated_at=utc_now(),
+        )
+        self.runtime.define(
+            removed,
+            expected_revision=current.revision,
+            principal=principal,
+            reason="application_remove_completed",
+        )
+        return {
+            "ok": True,
+            "status": "removed",
+            "deployment": removed.to_dict(),
+            "deployment_operations": results,
+            "snapshot_receipt": snapshot_receipt,
+        }

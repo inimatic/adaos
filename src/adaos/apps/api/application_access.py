@@ -16,8 +16,14 @@ from adaos.services.applications.runtime import (
     get_application_distribution_service,
     get_application_service,
 )
-from adaos.services.pending_actions import list_pending_actions_async, publish_pending_action_async
-from adaos.services.personalization_runtime import current_user_id, personalization_access_service
+from adaos.services.pending_actions import (
+    list_pending_actions_async,
+    publish_pending_action_async,
+)
+from adaos.services.personalization_runtime import (
+    current_user_id,
+    personalization_access_service,
+)
 
 
 router = APIRouter(tags=["application-access"], dependencies=[Depends(require_token)])
@@ -49,7 +55,9 @@ def _raise_access_error(exc: Exception) -> None:
         status = 404
     elif isinstance(exc, PermissionError):
         status = 403
-    raise HTTPException(status_code=status, detail={"error": name, "message": str(exc)}) from exc
+    raise HTTPException(
+        status_code=status, detail={"error": name, "message": str(exc)}
+    ) from exc
 
 
 class GrantRequest(BaseModel):
@@ -100,6 +108,7 @@ class ConnectedAccountRequest(BaseModel):
     status: Literal["missing", "connected", "expired", "revoked", "denied"]
     token_expires_at: str | None = None
     scope_changed_at: str | None = None
+    expected_revision: int = Field(..., ge=0)
 
 
 class SnapshotImportRequest(BaseModel):
@@ -150,7 +159,11 @@ def surface_contract() -> dict[str, Any]:
 
 @router.get("/application-access/role-templates")
 def role_templates() -> dict[str, Any]:
-    return {"templates": {key: [dict(item) for item in value] for key, value in ROLE_TEMPLATES.items()}}
+    return {
+        "templates": {
+            key: [dict(item) for item in value] for key, value in ROLE_TEMPLATES.items()
+        }
+    }
 
 
 @router.get("/application-access/applications/{application_id}")
@@ -160,7 +173,9 @@ def application_detail(
     ctx: AgentContext = Depends(get_ctx),
 ) -> dict[str, Any]:
     try:
-        return _management(ctx).application_detail(application_id, release_digest=release_digest)
+        return _management(ctx).application_detail(
+            application_id, release_digest=release_digest
+        )
     except Exception as exc:
         _raise_access_error(exc)
 
@@ -189,7 +204,9 @@ def create_grant(
             application_roles=tuple(body.application_roles),
             issuer_ref=_issuer(ctx),
             idempotency_key=body.idempotency_key,
-            permission_ceiling=tuple(body.permission_ceiling) if body.permission_ceiling is not None else None,
+            permission_ceiling=tuple(body.permission_ceiling)
+            if body.permission_ceiling is not None
+            else None,
             explicit_denies=tuple(body.explicit_denies),
             constraints=body.constraints,
             expires_at=body.expires_at,
@@ -212,8 +229,12 @@ def change_grant(
             application_roles=tuple(body.application_roles),
             issuer_ref=_issuer(ctx),
             expected_revision=body.expected_revision,
-            permission_ceiling=tuple(body.permission_ceiling) if body.permission_ceiling is not None else None,
-            explicit_denies=tuple(body.explicit_denies) if body.explicit_denies is not None else None,
+            permission_ceiling=tuple(body.permission_ceiling)
+            if body.permission_ceiling is not None
+            else None,
+            explicit_denies=tuple(body.explicit_denies)
+            if body.explicit_denies is not None
+            else None,
             constraints=body.constraints,
             expires_at=body.expires_at,
         )
@@ -270,7 +291,15 @@ def put_connected_account(
     ctx: AgentContext = Depends(get_ctx),
 ) -> dict[str, Any]:
     try:
-        return {"connected_account": _management(ctx).put_connected_account(application_id, body.model_dump())}
+        value = body.model_dump()
+        expected_revision = int(value.pop("expected_revision"))
+        return {
+            "connected_account": _management(ctx).put_connected_account(
+                application_id,
+                value,
+                expected_revision=expected_revision,
+            )
+        }
     except Exception as exc:
         _raise_access_error(exc)
 
@@ -284,8 +313,12 @@ def privacy_report(
     try:
         service = _management(ctx)
         return {
-            "privacy_report": service.privacy_report(application_id, release_digest=release_digest),
-            "anomalies": service.anomalies(application_id, release_digest=release_digest),
+            "privacy_report": service.privacy_report(
+                application_id, release_digest=release_digest
+            ),
+            "anomalies": service.anomalies(
+                application_id, release_digest=release_digest
+            ),
         }
     except Exception as exc:
         _raise_access_error(exc)
@@ -297,7 +330,11 @@ def access_reviews(
     stale_days: int = 90,
     ctx: AgentContext = Depends(get_ctx),
 ) -> dict[str, Any]:
-    return {"findings": _management(ctx).access_reviews(application_id=application_id, stale_days=stale_days)}
+    return {
+        "findings": _management(ctx).access_reviews(
+            application_id=application_id, stale_days=stale_days
+        )
+    }
 
 
 @router.get("/application-access/applications/{application_id}/update-review")
@@ -318,7 +355,9 @@ def update_review(
 
 
 @router.get("/application-access/applications/{application_id}/snapshot")
-def export_snapshot(application_id: str, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def export_snapshot(
+    application_id: str, ctx: AgentContext = Depends(get_ctx)
+) -> dict[str, Any]:
     try:
         return _management(ctx).export_snapshot(application_id)
     except Exception as exc:
@@ -326,9 +365,13 @@ def export_snapshot(application_id: str, ctx: AgentContext = Depends(get_ctx)) -
 
 
 @router.post("/application-access/snapshots/import")
-def import_snapshot(body: SnapshotImportRequest, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def import_snapshot(
+    body: SnapshotImportRequest, ctx: AgentContext = Depends(get_ctx)
+) -> dict[str, Any]:
     try:
-        return _management(ctx).import_snapshot(body.snapshot, issuer_ref=_issuer(ctx), apply=body.apply)
+        return _management(ctx).import_snapshot(
+            body.snapshot, issuer_ref=_issuer(ctx), apply=body.apply
+        )
     except Exception as exc:
         _raise_access_error(exc)
 
@@ -379,7 +422,9 @@ def permission_profiler(
 
 
 @router.get("/application-access/applications/{application_id}/verification-reports")
-def verification_reports(application_id: str, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
+def verification_reports(
+    application_id: str, ctx: AgentContext = Depends(get_ctx)
+) -> dict[str, Any]:
     return {"reports": _management(ctx).list_verification_reports(application_id)}
 
 
@@ -392,11 +437,25 @@ async def conversation(
     try:
         if body.intent == "list":
             if body.application_id:
-                return {"intent": "list", "result": service.application_detail(body.application_id, release_digest=body.release_digest)}
+                return {
+                    "intent": "list",
+                    "result": service.application_detail(
+                        body.application_id, release_digest=body.release_digest
+                    ),
+                }
             return {"intent": "list", "result": service.users_access()}
         if body.intent == "explain":
-            if not all((body.application_id, body.release_digest, body.subject_ref, body.permission_id)):
-                raise ValueError("explain requires application, release, subject and permission")
+            if not all(
+                (
+                    body.application_id,
+                    body.release_digest,
+                    body.subject_ref,
+                    body.permission_id,
+                )
+            ):
+                raise ValueError(
+                    "explain requires application, release, subject and permission"
+                )
             decision = service.access.decide(
                 body.application_id,
                 release_digest=body.release_digest,
@@ -412,7 +471,9 @@ async def conversation(
         grant = service.store.get_application_access_grant(body.grant_id)
         if body.pending_action_id:
             snapshot = await list_pending_actions_async(include_terminal=True)
-            action = dict((snapshot.get("by_id") or {}).get(body.pending_action_id) or {})
+            action = dict(
+                (snapshot.get("by_id") or {}).get(body.pending_action_id) or {}
+            )
             response = dict(action.get("response") or {})
             if (
                 action.get("kind") != "application.access.revoke"
@@ -420,20 +481,29 @@ async def conversation(
                 or action.get("status") != "responded"
                 or response.get("response_action_id") != "approve"
             ):
-                raise PermissionError("pending action does not approve this Application access revocation")
+                raise PermissionError(
+                    "pending action does not approve this Application access revocation"
+                )
             revoked = service.access.revoke_access(
                 body.grant_id,
                 issuer_ref=_issuer(ctx),
                 expected_revision=body.expected_revision,
             )
-            return {"intent": "revoke", "grant": revoked.to_dict(), "approval_id": body.pending_action_id}
+            return {
+                "intent": "revoke",
+                "grant": revoked.to_dict(),
+                "approval_id": body.pending_action_id,
+            }
         action = await publish_pending_action_async(
             ctx=ctx,
             kind="application.access.revoke",
             title="Revoke Application access",
             summary=f"Revoke {grant.subject_ref} access to {grant.application_id}?",
             producer={"type": "application", "application_id": grant.application_id},
-            owner_scope={"application_id": grant.application_id, "subject_ref": grant.subject_ref},
+            owner_scope={
+                "application_id": grant.application_id,
+                "subject_ref": grant.subject_ref,
+            },
             domain_ref={
                 "application_id": grant.application_id,
                 "subject_ref": grant.subject_ref,
@@ -442,7 +512,10 @@ async def conversation(
                 "reviewed_permission_profile_digest": grant.reviewed_permission_profile_digest,
             },
             allowed_actions=["approve", "refuse", "postpone"],
-            response_route={"type": "event", "topic": "application.access.conversation"},
+            response_route={
+                "type": "event",
+                "topic": "application.access.conversation",
+            },
             metadata={
                 "application_access": True,
                 "routes": {
@@ -459,7 +532,11 @@ async def conversation(
                 },
             },
         )
-        return {"intent": "revoke", "status": "approval_required", "pending_action": action}
+        return {
+            "intent": "revoke",
+            "status": "approval_required",
+            "pending_action": action,
+        }
     except Exception as exc:
         _raise_access_error(exc)
 

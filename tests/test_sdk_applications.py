@@ -325,6 +325,63 @@ def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) 
     )
 
 
+def test_sdk_component_placement_plans_forward_exact_cas_context(monkeypatch) -> None:
+    stub = _StubService()
+    monkeypatch.setattr(applications, "_service", lambda: stub)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:sn_home")
+    monkeypatch.setattr(
+        applications, "_admit_active_skill_capability", lambda _capability: None
+    )
+
+    applications.plan_relocate_component(
+        "app_recipes",
+        component_ref="scenario:recipes",
+        target_node_id="node-office",
+        expected_revision=7,
+        actor_ref="skill:applications",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="relocate-7",
+    )
+    applications.plan_remove_component(
+        "app_recipes",
+        component_ref="skill:recipes-worker",
+        expected_revision=8,
+        actor_ref="skill:applications",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="remove-component-8",
+    )
+
+    assert stub.calls == [
+        (
+            "plan_operation",
+            ("app_recipes", "relocate_component"),
+            {
+                "component_ref": "scenario:recipes",
+                "target_node_id": "node-office",
+                "expected_revision": 7,
+                "actor_ref": "skill:applications",
+                "subnet_ref": "subnet:sn_home",
+                "capability": "applications.plan",
+                "idempotency_key": "relocate-7",
+            },
+        ),
+        (
+            "plan_operation",
+            ("app_recipes", "remove_component"),
+            {
+                "component_ref": "skill:recipes-worker",
+                "expected_revision": 8,
+                "actor_ref": "skill:applications",
+                "subnet_ref": "subnet:sn_home",
+                "capability": "applications.plan",
+                "idempotency_key": "remove-component-8",
+            },
+        ),
+    ]
+
+
 def test_reviewed_update_batch_is_durable_and_resumable(
     monkeypatch, tmp_path: Path
 ) -> None:

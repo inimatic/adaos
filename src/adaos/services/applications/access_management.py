@@ -34,31 +34,110 @@ _log = logging.getLogger("adaos.applications.access")
 
 ROLE_TEMPLATES: dict[str, tuple[dict[str, Any], ...]] = {
     "classroom": (
-        {"id": "teacher", "title": "Teacher", "grants": ["application.manage", "work.assign", "work.review"]},
-        {"id": "student", "title": "Student", "grants": ["application.use", "work.read", "work.complete"], "assignable_to": ["member", "child"]},
-        {"id": "observer", "title": "Observer", "grants": ["application.use", "work.read"], "assignable_to": ["member", "guest"]},
+        {
+            "id": "teacher",
+            "title": "Teacher",
+            "grants": ["application.manage", "work.assign", "work.review"],
+        },
+        {
+            "id": "student",
+            "title": "Student",
+            "grants": ["application.use", "work.read", "work.complete"],
+            "assignable_to": ["member", "child"],
+        },
+        {
+            "id": "observer",
+            "title": "Observer",
+            "grants": ["application.use", "work.read"],
+            "assignable_to": ["member", "guest"],
+        },
     ),
     "household_tasks": (
-        {"id": "coordinator", "title": "Coordinator", "grants": ["application.manage", "task.assign", "task.complete"]},
-        {"id": "participant", "title": "Participant", "grants": ["application.use", "task.read", "task.complete"], "assignable_to": ["member", "child"]},
-        {"id": "guest_reader", "title": "Guest reader", "grants": ["application.use", "task.read"], "assignable_to": ["guest"]},
+        {
+            "id": "coordinator",
+            "title": "Coordinator",
+            "grants": ["application.manage", "task.assign", "task.complete"],
+        },
+        {
+            "id": "participant",
+            "title": "Participant",
+            "grants": ["application.use", "task.read", "task.complete"],
+            "assignable_to": ["member", "child"],
+        },
+        {
+            "id": "guest_reader",
+            "title": "Guest reader",
+            "grants": ["application.use", "task.read"],
+            "assignable_to": ["guest"],
+        },
     ),
     "dashboard": (
-        {"id": "operator", "title": "Operator", "grants": ["application.manage", "dashboard.read", "dashboard.configure"]},
-        {"id": "viewer", "title": "Viewer", "grants": ["application.use", "dashboard.read"], "assignable_to": ["member", "child", "guest"]},
+        {
+            "id": "operator",
+            "title": "Operator",
+            "grants": ["application.manage", "dashboard.read", "dashboard.configure"],
+        },
+        {
+            "id": "viewer",
+            "title": "Viewer",
+            "grants": ["application.use", "dashboard.read"],
+            "assignable_to": ["member", "child", "guest"],
+        },
     ),
     "moderation": (
-        {"id": "moderator", "title": "Moderator", "grants": ["application.manage", "queue.read", "queue.decide"], "sensitive": True},
-        {"id": "reviewer", "title": "Reviewer", "grants": ["application.use", "queue.read"]},
+        {
+            "id": "moderator",
+            "title": "Moderator",
+            "grants": ["application.manage", "queue.read", "queue.decide"],
+            "sensitive": True,
+        },
+        {
+            "id": "reviewer",
+            "title": "Reviewer",
+            "grants": ["application.use", "queue.read"],
+        },
     ),
     "research_review": (
-        {"id": "lead", "title": "Research lead", "grants": ["application.manage", "research.read", "research.annotate", "research.publish"], "sensitive": True},
-        {"id": "reviewer", "title": "Reviewer", "grants": ["application.use", "research.read", "research.annotate"]},
-        {"id": "reader", "title": "Reader", "grants": ["application.use", "research.read"], "assignable_to": ["member", "guest"]},
+        {
+            "id": "lead",
+            "title": "Research lead",
+            "grants": [
+                "application.manage",
+                "research.read",
+                "research.annotate",
+                "research.publish",
+            ],
+            "sensitive": True,
+        },
+        {
+            "id": "reviewer",
+            "title": "Reviewer",
+            "grants": ["application.use", "research.read", "research.annotate"],
+        },
+        {
+            "id": "reader",
+            "title": "Reader",
+            "grants": ["application.use", "research.read"],
+            "assignable_to": ["member", "guest"],
+        },
     ),
     "media_queue": (
-        {"id": "curator", "title": "Curator", "grants": ["application.manage", "media.read", "media.queue", "media.remove"]},
-        {"id": "listener", "title": "Listener", "grants": ["application.use", "media.read", "media.queue"], "assignable_to": ["member", "child", "guest"]},
+        {
+            "id": "curator",
+            "title": "Curator",
+            "grants": [
+                "application.manage",
+                "media.read",
+                "media.queue",
+                "media.remove",
+            ],
+        },
+        {
+            "id": "listener",
+            "title": "Listener",
+            "grants": ["application.use", "media.read", "media.queue"],
+            "assignable_to": ["member", "child", "guest"],
+        },
     ),
 }
 
@@ -96,6 +175,7 @@ def _redacted_account(value: Mapping[str, Any]) -> dict[str, Any]:
         "status",
         "token_expires_at",
         "scope_changed_at",
+        "revision",
         "created_at",
         "updated_at",
     }
@@ -175,9 +255,7 @@ def _person_projection(value: Mapping[str, Any]) -> dict[str, Any]:
     subject_ref = str(value.get("subject_ref") or "").strip()
     fallback_label = subject_ref.partition(":")[2] or subject_ref
     display_label = str(
-        profile.get("display_name")
-        or profile.get("preferred_name")
-        or fallback_label
+        profile.get("display_name") or profile.get("preferred_name") or fallback_label
     ).strip()
     display_source = (
         "profile"
@@ -277,7 +355,9 @@ class ApplicationAccessManagementService:
                 for item in release.project_release.components
             ):
                 continue
-            selection = selected.get((installation.application_id, release.release_digest))
+            selection = selected.get(
+                (installation.application_id, release.release_digest)
+            )
             candidates.append(
                 {
                     "application_id": installation.application_id,
@@ -315,9 +395,17 @@ class ApplicationAccessManagementService:
                 }
             )
         if requested_application_id:
-            candidates = [item for item in candidates if item["application_id"] == requested_application_id]
+            candidates = [
+                item
+                for item in candidates
+                if item["application_id"] == requested_application_id
+            ]
         if requested_release_digest:
-            candidates = [item for item in candidates if item["release_digest"] == requested_release_digest]
+            candidates = [
+                item
+                for item in candidates
+                if item["release_digest"] == requested_release_digest
+            ]
         if not candidates:
             return None
         if len(candidates) != 1:
@@ -331,8 +419,12 @@ class ApplicationAccessManagementService:
         application_access: Mapping[str, Any],
         component_capabilities: Iterable[str],
     ) -> tuple[str, str]:
-        explicit_permission = str(application_access.get("permission") or "").strip().lower()
-        explicit_capability = str(application_access.get("capability") or "").strip().lower()
+        explicit_permission = (
+            str(application_access.get("permission") or "").strip().lower()
+        )
+        explicit_capability = (
+            str(application_access.get("capability") or "").strip().lower()
+        )
         if explicit_permission and explicit_capability:
             return explicit_permission, explicit_capability
         effects = str(side_effects or "").strip().lower().replace("-", "_")
@@ -350,7 +442,15 @@ class ApplicationAccessManagementService:
             "cross_node": "network.egress",
             "device_control": "devices.control",
         }
-        admitted = tuple(sorted({str(item).strip().lower() for item in component_capabilities if str(item).strip()}))
+        admitted = tuple(
+            sorted(
+                {
+                    str(item).strip().lower()
+                    for item in component_capabilities
+                    if str(item).strip()
+                }
+            )
+        )
         preferred = (
             "secrets.use",
             "secrets.read",
@@ -361,7 +461,9 @@ class ApplicationAccessManagementService:
             "llm.generate",
             "model.use",
         )
-        permission = explicit_permission or next((item for item in preferred if item in admitted), "")
+        permission = explicit_permission or next(
+            (item for item in preferred if item in admitted), ""
+        )
         permission = permission or permission_by_effect.get(effects, "")
         # A simple Application may use its permission IDs as role actions. More
         # expressive applications can override this with a domain capability in
@@ -391,7 +493,9 @@ class ApplicationAccessManagementService:
                 "outcome": outcome,
                 "grant_id": str(grant_id or "").strip(),
                 "network_destination": str(network_destination or "").strip(),
-                "data_categories": sorted({str(item).strip() for item in data_categories if str(item).strip()}),
+                "data_categories": sorted(
+                    {str(item).strip() for item in data_categories if str(item).strip()}
+                ),
                 "actor_chain": dict(actor_chain),
             }
         )
@@ -429,7 +533,11 @@ class ApplicationAccessManagementService:
             grant=grant,
             permission_id=permission_id,
             app_capability=app_capability,
-            actor_chain={"application_id": application_id, "subject_ref": subject_ref, **dict(actor_chain or {})},
+            actor_chain={
+                "application_id": application_id,
+                "subject_ref": subject_ref,
+                **dict(actor_chain or {}),
+            },
             component_capabilities=component_capabilities,
         )
         return {"simulation": True, "persisted": False, "decision": decision.to_dict()}
@@ -438,6 +546,8 @@ class ApplicationAccessManagementService:
         self,
         application_id: str,
         value: Mapping[str, Any],
+        *,
+        expected_revision: int,
     ) -> dict[str, Any]:
         release_digest = str(value.get("release_digest") or "").strip()
         release = self.store.get_release(application_id, release_digest)
@@ -453,58 +563,95 @@ class ApplicationAccessManagementService:
         subject_ref = str(value.get("subject_ref") or "").strip()
         mode = str(value.get("mode") or "delegated_user").strip().lower()
         status = str(value.get("status") or "missing").strip().lower()
-        scopes = sorted({str(item).strip() for item in value.get("scopes") or () if str(item).strip()})
+        scopes = sorted(
+            {
+                str(item).strip()
+                for item in value.get("scopes") or ()
+                if str(item).strip()
+            }
+        )
         if not account_id or not subject_ref:
             raise ApplicationAccessError("connected account identity is required")
         if mode not in {"delegated_user", "app_service"}:
             raise ApplicationAccessError("connected account mode is invalid")
         allowed_modes = {
             str(item).strip().lower()
-            for item in provider.get("account_modes") or ("delegated_user", "app_service")
+            for item in provider.get("account_modes")
+            or ("delegated_user", "app_service")
             if str(item).strip()
         }
         if mode not in allowed_modes:
-            raise ApplicationAccessError("connected account mode is not declared for provider")
+            raise ApplicationAccessError(
+                "connected account mode is not declared for provider"
+            )
         if status not in {"missing", "connected", "expired", "revoked", "denied"}:
             raise ApplicationAccessError("connected account status is invalid")
         declared_scopes = {
-            str(item).strip() for item in provider.get("scopes") or () if str(item).strip()
+            str(item).strip()
+            for item in provider.get("scopes") or ()
+            if str(item).strip()
         }
         unknown_scopes = sorted(set(scopes) - declared_scopes)
         if unknown_scopes:
             raise ApplicationAccessError(
-                "connected account scopes are not declared: " + ", ".join(unknown_scopes)
+                "connected account scopes are not declared: "
+                + ", ".join(unknown_scopes)
+            )
+        try:
+            expected = int(expected_revision)
+        except (TypeError, ValueError) as exc:
+            raise ApplicationAccessError(
+                "connected account expected_revision must be an integer"
+            ) from exc
+        if expected < 0:
+            raise ApplicationAccessError(
+                "connected account expected_revision must be non-negative"
             )
         now = utc_now()
-        path = self._document_path("connected_accounts", f"{application_id}\0{account_id}")
-        previous = _read(path) if path.is_file() else {}
+        path = self._document_path(
+            "connected_accounts", f"{application_id}\0{account_id}"
+        )
         token_expires_at = value.get("token_expires_at")
         expiry = _parse_time(str(token_expires_at or ""))
         if status == "connected" and expiry and expiry <= datetime.now(timezone.utc):
             status = "expired"
-        previous_scopes = sorted(
-            {str(item).strip() for item in previous.get("scopes") or () if str(item).strip()}
-        )
-        scope_changed_at = value.get("scope_changed_at")
-        if previous and previous_scopes != scopes and not scope_changed_at:
-            scope_changed_at = now
-        record = {
-            "schema": "adaos.application.connected_account.v1",
-            "application_id": application_id,
-            "release_digest": release_digest,
-            "permission_profile_digest": release.permission_profile.digest,
-            "account_id": account_id,
-            "provider_id": provider_id,
-            "subject_ref": subject_ref,
-            "mode": mode,
-            "scopes": scopes,
-            "status": status,
-            "token_expires_at": token_expires_at,
-            "scope_changed_at": scope_changed_at,
-            "created_at": str(previous.get("created_at") or value.get("created_at") or now),
-            "updated_at": now,
-        }
         with mutation_lock(self.store.lock_path, timeout_s=30.0):
+            previous = _read(path) if path.is_file() else {}
+            observed = int(previous.get("revision") or 0)
+            if observed != expected:
+                raise ApplicationAccessError(
+                    "connected account revision conflict: "
+                    f"expected {expected}, observed {observed}"
+                )
+            previous_scopes = sorted(
+                {
+                    str(item).strip()
+                    for item in previous.get("scopes") or ()
+                    if str(item).strip()
+                }
+            )
+            scope_changed_at = value.get("scope_changed_at")
+            if previous and previous_scopes != scopes and not scope_changed_at:
+                scope_changed_at = now
+            record = {
+                "schema": "adaos.application.connected_account.v1",
+                "application_id": application_id,
+                "release_digest": release_digest,
+                "permission_profile_digest": release.permission_profile.digest,
+                "account_id": account_id,
+                "provider_id": provider_id,
+                "subject_ref": subject_ref,
+                "mode": mode,
+                "scopes": scopes,
+                "status": status,
+                "token_expires_at": token_expires_at,
+                "scope_changed_at": scope_changed_at,
+                "revision": observed + 1,
+                "created_at": str(
+                    previous.get("created_at") or value.get("created_at") or now
+                ),
+                "updated_at": now,
+            }
             atomic_write_json(path, record)
         self.store.append_application_access_audit(
             {
@@ -530,10 +677,18 @@ class ApplicationAccessManagementService:
         subject_ref: str | None = None,
     ) -> list[dict[str, Any]]:
         parent = self.store.root / "connected_accounts"
-        values = [_read(path) for path in parent.glob("*.json")] if parent.is_dir() else []
+        values = (
+            [_read(path) for path in parent.glob("*.json")] if parent.is_dir() else []
+        )
         now = datetime.now(timezone.utc)
         redacted = []
-        for item in sorted(values, key=lambda value: (str(value.get("application_id")), str(value.get("account_id")))):
+        for item in sorted(
+            values,
+            key=lambda value: (
+                str(value.get("application_id")),
+                str(value.get("account_id")),
+            ),
+        ):
             if (application_id and item.get("application_id") != application_id) or (
                 subject_ref and item.get("subject_ref") != subject_ref
             ):
@@ -545,15 +700,31 @@ class ApplicationAccessManagementService:
             redacted.append(account)
         return redacted
 
-    def privacy_report(self, application_id: str, *, release_digest: str) -> dict[str, Any]:
+    def privacy_report(
+        self, application_id: str, *, release_digest: str
+    ) -> dict[str, Any]:
         release = self.store.get_release(application_id, release_digest)
         observations = [
             item
-            for item in self.store.list_application_access_audit(application_id=application_id)
+            for item in self.store.list_application_access_audit(
+                application_id=application_id
+            )
             if item.get("action") == "runtime_observation"
         ]
-        observed_permissions = sorted({str(item.get("permission_id")) for item in observations if item.get("permission_id")})
-        destinations = sorted({str(item.get("network_destination")) for item in observations if item.get("network_destination")})
+        observed_permissions = sorted(
+            {
+                str(item.get("permission_id"))
+                for item in observations
+                if item.get("permission_id")
+            }
+        )
+        destinations = sorted(
+            {
+                str(item.get("network_destination"))
+                for item in observations
+                if item.get("network_destination")
+            }
+        )
         data_categories = sorted(
             {
                 str(category)
@@ -563,8 +734,18 @@ class ApplicationAccessManagementService:
             }
         )
         counts = {
-            prefix: sum(1 for item in observations if str(item.get("permission_id") or "").startswith(prefix))
-            for prefix in ("llm.", "model.", "secrets.", "notifications.", "background.")
+            prefix: sum(
+                1
+                for item in observations
+                if str(item.get("permission_id") or "").startswith(prefix)
+            )
+            for prefix in (
+                "llm.",
+                "model.",
+                "secrets.",
+                "notifications.",
+                "background.",
+            )
         }
         return {
             "schema": "adaos.application.privacy_report.v1",
@@ -573,8 +754,12 @@ class ApplicationAccessManagementService:
             "permission_profile_digest": release.permission_profile.digest,
             "declared": {
                 "permissions": list(release.permission_profile.flat_permissions),
-                "data_categories": list(release.permission_profile.data_practices.get("collected") or ()),
-                "external_providers": [dict(item) for item in release.permission_profile.external_providers],
+                "data_categories": list(
+                    release.permission_profile.data_practices.get("collected") or ()
+                ),
+                "external_providers": [
+                    dict(item) for item in release.permission_profile.external_providers
+                ],
                 "privacy_labels": dict(release.permission_profile.privacy_labels),
             },
             "observed": {
@@ -602,7 +787,11 @@ class ApplicationAccessManagementService:
         for item in audit:
             grant_id = str(item.get("grant_id") or "")
             observed = _parse_time(str(item.get("occurred_at") or ""))
-            if grant_id and observed and (grant_id not in last_use or observed > last_use[grant_id]):
+            if (
+                grant_id
+                and observed
+                and (grant_id not in last_use or observed > last_use[grant_id])
+            ):
                 last_use[grant_id] = observed
         findings: list[dict[str, Any]] = []
         for grant in self.store.list_application_access_grants(application_id):
@@ -612,7 +801,9 @@ class ApplicationAccessManagementService:
             expiry = _parse_time(grant.expires_at)
             updated = _parse_time(grant.updated_at)
             reasons = []
-            if kind == "guest" and (expiry is None or expiry > current + timedelta(days=30)):
+            if kind == "guest" and (
+                expiry is None or expiry > current + timedelta(days=30)
+            ):
                 reasons.append("long_lived_guest")
             if last_use.get(grant.grant_id, updated or current) < cutoff:
                 reasons.append("unused_grant")
@@ -623,7 +814,10 @@ class ApplicationAccessManagementService:
             if reasons:
                 findings.append(
                     {
-                        "finding_id": "review." + hashlib.sha256((grant.grant_id + "|" + "|".join(reasons)).encode()).hexdigest()[:20],
+                        "finding_id": "review."
+                        + hashlib.sha256(
+                            (grant.grant_id + "|" + "|".join(reasons)).encode()
+                        ).hexdigest()[:20],
                         "application_id": grant.application_id,
                         "subject_ref": grant.subject_ref,
                         "grant_id": grant.grant_id,
@@ -669,12 +863,18 @@ class ApplicationAccessManagementService:
             )
         return findings
 
-    def anomalies(self, application_id: str, *, release_digest: str) -> list[dict[str, Any]]:
+    def anomalies(
+        self, application_id: str, *, release_digest: str
+    ) -> list[dict[str, Any]]:
         report = self.privacy_report(application_id, release_digest=release_digest)
         release = self.store.get_release(application_id, release_digest)
         declared = set(report["declared"]["permissions"])
         findings = [
-            {"kind": "unexpected_permission", "permission_id": permission, "severity": "high" if is_high_risk_permission(permission) else "medium"}
+            {
+                "kind": "unexpected_permission",
+                "permission_id": permission,
+                "severity": "high" if is_high_risk_permission(permission) else "medium",
+            }
             for permission in report["observed"]["permissions"]
             if permission not in declared
         ]
@@ -683,7 +883,11 @@ class ApplicationAccessManagementService:
             for item in report["declared"]["external_providers"]
         }
         findings.extend(
-            {"kind": "unexpected_network_destination", "destination": destination, "severity": "high"}
+            {
+                "kind": "unexpected_network_destination",
+                "destination": destination,
+                "severity": "high",
+            }
             for destination in report["observed"]["network_destinations"]
             if destination.lower() not in provider_hosts
         )
@@ -721,7 +925,9 @@ class ApplicationAccessManagementService:
             installation = self.store.get_installation(application_id)
         except FileNotFoundError:
             pass
-        digest = release_digest or (installation.installed_release_digest if installation else "")
+        digest = release_digest or (
+            installation.installed_release_digest if installation else ""
+        )
         if not digest:
             channels = self.store.get_channels(application_id).get("channels") or {}
             digest = str(channels.get("stable") or channels.get("prerelease") or "")
@@ -731,7 +937,9 @@ class ApplicationAccessManagementService:
         release = self.store.get_release(application_id, digest)
         grants = self.store.list_application_access_grants(application_id)
         reports = self.list_verification_reports(application_id)
-        latest_report = next((item for item in reports if item.get("release_digest") == digest), None)
+        latest_report = next(
+            (item for item in reports if item.get("release_digest") == digest), None
+        )
         audit_limit = max(1, min(int(activity_limit), 200))
         activity = self.store.list_application_access_audit(
             application_id=application_id,
@@ -746,8 +954,12 @@ class ApplicationAccessManagementService:
                 "permissions": {
                     "profile": release.permission_profile.to_dict(),
                     "digest": release.permission_profile.digest,
-                    "privacy_report": self.privacy_report(application_id, release_digest=digest),
-                    "badges": self.privacy_badges(application_id, release_digest=digest),
+                    "privacy_report": self.privacy_report(
+                        application_id, release_digest=digest
+                    ),
+                    "badges": self.privacy_badges(
+                        application_id, release_digest=digest
+                    ),
                 },
                 "access": [item.to_dict() for item in grants],
                 "roles": [item.to_dict() for item in release.application_roles],
@@ -832,9 +1044,7 @@ class ApplicationAccessManagementService:
             if not subject_ref:
                 continue
             memberships = membership_by_subject.get(subject_ref, [])
-            platform_roles = {
-                str(item.get("role") or "") for item in memberships
-            }
+            platform_roles = {str(item.get("role") or "") for item in memberships}
             kind = (
                 "child"
                 if "child" in platform_roles
@@ -851,7 +1061,10 @@ class ApplicationAccessManagementService:
             person["memberships"] = memberships
         pending_guests = []
         for invite in directory.get("invites") or ():
-            if not isinstance(invite, Mapping) or invite.get("kind") != "guest_join_link":
+            if (
+                not isinstance(invite, Mapping)
+                or invite.get("kind") != "guest_join_link"
+            ):
                 continue
             pending_guests.append(
                 {
@@ -881,7 +1094,9 @@ class ApplicationAccessManagementService:
             if isinstance(item, Mapping)
         ]
         audit_limit = max(1, min(int(activity_limit), 200))
-        activity_values = self.store.list_application_access_audit(limit=audit_limit + 1)
+        activity_values = self.store.list_application_access_audit(
+            limit=audit_limit + 1
+        )
         person_values = sorted(
             (_person_projection(item) for item in people.values()),
             key=lambda item: item["subject_ref"],
@@ -908,7 +1123,16 @@ class ApplicationAccessManagementService:
             "diagnostics": {
                 "content_redacted": True,
                 "source": "personalization_metadata_and_application_access",
-                "fields": ["subject_ref", "grant_id", "roles", "permissions", "permission usage", "decision", "reason_code", "device/session status"],
+                "fields": [
+                    "subject_ref",
+                    "grant_id",
+                    "roles",
+                    "permissions",
+                    "permission usage",
+                    "decision",
+                    "reason_code",
+                    "device/session status",
+                ],
             },
         }
 
@@ -917,23 +1141,38 @@ class ApplicationAccessManagementService:
         active_grants = [item for item in grants if item.status == "active"]
         by_permission: dict[str, dict[str, Any]] = {}
         for application in self.store.list_applications():
-            channels = self.store.get_channels(application.application_id).get("channels") or {}
-            release_digest = str(channels.get("stable") or channels.get("prerelease") or "")
+            channels = (
+                self.store.get_channels(application.application_id).get("channels")
+                or {}
+            )
+            release_digest = str(
+                channels.get("stable") or channels.get("prerelease") or ""
+            )
             if not release_digest:
                 releases = self.store.list_releases(application.application_id)
                 release_digest = releases[-1].release_digest if releases else ""
             if not release_digest:
                 continue
             try:
-                release = self.store.get_release(application.application_id, release_digest)
+                release = self.store.get_release(
+                    application.application_id, release_digest
+                )
             except FileNotFoundError:
                 continue
             declarations = [
-                *(dict(item.to_dict()) | {"requirement": "required"} for item in release.permission_profile.required),
-                *(dict(item.to_dict()) | {"requirement": "optional"} for item in release.permission_profile.optional),
+                *(
+                    dict(item.to_dict()) | {"requirement": "required"}
+                    for item in release.permission_profile.required
+                ),
+                *(
+                    dict(item.to_dict()) | {"requirement": "optional"}
+                    for item in release.permission_profile.optional
+                ),
             ]
             application_grants = [
-                item for item in active_grants if item.application_id == application.application_id
+                item
+                for item in active_grants
+                if item.application_id == application.application_id
             ]
             for declaration in declarations:
                 permission_id = str(declaration.get("id") or "")
@@ -950,7 +1189,8 @@ class ApplicationAccessManagementService:
                     },
                 )
                 grant_count = sum(
-                    permission_id in item.permission_ceiling for item in application_grants
+                    permission_id in item.permission_ceiling
+                    for item in application_grants
                 )
                 deny_count = sum(
                     permission_id in item.explicit_denies for item in application_grants
@@ -961,7 +1201,10 @@ class ApplicationAccessManagementService:
                 entry["applications"].append(
                     {
                         "application_id": application.application_id,
-                        "title": str(application.display.get("title") or application.application_id),
+                        "title": str(
+                            application.display.get("title")
+                            or application.application_id
+                        ),
                         "requirement": declaration["requirement"],
                         "purpose": declaration.get("purpose"),
                         "approval_policy": declaration.get("approval_policy"),
@@ -970,7 +1213,9 @@ class ApplicationAccessManagementService:
                     }
                 )
         for entry in by_permission.values():
-            entry["applications"].sort(key=lambda item: (item["title"].casefold(), item["application_id"]))
+            entry["applications"].sort(
+                key=lambda item: (item["title"].casefold(), item["application_id"])
+            )
             entry["applications_summary"] = ", ".join(
                 item["title"] for item in entry["applications"]
             )
@@ -1044,8 +1289,16 @@ class ApplicationAccessManagementService:
             candidate_release=candidate_release,
         )
         declared = set(release.permission_profile.flat_permissions)
-        observed = {str(item).strip().lower() for item in observed_capabilities if str(item).strip()}
-        inferred = {str(item).strip().lower() for item in inferred_capabilities if str(item).strip()}
+        observed = {
+            str(item).strip().lower()
+            for item in observed_capabilities
+            if str(item).strip()
+        }
+        inferred = {
+            str(item).strip().lower()
+            for item in inferred_capabilities
+            if str(item).strip()
+        }
         used = observed | inferred
         role_matrix = []
         for role in release.application_roles:
@@ -1055,7 +1308,10 @@ class ApplicationAccessManagementService:
                     kind == "guest"
                     and (
                         role.sensitive
-                        or any(is_high_risk_permission(item) for item in role.requires_permissions)
+                        or any(
+                            is_high_risk_permission(item)
+                            for item in role.requires_permissions
+                        )
                     )
                 )
                 for kind in ("owner", "member", "child", "guest")
@@ -1086,7 +1342,9 @@ class ApplicationAccessManagementService:
             "statically_inferred": sorted(inferred),
             "observed": sorted(observed),
             "undeclared_observed": sorted(used - declared),
-            "undeclared_high_risk": sorted(item for item in used - declared if is_high_risk_permission(item)),
+            "undeclared_high_risk": sorted(
+                item for item in used - declared if is_high_risk_permission(item)
+            ),
             "unused": sorted(declared - used),
             "role_matrix": role_matrix,
             "preview_modes": preview_modes,
@@ -1099,7 +1357,10 @@ class ApplicationAccessManagementService:
         }
 
     def export_snapshot(self, application_id: str) -> dict[str, Any]:
-        grants = [item.to_dict() for item in self.store.list_application_access_grants(application_id)]
+        grants = [
+            item.to_dict()
+            for item in self.store.list_application_access_grants(application_id)
+        ]
         accounts = self.connected_accounts(application_id)
         payload = {
             "schema": "adaos.application.access_snapshot.v1",
@@ -1128,7 +1389,9 @@ class ApplicationAccessManagementService:
         for raw in payload.get("grants") or ():
             grant = ApplicationAccessGrant.from_mapping(raw)
             if grant.application_id != application_id:
-                raise ApplicationAccessError("snapshot grant belongs to another Application")
+                raise ApplicationAccessError(
+                    "snapshot grant belongs to another Application"
+                )
             if grant.status != "active":
                 continue
             planned.append(grant.to_dict())
@@ -1136,7 +1399,8 @@ class ApplicationAccessManagementService:
                 release = next(
                     item
                     for item in self.store.list_releases(application_id)
-                    if item.permission_profile.digest == grant.reviewed_permission_profile_digest
+                    if item.permission_profile.digest
+                    == grant.reviewed_permission_profile_digest
                 )
                 self.access.grant_access(
                     application_id,
@@ -1150,20 +1414,45 @@ class ApplicationAccessManagementService:
                     constraints=grant.constraints,
                     expires_at=grant.expires_at,
                 )
-        return {"valid": True, "applied": apply, "application_id": application_id, "planned_grants": planned}
+        return {
+            "valid": True,
+            "applied": apply,
+            "application_id": application_id,
+            "planned_grants": planned,
+        }
 
-    def privacy_badges(self, application_id: str, *, release_digest: str) -> list[dict[str, Any]]:
+    def privacy_badges(
+        self, application_id: str, *, release_digest: str
+    ) -> list[dict[str, Any]]:
         report = self.privacy_report(application_id, release_digest=release_digest)
         labels = report["declared"]["privacy_labels"]
         badges = [
-            {"id": "local_data", "status": "warning" if labels.get("sent_off_device") else "passed"},
-            {"id": "tracking", "status": "warning" if labels.get("tracking") else "passed"},
-            {"id": "user_linked", "status": "disclosed" if labels.get("linked_to_user") else "not_collected"},
-            {"id": "observed_matches_declared", "status": "failed" if self.anomalies(application_id, release_digest=release_digest) else "passed"},
+            {
+                "id": "local_data",
+                "status": "warning" if labels.get("sent_off_device") else "passed",
+            },
+            {
+                "id": "tracking",
+                "status": "warning" if labels.get("tracking") else "passed",
+            },
+            {
+                "id": "user_linked",
+                "status": "disclosed"
+                if labels.get("linked_to_user")
+                else "not_collected",
+            },
+            {
+                "id": "observed_matches_declared",
+                "status": "failed"
+                if self.anomalies(application_id, release_digest=release_digest)
+                else "passed",
+            },
         ]
         return badges
 
-    def save_verification_report(self, report: ApplicationVerificationReport) -> dict[str, Any]:
+    def save_verification_report(
+        self, report: ApplicationVerificationReport
+    ) -> dict[str, Any]:
         path = self._document_path(
             "verification_reports",
             "\0".join(
@@ -1186,13 +1475,24 @@ class ApplicationAccessManagementService:
                 atomic_write_json(path, report.to_dict())
         return report.to_dict()
 
-    def list_verification_reports(self, application_id: str | None = None) -> list[dict[str, Any]]:
+    def list_verification_reports(
+        self, application_id: str | None = None
+    ) -> list[dict[str, Any]]:
         parent = self.store.root / "verification_reports"
-        values = [_read(path) for path in parent.glob("*.json")] if parent.is_dir() else []
-        reports = [ApplicationVerificationReport.from_mapping(value).to_dict() for value in values]
+        values = (
+            [_read(path) for path in parent.glob("*.json")] if parent.is_dir() else []
+        )
+        reports = [
+            ApplicationVerificationReport.from_mapping(value).to_dict()
+            for value in values
+        ]
         return [
             item
-            for item in sorted(reports, key=lambda value: str(value.get("created_at") or ""), reverse=True)
+            for item in sorted(
+                reports,
+                key=lambda value: str(value.get("created_at") or ""),
+                reverse=True,
+            )
             if not application_id or item.get("application_id") == application_id
         ]
 
@@ -1275,8 +1575,12 @@ class ApplicationAccessManagementService:
             release_digest,
             candidate_release=candidate_release,
         )
-        disclosure_refs = tuple(str(item).strip() for item in disclosure_evidence if str(item).strip())
-        redaction_refs = tuple(str(item).strip() for item in redaction_evidence if str(item).strip())
+        disclosure_refs = tuple(
+            str(item).strip() for item in disclosure_evidence if str(item).strip()
+        )
+        redaction_refs = tuple(
+            str(item).strip() for item in redaction_evidence if str(item).strip()
+        )
         regression_refs = tuple(
             str(item).strip() for item in regression_evidence if str(item).strip()
         )
@@ -1303,14 +1607,18 @@ class ApplicationAccessManagementService:
                 "hard_gate",
                 "passed" if disclosure_refs else "inconclusive",
                 evidence=disclosure_refs[0] if disclosure_refs else None,
-                message="External effects disclosure evidence recorded." if disclosure_refs else "Disclosure evidence is required.",
+                message="External effects disclosure evidence recorded."
+                if disclosure_refs
+                else "Disclosure evidence is required.",
             ),
             VerificationCheck(
                 "secrets.redaction",
                 "hard_gate",
                 "passed" if redaction_refs else "inconclusive",
                 evidence=redaction_refs[0] if redaction_refs else None,
-                message="Secret redaction evidence recorded." if redaction_refs else "Secret redaction evidence is required.",
+                message="Secret redaction evidence recorded."
+                if redaction_refs
+                else "Secret redaction evidence is required.",
             ),
             VerificationCheck(
                 "release.scope",
@@ -1350,7 +1658,12 @@ class ApplicationAccessManagementService:
         ).seal()
         statement = {
             "_type": "https://in-toto.io/Statement/v1",
-            "subject": [{"name": application_id, "digest": {"sha256": release_digest.removeprefix("sha256:")}}],
+            "subject": [
+                {
+                    "name": application_id,
+                    "digest": {"sha256": release_digest.removeprefix("sha256:")},
+                }
+            ],
             "predicateType": "https://adaos.dev/attestations/application-verification/v1",
             "predicate": {
                 "report_digest": report.report_digest,
@@ -1375,9 +1688,21 @@ class ApplicationAccessManagementService:
             "evidence_refs": sorted(
                 {
                     *regression_refs,
-                    *(str(item).strip() for item in access_matrix_evidence if str(item).strip()),
-                    *(str(item).strip() for item in pending_action_evidence if str(item).strip()),
-                    *(str(item).strip() for item in audit_evidence if str(item).strip()),
+                    *(
+                        str(item).strip()
+                        for item in access_matrix_evidence
+                        if str(item).strip()
+                    ),
+                    *(
+                        str(item).strip()
+                        for item in pending_action_evidence
+                        if str(item).strip()
+                    ),
+                    *(
+                        str(item).strip()
+                        for item in audit_evidence
+                        if str(item).strip()
+                    ),
                     *disclosure_refs,
                     *redaction_refs,
                 }
@@ -1386,9 +1711,18 @@ class ApplicationAccessManagementService:
         }
         return {
             "report": saved,
-            "checklist": sorted(saved["checks"], key=lambda item: (item["result"] not in {"failed", "inconclusive"}, item["id"])),
+            "checklist": sorted(
+                saved["checks"],
+                key=lambda item: (
+                    item["result"] not in {"failed", "inconclusive"},
+                    item["id"],
+                ),
+            ),
             "publication_allowed": report.overall == "passed",
-            "attestation": {**statement, "statement_digest": canonical_payload_digest(statement)},
+            "attestation": {
+                **statement,
+                "statement_digest": canonical_payload_digest(statement),
+            },
             "evidence_bundle": {
                 **bundle,
                 "bundle_digest": canonical_payload_digest(bundle),
@@ -1407,14 +1741,22 @@ class ApplicationAccessManagementService:
         response = payload.get("response")
         response = dict(response) if isinstance(response, Mapping) else {}
         domain = payload.get("domain_ref")
-        domain = dict(domain) if isinstance(domain, Mapping) else dict(action.get("domain_ref") or {})
+        domain = (
+            dict(domain)
+            if isinstance(domain, Mapping)
+            else dict(action.get("domain_ref") or {})
+        )
         pending_action_id = str(
             payload.get("pending_action_id") or action.get("id") or ""
         ).strip()
         if action.get("kind") != "application.access.revoke":
-            raise ApplicationAccessError("unsupported Application access Pending Action")
+            raise ApplicationAccessError(
+                "unsupported Application access Pending Action"
+            )
         if pending_action_id != str(action.get("id") or "").strip():
-            raise ApplicationAccessError("Application access Pending Action identity mismatch")
+            raise ApplicationAccessError(
+                "Application access Pending Action identity mismatch"
+            )
         response_action_id = str(
             payload.get("response_action_id")
             or response.get("response_action_id")
@@ -1425,15 +1767,18 @@ class ApplicationAccessManagementService:
         grant_id = str(domain.get("grant_id") or "").strip()
         expected_revision = int(domain.get("expected_revision") or 0)
         if not grant_id or expected_revision < 1:
-            raise ApplicationAccessError("Application access response is missing grant revision")
+            raise ApplicationAccessError(
+                "Application access response is missing grant revision"
+            )
         grant = self.store.get_application_access_grant(grant_id)
         if grant.application_id != str(domain.get("application_id") or "").strip():
             raise ApplicationAccessError("Application access response grant mismatch")
         if grant.subject_ref != str(domain.get("subject_ref") or "").strip():
             raise ApplicationAccessError("Application access response subject mismatch")
-        if grant.reviewed_permission_profile_digest != str(
-            domain.get("reviewed_permission_profile_digest") or ""
-        ).strip():
+        if (
+            grant.reviewed_permission_profile_digest
+            != str(domain.get("reviewed_permission_profile_digest") or "").strip()
+        ):
             raise ApplicationAccessError(
                 "Application access response permission profile mismatch"
             )
@@ -1477,7 +1822,14 @@ class ApplicationAccessManagementService:
     def surface_contract() -> dict[str, Any]:
         return {
             "schema": "adaos.application.access_ui_contract.v1",
-            "applications_tabs": ["permissions", "access", "roles", "connected_accounts", "release_readiness", "activity"],
+            "applications_tabs": [
+                "permissions",
+                "access",
+                "roles",
+                "connected_accounts",
+                "release_readiness",
+                "activity",
+            ],
             "users_access_tabs": [
                 "people",
                 "guests",
@@ -1487,9 +1839,20 @@ class ApplicationAccessManagementService:
                 "application_access",
                 "activity",
             ],
-            "commands": ["assign_role", "change_role", "revoke_access", "simulate_policy", "export_snapshot", "import_snapshot"],
+            "commands": [
+                "assign_role",
+                "change_role",
+                "revoke_access",
+                "simulate_policy",
+                "export_snapshot",
+                "import_snapshot",
+            ],
             "responsive": {"compact": "single_column", "wide": "master_detail"},
-            "keyboard": {"tabs": ["ArrowLeft", "ArrowRight"], "activate": ["Enter", "Space"], "close": ["Escape"]},
+            "keyboard": {
+                "tabs": ["ArrowLeft", "ArrowRight"],
+                "activate": ["Enter", "Space"],
+                "close": ["Escape"],
+            },
             "locales": ["en", "ru"],
             "embedded_role_management": {"writes": "platform_api_only"},
         }
@@ -1508,7 +1871,9 @@ async def _on_application_access_conversation(evt: Any) -> None:
         management = ApplicationAccessManagementService(get_application_service(state))
         await asyncio.to_thread(management.apply_pending_action_response, dict(payload))
     except Exception:
-        _log.warning("failed to apply Application access Pending Action response", exc_info=True)
+        _log.warning(
+            "failed to apply Application access Pending Action response", exc_info=True
+        )
 
 
 __all__ = ["ApplicationAccessManagementService", "ROLE_TEMPLATES"]

@@ -1307,6 +1307,26 @@ def list_application_placements(
     for component_ref in component_refs:
         plan = desired.get(component_ref, {})
         mode = str(plan.get("mode") or "unmanaged")
+        if mode == "disabled":
+            rows.append(
+                {
+                    "placement_id": f"{component_ref}@disabled",
+                    "component_ref": component_ref,
+                    "node_id": None,
+                    "desired": False,
+                    "desired_mode": mode,
+                    "runtime_status": "disabled",
+                    "sync_status": "disabled",
+                    "status_icon": "remove-circle-outline",
+                    "status_color": "medium",
+                    "status_tooltip": "Component is explicitly uninstalled.",
+                    "generation": None,
+                    "updated_at": placement.get("updated_at"),
+                    "deployment_id": placement.get("deployment_id"),
+                    "deployment_revision": placement.get("revision"),
+                }
+            )
+            continue
         selected_nodes = {
             str(value or "").strip()
             for value in plan.get("selected_node_ids") or ()
@@ -2606,6 +2626,7 @@ def put_application_connected_account(
     subnet_ref: str,
     capability: str,
     idempotency_key: str,
+    expected_revision: int,
 ) -> dict[str, Any]:
     _mutation_identity(
         actor_ref,
@@ -2614,7 +2635,11 @@ def put_application_connected_account(
         idempotency_key,
         required_capability="applications.apply",
     )
-    return _access_management().put_connected_account(application_id, account)
+    return _access_management().put_connected_account(
+        application_id,
+        account,
+        expected_revision=expected_revision,
+    )
 
 
 def export_application_access_snapshot(application_id: str) -> dict[str, Any]:
@@ -3308,6 +3333,78 @@ def plan_remove(
     )
 
 
+def plan_relocate_component(
+    application_id: str,
+    *,
+    component_ref: str,
+    target_node_id: str,
+    expected_revision: int,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Plan an exact CAS-guarded change to one component placement."""
+
+    actor, subnet, granted, key = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.plan",
+    )
+    return (
+        _service()
+        .plan_operation(
+            application_id,
+            "relocate_component",
+            component_ref=component_ref,
+            target_node_id=target_node_id,
+            expected_revision=expected_revision,
+            actor_ref=actor,
+            subnet_ref=subnet,
+            capability=granted,
+            idempotency_key=key,
+        )
+        .to_dict()
+    )
+
+
+def plan_remove_component(
+    application_id: str,
+    *,
+    component_ref: str,
+    expected_revision: int,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Plan selective component uninstall without removing the Application."""
+
+    actor, subnet, granted, key = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.plan",
+    )
+    return (
+        _service()
+        .plan_operation(
+            application_id,
+            "remove_component",
+            component_ref=component_ref,
+            expected_revision=expected_revision,
+            actor_ref=actor,
+            subnet_ref=subnet,
+            capability=granted,
+            idempotency_key=key,
+        )
+        .to_dict()
+    )
+
+
 def plan_update_track(
     application_id: str,
     *,
@@ -3500,7 +3597,9 @@ __all__ = [
     "list_releases",
     "list_trial_access",
     "plan_install",
+    "plan_relocate_component",
     "plan_remove",
+    "plan_remove_component",
     "plan_trial_link_install",
     "plan_update",
     "plan_available_updates",

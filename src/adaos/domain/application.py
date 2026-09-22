@@ -5,7 +5,11 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Sequence
 
-from .artifact_release import ProjectRelease, StableSubscription, canonical_payload_digest
+from .artifact_release import (
+    ProjectRelease,
+    StableSubscription,
+    canonical_payload_digest,
+)
 from .application_access import (
     ApplicationPermissionProfile,
     ApplicationRoleDeclaration,
@@ -91,7 +95,9 @@ def _timestamp(value: Any, field_name: str) -> str:
     try:
         parsed = datetime.fromisoformat(token.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise ApplicationContractError(f"{field_name} must be an ISO-8601 timestamp") from exc
+        raise ApplicationContractError(
+            f"{field_name} must be an ISO-8601 timestamp"
+        ) from exc
     if parsed.tzinfo is None:
         raise ApplicationContractError(f"{field_name} must include a timezone")
     return token
@@ -167,8 +173,14 @@ class Application:
     updated_at: str = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "application_id", _identifier(self.application_id, "application_id"))
-        object.__setattr__(self, "legacy_project_id", _identifier(self.legacy_project_id, "legacy_project_id"))
+        object.__setattr__(
+            self, "application_id", _identifier(self.application_id, "application_id")
+        )
+        object.__setattr__(
+            self,
+            "legacy_project_id",
+            _identifier(self.legacy_project_id, "legacy_project_id"),
+        )
         object.__setattr__(self, "publisher_ref", _publisher_ref(self.publisher_ref))
         object.__setattr__(self, "slug", _identifier(self.slug, "slug"))
         display = _mapping(self.display, "display")
@@ -187,7 +199,9 @@ class Application:
                 for item in categories
             ]
             if len(normalized_categories) > 12:
-                raise ApplicationContractError("display.categories supports at most 12 items")
+                raise ApplicationContractError(
+                    "display.categories supports at most 12 items"
+                )
             if len({item.casefold() for item in normalized_categories}) != len(
                 normalized_categories
             ):
@@ -195,19 +209,25 @@ class Application:
             normalized_display["categories"] = normalized_categories
         object.__setattr__(self, "display", normalized_display)
         if self.visibility not in {"private", "link", "public"}:
-            raise ApplicationContractError("visibility must be private, link, or public")
+            raise ApplicationContractError(
+                "visibility must be private, link, or public"
+            )
         if self.lifecycle not in {"active", "retired", "archived"}:
             raise ApplicationContractError("application lifecycle is invalid")
         entrypoints = _mapping_tuple(self.entrypoints, "entrypoints")
         if not entrypoints:
-            raise ApplicationContractError("Application requires at least one entrypoint")
+            raise ApplicationContractError(
+                "Application requires at least one entrypoint"
+            )
         normalized_entrypoints: list[dict[str, Any]] = []
         seen: set[str] = set()
         for raw in entrypoints:
             entrypoint_id = _identifier(raw.get("entrypoint_id"), "entrypoint_id")
             presentation_ref = _text(raw.get("presentation_ref"), "presentation_ref")
             if not _REF_RE.fullmatch(presentation_ref):
-                raise ApplicationContractError("presentation_ref must reference a skill or scenario")
+                raise ApplicationContractError(
+                    "presentation_ref must reference a skill or scenario"
+                )
             if entrypoint_id in seen:
                 raise ApplicationContractError("entrypoint ids must be unique")
             seen.add(entrypoint_id)
@@ -218,24 +238,48 @@ class Application:
         publisher = _mapping(self.publisher, "publisher")
         publisher_ref = _publisher_ref(publisher.get("publisher_ref"))
         if publisher_ref != self.publisher_ref:
-            raise ApplicationContractError("publisher presentation does not match publisher_ref")
+            raise ApplicationContractError(
+                "publisher presentation does not match publisher_ref"
+            )
         release_key_fingerprint = _digest(
-            publisher.get("release_key_fingerprint"), "publisher.release_key_fingerprint"
+            publisher.get("release_key_fingerprint"),
+            "publisher.release_key_fingerprint",
         )
         object.__setattr__(
             self,
             "publisher",
             {
                 "publisher_ref": publisher_ref,
-                "display_name": _text(publisher.get("display_name"), "publisher.display_name", maximum=160),
-                "subnet_short_ref": _text(publisher.get("subnet_short_ref"), "publisher.subnet_short_ref", maximum=32),
-                "release_key_ref": _text(publisher.get("release_key_ref"), "publisher.release_key_ref", maximum=240),
+                "display_name": _text(
+                    publisher.get("display_name"), "publisher.display_name", maximum=160
+                ),
+                "subnet_short_ref": _text(
+                    publisher.get("subnet_short_ref"),
+                    "publisher.subnet_short_ref",
+                    maximum=32,
+                ),
+                "release_key_ref": _text(
+                    publisher.get("release_key_ref"),
+                    "publisher.release_key_ref",
+                    maximum=240,
+                ),
                 "release_key_fingerprint": release_key_fingerprint,
-                "home_zone": _identifier(publisher.get("home_zone"), "publisher.home_zone"),
-                "trust_relation": _text(publisher.get("trust_relation"), "publisher.trust_relation", maximum=40),
+                "home_zone": _identifier(
+                    publisher.get("home_zone"), "publisher.home_zone"
+                ),
+                "trust_relation": _text(
+                    publisher.get("trust_relation"),
+                    "publisher.trust_relation",
+                    maximum=40,
+                ),
             },
         )
-        if self.publisher["trust_relation"] not in {"local", "trusted", "unverified", "blocked"}:
+        if self.publisher["trust_relation"] not in {
+            "local",
+            "trusted",
+            "unverified",
+            "blocked",
+        }:
             raise ApplicationContractError("publisher.trust_relation is invalid")
         protection = _mapping(self.protection, "protection")
         unknown_protection = set(protection) - {
@@ -253,13 +297,17 @@ class Application:
         if not isinstance(recovery_surfaces, Sequence) or isinstance(
             recovery_surfaces, (str, bytes, bytearray)
         ):
-            raise ApplicationContractError("protection.recovery_surfaces must be an array")
+            raise ApplicationContractError(
+                "protection.recovery_surfaces must be an array"
+            )
         normalized_recovery = tuple(
             _identifier(item, "protection.recovery_surfaces item")
             for item in recovery_surfaces
         )
         if len(set(normalized_recovery)) != len(normalized_recovery):
-            raise ApplicationContractError("protection.recovery_surfaces must be unique")
+            raise ApplicationContractError(
+                "protection.recovery_surfaces must be unique"
+            )
         unsupported_recovery = set(normalized_recovery) - {"cli", "mcp"}
         if unsupported_recovery:
             raise ApplicationContractError(
@@ -301,14 +349,22 @@ class Application:
                 self,
                 "derived_from",
                 {
-                    "application_id": _identifier(derived.get("application_id"), "derived_from.application_id"),
-                    "release_digest": _digest(derived.get("release_digest"), "derived_from.release_digest"),
+                    "application_id": _identifier(
+                        derived.get("application_id"), "derived_from.application_id"
+                    ),
+                    "release_digest": _digest(
+                        derived.get("release_digest"), "derived_from.release_digest"
+                    ),
                     "relationship": "independent_derivative",
                 },
             )
         object.__setattr__(self, "revision", _revision(self.revision))
-        object.__setattr__(self, "created_at", _timestamp(self.created_at, "created_at"))
-        object.__setattr__(self, "updated_at", _timestamp(self.updated_at, "updated_at"))
+        object.__setattr__(
+            self, "created_at", _timestamp(self.created_at, "created_at")
+        )
+        object.__setattr__(
+            self, "updated_at", _timestamp(self.updated_at, "updated_at")
+        )
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -337,14 +393,36 @@ class Application:
             value,
             schema=APPLICATION_SCHEMA,
             allowed={
-                "schema", "application_id", "legacy_project_id", "publisher_ref", "slug",
-                "display", "visibility", "entrypoints", "publisher", "lifecycle",
-                "protection", "derived_from", "revision", "created_at", "updated_at",
+                "schema",
+                "application_id",
+                "legacy_project_id",
+                "publisher_ref",
+                "slug",
+                "display",
+                "visibility",
+                "entrypoints",
+                "publisher",
+                "lifecycle",
+                "protection",
+                "derived_from",
+                "revision",
+                "created_at",
+                "updated_at",
             },
             required={
-                "schema", "application_id", "legacy_project_id", "publisher_ref", "slug",
-                "display", "visibility", "entrypoints", "publisher", "lifecycle",
-                "revision", "created_at", "updated_at",
+                "schema",
+                "application_id",
+                "legacy_project_id",
+                "publisher_ref",
+                "slug",
+                "display",
+                "visibility",
+                "entrypoints",
+                "publisher",
+                "lifecycle",
+                "revision",
+                "created_at",
+                "updated_at",
             },
             field_name="Application",
         )
@@ -368,20 +446,32 @@ class ApplicationRelease:
     published_at: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "application_id", _identifier(self.application_id, "application_id"))
+        object.__setattr__(
+            self, "application_id", _identifier(self.application_id, "application_id")
+        )
         object.__setattr__(self, "publisher_ref", _publisher_ref(self.publisher_ref))
         if not isinstance(self.project_release, ProjectRelease):
             raise ApplicationContractError("project_release must be ProjectRelease")
         sealed = self.project_release.seal()
         object.__setattr__(self, "project_release", sealed)
-        object.__setattr__(self, "accepted_candidate_id", _text(self.accepted_candidate_id, "accepted_candidate_id", maximum=180))
+        object.__setattr__(
+            self,
+            "accepted_candidate_id",
+            _text(self.accepted_candidate_id, "accepted_candidate_id", maximum=180),
+        )
         evidence = _mapping_tuple(self.acceptance_evidence, "acceptance_evidence")
         if not evidence:
-            raise ApplicationContractError("ApplicationRelease requires acceptance evidence")
+            raise ApplicationContractError(
+                "ApplicationRelease requires acceptance evidence"
+            )
         object.__setattr__(self, "acceptance_evidence", evidence)
-        refs = tuple(sorted({_digest(item, "provenance_ref") for item in self.provenance_refs}))
+        refs = tuple(
+            sorted({_digest(item, "provenance_ref") for item in self.provenance_refs})
+        )
         if not refs:
-            raise ApplicationContractError("ApplicationRelease requires provenance refs")
+            raise ApplicationContractError(
+                "ApplicationRelease requires provenance refs"
+            )
         object.__setattr__(self, "provenance_refs", refs)
         composition = sealed.composition_lock
         locked_profile = (
@@ -419,16 +509,37 @@ class ApplicationRelease:
                 "Application setup contract must match the Application release identity"
             )
         object.__setattr__(self, "setup_contract", setup_contract)
-        report_ids = tuple(sorted({_identifier(item, "addresses_report_id") for item in self.addresses_report_ids}))
+        report_ids = tuple(
+            sorted(
+                {
+                    _identifier(item, "addresses_report_id")
+                    for item in self.addresses_report_ids
+                }
+            )
+        )
         object.__setattr__(self, "addresses_report_ids", report_ids)
-        if self.lifecycle not in {"candidate", "trial", "prerelease", "stable", "superseded", "retired", "archived", "yanked"}:
+        if self.lifecycle not in {
+            "candidate",
+            "trial",
+            "prerelease",
+            "stable",
+            "superseded",
+            "retired",
+            "archived",
+            "yanked",
+        }:
             raise ApplicationContractError("application release lifecycle is invalid")
         if self.published_at is not None:
-            object.__setattr__(self, "published_at", _timestamp(self.published_at, "published_at"))
+            object.__setattr__(
+                self, "published_at", _timestamp(self.published_at, "published_at")
+            )
 
     @property
     def release_digest(self) -> str:
-        return str(self.project_release.release_digest or self.project_release.computed_digest())
+        return str(
+            self.project_release.release_digest
+            or self.project_release.computed_digest()
+        )
 
     @property
     def permission_profile_digest(self) -> str:
@@ -436,7 +547,9 @@ class ApplicationRelease:
 
     @property
     def role_model_digest(self) -> str:
-        return canonical_payload_digest([item.to_dict() for item in self.application_roles])
+        return canonical_payload_digest(
+            [item.to_dict() for item in self.application_roles]
+        )
 
     @property
     def setup_contract_digest(self) -> str | None:
@@ -474,40 +587,87 @@ class ApplicationRelease:
             value,
             schema=APPLICATION_RELEASE_SCHEMA,
             allowed={
-                "schema", "application_id", "publisher_ref", "legacy_project_id", "version",
-                "release_digest", "project_release", "accepted_candidate_id", "acceptance_evidence",
-                "provenance_refs", "permission_profile", "permission_profile_digest",
-                "application_roles", "role_model_digest", "addresses_report_ids", "lifecycle",
-                "published_at", "setup_contract", "setup_contract_digest",
+                "schema",
+                "application_id",
+                "publisher_ref",
+                "legacy_project_id",
+                "version",
+                "release_digest",
+                "project_release",
+                "accepted_candidate_id",
+                "acceptance_evidence",
+                "provenance_refs",
+                "permission_profile",
+                "permission_profile_digest",
+                "application_roles",
+                "role_model_digest",
+                "addresses_report_ids",
+                "lifecycle",
+                "published_at",
+                "setup_contract",
+                "setup_contract_digest",
             },
             required={
-                "schema", "application_id", "publisher_ref", "legacy_project_id", "version",
-                "release_digest", "project_release", "accepted_candidate_id", "acceptance_evidence",
-                "provenance_refs", "lifecycle",
+                "schema",
+                "application_id",
+                "publisher_ref",
+                "legacy_project_id",
+                "version",
+                "release_digest",
+                "project_release",
+                "accepted_candidate_id",
+                "acceptance_evidence",
+                "provenance_refs",
+                "lifecycle",
             },
             field_name="ApplicationRelease",
         )
-        project_release = ProjectRelease.from_mapping(_mapping(payload["project_release"], "project_release"))
+        project_release = ProjectRelease.from_mapping(
+            _mapping(payload["project_release"], "project_release")
+        )
         expected_digest = _digest(payload["release_digest"], "release_digest")
-        if project_release.project_id != payload["legacy_project_id"] or project_release.version != payload["version"]:
-            raise ApplicationContractError("ApplicationRelease compatibility identity does not match ProjectRelease")
-        if (project_release.release_digest or project_release.computed_digest()) != expected_digest:
-            raise ApplicationContractError("ApplicationRelease release_digest must preserve ProjectRelease identity")
+        if (
+            project_release.project_id != payload["legacy_project_id"]
+            or project_release.version != payload["version"]
+        ):
+            raise ApplicationContractError(
+                "ApplicationRelease compatibility identity does not match ProjectRelease"
+            )
+        if (
+            project_release.release_digest or project_release.computed_digest()
+        ) != expected_digest:
+            raise ApplicationContractError(
+                "ApplicationRelease release_digest must preserve ProjectRelease identity"
+            )
         permission_profile = ApplicationPermissionProfile.from_mapping(
             payload.get("permission_profile"),
             legacy_permissions=project_release.permissions,
         )
         if payload.get("permission_profile_digest") is not None:
-            if _digest(payload["permission_profile_digest"], "permission_profile_digest") != permission_profile.digest:
-                raise ApplicationContractError("ApplicationRelease permission_profile_digest mismatch")
+            if (
+                _digest(
+                    payload["permission_profile_digest"], "permission_profile_digest"
+                )
+                != permission_profile.digest
+            ):
+                raise ApplicationContractError(
+                    "ApplicationRelease permission_profile_digest mismatch"
+                )
         application_roles = normalize_application_roles(
             tuple(payload.get("application_roles") or ()),
             known_permissions=permission_profile.flat_permissions,
         )
         if payload.get("role_model_digest") is not None:
-            expected_role_digest = canonical_payload_digest([item.to_dict() for item in application_roles])
-            if _digest(payload["role_model_digest"], "role_model_digest") != expected_role_digest:
-                raise ApplicationContractError("ApplicationRelease role_model_digest mismatch")
+            expected_role_digest = canonical_payload_digest(
+                [item.to_dict() for item in application_roles]
+            )
+            if (
+                _digest(payload["role_model_digest"], "role_model_digest")
+                != expected_role_digest
+            ):
+                raise ApplicationContractError(
+                    "ApplicationRelease role_model_digest mismatch"
+                )
         setup_contract = (
             ApplicationSetupContract.from_mapping(payload["setup_contract"])
             if payload.get("setup_contract") is not None
@@ -522,13 +682,17 @@ class ApplicationRelease:
                 _digest(payload["setup_contract_digest"], "setup_contract_digest")
                 != setup_contract.digest
             ):
-                raise ApplicationContractError("ApplicationRelease setup_contract_digest mismatch")
+                raise ApplicationContractError(
+                    "ApplicationRelease setup_contract_digest mismatch"
+                )
         return cls(
             application_id=payload["application_id"],
             publisher_ref=payload["publisher_ref"],
             project_release=project_release,
             accepted_candidate_id=payload["accepted_candidate_id"],
-            acceptance_evidence=_mapping_tuple(payload["acceptance_evidence"], "acceptance_evidence"),
+            acceptance_evidence=_mapping_tuple(
+                payload["acceptance_evidence"], "acceptance_evidence"
+            ),
             provenance_refs=tuple(payload["provenance_refs"]),
             permission_profile=permission_profile,
             application_roles=application_roles,
@@ -557,42 +721,97 @@ class ApplicationInstallation:
     updated_at: str = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "installation_id", _text(self.installation_id, "installation_id", maximum=180))
-        object.__setattr__(self, "application_id", _identifier(self.application_id, "application_id"))
-        object.__setattr__(self, "installed_release_digest", _digest(self.installed_release_digest, "installed_release_digest"))
+        object.__setattr__(
+            self,
+            "installation_id",
+            _text(self.installation_id, "installation_id", maximum=180),
+        )
+        object.__setattr__(
+            self, "application_id", _identifier(self.application_id, "application_id")
+        )
+        object.__setattr__(
+            self,
+            "installed_release_digest",
+            _digest(self.installed_release_digest, "installed_release_digest"),
+        )
         components = _mapping_tuple(self.component_refs, "component_refs")
         normalized: list[dict[str, Any]] = []
         seen: set[str] = set()
         for raw in components:
             component_ref = _text(raw.get("component_ref"), "component_ref")
             if not _REF_RE.fullmatch(component_ref):
-                raise ApplicationContractError("component_ref must reference a skill or scenario")
+                raise ApplicationContractError(
+                    "component_ref must reference a skill or scenario"
+                )
             if component_ref in seen:
                 raise ApplicationContractError("component_refs must be unique")
             seen.add(component_ref)
             lifecycle = _text(raw.get("lifecycle"), "component lifecycle", maximum=16)
             if lifecycle not in {"bound", "shared"}:
-                raise ApplicationContractError("component lifecycle must be bound or shared")
-            normalized.append({
-                "component_ref": component_ref,
-                "package_digest": _digest(raw.get("package_digest"), "package_digest"),
-                "lifecycle": lifecycle,
-            })
+                raise ApplicationContractError(
+                    "component lifecycle must be bound or shared"
+                )
+            normalized.append(
+                {
+                    "component_ref": component_ref,
+                    "package_digest": _digest(
+                        raw.get("package_digest"), "package_digest"
+                    ),
+                    "lifecycle": lifecycle,
+                }
+            )
         if not normalized:
-            raise ApplicationContractError("ApplicationInstallation requires component refs")
-        object.__setattr__(self, "component_refs", tuple(sorted(normalized, key=lambda item: item["component_ref"])))
+            raise ApplicationContractError(
+                "ApplicationInstallation requires component refs"
+            )
+        object.__setattr__(
+            self,
+            "component_refs",
+            tuple(sorted(normalized, key=lambda item: item["component_ref"])),
+        )
         if self.data_policy not in {"retain", "delete", "snapshot_then_delete"}:
             raise ApplicationContractError("installation data_policy is invalid")
-        if self.status not in {"planned", "installing", "active", "updating", "degraded", "removing", "removed", "failed", "unknown"}:
+        if self.status not in {
+            "planned",
+            "installing",
+            "active",
+            "updating",
+            "degraded",
+            "removing",
+            "removed",
+            "failed",
+            "unknown",
+        }:
             raise ApplicationContractError("installation status is invalid")
         object.__setattr__(self, "revision", _revision(self.revision))
-        object.__setattr__(self, "legacy_deployment_id", _optional_text(self.legacy_deployment_id, maximum=180))
-        object.__setattr__(self, "snapshot_ref", _optional_text(self.snapshot_ref, maximum=300))
-        for field_name in ("active_runtime_leases", "rollback_holds", "uncertain_operation_refs"):
-            values = tuple(sorted({_text(item, field_name, maximum=300) for item in getattr(self, field_name)}))
+        object.__setattr__(
+            self,
+            "legacy_deployment_id",
+            _optional_text(self.legacy_deployment_id, maximum=180),
+        )
+        object.__setattr__(
+            self, "snapshot_ref", _optional_text(self.snapshot_ref, maximum=300)
+        )
+        for field_name in (
+            "active_runtime_leases",
+            "rollback_holds",
+            "uncertain_operation_refs",
+        ):
+            values = tuple(
+                sorted(
+                    {
+                        _text(item, field_name, maximum=300)
+                        for item in getattr(self, field_name)
+                    }
+                )
+            )
             object.__setattr__(self, field_name, values)
-        object.__setattr__(self, "created_at", _timestamp(self.created_at, "created_at"))
-        object.__setattr__(self, "updated_at", _timestamp(self.updated_at, "updated_at"))
+        object.__setattr__(
+            self, "created_at", _timestamp(self.created_at, "created_at")
+        )
+        object.__setattr__(
+            self, "updated_at", _timestamp(self.updated_at, "updated_at")
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -616,15 +835,38 @@ class ApplicationInstallation:
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ApplicationInstallation":
         required = {
-            "schema", "installation_id", "application_id", "installed_release_digest",
-            "component_refs", "data_policy", "status", "revision", "legacy_deployment_id",
-            "snapshot_ref", "active_runtime_leases", "rollback_holds", "uncertain_operation_refs",
-            "created_at", "updated_at",
+            "schema",
+            "installation_id",
+            "application_id",
+            "installed_release_digest",
+            "component_refs",
+            "data_policy",
+            "status",
+            "revision",
+            "legacy_deployment_id",
+            "snapshot_ref",
+            "active_runtime_leases",
+            "rollback_holds",
+            "uncertain_operation_refs",
+            "created_at",
+            "updated_at",
         }
-        payload = _schema_mapping(value, schema=APPLICATION_INSTALLATION_SCHEMA, allowed=required, required=required, field_name="ApplicationInstallation")
+        payload = _schema_mapping(
+            value,
+            schema=APPLICATION_INSTALLATION_SCHEMA,
+            allowed=required,
+            required=required,
+            field_name="ApplicationInstallation",
+        )
         payload.pop("schema")
-        payload["component_refs"] = _mapping_tuple(payload["component_refs"], "component_refs")
-        for key in ("active_runtime_leases", "rollback_holds", "uncertain_operation_refs"):
+        payload["component_refs"] = _mapping_tuple(
+            payload["component_refs"], "component_refs"
+        )
+        for key in (
+            "active_runtime_leases",
+            "rollback_holds",
+            "uncertain_operation_refs",
+        ):
             payload[key] = tuple(payload[key])
         return cls(**payload)
 
@@ -637,7 +879,9 @@ class ApplicationInstallation:
         component_digests: Mapping[str, str],
     ) -> "ApplicationInstallation":
         if deployment.project_ref != f"project:{application.legacy_project_id}":
-            raise ApplicationContractError("ProjectDeployment belongs to a different Application")
+            raise ApplicationContractError(
+                "ProjectDeployment belongs to a different Application"
+            )
         missing = sorted(
             placement.component_ref
             for placement in deployment.placements
@@ -686,18 +930,30 @@ class ApplicationSubscription:
     updated_at: str = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "application_id", _identifier(self.application_id, "application_id"))
+        object.__setattr__(
+            self, "application_id", _identifier(self.application_id, "application_id")
+        )
         if self.update_track not in {"stable", "prerelease"}:
             raise ApplicationContractError("update_track must be stable or prerelease")
         if self.update_policy not in {"notify", "auto_compatible", "pinned"}:
             raise ApplicationContractError("update_policy is invalid")
         object.__setattr__(self, "revision", _revision(self.revision))
         if self.observed_release_digest is not None:
-            object.__setattr__(self, "observed_release_digest", _digest(self.observed_release_digest, "observed_release_digest"))
+            object.__setattr__(
+                self,
+                "observed_release_digest",
+                _digest(self.observed_release_digest, "observed_release_digest"),
+            )
         if self.pinned_release_digest is not None:
-            object.__setattr__(self, "pinned_release_digest", _digest(self.pinned_release_digest, "pinned_release_digest"))
+            object.__setattr__(
+                self,
+                "pinned_release_digest",
+                _digest(self.pinned_release_digest, "pinned_release_digest"),
+            )
         object.__setattr__(self, "paused", bool(self.paused))
-        object.__setattr__(self, "updated_at", _timestamp(self.updated_at, "updated_at"))
+        object.__setattr__(
+            self, "updated_at", _timestamp(self.updated_at, "updated_at")
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -714,8 +970,24 @@ class ApplicationSubscription:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ApplicationSubscription":
-        required = {"schema", "application_id", "update_track", "update_policy", "observed_release_digest", "pinned_release_digest", "paused", "revision", "updated_at"}
-        payload = _schema_mapping(value, schema=APPLICATION_SUBSCRIPTION_SCHEMA, allowed=required, required=required, field_name="ApplicationSubscription")
+        required = {
+            "schema",
+            "application_id",
+            "update_track",
+            "update_policy",
+            "observed_release_digest",
+            "pinned_release_digest",
+            "paused",
+            "revision",
+            "updated_at",
+        }
+        payload = _schema_mapping(
+            value,
+            schema=APPLICATION_SUBSCRIPTION_SCHEMA,
+            allowed=required,
+            required=required,
+            field_name="ApplicationSubscription",
+        )
         payload.pop("schema")
         return cls(**payload)
 
@@ -740,7 +1012,9 @@ class ApplicationSubscription:
             update_track="prerelease" if legacy.channel == "prerelease" else "stable",
             update_policy="pinned" if legacy.policy == "pinned" else "notify",
             observed_release_digest=legacy.installed_digest,
-            pinned_release_digest=legacy.installed_digest if legacy.policy == "pinned" else None,
+            pinned_release_digest=legacy.installed_digest
+            if legacy.policy == "pinned"
+            else None,
             revision=revision,
         )
 
@@ -756,21 +1030,39 @@ class RuntimeSelection:
     updated_at: str = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "webspace_id", _identifier(self.webspace_id, "webspace_id"))
-        object.__setattr__(self, "application_id", _identifier(self.application_id, "application_id"))
-        if self.source not in {"stable_installation", "prerelease_trial", "local_trial"}:
+        object.__setattr__(
+            self, "webspace_id", _identifier(self.webspace_id, "webspace_id")
+        )
+        object.__setattr__(
+            self, "application_id", _identifier(self.application_id, "application_id")
+        )
+        if self.source not in {
+            "stable_installation",
+            "prerelease_trial",
+            "local_trial",
+        }:
             raise ApplicationContractError("runtime selection source is invalid")
-        object.__setattr__(self, "release_digest", _digest(self.release_digest, "release_digest"))
+        object.__setattr__(
+            self, "release_digest", _digest(self.release_digest, "release_digest")
+        )
         root_ref = _text(self.runtime_root_ref, "runtime_root_ref", maximum=200)
         if root_ref != "workspace" and not root_ref.startswith("trial:"):
-            raise ApplicationContractError("runtime_root_ref must be workspace or trial:<candidate-id>")
+            raise ApplicationContractError(
+                "runtime_root_ref must be workspace or trial:<candidate-id>"
+            )
         if self.source == "stable_installation" and root_ref != "workspace":
-            raise ApplicationContractError("stable installation must select the Workspace runtime")
+            raise ApplicationContractError(
+                "stable installation must select the Workspace runtime"
+            )
         if self.source != "stable_installation" and not root_ref.startswith("trial:"):
-            raise ApplicationContractError("Trial source must select a Trial runtime root")
+            raise ApplicationContractError(
+                "Trial source must select a Trial runtime root"
+            )
         object.__setattr__(self, "runtime_root_ref", root_ref)
         object.__setattr__(self, "revision", _revision(self.revision))
-        object.__setattr__(self, "updated_at", _timestamp(self.updated_at, "updated_at"))
+        object.__setattr__(
+            self, "updated_at", _timestamp(self.updated_at, "updated_at")
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -786,8 +1078,23 @@ class RuntimeSelection:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "RuntimeSelection":
-        required = {"schema", "webspace_id", "application_id", "source", "release_digest", "runtime_root_ref", "revision", "updated_at"}
-        payload = _schema_mapping(value, schema=RUNTIME_SELECTION_SCHEMA, allowed=required, required=required, field_name="RuntimeSelection")
+        required = {
+            "schema",
+            "webspace_id",
+            "application_id",
+            "source",
+            "release_digest",
+            "runtime_root_ref",
+            "revision",
+            "updated_at",
+        }
+        payload = _schema_mapping(
+            value,
+            schema=RUNTIME_SELECTION_SCHEMA,
+            allowed=required,
+            required=required,
+            field_name="RuntimeSelection",
+        )
         payload.pop("schema")
         return cls(**payload)
 
@@ -796,7 +1103,9 @@ class RuntimeSelection:
             raise ApplicationContractError(
                 f"runtime selection revision conflict: expected {expected_revision}, observed {self.revision}"
             )
-        return replace(self, revision=self.revision + 1, updated_at=utc_now(), **changes)
+        return replace(
+            self, revision=self.revision + 1, updated_at=utc_now(), **changes
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -818,14 +1127,26 @@ class TrialAccessGrant:
     issued_at: str = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "grant_id", _text(self.grant_id, "grant_id", maximum=180))
-        object.__setattr__(self, "application_id", _identifier(self.application_id, "application_id"))
+        object.__setattr__(
+            self, "grant_id", _text(self.grant_id, "grant_id", maximum=180)
+        )
+        object.__setattr__(
+            self, "application_id", _identifier(self.application_id, "application_id")
+        )
         object.__setattr__(self, "publisher_ref", _publisher_ref(self.publisher_ref))
         if self.scope not in {"exact_release", "follow_prerelease"}:
             raise ApplicationContractError("TrialAccessGrant scope is invalid")
-        object.__setattr__(self, "recipient_subnet_ref", _publisher_ref(self.recipient_subnet_ref))
-        object.__setattr__(self, "recipient_key_ref", _text(self.recipient_key_ref, "recipient_key_ref", maximum=240))
-        object.__setattr__(self, "expires_at", _timestamp(self.expires_at, "expires_at"))
+        object.__setattr__(
+            self, "recipient_subnet_ref", _publisher_ref(self.recipient_subnet_ref)
+        )
+        object.__setattr__(
+            self,
+            "recipient_key_ref",
+            _text(self.recipient_key_ref, "recipient_key_ref", maximum=240),
+        )
+        object.__setattr__(
+            self, "expires_at", _timestamp(self.expires_at, "expires_at")
+        )
         object.__setattr__(self, "issued_at", _timestamp(self.issued_at, "issued_at"))
         max_uses = _revision(self.max_uses, "max_uses")
         uses = _revision(self.uses, "uses", minimum=0)
@@ -834,18 +1155,32 @@ class TrialAccessGrant:
         object.__setattr__(self, "max_uses", max_uses)
         object.__setattr__(self, "uses", uses)
         object.__setattr__(self, "nonce", _text(self.nonce, "nonce", maximum=240))
-        object.__setattr__(self, "allowed_zones", tuple(sorted({_identifier(item, "allowed_zone") for item in self.allowed_zones})))
+        object.__setattr__(
+            self,
+            "allowed_zones",
+            tuple(
+                sorted(
+                    {_identifier(item, "allowed_zone") for item in self.allowed_zones}
+                )
+            ),
+        )
         if not self.allowed_zones:
             raise ApplicationContractError("TrialAccessGrant requires an allowed zone")
         if self.status not in {"active", "consumed", "expired", "revoked"}:
             raise ApplicationContractError("TrialAccessGrant status is invalid")
         object.__setattr__(self, "revision", _revision(self.revision))
         if self.release_digest is not None:
-            object.__setattr__(self, "release_digest", _digest(self.release_digest, "release_digest"))
+            object.__setattr__(
+                self, "release_digest", _digest(self.release_digest, "release_digest")
+            )
         if self.scope == "exact_release" and self.release_digest is None:
-            raise ApplicationContractError("exact_release grant requires release_digest")
+            raise ApplicationContractError(
+                "exact_release grant requires release_digest"
+            )
         if self.scope == "follow_prerelease" and self.release_digest is not None:
-            raise ApplicationContractError("follow_prerelease grant cannot pin release_digest")
+            raise ApplicationContractError(
+                "follow_prerelease grant cannot pin release_digest"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -869,8 +1204,31 @@ class TrialAccessGrant:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "TrialAccessGrant":
-        required = {"schema", "grant_id", "application_id", "publisher_ref", "scope", "release_digest", "recipient_subnet_ref", "recipient_key_ref", "expires_at", "max_uses", "uses", "nonce", "allowed_zones", "status", "revision", "issued_at"}
-        payload = _schema_mapping(value, schema=TRIAL_ACCESS_GRANT_SCHEMA, allowed=required, required=required, field_name="TrialAccessGrant")
+        required = {
+            "schema",
+            "grant_id",
+            "application_id",
+            "publisher_ref",
+            "scope",
+            "release_digest",
+            "recipient_subnet_ref",
+            "recipient_key_ref",
+            "expires_at",
+            "max_uses",
+            "uses",
+            "nonce",
+            "allowed_zones",
+            "status",
+            "revision",
+            "issued_at",
+        }
+        payload = _schema_mapping(
+            value,
+            schema=TRIAL_ACCESS_GRANT_SCHEMA,
+            allowed=required,
+            required=required,
+            field_name="TrialAccessGrant",
+        )
         payload.pop("schema")
         payload["allowed_zones"] = tuple(payload["allowed_zones"])
         return cls(**payload)
@@ -895,26 +1253,70 @@ class ApplicationOperation:
     updated_at: str = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "operation_id", _text(self.operation_id, "operation_id", maximum=200))
-        object.__setattr__(self, "application_id", _identifier(self.application_id, "application_id"))
-        if self.kind not in {"install", "update", "remove", "select_track", "install_trial", "publish_trial", "publish_prerelease", "promote_stable", "reconcile"}:
+        object.__setattr__(
+            self, "operation_id", _text(self.operation_id, "operation_id", maximum=200)
+        )
+        object.__setattr__(
+            self, "application_id", _identifier(self.application_id, "application_id")
+        )
+        if self.kind not in {
+            "install",
+            "update",
+            "remove",
+            "select_track",
+            "relocate_component",
+            "remove_component",
+            "install_trial",
+            "publish_trial",
+            "publish_prerelease",
+            "promote_stable",
+            "reconcile",
+        }:
             raise ApplicationContractError("ApplicationOperation kind is invalid")
-        if self.status not in {"planned", "applying", "succeeded", "failed", "unknown", "reconciling", "cancelled"}:
+        if self.status not in {
+            "planned",
+            "applying",
+            "succeeded",
+            "failed",
+            "unknown",
+            "reconciling",
+            "cancelled",
+        }:
             raise ApplicationContractError("ApplicationOperation status is invalid")
-        object.__setattr__(self, "actor_ref", _text(self.actor_ref, "actor_ref", maximum=200))
+        object.__setattr__(
+            self, "actor_ref", _text(self.actor_ref, "actor_ref", maximum=200)
+        )
         object.__setattr__(self, "subnet_ref", _publisher_ref(self.subnet_ref))
-        object.__setattr__(self, "plan_digest", _digest(self.plan_digest, "plan_digest"))
-        object.__setattr__(self, "idempotency_key", _text(self.idempotency_key, "idempotency_key", maximum=240))
-        object.__setattr__(self, "expected_revision", _revision(self.expected_revision, "expected_revision", minimum=0))
+        object.__setattr__(
+            self, "plan_digest", _digest(self.plan_digest, "plan_digest")
+        )
+        object.__setattr__(
+            self,
+            "idempotency_key",
+            _text(self.idempotency_key, "idempotency_key", maximum=240),
+        )
+        object.__setattr__(
+            self,
+            "expected_revision",
+            _revision(self.expected_revision, "expected_revision", minimum=0),
+        )
         object.__setattr__(self, "revision", _revision(self.revision))
         plan = _mapping(self.plan, "plan")
         if canonical_payload_digest(plan) != self.plan_digest:
-            raise ApplicationContractError("plan_digest does not match canonical plan content")
+            raise ApplicationContractError(
+                "plan_digest does not match canonical plan content"
+            )
         object.__setattr__(self, "plan", plan)
         object.__setattr__(self, "result", _mapping(self.result, "result"))
-        object.__setattr__(self, "recovery_reason", _optional_text(self.recovery_reason, maximum=500))
-        object.__setattr__(self, "created_at", _timestamp(self.created_at, "created_at"))
-        object.__setattr__(self, "updated_at", _timestamp(self.updated_at, "updated_at"))
+        object.__setattr__(
+            self, "recovery_reason", _optional_text(self.recovery_reason, maximum=500)
+        )
+        object.__setattr__(
+            self, "created_at", _timestamp(self.created_at, "created_at")
+        )
+        object.__setattr__(
+            self, "updated_at", _timestamp(self.updated_at, "updated_at")
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -938,8 +1340,31 @@ class ApplicationOperation:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ApplicationOperation":
-        required = {"schema", "operation_id", "application_id", "kind", "status", "actor_ref", "subnet_ref", "plan_digest", "idempotency_key", "expected_revision", "revision", "plan", "result", "recovery_reason", "created_at", "updated_at"}
-        payload = _schema_mapping(value, schema=APPLICATION_OPERATION_SCHEMA, allowed=required, required=required, field_name="ApplicationOperation")
+        required = {
+            "schema",
+            "operation_id",
+            "application_id",
+            "kind",
+            "status",
+            "actor_ref",
+            "subnet_ref",
+            "plan_digest",
+            "idempotency_key",
+            "expected_revision",
+            "revision",
+            "plan",
+            "result",
+            "recovery_reason",
+            "created_at",
+            "updated_at",
+        }
+        payload = _schema_mapping(
+            value,
+            schema=APPLICATION_OPERATION_SCHEMA,
+            allowed=required,
+            required=required,
+            field_name="ApplicationOperation",
+        )
         payload.pop("schema")
         return cls(**payload)
 
