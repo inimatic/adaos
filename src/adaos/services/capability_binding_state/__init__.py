@@ -15,9 +15,12 @@ from .local_state import (
     LegacyCrudProjector,
     LocalIdentityConflict,
     LocalIdentityStore,
+    PrototypeCrudProjector,
     StateAttachmentError,
+    StagedAuthorityTransition,
     calculate_effective_guarantees,
     redacted_graph_record,
+    stage_authority_transition,
     validate_state_attachment,
 )
 from .resolver import (
@@ -27,10 +30,18 @@ from .resolver import (
     SemanticCandidate,
     SemanticResolver,
 )
+from .telemetry import (
+    CBSBenchmarkTelemetryConflict,
+    CBSBenchmarkTelemetryStore,
+    CBSCrudProofStore,
+)
 
 __all__ = [
     "CBSActivationCoordinator",
     "CBSActivationResult",
+    "CBSBenchmarkTelemetryConflict",
+    "CBSBenchmarkTelemetryStore",
+    "CBSCrudProofStore",
     "FencedLocalCrudWriter",
     "LegacyCrudProjection",
     "LegacyCrudProjector",
@@ -39,6 +50,7 @@ __all__ = [
     "ExactPackageResolver",
     "PortableContractCatalog",
     "PortableContractConflict",
+    "PrototypeCrudProjector",
     "ResolutionFailure",
     "ResolutionPlanError",
     "ResolutionPlanExpired",
@@ -47,8 +59,10 @@ __all__ = [
     "SemanticCandidate",
     "SemanticResolver",
     "StateAttachmentError",
+    "StagedAuthorityTransition",
     "StaleWriterError",
     "calculate_effective_guarantees",
     "redacted_graph_record",
+    "stage_authority_transition",
     "validate_state_attachment",
 ]

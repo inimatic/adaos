@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/cbs.benchmark_telemetry.v1.schema.json",
+  "title": "AdaOS CBS Benchmark-Compatible Telemetry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "run_id", "semantic_revision_digest", "environment_profile_digest", "requirement_digest", "contract_digests", "package_digests", "application_resolution_digest", "resolution_plan_digest", "workspace_lock_digest", "requirement_total", "requirement_resolved", "resolver_candidate_count", "binding_selection_cost", "context_tokens", "residual_implementation", "package_reuse", "contract_reuse", "resolution_duration_ms", "activation_duration_ms", "manual_interventions", "e2e_result", "invariant_results", "started_at", "completed_at", "telemetry_digest"],
+  "properties": {
+    "schema": {"const": "adaos.cbs.benchmark_telemetry.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "semantic_revision_digest": {"$ref": "#/$defs/digest"},
+    "environment_profile_digest": {"$ref": "#/$defs/digest"},
+    "requirement_digest": {"$ref": "#/$defs/digest"},
+    "contract_digests": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/digest"}},
+    "package_digests": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/digest"}},
+    "application_resolution_digest": {"$ref": "#/$defs/digest"},
+    "resolution_plan_digest": {"$ref": "#/$defs/digest"},
+    "workspace_lock_digest": {"$ref": "#/$defs/digest"},
+    "requirement_total": {"type": "integer", "minimum": 0},
+    "requirement_resolved": {"type": "integer", "minimum": 0},
+    "resolver_candidate_count": {"type": "integer", "minimum": 0},
+    "binding_selection_cost": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enumerated", "package_resolutions", "evidence_checks"],
+      "properties": {"enumerated": {"type": "integer", "minimum": 0}, "package_resolutions": {"type": "integer", "minimum": 0}, "evidence_checks": {"type": "integer", "minimum": 0}}
+    },
+    "context_tokens": {
+      "type": "object", "additionalProperties": false,
+      "required": ["input", "output"],
+      "properties": {"input": {"type": "integer", "minimum": 0}, "output": {"type": "integer", "minimum": 0}}
+    },
+    "residual_implementation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["refs", "diff_lines"],
+      "properties": {"refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}, "diff_lines": {"type": "integer", "minimum": 0}}
+    },
+    "package_reuse": {
+      "type": "object", "additionalProperties": false,
+      "required": ["selected", "reused"],
+      "properties": {"selected": {"type": "integer", "minimum": 0}, "reused": {"type": "integer", "minimum": 0}}
+    },
+    "contract_reuse": {
+      "type": "object", "additionalProperties": false,
+      "required": ["selected", "reused"],
+      "properties": {"selected": {"type": "integer", "minimum": 0}, "reused": {"type": "integer", "minimum": 0}}
+    },
+    "resolution_duration_ms": {"type": "integer", "minimum": 0},
+    "activation_duration_ms": {"type": "integer", "minimum": 0},
+    "manual_interventions": {"type": "integer", "minimum": 0},
+    "e2e_result": {"enum": ["passed", "failed"]},
+    "invariant_results": {
+      "type": "object", "additionalProperties": false,
+      "required": ["materialization_independence", "package_topology_independence", "state_continuity", "application_independence", "atomic_rebinding"],
+      "properties": {
+        "materialization_independence": {"type": "boolean"},
+        "package_topology_independence": {"type": "boolean"},
+        "state_continuity": {"type": "boolean"},
+        "application_independence": {"type": "boolean"},
+        "atomic_rebinding": {"type": "boolean"}
+      }
+    },
+    "started_at": {"type": "string", "minLength": 1},
+    "completed_at": {"type": "string", "minLength": 1},
+    "telemetry_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

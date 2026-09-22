@@ -212,6 +212,12 @@ class PrototypeResourceService:
         state = self._state(resource_type)
         return _clone(state["definition"]) if state else None
 
+    def snapshot(self, resource_type: str) -> dict[str, Any] | None:
+        """Return one isolated Preview state snapshot for CBS projection."""
+
+        state = self._state(resource_type)
+        return _clone(state) if state is not None else None
+
     def acceptance_snapshots(
         self,
         *,

@@ -38,6 +38,8 @@ STATE_LIFECYCLE_OPERATION_SCHEMA = "adaos.state.lifecycle_operation.v1"
 LOCAL_REVISION_OBSERVATION_SCHEMA = "adaos.local_revision.observation.v1"
 APPLICATION_RESOLUTION_SCHEMA = "adaos.application.resolution.v1"
 RESOLUTION_PLAN_SCHEMA = "adaos.resolution.plan.v1"
+CBS_BENCHMARK_TELEMETRY_SCHEMA = "adaos.cbs.benchmark_telemetry.v1"
+CBS_CRUD_PROOF_SCHEMA = "adaos.cbs.crud_proof.v1"
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$")
@@ -985,6 +987,132 @@ class ResolutionPlan(CanonicalRecord):
         return str(self._payload["plan_ref"])
 
 
+@dataclass(frozen=True, slots=True)
+class CBSBenchmarkTelemetry(CanonicalRecord):
+    SCHEMA: ClassVar[str] = CBS_BENCHMARK_TELEMETRY_SCHEMA
+    DIGEST_FIELD: ClassVar[str] = "telemetry_digest"
+    PORTABLE: ClassVar[bool] = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        run_id: str,
+        semantic_revision_digest: str,
+        environment_profile_digest: str,
+        requirement_digest: str,
+        contract_digests: Iterable[str],
+        package_digests: Iterable[str],
+        application_resolution_digest: str,
+        resolution_plan_digest: str,
+        workspace_lock_digest: str,
+        requirement_total: int,
+        requirement_resolved: int,
+        resolver_candidate_count: int,
+        binding_selection_cost: Mapping[str, Any],
+        context_tokens: Mapping[str, Any],
+        residual_implementation: Mapping[str, Any],
+        package_reuse: Mapping[str, Any],
+        contract_reuse: Mapping[str, Any],
+        resolution_duration_ms: int,
+        activation_duration_ms: int,
+        manual_interventions: int,
+        e2e_result: str,
+        invariant_results: Mapping[str, bool],
+        started_at: str,
+        completed_at: str,
+    ) -> "CBSBenchmarkTelemetry":
+        return cls._create(
+            {
+                "run_id": run_id,
+                "semantic_revision_digest": semantic_revision_digest,
+                "environment_profile_digest": environment_profile_digest,
+                "requirement_digest": requirement_digest,
+                "contract_digests": list(contract_digests),
+                "package_digests": list(package_digests),
+                "application_resolution_digest": application_resolution_digest,
+                "resolution_plan_digest": resolution_plan_digest,
+                "workspace_lock_digest": workspace_lock_digest,
+                "requirement_total": requirement_total,
+                "requirement_resolved": requirement_resolved,
+                "resolver_candidate_count": resolver_candidate_count,
+                "binding_selection_cost": dict(binding_selection_cost),
+                "context_tokens": dict(context_tokens),
+                "residual_implementation": dict(residual_implementation),
+                "package_reuse": dict(package_reuse),
+                "contract_reuse": dict(contract_reuse),
+                "resolution_duration_ms": resolution_duration_ms,
+                "activation_duration_ms": activation_duration_ms,
+                "manual_interventions": manual_interventions,
+                "e2e_result": e2e_result,
+                "invariant_results": dict(invariant_results),
+                "started_at": started_at,
+                "completed_at": completed_at,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CBSCrudProofBundle(CanonicalRecord):
+    SCHEMA: ClassVar[str] = CBS_CRUD_PROOF_SCHEMA
+    DIGEST_FIELD: ClassVar[str] = "proof_digest"
+    PORTABLE: ClassVar[bool] = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        run_id: str,
+        source_digest: str,
+        semantic_revision_digest: str,
+        environment_profile: Mapping[str, Any],
+        application_requirement: Mapping[str, Any],
+        contracts: Iterable[Mapping[str, Any]],
+        packages: Iterable[Mapping[str, Any]],
+        binding_deliveries: Iterable[Mapping[str, Any]],
+        application_resolutions: Iterable[Mapping[str, Any]],
+        resolution_plans: Iterable[Mapping[str, Any]],
+        workspace_locks: Iterable[Mapping[str, Any]],
+        local_revisions: Iterable[Mapping[str, Any]],
+        state_evidence: Iterable[Mapping[str, Any]],
+        evidence_claims: Iterable[Mapping[str, Any]],
+        evidence_assessments: Iterable[Mapping[str, Any]],
+        telemetry: Mapping[str, Any],
+        trace_ids: Iterable[str],
+        test_output: Mapping[str, Any],
+        invariants: Mapping[str, bool],
+        created_at: str,
+    ) -> "CBSCrudProofBundle":
+        return cls._create(
+            {
+                "run_id": run_id,
+                "source_digest": source_digest,
+                "semantic_revision_digest": semantic_revision_digest,
+                "environment_profile": dict(environment_profile),
+                "application_requirement": dict(application_requirement),
+                "contracts": [dict(item) for item in contracts],
+                "packages": [dict(item) for item in packages],
+                "binding_deliveries": [dict(item) for item in binding_deliveries],
+                "application_resolutions": [
+                    dict(item) for item in application_resolutions
+                ],
+                "resolution_plans": [dict(item) for item in resolution_plans],
+                "workspace_locks": [dict(item) for item in workspace_locks],
+                "local_revisions": [dict(item) for item in local_revisions],
+                "state_evidence": [dict(item) for item in state_evidence],
+                "evidence_claims": [dict(item) for item in evidence_claims],
+                "evidence_assessments": [
+                    dict(item) for item in evidence_assessments
+                ],
+                "telemetry": dict(telemetry),
+                "trace_ids": list(trace_ids),
+                "test_output": dict(test_output),
+                "invariants": dict(invariants),
+                "created_at": created_at,
+            }
+        )
+
+
 def validate_state_contract_locks(
     contract: StateContract,
     *,
@@ -1025,6 +1153,8 @@ __all__ = [
     "BINDING_DEFINITION_SCHEMA",
     "BINDING_DELIVERY_SCHEMA",
     "CAPABILITY_CONTRACT_SCHEMA",
+    "CBS_BENCHMARK_TELEMETRY_SCHEMA",
+    "CBS_CRUD_PROOF_SCHEMA",
     "ENVIRONMENT_PROFILE_SCHEMA",
     "EVIDENCE_ASSESSMENT_SCHEMA",
     "EVIDENCE_CLAIM_SCHEMA",
@@ -1042,6 +1172,8 @@ __all__ = [
     "CanonicalRecord",
     "CapabilityBindingStateContractError",
     "CapabilityContract",
+    "CBSBenchmarkTelemetry",
+    "CBSCrudProofBundle",
     "EnvironmentProfile",
     "EvidenceAssessment",
     "EvidenceClaim",

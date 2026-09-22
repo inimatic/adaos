@@ -28,6 +28,7 @@ from adaos.domain.capability_binding_state import (
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.resources.local import LocalCrudResourceService
+from adaos.services.resources.prototype import PrototypeResourceService
 
 
 class LocalIdentityConflict(ValueError):
@@ -313,6 +314,87 @@ class LegacyCrudProjection:
     source_record_digest: str
 
 
+@dataclass(frozen=True, slots=True)
+class StagedAuthorityTransition:
+    binding_instance: BindingInstance
+    state_space: StateSpace
+    relations: tuple[StateAccessRelation, ...]
+
+
+def stage_authority_transition(
+    store: LocalIdentityStore,
+    *,
+    binding_instance: BindingInstance,
+    state_space: StateSpace,
+    relations: tuple[StateAccessRelation, ...],
+) -> StagedAuthorityTransition:
+    """Append inactive revisions for one future single-writer authority epoch."""
+
+    if state_space.to_dict()["custodian_binding_instance_ref"] != binding_instance.stable_ref:
+        raise LocalIdentityConflict("StateSpace is not in the BindingInstance custody")
+    next_epoch = max(binding_instance.authority_epoch, state_space.authority_epoch) + 1
+    binding_value = binding_instance.to_dict()
+    next_binding = BindingInstance.create(
+        binding_instance_ref=binding_instance.stable_ref,
+        revision=binding_instance.revision + 1,
+        predecessor_digest=binding_instance.digest,
+        workspace_ref=binding_value["workspace_ref"],
+        tenant_ref=binding_value.get("tenant_ref"),
+        binding_definition_ref=binding_value["binding_definition_ref"],
+        binding_definition_digest=binding_value["binding_definition_digest"],
+        delivery_digest=binding_value["delivery_digest"],
+        environment_profile_ref=binding_value["environment_profile_ref"],
+        environment_profile_digest=binding_value["environment_profile_digest"],
+        mode=binding_value["mode"],
+        local_binding_ref=binding_value["local_binding_ref"],
+        authority_epoch=next_epoch,
+    )
+    store.append(next_binding)
+
+    state_value = state_space.to_dict()
+    next_space = StateSpace.create(
+        state_space_ref=state_space.stable_ref,
+        revision=state_space.revision + 1,
+        predecessor_digest=state_space.digest,
+        state_contract_ref=state_value["state_contract_ref"],
+        state_contract_version=state_value["state_contract_version"],
+        state_contract_digest=state_value["state_contract_digest"],
+        workspace_ref=state_value["workspace_ref"],
+        tenant_ref=state_value.get("tenant_ref"),
+        logical_owner_ref=state_value["logical_owner_ref"],
+        lifecycle_authority_ref=state_value["lifecycle_authority_ref"],
+        custodian_binding_instance_ref=next_binding.stable_ref,
+        mutation_authority_ref=state_value["mutation_authority_ref"],
+        locator_ref=state_value["locator_ref"],
+        generation=state_space.generation,
+        authority_epoch=next_epoch,
+        portability_class=state_value["portability_class"],
+        schema_locks=state_value["schema_locks"],
+    )
+    store.append(next_space)
+
+    next_relations: list[StateAccessRelation] = []
+    for relation in relations:
+        relation_value = relation.to_dict()
+        if (
+            relation_value["binding_instance_ref"] != binding_instance.stable_ref
+            or relation_value["state_space_ref"] != state_space.stable_ref
+        ):
+            raise LocalIdentityConflict("state access relation belongs to another attachment")
+        next_relation = StateAccessRelation.create(
+            relation_ref=relation.stable_ref,
+            binding_instance_ref=next_binding.stable_ref,
+            binding_instance_revision_digest=next_binding.digest,
+            state_space_ref=next_space.stable_ref,
+            state_space_revision_digest=next_space.digest,
+            port_id=relation_value["port_id"],
+            access=relation_value["access"],
+        )
+        store.put_fact(next_relation)
+        next_relations.append(next_relation)
+    return StagedAuthorityTransition(next_binding, next_space, tuple(next_relations))
+
+
 @dataclass(slots=True)
 class LegacyCrudProjector:
     service: LocalCrudResourceService
@@ -462,13 +544,139 @@ class LegacyCrudProjector:
         return True
 
 
+@dataclass(slots=True)
+class PrototypeCrudProjector:
+    """Project Builder Preview storage without sharing production state identity."""
+
+    service: PrototypeResourceService
+    store: LocalIdentityStore
+
+    def project(
+        self,
+        resource_type: str,
+        *,
+        workspace_ref: str,
+        tenant_ref: str | None,
+        capability_contract: CapabilityContract,
+        state_contract: StateContract,
+        binding_definition: BindingDefinition,
+        delivery: BindingDelivery,
+        environment_profile: EnvironmentProfile,
+    ) -> LegacyCrudProjection:
+        snapshot = self.service.snapshot(resource_type)
+        if snapshot is None:
+            raise KeyError(resource_type)
+        if delivery.binding_definition_digest != binding_definition.digest:
+            raise CapabilityBindingStateContractError(
+                "BindingDelivery does not deliver the selected BindingDefinition"
+            )
+        definition = snapshot.get("definition")
+        if not isinstance(definition, Mapping):
+            raise LocalIdentityConflict("prototype CRUD snapshot has no definition")
+        authority = definition.get("authority")
+        owner_ref = str(snapshot.get("project_ref") or "")
+        if not owner_ref or not isinstance(authority, Mapping):
+            raise LocalIdentityConflict("prototype CRUD ownership or authority is missing")
+        if str(authority.get("provider") or "") != "prototype":
+            raise LocalIdentityConflict("prototype CRUD authority must use the prototype provider")
+        record_schema = definition.get("record_schema")
+        record_schema_ref = str(definition.get("record_schema_ref") or "")
+        if not isinstance(record_schema, Mapping) or not record_schema_ref:
+            raise LocalIdentityConflict("prototype CRUD record schema lock is missing")
+        validate_state_contract_locks(
+            state_contract,
+            schema_locks=(
+                {
+                    "lock_id": record_schema_ref,
+                    "digest": canonical_payload_digest(dict(record_schema)),
+                },
+            ),
+        )
+
+        workspace_slug = _slug(workspace_ref)
+        resource_slug = _slug(resource_type)
+        binding_ref = f"binding-instance:{workspace_slug}/preview/{resource_slug}"
+        state_ref = f"state-space:{workspace_slug}/preview/{resource_slug}"
+        previous_binding = self.store.latest(binding_ref, BindingInstance)
+        binding = LegacyCrudProjector._binding_revision(
+            binding_ref,
+            previous_binding,
+            {
+                "workspace_ref": workspace_ref,
+                "tenant_ref": tenant_ref,
+                "binding_definition_ref": binding_definition.binding_definition_ref,
+                "binding_definition_digest": binding_definition.digest,
+                "delivery_digest": delivery.digest,
+                "environment_profile_ref": environment_profile.profile_ref,
+                "environment_profile_digest": environment_profile.digest,
+                "mode": "simulation",
+                "local_binding_ref": (
+                    f"prototype-resource:{_slug(str(authority.get('binding') or 'preview'))}"
+                ),
+                "authority_epoch": previous_binding.authority_epoch if previous_binding else 1,
+            },
+        )
+        self.store.append(binding)
+
+        previous_space = self.store.latest(state_ref, StateSpace)
+        state_value = state_contract.to_dict()
+        state_space = LegacyCrudProjector._state_revision(
+            state_ref,
+            previous_space,
+            {
+                "state_contract_ref": state_contract.state_contract_ref,
+                "state_contract_version": state_contract.version,
+                "state_contract_digest": state_contract.digest,
+                "workspace_ref": workspace_ref,
+                "tenant_ref": tenant_ref,
+                "logical_owner_ref": owner_ref,
+                "lifecycle_authority_ref": owner_ref,
+                "custodian_binding_instance_ref": binding.stable_ref,
+                "mutation_authority_ref": workspace_ref,
+                "locator_ref": f"prototype-resource:{resource_slug}",
+                "generation": int(snapshot.get("generation") or 1),
+                "authority_epoch": previous_space.authority_epoch if previous_space else 1,
+                "portability_class": state_value["portability_class"],
+                "schema_locks": state_value["schema_locks"],
+            },
+        )
+        self.store.append(state_space)
+
+        relations: list[StateAccessRelation] = []
+        for port in capability_contract.to_dict()["state_ports"]:
+            if port["contract_ref"] != state_contract.state_contract_ref:
+                continue
+            relation = StateAccessRelation.create(
+                relation_ref=(
+                    f"state-access:{workspace_slug}/preview/{resource_slug}/{_slug(port['port_id'])}"
+                ),
+                binding_instance_ref=binding.stable_ref,
+                binding_instance_revision_digest=binding.digest,
+                state_space_ref=state_space.stable_ref,
+                state_space_revision_digest=state_space.digest,
+                port_id=port["port_id"],
+                access=port["access"],
+            )
+            self.store.put_fact(relation)
+            relations.append(relation)
+        return LegacyCrudProjection(
+            binding_instance=binding,
+            state_space=state_space,
+            relations=tuple(relations),
+            source_record_digest=canonical_payload_digest(snapshot),
+        )
+
+
 __all__ = [
     "LegacyCrudProjection",
     "LegacyCrudProjector",
+    "PrototypeCrudProjector",
     "LocalIdentityConflict",
     "LocalIdentityStore",
     "StateAttachmentError",
+    "StagedAuthorityTransition",
     "calculate_effective_guarantees",
     "redacted_graph_record",
+    "stage_authority_transition",
     "validate_state_attachment",
 ]

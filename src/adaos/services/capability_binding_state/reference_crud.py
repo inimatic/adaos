@@ -19,6 +19,7 @@ from adaos.domain.capability_binding_state import (
 
 
 FLOWBOARD_RESOURCE_TYPE = "skill.flowboard_skill.work_items"
+FLOWBOARD_PROTOTYPE_RESOURCE_TYPE = "prototype.flowboard.work_items"
 FLOWBOARD_CAPABILITY_REF = "capability:resource.records.manage"
 FLOWBOARD_STATE_CONTRACT_REF = "state-contract:flowboard.work-items"
 FLOWBOARD_REQUIREMENT_REF = "requirement:flowboard/manage-work-items"
@@ -103,6 +104,105 @@ def flowboard_bundle() -> dict[str, Any]:
             {"id": "one", "title": "Plan release", "status": "planned", "revision": 1},
             {"id": "two", "title": "Ship release", "status": "done", "revision": 1},
         ],
+    }
+
+
+def flowboard_prototype_bundle() -> dict[str, Any]:
+    """Materialize the same contract scenario in disposable Builder Preview state."""
+
+    record_schema = flowboard_record_schema()
+
+    def activity(operation: str) -> dict[str, Any]:
+        input_schema: dict[str, Any] = {"type": "object"}
+        output_schema: dict[str, Any] = record_schema
+        if operation == "list":
+            input_schema = {"type": "object", "additionalProperties": False}
+            output_schema = {"type": "array", "items": record_schema}
+        elif operation == "show":
+            input_schema = {
+                "type": "object",
+                "required": ["id"],
+                "properties": {"id": {"type": "string"}},
+                "additionalProperties": False,
+            }
+            output_schema = {"oneOf": [record_schema, {"type": "null"}]}
+        elif operation == "create":
+            input_schema = {
+                "type": "object",
+                "required": ["record"],
+                "properties": {"record": record_schema},
+                "additionalProperties": False,
+            }
+        elif operation == "update":
+            input_schema = {
+                "type": "object",
+                "required": ["id", "patch"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "patch": {"type": "object"},
+                },
+                "additionalProperties": False,
+            }
+        elif operation == "delete":
+            input_schema = {
+                "type": "object",
+                "required": ["id"],
+                "properties": {"id": {"type": "string"}},
+                "additionalProperties": False,
+            }
+        return {
+            "activity_id": operation,
+            "operation": "get" if operation == "show" else operation,
+            "input_schema": input_schema,
+            "output_schema": output_schema,
+            "side_effect_class": (
+                "read_only" if operation in {"list", "show"} else "local_reversible"
+            ),
+            "implementation_status": "prototype_only",
+            "implementation_ref": None,
+        }
+
+    definition = flowboard_bundle()["resource_definition"]
+    definition = {
+        **definition,
+        "resource_type": FLOWBOARD_PROTOTYPE_RESOURCE_TYPE,
+        "version": "0.0.0-prototype",
+        "scope": {"owner": "project:flowboard"},
+        "authority": {
+            "provider": "prototype",
+            "binding": "flowboard.work_items",
+            "writes": "local_reversible",
+            "source_of_truth": "builder_preview",
+        },
+        # The semantic record lock is intentionally shared; the StateSpace is not.
+        "record_schema_ref": f"inline:{FLOWBOARD_RESOURCE_TYPE}",
+        "privacy": {
+            "sensitivity": "synthetic",
+            "retention": "preview",
+            "external_export": "denied",
+        },
+    }
+    data_definition = {
+        "schema": "adaos.builder.prototype_data.v1",
+        "source_id": "flowboard.work_items",
+        "mode": "local_crud",
+        "record_schema": record_schema,
+        "seed": flowboard_bundle()["seed"],
+        "activities": [
+            activity(operation)
+            for operation in ("list", "show", "create", "update", "delete")
+        ],
+    }
+    return {
+        "schema": "adaos.builder.prototype_resource.v1",
+        "project_ref": "project:flowboard",
+        "change_id": "change-cbs-crud-proof",
+        "revision": "semantic-revision-cbs-crud-v1",
+        "webui_digest": canonical_payload_digest(
+            {"fixture": "flowboard", "revision": "semantic-revision-cbs-crud-v1"}
+        ),
+        "resource_definition": definition,
+        "data_definition": data_definition,
     }
 
 
@@ -353,6 +453,7 @@ def package_mapping(package: ArtifactPackageRef) -> Mapping[str, str]:
 
 __all__ = [
     "FLOWBOARD_CAPABILITY_REF",
+    "FLOWBOARD_PROTOTYPE_RESOURCE_TYPE",
     "FLOWBOARD_REQUIREMENT_REF",
     "FLOWBOARD_RESOURCE_TYPE",
     "FLOWBOARD_STATE_CONTRACT_REF",
@@ -360,6 +461,7 @@ __all__ = [
     "binding_delivery",
     "conformance_evidence",
     "flowboard_bundle",
+    "flowboard_prototype_bundle",
     "flowboard_contracts",
     "flowboard_record_schema",
     "package_mapping",
