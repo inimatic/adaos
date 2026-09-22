@@ -62,6 +62,11 @@ from .booking import (
     SimulationReservationProvider,
     StaleAvailability,
 )
+from .skill_inventory import (
+    discover_dev_skills_root,
+    inventory_installed_skills,
+    render_skill_inventory_markdown,
+)
 
 __all__ = [
     "CBSActivationCoordinator",
@@ -115,4 +120,7 @@ __all__ = [
     "redacted_graph_record",
     "stage_authority_transition",
     "validate_state_attachment",
+    "discover_dev_skills_root",
+    "inventory_installed_skills",
+    "render_skill_inventory_markdown",
 ]
