@@ -5,6 +5,15 @@ Status: implementation roadmap for
 
 Last reviewed: 2026-09-17.
 
+Implementation checkpoint: the bounded CRUD-first `must` scope of `CBS1`
+through `CBS5` is executable as of 2026-09-22. Exact implementation,
+compatibility, evidence, Builder-adaptation, skill-migration, and legacy-removal
+status is recorded in
+[CBS1-CBS5 Implementation](capability-binding-state-cbs1-cbs5-implementation.md).
+The checklist below continues to distinguish that bounded proof from later
+provider generalization and the remaining `should`, `could`, and `deferred`
+work.
+
 ## Outcome
 
 AdaOS can preserve Application and eligible state identities while changing a
