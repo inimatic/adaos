@@ -157,25 +157,28 @@ try {
       }
       if (reviewStage !== 'prototype' && !expectTrialUnavailable) {
         await page.waitForFunction(() => {
-          const dynamicKinds = new Set(['api', 'mcp', 'resource', 'skill'])
+          const dynamicKinds = new Set(['api', 'mcp', 'resource', 'resourceQuery', 'skill'])
           const visibleDynamicHosts = [...document.querySelectorAll('ada-page-widget-host')]
             .filter(element => {
               const style = getComputedStyle(element)
               if (!element.getClientRects().length || style.visibility === 'hidden' || style.display === 'none') return false
-              const component = window.ng?.getComponent(element)
+              let component
+              try { component = window.ng?.getComponent(element) } catch { return false }
               return dynamicKinds.has(String(component?.widget?.dataSource?.kind || ''))
             })
           return visibleDynamicHosts.every(element => {
-            const status = window.ng?.getComponent(element)?.dataSourceStatus
+            let status
+            try { status = window.ng?.getComponent(element)?.dataSourceStatus } catch { return false }
             const state = String(status?.state || '')
             return status?.hasValue === true || ['error', 'unavailable'].includes(state)
           })
         }, undefined, { timeout: 30_000 })
         const failedDataSources = await page.locator('ada-page-widget-host').evaluateAll(elements => {
-          const dynamicKinds = new Set(['api', 'mcp', 'resource', 'skill'])
+          const dynamicKinds = new Set(['api', 'mcp', 'resource', 'resourceQuery', 'skill'])
           return elements.flatMap(element => {
             const style = getComputedStyle(element)
-            const component = window.ng?.getComponent(element)
+            let component
+            try { component = window.ng?.getComponent(element) } catch { return [] }
             const source = component?.widget?.dataSource
             const status = component?.dataSourceStatus
             if (!element.getClientRects().length || style.visibility === 'hidden' || style.display === 'none'
@@ -270,7 +273,15 @@ try {
       loadingIndicators: document.querySelectorAll('ion-spinner').length,
       dataSources: [...document.querySelectorAll('ada-page-widget-host')].flatMap(element => {
         const style = getComputedStyle(element)
-        const component = window.ng?.getComponent(element)
+        let component
+        try {
+          component = window.ng?.getComponent(element)
+        } catch {
+          // Angular can leave a detached/custom host in the DOM for one frame
+          // while a development scenario is being rematerialized. It is not a
+          // rendered data source and must not abort the whole E2E observation.
+          return []
+        }
         const source = component?.widget?.dataSource
         if (!source || !element.getClientRects().length || style.visibility === 'hidden' || style.display === 'none') return []
         return [{
@@ -283,7 +294,13 @@ try {
       tables: document.querySelectorAll('ada-table-widget').length,
       language: document.documentElement.lang,
       dictionary: (() => {
-        const component = window.ng?.getComponent(document.querySelector('ada-table-widget, ada-list-widget, ada-details-widget'))
+        const element = document.querySelector('ada-table-widget, ada-list-widget, ada-details-widget')
+        let component
+        try {
+          component = element ? window.ng?.getComponent(element) : undefined
+        } catch {
+          component = undefined
+        }
         const i18n = component?.i18n
         return { language: i18n?.getLang(), revision: i18n?.revision,
           valueLabels: Object.keys(i18n?.activeDict || {}).filter(key => key.startsWith('value.')).length }
