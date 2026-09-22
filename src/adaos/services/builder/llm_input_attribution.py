@@ -15,6 +15,7 @@ _SAFE_GENERATION_OPTIONS = frozenset(
     {
         "max_tokens",
         "output_mode",
+        "patch_stream",
         "prompt_cache_key",
         "prompt_cache_retention",
         "reasoning",

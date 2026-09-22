@@ -280,6 +280,69 @@ stream_publish(
 The client applies `upsert`, `replace`, and `remove` to the selected local
 collection. A later full snapshot can still replace the whole receiver value.
 
+## Builder Prototype Patch Stream
+
+Builder prototype generation uses a dedicated opt-in stream reducer instead of
+reusing generic collection patches for page schema mutation. The target receiver
+is:
+
+```json
+{
+  "webio": {
+    "receivers": {
+      "builder.prototype.patch_stream": {
+        "mode": "replace",
+        "transport": "hub",
+        "scope": "shared",
+        "reducer": "builder.prototype.patch_stream",
+        "allowedPatchRoots": ["/pageSchema"],
+        "maxItems": 200,
+        "initialState": {
+          "schema": "adaos.builder.prototype.patch_stream.state.v1",
+          "status": "idle",
+          "draft": {}
+        }
+      }
+    }
+  }
+}
+```
+
+Root LLM jobs opt in with `stream=true`, `stream_protocol="jsonl"`, and a
+`patch_stream` target:
+
+```json
+{
+  "stream": true,
+  "stream_protocol": "jsonl",
+  "patch_stream": {
+    "receiver": "builder.prototype.patch_stream",
+    "webspace_id": "preview-webspace-id",
+    "owner": "builder"
+  }
+}
+```
+
+The model output remains newline-delimited semantic events:
+
+```jsonl
+{"type":"meta","schema":"adaos.builder.prototype.patch_stream.v1","base_hash":"sha256:...","draft":{"pageSchema":{"id":"draft","areas":[{"id":"main","role":"main"}],"widgets":[]}}}
+{"type":"patch","seq":1,"op":"add","path":"/pageSchema/widgets/-","value":{"id":"draft-card","type":"ui.markdown","area":"main","inputs":{"content":"Drafting..."}}}
+{"type":"complete","comment":"ready for compiler commit"}
+```
+
+The Root job keeps progress summaries for polling clients, but forwards full
+patch values to `io.out.stream.publish` as
+`adaos.builder.prototype.patch_stream.v1`. The router still performs the normal
+WebIO stream admission, budget, and fan-out checks before browsers see the
+event.
+
+On the browser, the reducer maintains an ephemeral
+`adaos.builder.prototype.patch_stream.state.v1` value with `status`, `draft`,
+`seq`, `patch_count`, and bounded `events`. This draft is not written back into
+Yjs. The authoritative Builder commit remains the existing full semantic
+prototype compile, validation, revision snapshot, and materialization path.
+
 For node-aware member delivery, the browser and router may also use
 node-qualified topics:
 

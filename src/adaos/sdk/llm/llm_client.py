@@ -539,6 +539,7 @@ def _llm_root_payload(
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     stream_protocol: str | None = None,
+    patch_stream: Mapping[str, Any] | str | bool | None = None,
     profile_scope: str | None = None,
 ) -> tuple[Dict[str, Any], list[Mapping[str, str]]]:
     normalized_messages = _message_list(messages)
@@ -583,6 +584,11 @@ def _llm_root_payload(
     protocol = str(stream_protocol or "").strip().lower()
     if protocol:
         payload["stream_protocol"] = protocol
+    if patch_stream is not None:
+        if isinstance(patch_stream, Mapping):
+            payload["patch_stream"] = dict(patch_stream)
+        else:
+            payload["patch_stream"] = patch_stream
     return _responses_payload(payload, normalized_messages), normalized_messages
 
 
@@ -654,6 +660,7 @@ def send_response(
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     stream_protocol: str | None = None,
+    patch_stream: Mapping[str, Any] | str | bool | None = None,
     profile_scope: str | None = None,
     timeout: float | None = None,
 ) -> Dict[str, Any]:
@@ -679,6 +686,7 @@ def send_response(
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=prompt_cache_retention,
         stream_protocol=stream_protocol,
+        patch_stream=patch_stream,
         profile_scope=profile_scope,
     )
 
@@ -749,6 +757,7 @@ def submit_response_job(
     prompt_cache_key: str | None = None,
     prompt_cache_retention: str | None = None,
     stream_protocol: str | None = None,
+    patch_stream: Mapping[str, Any] | str | bool | None = None,
     profile_scope: str | None = None,
     timeout: float | None = None,
 ) -> Dict[str, Any]:
@@ -776,6 +785,7 @@ def submit_response_job(
         prompt_cache_key=prompt_cache_key,
         prompt_cache_retention=prompt_cache_retention,
         stream_protocol=stream_protocol,
+        patch_stream=patch_stream,
         profile_scope=profile_scope,
     )
     return _submit_root_job(root_payload, request_id=request_id, timeout=timeout, submit_started=submit_started)

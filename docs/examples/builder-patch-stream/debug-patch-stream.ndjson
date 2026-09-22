@@ -1,0 +1,4 @@
+{"type":"meta","schema":"adaos.builder.prototype.patch_stream.v1","base_hash":"sha256:debug-base","draft":{"pageSchema":{"id":"debug_patch_stream","areas":[{"id":"main","role":"main"}],"widgets":[]}}}
+{"type":"patch","seq":1,"op":"add","path":"/pageSchema/widgets/-","value":{"id":"builder-debug-card","type":"ui.markdown","area":"main","inputs":{"content":"Draft card"}}}
+{"type":"patch","seq":2,"op":"replace","path":"/pageSchema/widgets/0/inputs/content","value":"Draft card updated while streaming"}
+{"type":"complete","comment":"ready for compiler commit"}
