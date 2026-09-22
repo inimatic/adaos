@@ -12,8 +12,11 @@
     "contract_range": {"type": "string", "minLength": 1},
     "environment_target": {
       "type": "object", "additionalProperties": false,
-      "required": ["profile_ref", "mode"],
-      "properties": {"profile_ref": {"type": "string", "pattern": "^profile:"}, "mode": {"enum": ["semantic", "simulation", "sandbox", "production"]}}
+      "required": ["profile_ref", "allowed_modes"],
+      "properties": {
+        "profile_ref": {"type": "string", "pattern": "^profile:"},
+        "allowed_modes": {"type": "array", "minItems": 1, "items": {"enum": ["simulation", "sandbox", "production"]}, "uniqueItems": true}
+      }
     },
     "policy_constraints": {
       "type": "object", "additionalProperties": false,

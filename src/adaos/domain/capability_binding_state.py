@@ -36,6 +36,7 @@ STATE_SPACE_SCHEMA = "adaos.state.space.v1"
 STATE_ACCESS_RELATION_SCHEMA = "adaos.state.access_relation.v1"
 STATE_LIFECYCLE_OPERATION_SCHEMA = "adaos.state.lifecycle_operation.v1"
 LOCAL_REVISION_OBSERVATION_SCHEMA = "adaos.local_revision.observation.v1"
+APPLICATION_RESOLUTION_SCHEMA = "adaos.application.resolution.v1"
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$")
@@ -862,6 +863,68 @@ class LocalRevisionObservation(CanonicalRecord):
         return str(self._payload["observation_ref"])
 
 
+@dataclass(frozen=True, slots=True)
+class ApplicationResolution(CanonicalRecord):
+    SCHEMA: ClassVar[str] = APPLICATION_RESOLUTION_SCHEMA
+    DIGEST_FIELD: ClassVar[str] = "resolution_digest"
+    PORTABLE: ClassVar[bool] = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        resolution_ref: str,
+        semantic_revision_digest: str,
+        requirement_ref: str,
+        requirement_digest: str,
+        environment_profile_ref: str,
+        environment_profile_digest: str,
+        policy_digest: str,
+        selected_contracts: Iterable[Mapping[str, Any]],
+        binding_definition: Mapping[str, Any],
+        project_release_digest: str,
+        package_closure: Iterable[Mapping[str, Any]],
+        delivery: Mapping[str, Any],
+        binding_instances: Iterable[Mapping[str, Any]],
+        provisioning_obligations: Iterable[Mapping[str, Any]],
+        state_attachments: Iterable[Mapping[str, Any]],
+        evidence: Iterable[Mapping[str, Any]],
+        rejection_explanations: Iterable[Mapping[str, Any]],
+        created_at: str,
+    ) -> "ApplicationResolution":
+        _validate_ref(
+            resolution_ref,
+            prefix="application-resolution:",
+            field="resolution_ref",
+        )
+        return cls._create(
+            {
+                "resolution_ref": resolution_ref,
+                "semantic_revision_digest": semantic_revision_digest,
+                "requirement_ref": requirement_ref,
+                "requirement_digest": requirement_digest,
+                "environment_profile_ref": environment_profile_ref,
+                "environment_profile_digest": environment_profile_digest,
+                "policy_digest": policy_digest,
+                "selected_contracts": [dict(item) for item in selected_contracts],
+                "binding_definition": dict(binding_definition),
+                "project_release_digest": project_release_digest,
+                "package_closure": [dict(item) for item in package_closure],
+                "delivery": dict(delivery),
+                "binding_instances": [dict(item) for item in binding_instances],
+                "provisioning_obligations": [dict(item) for item in provisioning_obligations],
+                "state_attachments": [dict(item) for item in state_attachments],
+                "evidence": [dict(item) for item in evidence],
+                "rejection_explanations": [dict(item) for item in rejection_explanations],
+                "created_at": created_at,
+            }
+        )
+
+    @property
+    def resolution_ref(self) -> str:
+        return str(self._payload["resolution_ref"])
+
+
 def validate_state_contract_locks(
     contract: StateContract,
     *,
@@ -897,6 +960,7 @@ def validate_state_contract_locks(
 
 __all__ = [
     "APPLICATION_REQUIREMENT_SCHEMA",
+    "APPLICATION_RESOLUTION_SCHEMA",
     "BINDING_INSTANCE_SCHEMA",
     "BINDING_DEFINITION_SCHEMA",
     "BINDING_DELIVERY_SCHEMA",
@@ -910,6 +974,7 @@ __all__ = [
     "STATE_LIFECYCLE_OPERATION_SCHEMA",
     "STATE_SPACE_SCHEMA",
     "ApplicationRequirement",
+    "ApplicationResolution",
     "BindingDefinition",
     "BindingDelivery",
     "BindingInstance",

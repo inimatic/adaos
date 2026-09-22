@@ -259,7 +259,10 @@ def test_evidence_requirement_and_assessment_keep_distinct_semantics() -> None:
         requirement_ref="requirement:flowboard/manage-work-items",
         capability_ref=capability.capability_ref,
         contract_range="^1.0.0",
-        environment_target={"profile_ref": profile.profile_ref, "mode": "production"},
+        environment_target={
+            "profile_ref": profile.profile_ref,
+            "allowed_modes": ["simulation", "production"],
+        },
         policy_constraints={"locality": "local", "required_authorities": ["resource.records.write"]},
         evidence_threshold={"required_claim_kinds": ["capability_conformance", "state_compatibility"], "allow_stale": False},
     )
