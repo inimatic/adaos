@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/resolution.plan.v1.schema.json",
+  "title": "AdaOS Resolution Plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "plan_ref", "application_resolution_ref", "application_resolution_digest", "base_lock", "desired_bindings", "desired_state_attachments", "provisioning", "migrations", "evidence", "steps", "expected_generations", "expected_authority_epochs", "compensation", "recovery", "created_at", "expires_at", "plan_digest"],
+  "properties": {
+    "schema": {"const": "adaos.resolution.plan.v1"},
+    "plan_ref": {"type": "string", "pattern": "^resolution-plan:"},
+    "application_resolution_ref": {"type": "string", "pattern": "^application-resolution:"},
+    "application_resolution_digest": {"$ref": "#/$defs/digest"},
+    "base_lock": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision"],
+      "properties": {"digest": {"$ref": "#/$defs/digest"}, "revision": {"type": "integer", "minimum": 0}}
+    },
+    "desired_bindings": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["ref", "revision_digest", "authority_epoch"],
+        "properties": {"ref": {"type": "string", "pattern": "^binding-instance:"}, "revision_digest": {"$ref": "#/$defs/digest"}, "authority_epoch": {"type": "integer", "minimum": 1}}
+      }
+    },
+    "desired_state_attachments": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["port_id", "state_space_ref", "revision_digest", "generation", "authority_epoch", "relation_digest"],
+        "properties": {
+          "port_id": {"type": "string", "minLength": 1},
+          "state_space_ref": {"type": "string", "pattern": "^state-space:"},
+          "revision_digest": {"$ref": "#/$defs/digest"},
+          "generation": {"type": "integer", "minimum": 1},
+          "authority_epoch": {"type": "integer", "minimum": 1},
+          "relation_digest": {"$ref": "#/$defs/digest"}
+        }
+      }
+    },
+    "provisioning": {"type": "array", "items": {"type": "object"}},
+    "migrations": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["migration_ref", "classification", "proven"],
+        "properties": {
+          "migration_ref": {"type": "string", "minLength": 1},
+          "classification": {"enum": ["idempotent", "compensatable", "reconcile_only", "irreversible"]},
+          "proven": {"type": "boolean"}
+        }
+      }
+    },
+    "evidence": {"type": "array", "items": {"type": "object"}},
+    "steps": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["step_id", "kind", "retry"],
+        "properties": {
+          "step_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+          "kind": {"enum": ["read_only", "idempotent", "compensatable", "reconcile_only", "irreversible"]},
+          "retry": {"enum": ["safe", "after_reconcile", "never"]}
+        }
+      }
+    },
+    "expected_generations": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["state_space_ref", "revision_digest", "generation"],
+        "properties": {"state_space_ref": {"type": "string", "pattern": "^state-space:"}, "revision_digest": {"$ref": "#/$defs/digest"}, "generation": {"type": "integer", "minimum": 1}}
+      }
+    },
+    "expected_authority_epochs": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["subject_ref", "revision_digest", "authority_epoch"],
+        "properties": {"subject_ref": {"type": "string", "minLength": 1}, "revision_digest": {"$ref": "#/$defs/digest"}, "authority_epoch": {"type": "integer", "minimum": 1}}
+      }
+    },
+    "compensation": {"type": "array", "items": {"type": "object"}},
+    "recovery": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pre_commit", "post_commit"],
+      "properties": {"pre_commit": {"type": "string", "minLength": 1}, "post_commit": {"type": "string", "minLength": 1}}
+    },
+    "created_at": {"type": "string", "minLength": 1},
+    "expires_at": {"type": "string", "minLength": 1},
+    "plan_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

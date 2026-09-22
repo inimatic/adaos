@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/workspace.lock.v2.schema.json",
+  "title": "AdaOS Workspace Lock v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "lock_revision", "updated_at", "slots", "components", "bindings", "cbs", "lock_digest"],
+  "properties": {
+    "schema": {"const": "adaos.workspace.lock.v2"},
+    "lock_revision": {"type": "integer", "minimum": 1},
+    "previous_lock_revision": {"type": "integer", "minimum": 1},
+    "updated_at": {"type": "string", "minLength": 1},
+    "slots": {"type": "object"},
+    "components": {"type": "array", "items": {"type": "object"}},
+    "bindings": {"type": "array", "items": {"type": "object"}},
+    "cbs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["application_resolution_ref", "application_resolution_digest", "resolution_plan_ref", "resolution_plan_digest", "writer_protocol", "binding_instances", "state_spaces", "state_attachments", "evidence_set_digest"],
+      "properties": {
+        "application_resolution_ref": {"type": "string", "pattern": "^application-resolution:"},
+        "application_resolution_digest": {"$ref": "#/$defs/digest"},
+        "resolution_plan_ref": {"type": "string", "pattern": "^resolution-plan:"},
+        "resolution_plan_digest": {"$ref": "#/$defs/digest"},
+        "writer_protocol": {"const": "cbs-single-writer-v1"},
+        "binding_instances": {"type": "array", "items": {"type": "object"}},
+        "state_spaces": {"type": "array", "items": {"type": "object"}},
+        "state_attachments": {"type": "array", "items": {"type": "object"}},
+        "evidence_set_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "lock_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

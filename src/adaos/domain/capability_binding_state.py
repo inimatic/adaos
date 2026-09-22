@@ -37,6 +37,7 @@ STATE_ACCESS_RELATION_SCHEMA = "adaos.state.access_relation.v1"
 STATE_LIFECYCLE_OPERATION_SCHEMA = "adaos.state.lifecycle_operation.v1"
 LOCAL_REVISION_OBSERVATION_SCHEMA = "adaos.local_revision.observation.v1"
 APPLICATION_RESOLUTION_SCHEMA = "adaos.application.resolution.v1"
+RESOLUTION_PLAN_SCHEMA = "adaos.resolution.plan.v1"
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$")
@@ -925,6 +926,65 @@ class ApplicationResolution(CanonicalRecord):
         return str(self._payload["resolution_ref"])
 
 
+@dataclass(frozen=True, slots=True)
+class ResolutionPlan(CanonicalRecord):
+    SCHEMA: ClassVar[str] = RESOLUTION_PLAN_SCHEMA
+    DIGEST_FIELD: ClassVar[str] = "plan_digest"
+    PORTABLE: ClassVar[bool] = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        plan_ref: str,
+        application_resolution_ref: str,
+        application_resolution_digest: str,
+        base_lock: Mapping[str, Any],
+        desired_bindings: Iterable[Mapping[str, Any]],
+        desired_state_attachments: Iterable[Mapping[str, Any]],
+        provisioning: Iterable[Mapping[str, Any]],
+        migrations: Iterable[Mapping[str, Any]],
+        evidence: Iterable[Mapping[str, Any]],
+        steps: Iterable[Mapping[str, Any]],
+        expected_generations: Iterable[Mapping[str, Any]],
+        expected_authority_epochs: Iterable[Mapping[str, Any]],
+        compensation: Iterable[Mapping[str, Any]],
+        recovery: Mapping[str, Any],
+        created_at: str,
+        expires_at: str,
+    ) -> "ResolutionPlan":
+        _validate_ref(plan_ref, prefix="resolution-plan:", field="plan_ref")
+        _validate_ref(
+            application_resolution_ref,
+            prefix="application-resolution:",
+            field="application_resolution_ref",
+        )
+        return cls._create(
+            {
+                "plan_ref": plan_ref,
+                "application_resolution_ref": application_resolution_ref,
+                "application_resolution_digest": application_resolution_digest,
+                "base_lock": dict(base_lock),
+                "desired_bindings": [dict(item) for item in desired_bindings],
+                "desired_state_attachments": [dict(item) for item in desired_state_attachments],
+                "provisioning": [dict(item) for item in provisioning],
+                "migrations": [dict(item) for item in migrations],
+                "evidence": [dict(item) for item in evidence],
+                "steps": [dict(item) for item in steps],
+                "expected_generations": [dict(item) for item in expected_generations],
+                "expected_authority_epochs": [dict(item) for item in expected_authority_epochs],
+                "compensation": [dict(item) for item in compensation],
+                "recovery": dict(recovery),
+                "created_at": created_at,
+                "expires_at": expires_at,
+            }
+        )
+
+    @property
+    def plan_ref(self) -> str:
+        return str(self._payload["plan_ref"])
+
+
 def validate_state_contract_locks(
     contract: StateContract,
     *,
@@ -969,6 +1029,7 @@ __all__ = [
     "EVIDENCE_ASSESSMENT_SCHEMA",
     "EVIDENCE_CLAIM_SCHEMA",
     "LOCAL_REVISION_OBSERVATION_SCHEMA",
+    "RESOLUTION_PLAN_SCHEMA",
     "STATE_CONTRACT_SCHEMA",
     "STATE_ACCESS_RELATION_SCHEMA",
     "STATE_LIFECYCLE_OPERATION_SCHEMA",
@@ -985,6 +1046,7 @@ __all__ = [
     "EvidenceAssessment",
     "EvidenceClaim",
     "LocalRevisionObservation",
+    "ResolutionPlan",
     "StateContract",
     "StateAccessRelation",
     "StateLifecycleOperation",

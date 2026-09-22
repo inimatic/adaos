@@ -1,6 +1,15 @@
 """Capability, binding, state, resolution, and activation services."""
 
 from .catalog import PortableContractCatalog, PortableContractConflict
+from .activation import (
+    CBSActivationCoordinator,
+    CBSActivationResult,
+    FencedLocalCrudWriter,
+    ResolutionPlanError,
+    ResolutionPlanExpired,
+    ResolutionPlanner,
+    StaleWriterError,
+)
 from .local_state import (
     LegacyCrudProjection,
     LegacyCrudProjector,
@@ -20,6 +29,9 @@ from .resolver import (
 )
 
 __all__ = [
+    "CBSActivationCoordinator",
+    "CBSActivationResult",
+    "FencedLocalCrudWriter",
     "LegacyCrudProjection",
     "LegacyCrudProjector",
     "LocalIdentityConflict",
@@ -28,10 +40,14 @@ __all__ = [
     "PortableContractCatalog",
     "PortableContractConflict",
     "ResolutionFailure",
+    "ResolutionPlanError",
+    "ResolutionPlanExpired",
+    "ResolutionPlanner",
     "ResolutionRejection",
     "SemanticCandidate",
     "SemanticResolver",
     "StateAttachmentError",
+    "StaleWriterError",
     "calculate_effective_guarantees",
     "redacted_graph_record",
     "validate_state_attachment",

@@ -105,6 +105,20 @@ class LocalIdentityStore:
             raise LocalIdentityConflict("local identity directory does not match stored stable ref")
         return record
 
+    def by_digest(self, stable_ref: str, digest: str, model: type[RecordT]) -> RecordT:
+        kind = "binding-instances" if model is BindingInstance else "state-spaces"
+        directory = Path(self.root) / kind / _ref_key(stable_ref)
+        for path in self._revision_paths(directory):
+            value = json.loads(path.read_text(encoding="utf-8"))
+            record = model.from_mapping(value)
+            if record.digest == digest:
+                if record.stable_ref != stable_ref:
+                    raise LocalIdentityConflict(
+                        "local identity directory does not match stored stable ref"
+                    )
+                return record
+        raise KeyError(f"{stable_ref}@{digest}")
+
     def put_fact(
         self,
         record: StateAccessRelation | StateLifecycleOperation | LocalRevisionObservation,

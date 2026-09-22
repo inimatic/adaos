@@ -16,6 +16,7 @@ PACKAGE_REF_SCHEMA = "adaos.artifact.package_ref.v1"
 PROJECT_RELEASE_SCHEMA = "adaos.artifact.project_release.v1"
 PROJECT_COMPOSITION_LOCK_SCHEMA = "adaos.artifact.project_composition_lock.v1"
 WORKSPACE_LOCK_SCHEMA = "adaos.workspace.lock.v1"
+WORKSPACE_LOCK_V2_SCHEMA = "adaos.workspace.lock.v2"
 SUBSCRIPTION_SCHEMA = "adaos.artifact.subscription.v1"
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
@@ -1334,6 +1335,7 @@ class WorkspaceLock:
     components: tuple[ArtifactPackageRef, ...] = ()
     bindings: tuple[DependencyBinding, ...] = ()
     previous_lock_revision: int | None = None
+    cbs: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.lock_revision, int) or self.lock_revision < 1:
@@ -1365,10 +1367,52 @@ class WorkspaceLock:
                     f"binding for {binding.consumer} references inactive package "
                     f"{binding.dependency}@{binding.package_digest}"
                 )
+        if self.cbs is not None:
+            if not isinstance(self.cbs, Mapping):
+                raise ArtifactReleaseContractError("WorkspaceLock cbs extension must be an object")
+            cbs = dict(self.cbs)
+            allowed = {
+                "application_resolution_ref",
+                "application_resolution_digest",
+                "resolution_plan_ref",
+                "resolution_plan_digest",
+                "writer_protocol",
+                "binding_instances",
+                "state_spaces",
+                "state_attachments",
+                "evidence_set_digest",
+            }
+            required = allowed
+            unknown = sorted(set(cbs) - allowed)
+            missing = sorted(required - set(cbs))
+            if unknown or missing:
+                raise ArtifactReleaseContractError(
+                    "WorkspaceLock cbs extension fields differ from v2 contract: "
+                    f"unknown={unknown}, missing={missing}"
+                )
+            for field in (
+                "application_resolution_digest",
+                "resolution_plan_digest",
+                "evidence_set_digest",
+            ):
+                cbs[field] = _digest(cbs.get(field), field=f"cbs.{field}")
+            _text(cbs.get("application_resolution_ref"), field="cbs.application_resolution_ref")
+            _text(cbs.get("resolution_plan_ref"), field="cbs.resolution_plan_ref")
+            if cbs.get("writer_protocol") != "cbs-single-writer-v1":
+                raise ArtifactReleaseContractError(
+                    "WorkspaceLock cbs.writer_protocol must be cbs-single-writer-v1"
+                )
+            for field in ("binding_instances", "state_spaces", "state_attachments"):
+                if not isinstance(cbs.get(field), list) or any(
+                    not isinstance(item, Mapping) for item in cbs[field]
+                ):
+                    raise ArtifactReleaseContractError(f"cbs.{field} must be an array of objects")
+                cbs[field] = [dict(item) for item in cbs[field]]
+            object.__setattr__(self, "cbs", cbs)
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "schema": WORKSPACE_LOCK_SCHEMA,
+            "schema": WORKSPACE_LOCK_V2_SCHEMA if self.cbs is not None else WORKSPACE_LOCK_SCHEMA,
             "lock_revision": self.lock_revision,
             "updated_at": self.updated_at,
             "slots": {
@@ -1383,14 +1427,20 @@ class WorkspaceLock:
         }
         if self.previous_lock_revision is not None:
             payload["previous_lock_revision"] = self.previous_lock_revision
+        if self.cbs is not None:
+            payload["cbs"] = dict(self.cbs)
         payload["lock_digest"] = canonical_payload_digest(payload)
         return payload
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "WorkspaceLock":
+        schema = value.get("schema")
+        if schema not in {WORKSPACE_LOCK_SCHEMA, WORKSPACE_LOCK_V2_SCHEMA}:
+            raise ArtifactReleaseContractError(f"unsupported WorkspaceLock schema: {schema!r}")
+        v2 = schema == WORKSPACE_LOCK_V2_SCHEMA
         _require_mapping_contract(
             value,
-            schema=WORKSPACE_LOCK_SCHEMA,
+            schema=schema,
             allowed={
                 "schema",
                 "lock_revision",
@@ -1400,6 +1450,7 @@ class WorkspaceLock:
                 "components",
                 "bindings",
                 "lock_digest",
+                *(("cbs",) if v2 else ()),
             },
             required={
                 "schema",
@@ -1409,6 +1460,7 @@ class WorkspaceLock:
                 "components",
                 "bindings",
                 "lock_digest",
+                *(("cbs",) if v2 else ()),
             },
             field="WorkspaceLock",
         )
@@ -1444,6 +1496,7 @@ class WorkspaceLock:
                 for item in raw_bindings
                 if isinstance(item, Mapping)
             ),
+            cbs=dict(value["cbs"]) if v2 and isinstance(value.get("cbs"), Mapping) else None,
         )
         expected = value.get("lock_digest")
         if expected is not None and _digest(expected, field="lock_digest") != lock.to_dict()["lock_digest"]:
@@ -1529,6 +1582,7 @@ __all__ = [
     "StableSubscription",
     "SubscriptionPolicy",
     "WORKSPACE_LOCK_SCHEMA",
+    "WORKSPACE_LOCK_V2_SCHEMA",
     "WorkspaceLock",
     "WorkspaceSlot",
     "WorkflowAdapterLock",

@@ -915,8 +915,13 @@ class WorkspaceActivationManager:
         audience: str | None,
         data_mode: str | None,
         data_ref: str | None,
+        cbs: Mapping[str, Any] | None = None,
         updated_at: str | None = None,
     ) -> WorkspaceLock:
+        if current is not None and current.cbs is not None and cbs is None:
+            raise ActivationError(
+                "CBS-managed WorkspaceLock cannot be downgraded by legacy activation"
+            )
         release_digest = plan.release.release_digest or plan.release.computed_digest()
         slots = {item.slot_id: item for item in (current.slots if current else ())}
         slots[slot_id] = WorkspaceSlot(
@@ -1025,6 +1030,7 @@ class WorkspaceActivationManager:
                 slots=tuple(slots.values()),
                 components=tuple(components.values()),
                 bindings=tuple(bindings.values()),
+                cbs=dict(cbs) if cbs is not None else None,
             )
         except ArtifactReleaseContractError as exc:
             raise ActivationError(f"activation would create an incompatible WorkspaceLock: {exc}") from exc
@@ -1292,7 +1298,21 @@ class WorkspaceActivationManager:
         repair_reporter: Callable[[Mapping[str, Any]], Any] | None = None,
         expected_lock_digest: str | None | object = _CAPTURE_CURRENT_LOCK,
         desired_lock_updated_at: str | None = None,
+        cbs_lock: Mapping[str, Any] | None = None,
+        application_resolution_digest: str | None = None,
+        resolution_plan_digest: str | None = None,
     ) -> ActivationResult:
+        if cbs_lock is not None:
+            if cbs_lock.get("application_resolution_digest") != application_resolution_digest:
+                raise ActivationError(
+                    "cbs_lock ApplicationResolution digest differs from activation input"
+                )
+            if cbs_lock.get("resolution_plan_digest") != resolution_plan_digest:
+                raise ActivationError(
+                    "cbs_lock ResolutionPlan digest differs from activation input"
+                )
+        elif application_resolution_digest is not None or resolution_plan_digest is not None:
+            raise ActivationError("CBS activation digests require a cbs_lock extension")
         self._assert_plan(plan)
         if self.attestation_admission is not None:
             try:
@@ -1328,6 +1348,9 @@ class WorkspaceActivationManager:
                     repair_reporter=repair_reporter,
                     expected_lock_digest=expected_lock_digest,
                     desired_lock_updated_at=desired_lock_updated_at,
+                    cbs_lock=cbs_lock,
+                    application_resolution_digest=application_resolution_digest,
+                    resolution_plan_digest=resolution_plan_digest,
                 )
         except MutationLockTimeout as exc:
             raise ActivationError("Workspace writer lease is busy") from exc
@@ -1358,6 +1381,9 @@ class WorkspaceActivationManager:
         repair_reporter: Callable[[Mapping[str, Any]], Any] | None = None,
         expected_lock_digest: str | None | object = _CAPTURE_CURRENT_LOCK,
         desired_lock_updated_at: str | None = None,
+        cbs_lock: Mapping[str, Any] | None = None,
+        application_resolution_digest: str | None = None,
+        resolution_plan_digest: str | None = None,
     ) -> ActivationResult:
         operation_id = self.operation_id(idempotency_key)
         release_digest = plan.release.release_digest or plan.release.computed_digest()
@@ -1366,6 +1392,14 @@ class WorkspaceActivationManager:
             if existing.get("release_digest") != release_digest:
                 raise ActivationReplayBlocked(
                     "idempotency key is already bound to a different ProjectRelease"
+                )
+            if existing.get("application_resolution_digest") != application_resolution_digest:
+                raise ActivationReplayBlocked(
+                    "idempotency key is already bound to a different ApplicationResolution"
+                )
+            if existing.get("resolution_plan_digest") != resolution_plan_digest:
+                raise ActivationReplayBlocked(
+                    "idempotency key is already bound to a different ResolutionPlan"
                 )
             if existing.get("status") == "completed":
                 if not isinstance(existing.get("reload_receipt"), Mapping) or not isinstance(
@@ -1419,6 +1453,8 @@ class WorkspaceActivationManager:
             "operation_id": operation_id,
             "idempotency_key": str(idempotency_key),
             "release_digest": release_digest,
+            "application_resolution_digest": application_resolution_digest,
+            "resolution_plan_digest": resolution_plan_digest,
             "status": "running",
             "phase": "created",
             "created_at": _now_iso(),
@@ -1493,6 +1529,7 @@ class WorkspaceActivationManager:
                 audience=audience,
                 data_mode=data_mode,
                 data_ref=data_ref,
+                cbs=cbs_lock,
                 updated_at=desired_lock_updated_at,
             )
             operation["desired_lock"] = desired.to_dict()
