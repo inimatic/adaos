@@ -98,6 +98,14 @@ _UNCHANGED_RETRY_INSTRUCTION = (
     "Retry the unchanged accepted implementation after the previous executor "
     "failure. Do not reinterpret or expand the user request."
 )
+_DEFAULT_PROTOTYPE_EXECUTION_BUDGET = {
+    "schema": "adaos.builder.execution_budget.v1",
+    "source": "builder.prototype.default",
+    "max_model_tokens": 2_000_000,
+    "max_billable_tokens": 20_000_000,
+    "max_wall_seconds": 10_800,
+    "token_budget_metric": "fresh_plus_output",
+}
 
 
 def _admitted_execution_budget(
@@ -112,6 +120,16 @@ def _admitted_execution_budget(
     # billable guard still caps aggregate provider usage.
     budget.setdefault("token_budget_metric", "fresh_plus_output")
     return with_effective_billable_token_limit(budget)
+
+
+def _prototype_execution_budget(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Use a larger default for full Prototype revisions without overriding callers."""
+
+    if isinstance(value, Mapping):
+        return dict(value)
+    return dict(_DEFAULT_PROTOTYPE_EXECUTION_BUDGET)
 
 
 def _preserved_candidate_has_changes(run_root: Path) -> bool:
@@ -1234,7 +1252,10 @@ def _continuation_allows_large_manifest_rewrite(
     return bool(
         isinstance(checkpoint, Mapping)
         and checkpoint.get("mode") == "validate_preserved_candidate"
-        and checkpoint.get("reason") == "manifest_scope_requalified_after_guard"
+        and (
+            checkpoint.get("reason") == "manifest_scope_requalified_after_guard"
+            or checkpoint.get("allow_large_manifest_rewrite") is True
+        )
         and str(checkpoint.get("source_task_id") or "").strip()
         and isinstance(checkpoint.get("continuation_contract"), Mapping)
     )
@@ -3864,6 +3885,9 @@ class BuilderAutomationService:
                 development_session_id=str(development_session_id or ""),
             )
             canonical_change_rebound = False
+            transition_token = str(workflow_transition or "").strip() or None
+            if transition_token == "return_to_prototype" and execution_budget is None:
+                execution_budget = _prototype_execution_budget(None)
             if isinstance(execution_budget, Mapping):
                 previous_budget = (
                     dict(session.get("execution_budget"))
@@ -3917,7 +3941,6 @@ class BuilderAutomationService:
                     )
                 session["execution_budget_history"] = history[-20:]
                 session["execution_budget"] = next_budget
-            transition_token = str(workflow_transition or "").strip() or None
             starts_automation = False
             if transition_token != "return_to_prototype":
                 workflow_before = self._workflow().describe(
@@ -4625,7 +4648,9 @@ class BuilderAutomationService:
         trigger_failure_id: str | None = None
         if "Codex token budget exceeded:" not in failure_message:
             retry_reason = None
-            if "Generated project validation failed:" in failure_message:
+            if "large declarative manifest rewrite is not admitted" in failure_message:
+                retry_reason = "manifest_scope_requalified_after_guard"
+            elif "Generated project validation failed:" in failure_message:
                 retry_reason = "deterministic_validation_failure"
             elif requalified_feedback_message(
                 Path(self.runs_root) / _safe_token(task_id), failure
@@ -4633,10 +4658,6 @@ class BuilderAutomationService:
                 retry_reason = "development_feedback_requalified"
             elif "changed paths outside the exact repair files:" in failure_message:
                 retry_reason = "repair_envelope_requalified_after_path_guard"
-            elif (
-                "large declarative manifest rewrite is not admitted" in failure_message
-            ):
-                retry_reason = "manifest_scope_requalified_after_guard"
             elif (
                 "validation-only repair requires source preconditions"
                 in failure_message
@@ -4647,6 +4668,11 @@ class BuilderAutomationService:
                 in failure_message
             ):
                 retry_reason = "continuation_identity_verification_retry"
+            elif (
+                "continuation source task did not stop at an eligible preservation boundary"
+                in failure_message
+            ):
+                retry_reason = "continuation_preservation_boundary_retry"
             elif any(
                 marker in failure_message
                 for marker in (
@@ -4660,6 +4686,49 @@ class BuilderAutomationService:
                 retry_reason = "trusted_root_mcp_validation_retry"
             if retry_reason is None:
                 return None
+            if retry_reason == "manifest_scope_requalified_after_guard":
+                failed_run_root = Path(self.runs_root) / _safe_token(task_id)
+                assignment_path = failed_run_root / "input" / "assignment.json"
+                try:
+                    failed_assignment = json.loads(
+                        assignment_path.read_text(encoding="utf-8")
+                    )
+                except (FileNotFoundError, OSError, json.JSONDecodeError):
+                    failed_assignment = {}
+                failed_request = (
+                    dict(failed_assignment.get("realize_request") or {})
+                    if isinstance(failed_assignment, Mapping)
+                    else {}
+                )
+                failed_artifacts = (
+                    dict(failed_request.get("artifacts") or {})
+                    if isinstance(failed_request.get("artifacts"), Mapping)
+                    else {}
+                )
+                prior_checkpoint = (
+                    dict(failed_artifacts.get("continuation_checkpoint") or {})
+                    if isinstance(
+                        failed_artifacts.get("continuation_checkpoint"), Mapping
+                    )
+                    else {}
+                )
+                continuation_contract = _continuation_contract()
+                if not prior_checkpoint and (
+                    failed_artifacts.get("continuation_contract")
+                    == continuation_contract
+                    and _preserved_candidate_has_changes(failed_run_root)
+                ):
+                    return {
+                        "schema": "adaos.builder.automation_continuation_checkpoint.v1",
+                        "mode": "validate_preserved_candidate",
+                        "source_task_id": task_id,
+                        "failure_id": str(failure.get("failure_id") or "").strip()
+                        or None,
+                        "trigger_failure_id": None,
+                        "reason": retry_reason,
+                        "continuation_contract": continuation_contract,
+                        "created_at": _now_iso(),
+                    }
             if retry_reason in {
                 "deterministic_validation_failure",
                 "development_feedback_requalified",
@@ -4770,8 +4839,15 @@ class BuilderAutomationService:
                     source_reason == "deterministic_validation_failure"
                     and "Generated project validation failed:" in source_failure_message
                 )
+                source_is_manifest_boundary = (
+                    source_reason == "manifest_scope_requalified_after_guard"
+                    and "large declarative manifest rewrite is not admitted"
+                    in source_failure_message
+                )
                 if str(source_task.get("status") or "").strip() != "failed" or not (
-                    source_is_budget_boundary or source_is_validation_boundary
+                    source_is_budget_boundary
+                    or source_is_validation_boundary
+                    or source_is_manifest_boundary
                 ):
                     return None
                 trigger_failure_id = (
@@ -4780,6 +4856,8 @@ class BuilderAutomationService:
                 reason = (
                     "deterministic_validation_failure"
                     if source_is_validation_boundary
+                    else "manifest_scope_requalified_after_guard"
+                    if source_is_manifest_boundary
                     else retry_reason
                 )
         run_root = Path(self.runs_root) / _safe_token(source_task_id)
@@ -4817,6 +4895,10 @@ class BuilderAutomationService:
             "failure_id": str(source_failure.get("failure_id") or "").strip() or None,
             "trigger_failure_id": trigger_failure_id,
             "reason": reason,
+            "allow_large_manifest_rewrite": bool(
+                source_artifacts.get("allow_large_manifest_rewrite") is True
+                or reason == "manifest_scope_requalified_after_guard"
+            ),
             "continuation_contract": continuation_contract,
             "created_at": _now_iso(),
         }

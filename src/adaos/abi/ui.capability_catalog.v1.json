@@ -474,6 +474,7 @@
         "optional_inputs": [
           "titleKey",
           "subtitleKey",
+          "accentKey",
           "iconKey",
           "previewKey",
           "imageKey",
@@ -496,7 +497,7 @@
           "pageSizeOptions"
         ],
         "projection": "Rows default to id/title/subtitle/icon and may render imageKey as a thumbnail or imageShape=avatar. When avatar imagery is absent, initialsKey renders a bounded textual avatar. Cards additionally render previewKey, imageKey with imageAltKey, badgeKey and inputs.meta. Configure these input keys when source fields use different names; arbitrary source fields are not visible unless projected or consumed by an action.",
-        "meta_shape": "inputs.meta entries require key and may declare label, kind=text|badge|boolean, overflow=wrap|truncate and align=start|center|end.",
+        "meta_shape": "inputs.meta entries require key and may declare label, kind=text|badge|boolean|icon, overflow=wrap|truncate and align=start|center|end. Icon metadata may bind titleKey and colorKey for accessible text and semantic Ionic color. inputs.accentKey may bind a semantic Ionic color to a compact row/card border; arbitrary CSS values are rejected by the Client.",
         "button_shape": "inputs.buttons entries require id and may declare label, itemLabelKey, icon, whenKey and whenEquals. Every such button is repeated for each visible row or card. inputs.headerActions is reserved for one or two compact contextual/presentation commands beside the list heading, such as Customize view; use an icon plus an accessible label. Collection mutations such as Add, Invite, Import, or Refresh belong in a separate sibling ui.actions widget. Bind every visible row or header command with a top-level widget.actions entry on=click:<buttonId>. itemLabelKey reads a per-record visible label and falls back to label. A row field such as primaryAction does not create a button.",
         "query_binding": "inputs.search is boolean, never an object. To share a ui.queryToolbar value with this static collection, use inputs.filters entries shaped {key,stateKey,operator}; stateKey is the bare page-state key without a $state. prefix. Use operator=contains for text search and equals for exact filters. For equals, each non-All select option value must equal the corresponding record field value; keep user-facing meaning in the option label. Filter definitions do not contain options or equalsField; options belong to ui.queryToolbar controls.",
         "row_state": "For flat list rows, inputs.disabledKey names a boolean field that disables activation; inputs.currentKey names a separate boolean field that bolds the title and marks aria-current=step. Current work is independent of selected detail. Selection and row-button events expose row fields directly as $event.<field>, not $event.item.<field>. updateState params accept direct references or structured expressions such as {kind:'expression',op:'equals',args:['$event.status','ready']}; binary expressions use args and never left/right. A string such as $event.status === 'ready' is not evaluated. Prefer exposing the required boolean on the row and binding $event.<booleanField>.",
@@ -572,13 +573,14 @@
       ],
       "responsive": {
         "desktop": "tabular",
-        "compact": "bounded horizontal overflow"
+        "compact": "bounded horizontal overflow by default; inputs.compactPresentation=cards renders each row as a labeled comparison card"
       },
       "limitations": [
         "Free-form HTML is not supported."
       ],
       "postconditions": [
         "Declared columns map to rendered cells in declaration order.",
+        "inputs.compactPresentation=cards preserves the same columns and row actions while replacing compact horizontal overflow with labeled row cards; desktop remains tabular.",
         "columns[*].sortable=true enables local sorting before pagination; inputs.sort={key,direction} selects the initial order. Sorting is unavailable for server-paginated data. kind=datetime formats an ISO timestamp in the active locale and local timezone.",
         "Page size and declared filter modes persist within the active subnet, page scope and widget identity. inputs.preferences=false disables persistence; inputs.preferences.filterStateKeys adds explicit scalar filter modes. Search, selection, records and cursors are not persisted. inputs.refresh=true adds a targeted datasource reload button."
       ]

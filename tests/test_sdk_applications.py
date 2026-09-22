@@ -10,6 +10,7 @@ from adaos.sdk import applications
 from adaos.sdk.core.exporter import export
 from adaos.services.applications import (
     ApplicationDevelopmentCoordinator,
+    compile_setup_contract,
     register_development_report_service,
 )
 
@@ -137,9 +138,7 @@ def test_active_release_follows_the_selected_webspace_beta() -> None:
         ],
     }
 
-    selected = applications._active_release_for_webspace(
-        model, webspace_id="office"
-    )
+    selected = applications._active_release_for_webspace(model, webspace_id="office")
 
     assert selected["version"] == "1.2.0-beta.1"
     assert selected["release_digest"] == beta_b
@@ -326,6 +325,131 @@ def test_sdk_application_mutations_forward_complete_review_context(monkeypatch) 
     )
 
 
+def test_reviewed_update_batch_is_durable_and_resumable(
+    monkeypatch, tmp_path: Path
+) -> None:
+    release_digest = "sha256:" + "b" * 64
+    models = [
+        {
+            "application": {
+                "application_id": "app_notes",
+                "aggregate_backed": True,
+                "display": {"title": "Notes"},
+            },
+            "installed": True,
+            "installation": {"revision": 4},
+            "active_release": {"version": "1.0.0"},
+            "effective_release": {
+                "release_digest": release_digest,
+                "release": {"version": "1.1.0"},
+            },
+            "update_available": True,
+            "attention": {"status": "update_available"},
+        }
+    ]
+    planned = []
+    applied = []
+    monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:sn_home")
+    monkeypatch.setattr(
+        applications, "_admit_active_skill_capability", lambda _capability: None
+    )
+    monkeypatch.setattr(
+        applications,
+        "list_applications",
+        lambda **_kwargs: models,
+    )
+    monkeypatch.setattr(
+        applications,
+        "plan_update",
+        lambda application_id, **kwargs: planned.append((application_id, kwargs))
+        or {
+            "operation_id": "appop.update-notes",
+            "plan_digest": "sha256:" + "c" * 64,
+        },
+    )
+    monkeypatch.setattr(
+        applications,
+        "apply_operation",
+        lambda operation_id, **kwargs: applied.append((operation_id, kwargs))
+        or {"operation_id": operation_id, "status": "succeeded"},
+    )
+
+    batch = applications.plan_available_updates(
+        application_ids=None,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="update-all-1",
+    )
+    repeated = applications.plan_available_updates(
+        application_ids=None,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="update-all-1",
+    )
+
+    assert repeated == batch
+    assert len(planned) == 1
+    assert batch["status"] == "planned"
+    assert batch["operations"][0]["application_id"] == "app_notes"
+
+    receipt = applications.apply_update_batch(
+        batch["batch_id"],
+        plan_digest=batch["plan_digest"],
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+        idempotency_key="apply-update-all-1",
+    )
+    replay = applications.apply_update_batch(
+        batch["batch_id"],
+        plan_digest=batch["plan_digest"],
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+        idempotency_key="apply-update-all-1",
+    )
+
+    assert receipt["status"] == "succeeded"
+    assert receipt["summary"] == {
+        "total": 1,
+        "succeeded": 1,
+        "failed": 0,
+        "skipped": 0,
+    }
+    assert replay == receipt
+    assert len(applied) == 1
+
+
+def test_update_assessment_exposes_blocked_legacy_projection(monkeypatch) -> None:
+    monkeypatch.setattr(
+        applications,
+        "list_applications",
+        lambda **_kwargs: [
+            {
+                "application": {
+                    "application_id": "legacy_tool",
+                    "aggregate_backed": False,
+                    "display": {"title": "Legacy tool"},
+                },
+                "installed": True,
+                "installation": {"revision": 1},
+                "update_available": True,
+                "effective_release": {"release_digest": "sha256:" + "d" * 64},
+            }
+        ],
+    )
+
+    assessment = applications.assess_updates()
+
+    assert assessment["update_count"] == 1
+    assert assessment["eligible_count"] == 0
+    assert assessment["blocked_count"] == 1
+    assert assessment["items"][0]["blocked_reason"] == "aggregate_lifecycle_required"
+
+
 def test_successful_install_projects_application_to_home(monkeypatch) -> None:
     class Service:
         def apply_operation(self, *_args, **_kwargs):
@@ -347,9 +471,7 @@ def test_successful_install_projects_application_to_home(monkeypatch) -> None:
     monkeypatch.setattr(
         applications,
         "_sync_home_installation",
-        lambda application_id, **kwargs: projected.append(
-            (application_id, kwargs)
-        )
+        lambda application_id, **kwargs: projected.append((application_id, kwargs))
         or {"pinned": True, "webspace_id": kwargs["webspace_id"]},
     )
 
@@ -364,9 +486,7 @@ def test_successful_install_projects_application_to_home(monkeypatch) -> None:
     )
 
     assert result["home"] == {"pinned": True, "webspace_id": "family"}
-    assert projected == [
-        ("reading_list", {"installed": True, "webspace_id": "family"})
-    ]
+    assert projected == [("reading_list", {"installed": True, "webspace_id": "family"})]
 
 
 def test_home_pin_changes_only_presentation_overlay(monkeypatch) -> None:
@@ -567,9 +687,7 @@ def test_home_reorder_accepts_installed_legacy_presentation_ref(monkeypatch) -> 
     )
 
     assert result["application_ref"] == "legacy_metrics_app"
-    assert writes == [
-        (["legacy_metrics_app", "notes_app", "chat_app"], "desktop")
-    ]
+    assert writes == [(["legacy_metrics_app", "notes_app", "chat_app"], "desktop")]
 
 
 def test_home_pin_accepts_installed_legacy_presentation_ref(monkeypatch) -> None:
@@ -669,9 +787,7 @@ def test_application_show_enriches_only_the_requested_model(monkeypatch) -> None
     enriched: list[list[str]] = []
 
     def enrich(selected, **_kwargs):
-        enriched.append(
-            [item["application"]["application_id"] for item in selected]
-        )
+        enriched.append([item["application"]["application_id"] for item in selected])
         return selected
 
     monkeypatch.setattr(applications, "_application_models", lambda **_kwargs: models)
@@ -1126,6 +1242,86 @@ def test_application_list_includes_read_only_workspace_project_projection(
     ]
 
 
+def test_application_placements_compare_desired_and_observed_nodes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        applications,
+        "get_application",
+        lambda application_id, webspace_id=None: {
+            "application": {"application_id": application_id},
+            "execution_placement": {
+                "deployment_id": "application-deployment:reading-list",
+                "revision": 8,
+                "desired": [
+                    {
+                        "component_ref": "scenario:reading-list",
+                        "mode": "selected",
+                        "selected_node_ids": ["node-home", "node-tablet"],
+                    },
+                    {
+                        "component_ref": "skill:book-store",
+                        "mode": "any",
+                        "selected_node_ids": [],
+                    },
+                ],
+                "observed": [
+                    {
+                        "component_ref": "scenario:reading-list",
+                        "node_id": "node-home",
+                        "status": "active",
+                        "generation": 8,
+                        "updated_at": "2026-09-22T05:00:00Z",
+                    },
+                    {
+                        "component_ref": "skill:book-store",
+                        "node_id": "node-edge",
+                        "status": "failed",
+                        "generation": 7,
+                        "updated_at": "2026-09-22T04:59:00Z",
+                    },
+                ],
+            },
+        },
+    )
+
+    rows = applications.list_application_placements(
+        "reading-list", webspace_id="desktop"
+    )
+
+    by_id = {item["placement_id"]: item for item in rows}
+    assert by_id["scenario:reading-list@node-home"]["sync_status"] == "synced"
+    assert by_id["scenario:reading-list@node-tablet"]["sync_status"] == "missing"
+    assert by_id["skill:book-store@node-edge"]["sync_status"] == "degraded"
+    assert by_id["skill:book-store@node-edge"]["desired"] is True
+
+
+def test_application_placements_surface_unmanaged_observed_instance(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        applications,
+        "get_application",
+        lambda application_id, webspace_id=None: {
+            "execution_placement": {
+                "deployment_id": "application-deployment:notes",
+                "revision": 2,
+                "desired": [],
+                "observed": [
+                    {
+                        "component_ref": "skill:legacy-worker",
+                        "node_id": "node-old",
+                        "status": "active",
+                    }
+                ],
+            }
+        },
+    )
+
+    rows = applications.list_application_placements("notes")
+
+    assert rows[0]["sync_status"] == "unmanaged"
+    assert rows[0]["desired"] is False
+
+
 def test_release_list_projects_read_only_workspace_project(monkeypatch) -> None:
     digest = "sha256:" + "a" * 64
 
@@ -1421,3 +1617,189 @@ def test_sdk_release_reads_preserve_identity_and_redact_private_source(
         "secret",
     ):
         assert private_value not in serialized
+
+
+def _setup_release_fixture():
+    digest = "sha256:" + "d" * 64
+    contract = compile_setup_contract(
+        application_id="app_weather",
+        release_digest=digest,
+        component_manifests={
+            "skill:weather": {
+                "configuration": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {"units": {"enum": ["metric", "imperial"]}},
+                        "required": ["units"],
+                        "additionalProperties": False,
+                    },
+                    "defaults": {"units": "metric"},
+                    "credentials": {
+                        "api_token": {
+                            "title": "Weather token",
+                            "purpose": "Read the configured weather provider",
+                            "required": False,
+                        }
+                    },
+                }
+            }
+        },
+        placement_required=True,
+    )
+    release = SimpleNamespace(
+        setup_contract=contract,
+        release_digest=digest,
+        lifecycle="stable",
+    )
+    model = {
+        "installed": True,
+        "execution_placement": {"status": "active", "partial": False},
+    }
+    return digest, release, model
+
+
+def _admit_setup_test_surface(monkeypatch, tmp_path, release, model, digest):
+    monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        applications,
+        "_application_setup_target",
+        lambda *_args, **_kwargs: (model, release, "stable"),
+    )
+    monkeypatch.setattr(
+        applications,
+        "get_application_access_surface",
+        lambda *_args, **_kwargs: {"sections": {"connected_accounts": []}},
+    )
+    monkeypatch.setattr(
+        applications,
+        "list_releases",
+        lambda _application_id: [
+            {"release_digest": digest, "acceptance_evidence_count": 1}
+        ],
+    )
+
+
+def test_application_setup_surface_is_release_owned_and_secret_free(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    digest, release, model = _setup_release_fixture()
+    _admit_setup_test_surface(monkeypatch, tmp_path, release, model, digest)
+
+    surface = applications.get_application_setup("app_weather", release_digest=digest)
+
+    assert surface["available"] is True
+    assert surface["state"]["status"] == "ready"
+    assert surface["configuration"] == [
+        {
+            "component_ref": "skill:weather",
+            "revision": 0,
+            "channel": "stable",
+            "values": {"units": "metric"},
+            "credential_presence": [{"slot": "api_token", "present": False}],
+        }
+    ]
+    assert "credential_reference" not in str(surface)
+    assert "top-secret" not in str(surface)
+
+
+def test_application_setup_configuration_uses_cas(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    digest, release, model = _setup_release_fixture()
+    _admit_setup_test_surface(monkeypatch, tmp_path, release, model, digest)
+    monkeypatch.setattr(
+        applications, "_mutation_identity", lambda *_args, **_kwargs: ()
+    )
+
+    updated = applications.update_application_configuration(
+        "app_weather",
+        "skill:weather",
+        {"units": "imperial"},
+        release_digest=digest,
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:home",
+        capability="applications.apply",
+    )
+
+    assert updated["configuration"] == {
+        "component_ref": "skill:weather",
+        "revision": 1,
+        "values": {"units": "imperial"},
+    }
+    with pytest.raises(ValueError, match="Configuration changed"):
+        applications.update_application_configuration(
+            "app_weather",
+            "skill:weather",
+            {"units": "metric"},
+            release_digest=digest,
+            expected_revision=0,
+            actor_ref="user:owner",
+            subnet_ref="subnet:home",
+            capability="applications.apply",
+        )
+
+
+def test_application_setup_credential_uses_vault_and_never_returns_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import adaos.services.personalization_runtime as personalization_runtime
+
+    digest, release, model = _setup_release_fixture()
+    _admit_setup_test_surface(monkeypatch, tmp_path, release, model, digest)
+
+    class Vault:
+        def __init__(self) -> None:
+            self.values: dict[str, str] = {}
+
+        def put(self, key: str, value: str) -> None:
+            self.values[key] = value
+
+        def delete(self, key: str) -> None:
+            self.values.pop(key, None)
+
+    vault = Vault()
+    ctx = SimpleNamespace(credential_vault=vault)
+    monkeypatch.setattr(applications, "require_ctx", lambda *_args: ctx)
+    monkeypatch.setattr(
+        applications, "_mutation_identity", lambda *_args, **_kwargs: ()
+    )
+    monkeypatch.setattr(
+        personalization_runtime,
+        "personalization_access_service",
+        lambda _ctx: SimpleNamespace(owner=SimpleNamespace(ref=lambda: "user:owner")),
+    )
+
+    stored = applications.update_application_credential(
+        "app_weather",
+        "skill:weather",
+        "api_token",
+        "top-secret",
+        release_digest=digest,
+        expected_revision=0,
+        actor_ref="user:owner",
+        subnet_ref="subnet:home",
+        capability="applications.apply",
+    )
+
+    assert stored["credential"]["present"] is True
+    assert "top-secret" not in str(stored)
+    assert len(vault.values) == 1
+
+    removed = applications.update_application_credential(
+        "app_weather",
+        "skill:weather",
+        "api_token",
+        None,
+        release_digest=digest,
+        expected_revision=1,
+        actor_ref="user:owner",
+        subnet_ref="subnet:home",
+        capability="applications.apply",
+    )
+
+    assert removed["credential"]["present"] is False
+    assert vault.values == {}

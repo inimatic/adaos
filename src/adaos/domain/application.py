@@ -11,6 +11,7 @@ from .application_access import (
     ApplicationRoleDeclaration,
     normalize_application_roles,
 )
+from .application_setup import ApplicationSetupContract
 from .project_deployment import ProjectDeployment
 
 
@@ -361,6 +362,7 @@ class ApplicationRelease:
     provenance_refs: tuple[str, ...]
     permission_profile: ApplicationPermissionProfile | Mapping[str, Any] | None = None
     application_roles: tuple[ApplicationRoleDeclaration | Mapping[str, Any], ...] = ()
+    setup_contract: ApplicationSetupContract | Mapping[str, Any] | None = None
     addresses_report_ids: tuple[str, ...] = ()
     lifecycle: str = "candidate"
     published_at: str | None = None
@@ -403,6 +405,20 @@ class ApplicationRelease:
             known_permissions=permission_profile.flat_permissions,
         )
         object.__setattr__(self, "application_roles", roles)
+        if self.setup_contract is None:
+            setup_contract = None
+        elif isinstance(self.setup_contract, ApplicationSetupContract):
+            setup_contract = self.setup_contract
+        else:
+            setup_contract = ApplicationSetupContract.from_mapping(self.setup_contract)
+        if setup_contract is not None and (
+            setup_contract.application_id != self.application_id
+            or setup_contract.release_digest != self.release_digest
+        ):
+            raise ApplicationContractError(
+                "Application setup contract must match the Application release identity"
+            )
+        object.__setattr__(self, "setup_contract", setup_contract)
         report_ids = tuple(sorted({_identifier(item, "addresses_report_id") for item in self.addresses_report_ids}))
         object.__setattr__(self, "addresses_report_ids", report_ids)
         if self.lifecycle not in {"candidate", "trial", "prerelease", "stable", "superseded", "retired", "archived", "yanked"}:
@@ -421,6 +437,10 @@ class ApplicationRelease:
     @property
     def role_model_digest(self) -> str:
         return canonical_payload_digest([item.to_dict() for item in self.application_roles])
+
+    @property
+    def setup_contract_digest(self) -> str | None:
+        return self.setup_contract.digest if self.setup_contract is not None else None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -443,6 +463,9 @@ class ApplicationRelease:
         }
         if self.published_at is not None:
             payload["published_at"] = self.published_at
+        if self.setup_contract is not None:
+            payload["setup_contract"] = self.setup_contract.to_dict()
+            payload["setup_contract_digest"] = self.setup_contract_digest
         return payload
 
     @classmethod
@@ -455,7 +478,7 @@ class ApplicationRelease:
                 "release_digest", "project_release", "accepted_candidate_id", "acceptance_evidence",
                 "provenance_refs", "permission_profile", "permission_profile_digest",
                 "application_roles", "role_model_digest", "addresses_report_ids", "lifecycle",
-                "published_at",
+                "published_at", "setup_contract", "setup_contract_digest",
             },
             required={
                 "schema", "application_id", "publisher_ref", "legacy_project_id", "version",
@@ -485,6 +508,21 @@ class ApplicationRelease:
             expected_role_digest = canonical_payload_digest([item.to_dict() for item in application_roles])
             if _digest(payload["role_model_digest"], "role_model_digest") != expected_role_digest:
                 raise ApplicationContractError("ApplicationRelease role_model_digest mismatch")
+        setup_contract = (
+            ApplicationSetupContract.from_mapping(payload["setup_contract"])
+            if payload.get("setup_contract") is not None
+            else None
+        )
+        if payload.get("setup_contract_digest") is not None:
+            if setup_contract is None:
+                raise ApplicationContractError(
+                    "ApplicationRelease setup_contract_digest requires setup_contract"
+                )
+            if (
+                _digest(payload["setup_contract_digest"], "setup_contract_digest")
+                != setup_contract.digest
+            ):
+                raise ApplicationContractError("ApplicationRelease setup_contract_digest mismatch")
         return cls(
             application_id=payload["application_id"],
             publisher_ref=payload["publisher_ref"],
@@ -494,6 +532,7 @@ class ApplicationRelease:
             provenance_refs=tuple(payload["provenance_refs"]),
             permission_profile=permission_profile,
             application_roles=application_roles,
+            setup_contract=setup_contract,
             addresses_report_ids=tuple(payload.get("addresses_report_ids") or ()),
             lifecycle=payload["lifecycle"],
             published_at=payload.get("published_at"),

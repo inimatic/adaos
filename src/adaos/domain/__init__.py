@@ -125,6 +125,11 @@ from .application import (
     RuntimeSelection,
     TrialAccessGrant,
 )
+from .application_setup import (
+    APPLICATION_SETUP_CONTRACT_SCHEMA,
+    ApplicationSetupContract,
+    canonical_setup_digest,
+)
 from .development_report import (
     DevelopmentReport,
     DevelopmentReportAck,
@@ -314,6 +319,9 @@ __all__ = [
     "ApplicationSubscription",
     "RuntimeSelection",
     "TrialAccessGrant",
+    "APPLICATION_SETUP_CONTRACT_SCHEMA",
+    "ApplicationSetupContract",
+    "canonical_setup_digest",
     "DevelopmentReport",
     "DevelopmentReportAck",
     "DevelopmentReportContractError",

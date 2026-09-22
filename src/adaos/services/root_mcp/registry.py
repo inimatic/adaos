@@ -10,7 +10,10 @@ from typing import Any
 from adaos.build_info import BUILD_INFO
 from adaos.sdk.core.exporter import export as sdk_export
 from adaos.services.agent_context import get_ctx
-from adaos.services.system_model import CANONICAL_KIND_REGISTRY, CANONICAL_RELATION_REGISTRY
+from adaos.services.system_model import (
+    CANONICAL_KIND_REGISTRY,
+    CANONICAL_RELATION_REGISTRY,
+)
 from adaos.services.system_model.model import (
     CanonicalStatus,
     ConnectivityStatus,
@@ -32,8 +35,16 @@ DESCRIPTOR_CACHE_CLASS_DEFAULTS: dict[str, dict[str, Any]] = {
     "sdk": {"ttl_seconds": 900, "stability": "experimental", "freshness": "fresh"},
     "vocabulary": {"ttl_seconds": 3600, "stability": "stable", "freshness": "fresh"},
     "schema": {"ttl_seconds": 3600, "stability": "stable", "freshness": "fresh"},
-    "templates": {"ttl_seconds": 900, "stability": "experimental", "freshness": "fresh"},
-    "architecture": {"ttl_seconds": 1800, "stability": "experimental", "freshness": "fresh"},
+    "templates": {
+        "ttl_seconds": 900,
+        "stability": "experimental",
+        "freshness": "fresh",
+    },
+    "architecture": {
+        "ttl_seconds": 1800,
+        "stability": "experimental",
+        "freshness": "fresh",
+    },
     "policy": {"ttl_seconds": 600, "stability": "experimental", "freshness": "fresh"},
     "client": {"ttl_seconds": 600, "stability": "experimental", "freshness": "fresh"},
     "auth": {"ttl_seconds": 300, "stability": "experimental", "freshness": "fresh"},
@@ -88,7 +99,11 @@ def _plane_registry_payload() -> dict[str, Any]:
                 "surface": "operations",
                 "mode": "typed_operational_plane",
                 "published_by": "root",
-                "preferred_for": ["profiler_inspection", "profiler_control", "operator_workflows"],
+                "preferred_for": [
+                    "profiler_inspection",
+                    "profiler_control",
+                    "operator_workflows",
+                ],
                 "descriptor_ids": ["capability_profiles", "mcp_session_profile"],
                 "tool_prefixes": ["hub.memory."],
                 "capability_profiles": ["ProfileOpsRead", "ProfileOpsControl"],
@@ -101,7 +116,12 @@ def _plane_registry_payload() -> dict[str, Any]:
                 "surface": "development",
                 "mode": "typed_context_graph_adapter",
                 "published_by": "root",
-                "preferred_for": ["builder", "codex", "evaluator", "context_inspection"],
+                "preferred_for": [
+                    "builder",
+                    "codex",
+                    "evaluator",
+                    "context_inspection",
+                ],
                 "descriptor_ids": [
                     "context_capsule_schema",
                     "context_relationship_schema",
@@ -123,7 +143,11 @@ def _plane_registry_payload() -> dict[str, Any]:
                 "surface": "development",
                 "mode": "typed_development_task_plane",
                 "published_by": "root",
-                "preferred_for": ["builder_realization", "isolated_dev_nodes", "task_queue_diagnostics"],
+                "preferred_for": [
+                    "builder_realization",
+                    "isolated_dev_nodes",
+                    "task_queue_diagnostics",
+                ],
                 "descriptor_ids": [
                     "builder_realize_request_schema",
                     "skill_factory_dev_node_registration_schema",
@@ -134,7 +158,11 @@ def _plane_registry_payload() -> dict[str, Any]:
                     "skill_factory_status",
                 ],
                 "tool_prefixes": ["skill_factory."],
-                "capability_profiles": ["SkillFactoryTaskRead", "SkillFactoryTaskSubmit", "SkillFactoryDevNode"],
+                "capability_profiles": [
+                    "SkillFactoryTaskRead",
+                    "SkillFactoryTaskSubmit",
+                    "SkillFactoryDevNode",
+                ],
                 "backing_store": "root_descriptor_cache + skill_factory_state",
             },
             {
@@ -144,10 +172,18 @@ def _plane_registry_payload() -> dict[str, Any]:
                 "surface": "development",
                 "mode": "typed_authoring_context",
                 "published_by": "root",
-                "preferred_for": ["nlu_teacher", "entity_canonicalization", "llm_authoring"],
+                "preferred_for": [
+                    "nlu_teacher",
+                    "entity_canonicalization",
+                    "llm_authoring",
+                ],
                 "descriptor_ids": ["named_entity_registry", "nlu_teacher_schema"],
                 "tool_prefixes": ["nlu_authoring."],
-                "capability_profiles": ["NLUTeacherRead", "NLUTeacherDryRun", "NLUTeacherAuthor"],
+                "capability_profiles": [
+                    "NLUTeacherRead",
+                    "NLUTeacherDryRun",
+                    "NLUTeacherAuthor",
+                ],
                 "backing_store": "root_descriptor_cache + named_entity_read_model + governed_access_links",
             },
         ],
@@ -169,11 +205,17 @@ def _with_ttl(issued_at: str, ttl_seconds: int) -> str:
     base = datetime.fromisoformat(issued_at)
     if base.tzinfo is None:
         base = base.replace(tzinfo=timezone.utc)
-    return (base + timedelta(seconds=max(1, int(ttl_seconds)))).replace(microsecond=0).isoformat()
+    return (
+        (base + timedelta(seconds=max(1, int(ttl_seconds))))
+        .replace(microsecond=0)
+        .isoformat()
+    )
 
 
 def _json_hash(payload: Any) -> str:
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -203,8 +245,12 @@ def _overview_row(
         "side_effects": side_effects,
         "owner": owner,
         "schema_id": schema_id,
-        "required_args_digest": f"sha256:{_json_hash(required_args)}" if required_args is not None else None,
-        "capability_digest": f"sha256:{_json_hash(capabilities)}" if capabilities is not None else None,
+        "required_args_digest": f"sha256:{_json_hash(required_args)}"
+        if required_args is not None
+        else None,
+        "capability_digest": f"sha256:{_json_hash(capabilities)}"
+        if capabilities is not None
+        else None,
     }
     fingerprint = f"sha256:{_json_hash(identity)}"
     return {
@@ -228,7 +274,11 @@ def _sdk_metadata(
     limit: int = 24,
 ) -> dict[str, Any]:
     payload = dict(sdk_export(level=level, query=query, limit=limit))
-    raw_items = payload.get("items") if isinstance(payload.get("items"), list) else payload.get("tools")
+    raw_items = (
+        payload.get("items")
+        if isinstance(payload.get("items"), list)
+        else payload.get("tools")
+    )
     rows: list[dict[str, Any]] = []
     for item in raw_items or []:
         if not isinstance(item, dict):
@@ -236,8 +286,14 @@ def _sdk_metadata(
         name = str(item.get("n") or item.get("name") or "").strip()
         if not name:
             continue
-        meta = dict(item.get("meta") or {}) if isinstance(item.get("meta"), dict) else {}
-        input_schema = dict(item.get("input_schema") or {}) if isinstance(item.get("input_schema"), dict) else {}
+        meta = (
+            dict(item.get("meta") or {}) if isinstance(item.get("meta"), dict) else {}
+        )
+        input_schema = (
+            dict(item.get("input_schema") or {})
+            if isinstance(item.get("input_schema"), dict)
+            else {}
+        )
         row = _overview_row(
             row_id=name,
             kind=str(item.get("k") or item.get("kind") or "sdk_method"),
@@ -250,7 +306,10 @@ def _sdk_metadata(
             owner=str(item.get("m") or item.get("module") or "adaos.sdk").strip(),
             schema_id=f"sdk:{name}:input",
             required_args=input_schema.get("required") or item.get("a") or [],
-            capabilities={"approval_scope": meta.get("approval_scope"), "idempotent": meta.get("idempotent")},
+            capabilities={
+                "approval_scope": meta.get("approval_scope"),
+                "idempotent": meta.get("idempotent"),
+            },
             metadata={
                 "module": item.get("m") or item.get("module"),
                 "qualname": item.get("qualname"),
@@ -301,7 +360,9 @@ def _read_descriptor_cache_state() -> dict[str, Any]:
 
 
 def _write_descriptor_cache_state(payload: dict[str, Any]) -> None:
-    _descriptor_cache_state_path().write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _descriptor_cache_state_path().write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def record_descriptor_refresh(
@@ -326,7 +387,9 @@ def record_descriptor_refresh(
             "source_kind": str(source_kind or "").strip() or "unknown",
             "artifact_kind": str(artifact_kind or "").strip() or None,
             "artifact_name": str(artifact_name or "").strip() or None,
-            "descriptor_ids": [str(item).strip() for item in descriptor_ids if str(item).strip()],
+            "descriptor_ids": [
+                str(item).strip() for item in descriptor_ids if str(item).strip()
+            ],
         },
     }
     _write_descriptor_cache_state(payload)
@@ -341,7 +404,9 @@ def descriptor_cache_summary() -> dict[str, Any]:
         "state_path": str(_descriptor_cache_state_path()),
         "refresh_count": int(current.get("refresh_count") or 0),
         "updated_at": current.get("updated_at"),
-        "last_refresh": dict(current.get("last_refresh") or {}) if isinstance(current.get("last_refresh"), dict) else None,
+        "last_refresh": dict(current.get("last_refresh") or {})
+        if isinstance(current.get("last_refresh"), dict)
+        else None,
     }
 
 
@@ -366,7 +431,9 @@ def _builder_draft_schema() -> dict[str, Any]:
 
 
 def _builder_realize_request_schema() -> dict[str, Any]:
-    return _load_json(_package_root() / "abi" / "builder.realize_request.v1.schema.json")
+    return _load_json(
+        _package_root() / "abi" / "builder.realize_request.v1.schema.json"
+    )
 
 
 def _skill_factory_schema(name: str) -> dict[str, Any]:
@@ -389,10 +456,138 @@ def _application_contracts() -> dict[str, Any]:
         "application.access-profile-diff.v1.schema.json",
         "application.verification-report.v1.schema.json",
         "application.release-evidence-bundle.v1.schema.json",
+        "application.setup_contract.v1.schema.json",
+        "application.setup_state.v1.schema.json",
     )
+
+    # Publish the executable Root MCP surface with the ABI bundle.  Schemas
+    # alone prove record shape, but they do not tell an Automation worker which
+    # public operation owns a read or mutation.  Keep this projection compact:
+    # every operation is derived from the registered contract and deliberately
+    # omits the common response envelope and internal handler metadata.
+    from .applications_plane import contracts as application_tool_contracts
+
+    tools = {
+        contract.id: {
+            "tool_id": contract.id,
+            "title": contract.title,
+            "summary": contract.summary,
+            "input_schema": contract.input_schema,
+            "required_capability": contract.required_capability,
+            "side_effects": contract.side_effects,
+            "stability": contract.stability,
+        }
+        for contract in application_tool_contracts()
+    }
+    group_specs = (
+        (
+            "catalog_and_detail",
+            "Bounded catalog, selected Application, release, operation, report, component and placement reads.",
+            {
+                "applications.list",
+                "applications.show",
+                "applications.list_components",
+                "applications.list_placements",
+                "applications.list_releases",
+                "applications.list_operations",
+                "applications.poll_operation_events",
+                "applications.get_operation",
+                "applications.list_development_reports",
+                "applications.get_development_report_status",
+            },
+        ),
+        (
+            "lifecycle",
+            "Reviewable install, update, remove and track plans; exact digest apply; direct settings; Home pinning; update batches.",
+            {
+                "applications.assess_updates",
+                "applications.plan_updates",
+                "applications.get_update_batch",
+                "applications.apply_updates",
+                "applications.set_home_pin",
+                "applications.reorder_home",
+                "applications.update_settings",
+                "applications.plan",
+                "applications.apply",
+                "applications.explain_plan",
+            },
+        ),
+        (
+            "access",
+            "Release-bound permissions, roles, grants, connected accounts, privacy, readiness, simulation and audit activity.",
+            {
+                tool_id
+                for tool_id in tools
+                if tool_id.startswith("applications.access.")
+            },
+        ),
+        (
+            "setup_and_placement",
+            "Release-owned setup state, typed settings, write-only credential handoff and desired/observed placement.",
+            {
+                tool_id
+                for tool_id in tools
+                if tool_id.startswith("applications.setup.")
+                or tool_id
+                in {
+                    "applications.list_components",
+                    "applications.list_placements",
+                }
+            },
+        ),
+        (
+            "builder_lifecycle",
+            "Publisher-local development, Prototype/Automation evidence, Trial beta and Stable publication operations.",
+            {
+                tool_id
+                for tool_id in tools
+                if tool_id.startswith("applications.development.")
+            },
+        ),
+        (
+            "trial_and_prerelease",
+            "Targeted Trial access plus prerelease rollout, health and reviewed install operations.",
+            {
+                "applications.issue_trial_access",
+                "applications.revoke_trial_access",
+                "applications.resolve_trial_link",
+                "applications.plan_trial_link_install",
+                "applications.get_prerelease_rollout",
+                "applications.set_prerelease_rollout",
+                "applications.record_prerelease_health",
+            },
+        ),
+    )
+    operation_groups = []
+    for group_id, summary, selected_ids in group_specs:
+        selected = [
+            tools[tool_id] for tool_id in sorted(selected_ids) if tool_id in tools
+        ]
+        operation_groups.append(
+            {
+                "group_id": group_id,
+                "title": group_id.replace("_", " ").title(),
+                "summary": summary,
+                "tool_ids": [item["tool_id"] for item in selected],
+                "capabilities": sorted(
+                    {
+                        str(item["required_capability"])
+                        for item in selected
+                        if item.get("required_capability")
+                    }
+                ),
+                "tools": selected,
+            }
+        )
     return {
         "schema": "adaos.application.contract_bundle.v1",
         "schemas": {name: _skill_factory_schema(name) for name in names},
+        "operation_groups": operation_groups,
+        "error_contract": {
+            "conflict": "A stale expected_revision or changed exact plan fails closed; refresh authoritative state before retry.",
+            "idempotency": "Mutating tools that declare idempotency_key replay only the same admitted request.",
+            "authority": "Only the public SDK and Root MCP tool contracts are runtime authority; local fixtures are never a fallback.",
+        },
     }
 
 
@@ -431,14 +626,20 @@ def _template_names(raw: Any) -> list[str]:
         return []
     if not path.exists() or not path.is_dir():
         return []
-    return sorted(item.name for item in path.iterdir() if item.is_dir() and not item.name.startswith("."))
+    return sorted(
+        item.name
+        for item in path.iterdir()
+        if item.is_dir() and not item.name.startswith(".")
+    )
 
 
 def _template_catalog() -> dict[str, Any]:
     ctx = get_ctx()
     return {
         "skills": _template_names(getattr(ctx.paths, "skill_templates_dir", None)),
-        "scenarios": _template_names(getattr(ctx.paths, "scenario_templates_dir", None)),
+        "scenarios": _template_names(
+            getattr(ctx.paths, "scenario_templates_dir", None)
+        ),
     }
 
 
@@ -463,13 +664,13 @@ def _public_registry_summary(kind: str) -> dict[str, Any]:
     normalized: list[dict[str, Any]] = []
     for item in items[:50]:
         value = {
-                "id": str(item.get("id") or item.get("name") or "").strip(),
-                "name": str(item.get("name") or item.get("id") or "").strip(),
-                "version": str(item.get("version") or "").strip() or None,
-                "updated_at": str(item.get("updated_at") or "").strip() or None,
-                "description": str(item.get("description") or "").strip() or None,
-                "manifest": str(item.get("manifest") or "").strip() or None,
-            }
+            "id": str(item.get("id") or item.get("name") or "").strip(),
+            "name": str(item.get("name") or item.get("id") or "").strip(),
+            "version": str(item.get("version") or "").strip() or None,
+            "updated_at": str(item.get("updated_at") or "").strip() or None,
+            "description": str(item.get("description") or "").strip() or None,
+            "manifest": str(item.get("manifest") or "").strip() or None,
+        }
         value["overview"] = _overview_row(
             row_id=value["id"],
             kind="skill" if token == "skills" else "scenario",
@@ -479,7 +680,9 @@ def _public_registry_summary(kind: str) -> dict[str, Any]:
             stability="published",
             descriptor_id=f"public_{token[:-1]}_registry_summary",
             owner=str(item.get("owner") or "workspace").strip(),
-            schema_id="skill_manifest_schema" if token == "skills" else "scenario_manifest_schema",
+            schema_id="skill_manifest_schema"
+            if token == "skills"
+            else "scenario_manifest_schema",
             capabilities={
                 "tools": item.get("tools") or [],
                 "events": item.get("events") or [],
@@ -505,7 +708,10 @@ def _architecture_catalog() -> dict[str, Any]:
         text = path.read_text(encoding="utf-8")
     except Exception:
         text = ""
-    pattern = re.compile(r"^- \[(?P<title>[^\]]+)\]\((?P<link>[^\)]+)\):\s*(?P<summary>.+)$", re.MULTILINE)
+    pattern = re.compile(
+        r"^- \[(?P<title>[^\]]+)\]\((?P<link>[^\)]+)\):\s*(?P<summary>.+)$",
+        re.MULTILINE,
+    )
     for match in pattern.finditer(text):
         pages.append(
             {
@@ -612,7 +818,13 @@ def _system_model_vocabulary() -> dict[str, Any]:
         "kinds": sorted(CANONICAL_KIND_REGISTRY),
         "relations": sorted(CANONICAL_RELATION_REGISTRY),
         "statuses": _status_vocab(),
-        "projection_classes": ["object", "reliability", "inventory", "neighborhood", "task_packet"],
+        "projection_classes": [
+            "object",
+            "reliability",
+            "inventory",
+            "neighborhood",
+            "task_packet",
+        ],
     }
 
 
@@ -664,7 +876,9 @@ def _descriptor_entry(
     }
 
 
-def _descriptor_bundle_metadata(entry: dict[str, Any], payload: Any, *, level: str = "std") -> dict[str, Any]:
+def _descriptor_bundle_metadata(
+    entry: dict[str, Any], payload: Any, *, level: str = "std"
+) -> dict[str, Any]:
     issued_at = _iso_now()
     cache = dict(entry.get("cache") or {})
     ttl_seconds = int(cache.get("ttl_seconds") or 600)
@@ -719,7 +933,9 @@ def _descriptor_payload(
     if token == "builder_realize_request_schema":
         return _builder_realize_request_schema()
     if token == "skill_factory_dev_node_registration_schema":
-        return _skill_factory_schema("skill_factory.dev_node_registration.v1.schema.json")
+        return _skill_factory_schema(
+            "skill_factory.dev_node_registration.v1.schema.json"
+        )
     if token == "skill_factory_dev_task_assignment_schema":
         return _skill_factory_schema("skill_factory.dev_task_assignment.v1.schema.json")
     if token == "skill_factory_dev_result_schema":
@@ -763,7 +979,9 @@ def _descriptor_payload(
                     "profile_id": profile_id,
                     "capabilities": list(capabilities),
                 }
-                for profile_id, capabilities in sorted(DEFAULT_CAPABILITY_PROFILES.items())
+                for profile_id, capabilities in sorted(
+                    DEFAULT_CAPABILITY_PROFILES.items()
+                )
             ],
         }
     if token == "mcp_session_profile":
@@ -1111,9 +1329,18 @@ def descriptor_registry_summary() -> dict[str, Any]:
         "cache_mode": "root_descriptor_cache",
         "descriptor_count": len(items),
         "descriptors": [item["descriptor_id"] for item in items],
-        "descriptor_classes": sorted({str(item.get("descriptor_class") or "").strip() for item in items if str(item.get("descriptor_class") or "").strip()}),
+        "descriptor_classes": sorted(
+            {
+                str(item.get("descriptor_class") or "").strip()
+                for item in items
+                if str(item.get("descriptor_class") or "").strip()
+            }
+        ),
         "cache_policies": {
-            key: {"ttl_seconds": int(value.get("ttl_seconds") or 0), "stability": str(value.get("stability") or "experimental")}
+            key: {
+                "ttl_seconds": int(value.get("ttl_seconds") or 0),
+                "stability": str(value.get("stability") or "experimental"),
+            }
             for key, value in sorted(DESCRIPTOR_CACHE_CLASS_DEFAULTS.items())
         },
         "descriptor_cache": descriptor_cache_summary(),
@@ -1136,7 +1363,10 @@ def get_descriptor_set(
     effective_level = str(level or "std").strip().lower() or "std"
     if effective_level not in {"mini", "std", "rich"}:
         effective_level = "std"
-    entry = next((item for item in list_descriptor_sets() if item["descriptor_id"] == token), None)
+    entry = next(
+        (item for item in list_descriptor_sets() if item["descriptor_id"] == token),
+        None,
+    )
     if entry is None:
         raise KeyError(token)
     payload = _descriptor_payload(

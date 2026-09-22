@@ -23,6 +23,7 @@ from adaos.domain.artifact_release import (
     StableSubscription,
     canonical_payload_digest,
 )
+from adaos.services.applications.setup import compile_setup_contract
 
 
 ABI_ROOT = Path(__file__).parents[1] / "src" / "adaos" / "abi"
@@ -84,13 +85,34 @@ def _application() -> Application:
 
 
 def _contracts() -> list[tuple[str, object]]:
+    project_release = _project_release()
+    setup_contract = compile_setup_contract(
+        application_id="app_recipes",
+        release_digest=project_release.release_digest,
+        component_manifests={
+            "scenario:recipes": {
+                "configuration": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {"servings": {"type": "integer", "minimum": 1}},
+                        "required": ["servings"],
+                        "additionalProperties": False,
+                    },
+                    "defaults": {"servings": 4},
+                    "credentials": {},
+                }
+            }
+        },
+        verification=({"id": "runtime_probe", "title": "Runtime probe"},),
+    )
     release = ApplicationRelease(
         application_id="app_recipes",
         publisher_ref="subnet:sn_home",
-        project_release=_project_release(),
+        project_release=project_release,
         accepted_candidate_id="candidate.recipes.1",
         acceptance_evidence=({"decision": "accepted", "actor": "owner"},),
         provenance_refs=(DIGEST_C,),
+        setup_contract=setup_contract,
         lifecycle="stable",
         published_at="2026-09-05T12:00:00+00:00",
     )
@@ -180,6 +202,24 @@ def test_application_release_preserves_legacy_project_release_digest() -> None:
 
     assert application_release.release_digest == project_release.release_digest
     assert application_release.to_dict()["project_release"] == project_release.to_dict()
+
+
+def test_application_release_rejects_setup_for_another_release() -> None:
+    setup_contract = compile_setup_contract(
+        application_id="app_recipes",
+        release_digest=DIGEST_A,
+        component_manifests={},
+    )
+    with pytest.raises(ApplicationContractError, match="setup contract must match"):
+        ApplicationRelease(
+            application_id="app_recipes",
+            publisher_ref="subnet:sn_home",
+            project_release=_project_release(),
+            accepted_candidate_id="candidate.recipes.1",
+            acceptance_evidence=({"decision": "accepted"},),
+            provenance_refs=(DIGEST_C,),
+            setup_contract=setup_contract,
+        )
 
 
 def test_subscription_compatibility_keeps_track_and_observed_digest() -> None:

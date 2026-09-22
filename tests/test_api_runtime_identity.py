@@ -921,6 +921,12 @@ def test_admin_root_mcp_call_allows_read_only_descriptor_tools(monkeypatch, tool
     ("tool_id", "capability"),
     [
         ("applications.list", "applications.read"),
+        ("applications.list_components", "applications.read"),
+        ("applications.list_placements", "applications.read"),
+        ("applications.assess_updates", "applications.read"),
+        ("applications.plan_updates", "applications.plan"),
+        ("applications.get_update_batch", "applications.read"),
+        ("applications.apply_updates", "applications.apply"),
         ("applications.show", "applications.read"),
         ("applications.reorder_home", "applications.apply"),
         ("applications.access.show", "applications.read"),

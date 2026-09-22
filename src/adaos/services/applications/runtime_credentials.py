@@ -55,7 +55,8 @@ class ApplicationRuntimeCredentials:
         manifest = yaml.safe_load(_manifest_path(self.ctx.skill_ctx.get()).read_text(encoding="utf-8"))
         slots = (manifest.get("configuration") or {}).get("credentials")
         declaration = slots.get(name) if isinstance(slots, dict) else None
-        if (not isinstance(declaration, dict) or set(declaration) != {"purpose"}
+        if (not isinstance(declaration, dict)
+                or set(declaration) - {"purpose", "title", "required"}
                 or not isinstance(declaration.get("purpose"), str)
                 or not 1 <= len(declaration["purpose"].strip()) <= 1000):
             raise PermissionError("Credential slot and its purpose must be declared by the active skill")

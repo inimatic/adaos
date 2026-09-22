@@ -8,10 +8,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+import json
 from pathlib import Path
 from typing import Any
+import uuid
 
-from adaos.domain.application import RuntimeSelection
+from adaos.domain.application import RuntimeSelection, utc_now
+from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.application_registry_projection import ApplicationRegistryProjection
 from adaos.services.applications import (
@@ -19,10 +22,21 @@ from adaos.services.applications import (
     ApplicationAccessService,
     ApplicationDevelopmentCoordinator,
     ApplicationRolloutService,
+    ApplicationSetupStateStore,
     DevelopmentReportTriageService,
     TrialAccessService,
     get_application_service,
     get_development_report_service,
+    project_setup_state,
+)
+from adaos.services.applications.configuration import ApplicationConfigurationStore
+from adaos.services.applications.conditions import enrich_application_conditions
+from adaos.services.applications.runtime_credentials import (
+    ApplicationRuntimeCredentials,
+)
+from adaos.services.applications.update_batches import (
+    ApplicationUpdateBatchStore,
+    update_batch_id,
 )
 from adaos.services.builder.workbench import BuilderWorkbenchService
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
@@ -207,27 +221,38 @@ def _release_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
             "private_source": "redacted",
         }
     )
-    return {
-        key: deepcopy(raw[key])
-        for key in (
-            "schema",
-            "application_id",
-            "publisher_ref",
-            "legacy_project_id",
-            "version",
-            "release_digest",
-            "accepted_candidate_id",
-            "provenance_refs",
-            "addresses_report_ids",
-            "lifecycle",
-            "published_at",
-            "channels",
+    return (
+        {
+            key: deepcopy(raw[key])
+            for key in (
+                "schema",
+                "application_id",
+                "publisher_ref",
+                "legacy_project_id",
+                "version",
+                "release_digest",
+                "accepted_candidate_id",
+                "provenance_refs",
+                "addresses_report_ids",
+                "lifecycle",
+                "published_at",
+                "channels",
+            )
+            if key in raw
+        }
+        | {
+            "project_release": safe_project,
+            "acceptance_evidence_count": len(raw.get("acceptance_evidence") or ()),
+        }
+        | (
+            {
+                "setup_contract": deepcopy(raw.get("setup_contract")),
+                "setup_contract_digest": raw.get("setup_contract_digest"),
+            }
+            if raw.get("setup_contract") is not None
+            else {}
         )
-        if key in raw
-    } | {
-        "project_release": safe_project,
-        "acceptance_evidence_count": len(raw.get("acceptance_evidence") or ()),
-    }
+    )
 
 
 def _workspace_project_components(project: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -397,8 +422,7 @@ def _active_release_for_webspace(
         for release in model.get("local_beta_releases") or ():
             if (
                 isinstance(release, Mapping)
-                and str(release.get("release_digest") or "").strip()
-                == selected_digest
+                and str(release.get("release_digest") or "").strip() == selected_digest
             ):
                 return dict(release)
     for field in ("active_release", "installed_release"):
@@ -825,11 +849,7 @@ def list_development_projects(
     )
     return [
         {
-            **{
-                key: deepcopy(row[key])
-                for key in public_fields
-                if key in row
-            },
+            **{key: deepcopy(row[key]) for key in public_fields if key in row},
             "status": "development",
         }
         for row in rows
@@ -940,7 +960,11 @@ def _application_models(
 def _marketplace_listing(application: Mapping[str, Any]) -> dict[str, Any]:
     raw = str(application.get("catalog_visibility") or "").strip().lower()
     if not raw:
-        raw = "listed" if str(application.get("visibility") or "") == "public" else "unlisted"
+        raw = (
+            "listed"
+            if str(application.get("visibility") or "") == "public"
+            else "unlisted"
+        )
     status = "listed" if raw in {"listed", "public"} else "unlisted"
     return {
         "schema": "adaos.application.marketplace_listing.v1",
@@ -956,7 +980,9 @@ def _application_component_inventory(model: Mapping[str, Any]) -> list[dict[str,
         candidate = model.get(field)
         if isinstance(candidate, Mapping):
             project_release = candidate.get("project_release")
-            if isinstance(project_release, Mapping) and project_release.get("components"):
+            if isinstance(project_release, Mapping) and project_release.get(
+                "components"
+            ):
                 release = project_release
                 release_source = field
                 break
@@ -1006,7 +1032,9 @@ def _application_component_inventory(model: Mapping[str, Any]) -> list[dict[str,
                 "runtime_status": (
                     "active"
                     if any(str(item.get("status") or "") == "active" for item in actual)
-                    else str((actual[0] if actual else {}).get("status") or "not_observed")
+                    else str(
+                        (actual[0] if actual else {}).get("status") or "not_observed"
+                    )
                 ),
             }
         )
@@ -1034,9 +1062,9 @@ def _enrich_application_models(
     try:
         project_icons = {
             str(item.get("id") or "").strip(): str(item.get("icon") or "").strip()
-            for item in ApplicationRegistryProjection(_state_dir()).list_workspace_projects(
-                include_hidden=True
-            )
+            for item in ApplicationRegistryProjection(
+                _state_dir()
+            ).list_workspace_projects(include_hidden=True)
             if str(item.get("id") or "").strip()
         }
     except (OSError, RuntimeError, ValueError):
@@ -1046,21 +1074,27 @@ def _enrich_application_models(
         application = model.get("application") or {}
         application_id = str(application.get("application_id") or "")
         release_catalogs = [
-            (((model.get(field) or {}).get("project_release") or {}).get("catalog") or {})
+            (
+                ((model.get(field) or {}).get("project_release") or {}).get("catalog")
+                or {}
+            )
             for field in ("active_release", "marketplace_release", "installed_release")
         ]
         release_icon = next(
             (
                 str(catalog.get("icon") or "").strip()
                 for catalog in release_catalogs
-                if isinstance(catalog, Mapping) and str(catalog.get("icon") or "").strip()
+                if isinstance(catalog, Mapping)
+                and str(catalog.get("icon") or "").strip()
             ),
             "",
         )
         model["icon"] = (
             release_icon
             or str((application.get("display") or {}).get("icon") or "").strip()
-            or project_icons.get(str(application.get("legacy_project_id") or "").strip(), "")
+            or project_icons.get(
+                str(application.get("legacy_project_id") or "").strip(), ""
+            )
             or "apps-outline"
         )
         local_source = development.get(application_id)
@@ -1076,7 +1110,9 @@ def _enrich_application_models(
             ).strip()
             if not source_webspace_id and object_type and object_id:
                 source_webspace_id = str(
-                    BuilderWorkbenchService(state_dir=_state_dir()).find_existing_source_for_selection(
+                    BuilderWorkbenchService(
+                        state_dir=_state_dir()
+                    ).find_existing_source_for_selection(
                         object_type=object_type,
                         object_id=object_id,
                     )
@@ -1160,9 +1196,9 @@ def _enrich_application_models(
             "visibility": str(application.get("visibility") or "private")
         }
         application["marketplace_listing"] = _marketplace_listing(application)
-        model["active_release"] = _active_release_for_webspace(
-            model, webspace_id=webspace_id
-        ) or None
+        model["active_release"] = (
+            _active_release_for_webspace(model, webspace_id=webspace_id) or None
+        )
         model["component_inventory"] = _application_component_inventory(model)
         home = _home_projection(model, webspace_id, snapshot=home_snapshot)
         model["home"] = home
@@ -1170,7 +1206,7 @@ def _enrich_application_models(
         model["installation_summary"] = _installation_summary(
             model, webspace_id=webspace_id
         )
-        enriched.append(model)
+        enriched.append(enrich_application_conditions(model))
     return enriched
 
 
@@ -1244,6 +1280,551 @@ def list_application_components(
             "component_inventory", ()
         )
     )
+
+
+def list_application_placements(
+    application_id: str, *, webspace_id: str | None = None
+) -> list[dict[str, Any]]:
+    """Return desired and observed execution as bounded node-level rows."""
+
+    model = get_application(application_id, webspace_id=webspace_id)
+    placement = model.get("execution_placement") or {}
+    desired = {
+        str(item.get("component_ref") or ""): dict(item)
+        for item in placement.get("desired") or ()
+        if isinstance(item, Mapping) and str(item.get("component_ref") or "")
+    }
+    observed_by_component: dict[str, list[dict[str, Any]]] = {}
+    for item in placement.get("observed") or ():
+        if not isinstance(item, Mapping):
+            continue
+        component_ref = str(item.get("component_ref") or "")
+        if component_ref:
+            observed_by_component.setdefault(component_ref, []).append(dict(item))
+
+    rows: list[dict[str, Any]] = []
+    component_refs = sorted({*desired, *observed_by_component})
+    for component_ref in component_refs:
+        plan = desired.get(component_ref, {})
+        mode = str(plan.get("mode") or "unmanaged")
+        selected_nodes = {
+            str(value or "").strip()
+            for value in plan.get("selected_node_ids") or ()
+            if str(value or "").strip()
+        }
+        actual = observed_by_component.get(component_ref, [])
+        observed_nodes: set[str] = set()
+        for item in actual:
+            node_id = str(item.get("node_id") or "").strip()
+            if node_id:
+                observed_nodes.add(node_id)
+            desired_here = bool(plan) and (
+                not selected_nodes or node_id in selected_nodes
+            )
+            runtime_status = str(item.get("status") or "unknown").strip().lower()
+            if desired_here and runtime_status == "active":
+                sync_status, icon, color = (
+                    "synced",
+                    "checkmark-circle-outline",
+                    "success",
+                )
+            elif desired_here:
+                sync_status, icon, color = (
+                    "degraded",
+                    "alert-circle-outline",
+                    "danger",
+                )
+            else:
+                sync_status, icon, color = (
+                    "unmanaged",
+                    "help-circle-outline",
+                    "medium",
+                )
+            rows.append(
+                {
+                    "placement_id": f"{component_ref}@{node_id or 'unknown'}",
+                    "component_ref": component_ref,
+                    "node_id": node_id or None,
+                    "desired": desired_here,
+                    "desired_mode": mode,
+                    "runtime_status": runtime_status,
+                    "sync_status": sync_status,
+                    "status_icon": icon,
+                    "status_color": color,
+                    "status_tooltip": (
+                        f"Desired and observed state are synchronized on {node_id}."
+                        if sync_status == "synced"
+                        else (
+                            f"Desired state is not ready on {node_id}."
+                            if desired_here
+                            else f"Observed placement on {node_id} is not in desired state."
+                        )
+                    ),
+                    "generation": item.get("generation"),
+                    "updated_at": item.get("updated_at"),
+                    "deployment_id": placement.get("deployment_id"),
+                    "deployment_revision": placement.get("revision"),
+                }
+            )
+
+        for node_id in sorted(selected_nodes - observed_nodes):
+            rows.append(
+                {
+                    "placement_id": f"{component_ref}@{node_id}",
+                    "component_ref": component_ref,
+                    "node_id": node_id,
+                    "desired": True,
+                    "desired_mode": mode,
+                    "runtime_status": "not_observed",
+                    "sync_status": "missing",
+                    "status_icon": "warning-outline",
+                    "status_color": "warning",
+                    "status_tooltip": f"Desired placement on {node_id} is not observed.",
+                    "generation": None,
+                    "updated_at": None,
+                    "deployment_id": placement.get("deployment_id"),
+                    "deployment_revision": placement.get("revision"),
+                }
+            )
+
+        if plan and not actual and not selected_nodes:
+            rows.append(
+                {
+                    "placement_id": f"{component_ref}@unassigned",
+                    "component_ref": component_ref,
+                    "node_id": None,
+                    "desired": True,
+                    "desired_mode": mode,
+                    "runtime_status": "not_observed",
+                    "sync_status": "pending",
+                    "status_icon": "time-outline",
+                    "status_color": "warning",
+                    "status_tooltip": "Desired placement has no observed runtime instance.",
+                    "generation": None,
+                    "updated_at": None,
+                    "deployment_id": placement.get("deployment_id"),
+                    "deployment_revision": placement.get("revision"),
+                }
+            )
+
+    rows.sort(
+        key=lambda item: (
+            str(item.get("component_ref") or "").casefold(),
+            str(item.get("node_id") or ""),
+        )
+    )
+    return rows[:500]
+
+
+def _application_setup_target(
+    application_id: str,
+    *,
+    release_digest: str | None = None,
+    webspace_id: str | None = None,
+) -> tuple[dict[str, Any], Any, str]:
+    model = get_application(application_id, webspace_id=webspace_id)
+    selected_digest = str(release_digest or "").strip()
+    if not selected_digest:
+        for field in (
+            "active_release",
+            "installed_release",
+            "marketplace_release",
+        ):
+            candidate = model.get(field)
+            if (
+                isinstance(candidate, Mapping)
+                and str(candidate.get("release_digest") or "").strip()
+            ):
+                selected_digest = str(candidate["release_digest"]).strip()
+                break
+    if not selected_digest:
+        raise FileNotFoundError(
+            f"Application has no setup-capable release: {application_id}"
+        )
+    release = _service().store.get_release(application_id, selected_digest)
+    selection = get_runtime_selection(str(webspace_id or "desktop"), application_id)
+    channel = (
+        "beta"
+        if str((selection or {}).get("runtime_root_ref") or "").startswith("trial:")
+        or str(release.lifecycle or "").lower() in {"candidate", "trial"}
+        else "stable"
+    )
+    return model, release, channel
+
+
+def _setup_configuration_rows(
+    application_id: str,
+    release: Any,
+    *,
+    channel: str,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, list[str]]]:
+    contract = release.setup_contract
+    if contract is None:
+        return [], {}, {}
+    rows: list[dict[str, Any]] = []
+    values_by_component: dict[str, dict[str, Any]] = {}
+    credential_presence: dict[str, list[str]] = {}
+    for component in contract.payload.get("components") or ():
+        component_ref = str(component.get("component_ref") or "")
+        store = ApplicationConfigurationStore(
+            _state_dir(), application_id, component_ref
+        )
+        record = store.read()
+        selected = None
+        if channel == "beta" and (record.get("beta") or {}).get("active"):
+            selected = record.get("beta")
+        elif channel == "stable":
+            selected = record.get("stable")
+        settings = component.get("settings") or {}
+        defaults = deepcopy(dict(settings.get("defaults") or {}))
+        values = deepcopy(dict((selected or {}).get("values") or defaults))
+        credentials = dict((selected or {}).get("credentials") or {})
+        values_by_component[component_ref] = values
+        credential_presence[component_ref] = sorted(credentials)
+        rows.append(
+            {
+                "component_ref": component_ref,
+                "revision": int(record.get("revision") or 0),
+                "channel": channel,
+                "values": values,
+                "credential_presence": [
+                    {
+                        "slot": str(item.get("slot") or ""),
+                        "present": str(item.get("slot") or "") in credentials,
+                    }
+                    for item in component.get("credentials") or ()
+                ],
+            }
+        )
+    return rows, values_by_component, credential_presence
+
+
+def get_application_setup(
+    application_id: str,
+    *,
+    release_digest: str | None = None,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Return release-owned setup plus a secret-free, revisioned readiness view."""
+
+    model, release, channel = _application_setup_target(
+        application_id,
+        release_digest=release_digest,
+        webspace_id=webspace_id,
+    )
+    contract = release.setup_contract
+    if contract is None:
+        return {
+            "schema": "adaos.application.setup_surface.v1",
+            "application_id": application_id,
+            "release_digest": release.release_digest,
+            "available": False,
+            "reason": "release_setup_contract_not_declared",
+            "contract": None,
+            "state": None,
+            "configuration": [],
+        }
+    configuration, values, credential_presence = _setup_configuration_rows(
+        application_id,
+        release,
+        channel=channel,
+    )
+    try:
+        access = get_application_access_surface(
+            application_id,
+            release_digest=release.release_digest,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError):
+        access = {}
+    sections = access.get("sections") if isinstance(access, Mapping) else {}
+    sections = sections if isinstance(sections, Mapping) else {}
+    account_status = {
+        str(item.get("account_id") or item.get("id") or item.get("provider") or ""): (
+            "ready"
+            if str(item.get("status") or "").lower() in {"active", "connected", "ready"}
+            else str(item.get("status") or "missing").lower()
+        )
+        for item in sections.get("connected_accounts") or ()
+        if isinstance(item, Mapping)
+    }
+    permission_status = {
+        str(item.get("id") or ""): (
+            "ready" if bool(model.get("installed")) else "pending"
+        )
+        for item in contract.payload.get("permissions") or ()
+        if str(item.get("id") or "")
+    }
+    placement = model.get("execution_placement") or {}
+    placement_state = str(placement.get("status") or "unknown").lower()
+    if not bool(contract.payload.get("placement", {}).get("required")):
+        placement_status = "not_applicable"
+    elif placement_state in {"active", "ready", "synced"} and not bool(
+        placement.get("partial")
+    ):
+        placement_status = "ready"
+    elif placement_state in {"failed", "unavailable", "degraded"}:
+        placement_status = "failed"
+    elif placement_state in {"not_materialized", "not_reported"}:
+        placement_status = "missing"
+    else:
+        placement_status = "unknown"
+    evidence_ready = bool(
+        next(
+            (
+                item.get("acceptance_evidence_count")
+                for item in list_releases(application_id)
+                if item.get("release_digest") == release.release_digest
+            ),
+            0,
+        )
+    )
+    verification_status = {
+        str(item.get("id") or ""): ("ready" if evidence_ready else "pending")
+        for item in contract.payload.get("verification") or ()
+        if str(item.get("id") or "")
+    }
+    projection = project_setup_state(
+        contract,
+        channel=channel,
+        configuration=values,
+        credential_presence=credential_presence,
+        connected_account_status=account_status,
+        permission_status=permission_status,
+        placement_status=placement_status,
+        verification_status=verification_status,
+    )
+    store = ApplicationSetupStateStore(_state_dir())
+    current = store.read(application_id, channel)
+    state = store.reconcile(
+        projection,
+        expected_revision=int((current or {}).get("revision") or 0),
+    )
+    return {
+        "schema": "adaos.application.setup_surface.v1",
+        "application_id": application_id,
+        "release_digest": release.release_digest,
+        "available": True,
+        "reason": None,
+        "contract": contract.to_dict(),
+        "state": state,
+        "configuration": configuration,
+    }
+
+
+def update_application_configuration(
+    application_id: str,
+    component_ref: str,
+    values: Mapping[str, Any],
+    *,
+    release_digest: str,
+    expected_revision: int,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
+    """CAS-update non-secret setup values for one owned component."""
+
+    _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        f"application-setup:{application_id}:{component_ref}:{expected_revision}",
+        required_capability="applications.apply",
+    )
+    _, release, channel = _application_setup_target(
+        application_id,
+        release_digest=release_digest,
+        webspace_id=webspace_id,
+    )
+    contract = release.setup_contract
+    if contract is None:
+        raise ValueError("Application release does not declare a setup contract")
+    component = next(
+        (
+            dict(item)
+            for item in contract.payload.get("components") or ()
+            if str(item.get("component_ref") or "") == component_ref
+        ),
+        None,
+    )
+    settings = (component or {}).get("settings")
+    if not isinstance(settings, Mapping):
+        raise ValueError("Application component does not declare typed settings")
+    store = ApplicationConfigurationStore(_state_dir(), application_id, component_ref)
+    record = store.read()
+    if channel == "beta":
+        beta = record.get("beta") or {}
+        if not beta.get("active"):
+            raise ValueError("Beta configuration has not been prepared")
+        saved = store.update_beta(
+            candidate_id=str(beta.get("candidate_id") or ""),
+            schema=dict(settings["schema"]),
+            values=dict(values),
+            credentials=dict(beta.get("credentials") or {}),
+            expected_revision=expected_revision,
+        )
+    else:
+        stable = record.get("stable") or {}
+        saved = store.set_stable(
+            release_digest=release.release_digest,
+            schema=dict(settings["schema"]),
+            values=dict(values),
+            credentials=dict(stable.get("credentials") or {}),
+            expected_revision=expected_revision,
+        )
+    return {
+        "configuration": {
+            "component_ref": component_ref,
+            "revision": int(saved.get("revision") or 0),
+            "values": deepcopy(dict(values)),
+        },
+        "setup": get_application_setup(
+            application_id,
+            release_digest=release.release_digest,
+            webspace_id=webspace_id,
+        ),
+    }
+
+
+def update_application_credential(
+    application_id: str,
+    component_ref: str,
+    slot: str,
+    value: str | None,
+    *,
+    release_digest: str,
+    expected_revision: int,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Bind or revoke one declared credential without returning its value/ref."""
+
+    _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        f"application-credential:{application_id}:{component_ref}:{slot}:{expected_revision}",
+        required_capability="applications.apply",
+    )
+    if value is not None and (
+        not isinstance(value, str) or len(value.encode("utf-8")) > 65_536
+    ):
+        raise ValueError("Credential value must be a string of at most 64 KiB")
+    _, release, channel = _application_setup_target(
+        application_id,
+        release_digest=release_digest,
+        webspace_id=webspace_id,
+    )
+    contract = release.setup_contract
+    if contract is None:
+        raise ValueError("Application release does not declare a setup contract")
+    component = next(
+        (
+            dict(item)
+            for item in contract.payload.get("components") or ()
+            if str(item.get("component_ref") or "") == component_ref
+        ),
+        None,
+    )
+    credential = next(
+        (
+            dict(item)
+            for item in (component or {}).get("credentials") or ()
+            if str(item.get("slot") or "") == slot
+        ),
+        None,
+    )
+    if credential is None:
+        raise ValueError("Credential slot is not declared by the release")
+    ctx = require_ctx("sdk.applications")
+    vault = getattr(ctx, "credential_vault", None)
+    if vault is None:
+        raise PermissionError("Node credential vault is unavailable")
+    from adaos.services.personalization_runtime import personalization_access_service
+
+    owner_ref = personalization_access_service(ctx).owner.ref()
+    identity = {
+        "application_id": application_id,
+        "component_ref": component_ref,
+        "owner_ref": owner_ref,
+        "slot": slot,
+        "purpose": str(credential.get("purpose") or ""),
+    }
+    store = ApplicationConfigurationStore(_state_dir(), application_id, component_ref)
+    record = store.read()
+    if int(record.get("revision") or 0) != int(expected_revision):
+        raise ValueError("Configuration changed; reopen setup before applying")
+    if channel == "beta":
+        selected = record.get("beta") or {}
+        if not selected.get("active"):
+            raise ValueError("Beta configuration has not been prepared")
+    else:
+        selected = record.get("stable") or {}
+    settings = (component or {}).get("settings") or {}
+    schema = dict(settings.get("schema") or {"type": "object"})
+    values = deepcopy(dict(selected.get("values") or settings.get("defaults") or {}))
+    credentials = dict(selected.get("credentials") or {})
+    previous_ref = credentials.get(slot)
+    new_ref = None
+    if value is None:
+        credentials.pop(slot, None)
+    else:
+        new_ref = "credential:" + uuid.uuid4().hex
+        payload = json.dumps({"identity": identity, "value": value}, ensure_ascii=False)
+        ApplicationRuntimeCredentials._vault_call(
+            vault,
+            "put",
+            ApplicationRuntimeCredentials._key(identity, new_ref),
+            payload,
+        )
+        credentials[slot] = new_ref
+    try:
+        if channel == "beta":
+            saved = store.update_beta(
+                candidate_id=str(selected.get("candidate_id") or ""),
+                schema=schema,
+                values=values,
+                credentials=credentials,
+                expected_revision=expected_revision,
+            )
+        else:
+            saved = store.set_stable(
+                release_digest=release.release_digest,
+                schema=schema,
+                values=values,
+                credentials=credentials,
+                expected_revision=expected_revision,
+            )
+    except Exception:
+        if new_ref is not None:
+            ApplicationRuntimeCredentials._vault_call(
+                vault,
+                "delete",
+                ApplicationRuntimeCredentials._key(identity, new_ref),
+            )
+        raise
+    if previous_ref and previous_ref != new_ref:
+        ApplicationRuntimeCredentials._vault_call(
+            vault,
+            "delete",
+            ApplicationRuntimeCredentials._key(identity, previous_ref),
+        )
+    return {
+        "credential": {
+            "component_ref": component_ref,
+            "slot": slot,
+            "present": value is not None,
+            "revision": int(saved.get("revision") or 0),
+        },
+        "setup": get_application_setup(
+            application_id,
+            release_digest=release.release_digest,
+            webspace_id=webspace_id,
+        ),
+    }
 
 
 def set_home_pinned(
@@ -1350,7 +1931,11 @@ def reorder_home_application(
 
     remaining = [item for item in current if item not in alias_set]
     bounded_index = max(0, min(int(to_index), len(remaining)))
-    reordered = [*remaining[:bounded_index], application_ref, *remaining[bounded_index:]]
+    reordered = [
+        *remaining[:bounded_index],
+        application_ref,
+        *remaining[bounded_index:],
+    ]
     service.set_icon_order_with_live_room(reordered, webspace)
     return {
         "schema": "adaos.application.home_projection.v1",
@@ -1456,7 +2041,9 @@ def list_releases(application_id: str) -> list[dict[str, Any]]:
             }
         )
         project_release = dict(release.get("project_release") or {})
-        project_release.setdefault("schema", "adaos.artifact.workspace_project_release.v1")
+        project_release.setdefault(
+            "schema", "adaos.artifact.workspace_project_release.v1"
+        )
         project_release["release_digest"] = manifest_digest
         release["project_release"] = project_release
         return [_release_read_model(release)]
@@ -2426,6 +3013,268 @@ def plan_update(
     )
 
 
+def assess_updates(
+    *,
+    application_ids: Sequence[str] | None = None,
+    webspace_id: str = "desktop",
+) -> dict[str, Any]:
+    """Return a bounded, side-effect-free Application update assessment."""
+
+    requested = {
+        str(value or "").strip()
+        for value in (application_ids or ())
+        if str(value or "").strip()
+    }
+    if len(requested) > 100:
+        raise ValueError("application_ids cannot contain more than 100 items")
+    models = list_applications(installed_only=True, webspace_id=webspace_id)
+    if requested:
+        models = [
+            item
+            for item in models
+            if str((item.get("application") or {}).get("application_id") or "")
+            in requested
+        ]
+    if len(models) > 100:
+        raise ValueError(
+            "update assessment is limited to 100 Applications; "
+            "provide application_ids to narrow the scope"
+        )
+    items = []
+    for model in models:
+        application = model.get("application") or {}
+        installation = model.get("installation") or {}
+        active_release = model.get("active_release") or {}
+        effective = model.get("effective_release") or {}
+        target_release = effective.get("release") or {}
+        item = {
+            "application_id": str(application.get("application_id") or ""),
+            "title": str(
+                (application.get("display") or {}).get("title")
+                or application.get("application_id")
+                or ""
+            ),
+            "installed_version": active_release.get("version"),
+            "available_version": target_release.get("version"),
+            "target_release_digest": effective.get("release_digest"),
+            "installation_revision": installation.get("revision"),
+            "update_available": bool(model.get("update_available")),
+            "eligible": bool(
+                model.get("update_available")
+                and installation
+                and application.get("aggregate_backed", True)
+            ),
+            "attention": deepcopy(model.get("attention") or {}),
+        }
+        if model.get("update_available") and not item["eligible"]:
+            item["blocked_reason"] = (
+                "stable_installation_required"
+                if not installation
+                else "aggregate_lifecycle_required"
+            )
+        items.append(item)
+    items.sort(
+        key=lambda item: (
+            not item["eligible"],
+            item["title"].casefold(),
+            item["application_id"],
+        )
+    )
+    return {
+        "schema": "adaos.application.update_assessment.v1",
+        "assessed_count": len(items),
+        "update_count": sum(1 for item in items if item["update_available"]),
+        "eligible_count": sum(1 for item in items if item["eligible"]),
+        "blocked_count": sum(1 for item in items if item.get("blocked_reason")),
+        "items": items,
+    }
+
+
+def plan_available_updates(
+    *,
+    application_ids: Sequence[str] | None,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+    webspace_id: str = "desktop",
+) -> dict[str, Any]:
+    """Create one durable review record containing exact per-Application plans."""
+
+    actor, subnet, _, key = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.plan",
+    )
+    store = ApplicationUpdateBatchStore(_state_dir())
+    batch_id = update_batch_id(subnet, key)
+    try:
+        return store.get(batch_id)
+    except FileNotFoundError:
+        pass
+
+    assessment = assess_updates(
+        application_ids=application_ids,
+        webspace_id=webspace_id,
+    )
+    operations = []
+    skipped = []
+    for item in assessment["items"]:
+        if not item["eligible"]:
+            if item["update_available"]:
+                skipped.append(
+                    {
+                        "application_id": item["application_id"],
+                        "reason": item.get("blocked_reason") or "not_eligible",
+                    }
+                )
+            continue
+        child_key = (
+            "batch-update:"
+            + canonical_payload_digest(
+                {"batch_id": batch_id, "application_id": item["application_id"]}
+            ).split(":", 1)[1]
+        )
+        operation = plan_update(
+            item["application_id"],
+            release_digest=item["target_release_digest"],
+            expected_revision=int(item["installation_revision"] or 0),
+            actor_ref=actor,
+            subnet_ref=subnet,
+            capability="applications.plan",
+            idempotency_key=child_key,
+        )
+        operations.append(
+            {
+                "application_id": item["application_id"],
+                "title": item["title"],
+                "installed_version": item["installed_version"],
+                "available_version": item["available_version"],
+                "operation_id": operation["operation_id"],
+                "operation_plan_digest": operation["plan_digest"],
+                "apply_idempotency_key": child_key,
+                "status": "planned",
+            }
+        )
+    created_at = utc_now()
+    digest_payload = {
+        "schema": "adaos.application.update_batch_plan.v1",
+        "batch_id": batch_id,
+        "subnet_ref": subnet,
+        "webspace_id": str(webspace_id or "desktop").strip() or "desktop",
+        "operations": [
+            {
+                key: item[key]
+                for key in (
+                    "application_id",
+                    "operation_id",
+                    "operation_plan_digest",
+                )
+            }
+            for item in operations
+        ],
+    }
+    batch = {
+        "schema": "adaos.application.update_batch.v1",
+        "batch_id": batch_id,
+        "status": "planned",
+        "actor_ref": actor,
+        "subnet_ref": subnet,
+        "idempotency_key": key,
+        "webspace_id": digest_payload["webspace_id"],
+        "plan_digest": canonical_payload_digest(digest_payload),
+        "assessment": assessment,
+        "operations": operations,
+        "skipped": skipped,
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+    return store.save(batch)
+
+
+def get_update_batch(batch_id: str) -> dict[str, Any]:
+    return ApplicationUpdateBatchStore(_state_dir()).get(batch_id)
+
+
+def apply_update_batch(
+    batch_id: str,
+    *,
+    plan_digest: str,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+    webspace_id: str = "desktop",
+) -> dict[str, Any]:
+    """Apply or resume an exact reviewed update batch with durable partial results."""
+
+    actor, subnet, _, key = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.apply",
+    )
+    store = ApplicationUpdateBatchStore(_state_dir())
+    batch = store.get(batch_id)
+    if batch.get("subnet_ref") != subnet:
+        raise ValueError("Application update batch belongs to another subnet")
+    if batch.get("plan_digest") != str(plan_digest or "").strip():
+        raise ValueError("Application update batch plan digest does not match")
+    if batch.get("status") in {"succeeded", "partial", "failed"}:
+        return batch
+    known_apply_key = str(batch.get("apply_idempotency_key") or "")
+    if known_apply_key and known_apply_key != key:
+        raise ValueError("Application update batch apply identity does not match")
+    batch["apply_idempotency_key"] = key
+    batch["status"] = "applying"
+    batch["updated_at"] = utc_now()
+    store.save(batch)
+
+    outcomes = list(batch.get("operations") or [])
+    for index, item in enumerate(outcomes):
+        if item.get("status") == "succeeded":
+            continue
+        try:
+            receipt = apply_operation(
+                str(item.get("operation_id") or ""),
+                plan_digest=str(item.get("operation_plan_digest") or ""),
+                actor_ref=actor,
+                subnet_ref=subnet,
+                capability="applications.apply",
+                idempotency_key=str(item.get("apply_idempotency_key") or ""),
+                webspace_id=str(webspace_id or batch.get("webspace_id") or "desktop"),
+            )
+            item["status"] = str(receipt.get("status") or "unknown")
+            item["receipt"] = receipt
+        except Exception as exc:  # Preserve each independent result for recovery.
+            item["status"] = "failed"
+            item["error"] = {
+                "type": type(exc).__name__,
+                "message": str(exc)[:500],
+            }
+        outcomes[index] = item
+        batch["operations"] = outcomes
+        batch["updated_at"] = utc_now()
+        store.save(batch)
+
+    succeeded = sum(1 for item in outcomes if item.get("status") == "succeeded")
+    failed = len(outcomes) - succeeded
+    batch["status"] = (
+        "succeeded" if failed == 0 else ("failed" if succeeded == 0 else "partial")
+    )
+    batch["summary"] = {
+        "total": len(outcomes),
+        "succeeded": succeeded,
+        "failed": failed,
+        "skipped": len(batch.get("skipped") or []),
+    }
+    batch["updated_at"] = utc_now()
+    return store.save(batch)
+
+
 def plan_remove(
     application_id: str,
     *,
@@ -2611,12 +3460,15 @@ def explain_plan(operation_id: str) -> dict[str, Any]:
 __all__ = [
     "accept_development_report",
     "apply_operation",
+    "apply_update_batch",
+    "assess_updates",
     "change_application_access",
     "decide_application_access",
     "explain_plan",
     "export_application_access_snapshot",
     "get_application",
     "get_application_access_surface",
+    "get_application_setup",
     "get_application_privacy_report",
     "get_application_update_review",
     "get_development_report",
@@ -2627,6 +3479,7 @@ __all__ = [
     "get_prerelease_rollout",
     "get_runtime_selection",
     "get_subscription",
+    "get_update_batch",
     "get_users_access_surface",
     "grant_application_access",
     "import_application_access_snapshot",
@@ -2634,6 +3487,8 @@ __all__ = [
     "list_application_access",
     "list_application_access_audit",
     "list_application_access_reviews",
+    "list_application_components",
+    "list_application_placements",
     "list_applications",
     "list_catalog",
     "list_development_projects",
@@ -2648,6 +3503,7 @@ __all__ = [
     "plan_remove",
     "plan_trial_link_install",
     "plan_update",
+    "plan_available_updates",
     "plan_update_track",
     "poll_operation_events",
     "profile_application_permissions",
@@ -2669,6 +3525,8 @@ __all__ = [
     "submit_development_report_appeal",
     "sync_development_reports",
     "triage_development_report",
+    "update_application_configuration",
+    "update_application_credential",
     "verify_application_release",
     "verify_development_report_release",
 ]

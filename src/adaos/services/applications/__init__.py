@@ -75,6 +75,12 @@ from .source_projection import (
     StableSourceProjectionService,
 )
 from .rollout import ApplicationRolloutError, ApplicationRolloutService
+from .setup import (
+    ApplicationSetupConflict,
+    ApplicationSetupStateStore,
+    compile_setup_contract,
+    project_setup_state,
+)
 
 __all__ = [
     "ApplicationChannelConflict",
@@ -110,6 +116,8 @@ __all__ = [
     "HttpDevelopmentReportRelayPeer",
     "ApplicationService",
     "ApplicationServiceError",
+    "ApplicationSetupConflict",
+    "ApplicationSetupStateStore",
     "ApplicationStore",
     "ApplicationStoreError",
     "DistributionOutcomeUnknown",
@@ -144,4 +152,6 @@ __all__ = [
     "register_development_report_service_factory",
     "register_stable_source_publisher",
     "resolve_application_distribution_service",
+    "compile_setup_contract",
+    "project_setup_state",
 ]

@@ -13,7 +13,13 @@ from adaos.build_info import BUILD_INFO
 from adaos.services.agent_context import get_ctx
 from adaos.services.id_gen import new_id
 
-from .audit import append_audit_event, list_audit_events, target_activity_feed, target_capability_usage_summary, target_operational_timeline
+from .audit import (
+    append_audit_event,
+    list_audit_events,
+    target_activity_feed,
+    target_capability_usage_summary,
+    target_operational_timeline,
+)
 from .descriptor_search import get_descriptor_item as get_registry_descriptor_item
 from .descriptor_search import search_descriptors as search_descriptor_registry
 from .infra_access import (
@@ -48,7 +54,11 @@ from .memory_reports import (
     list_memory_profile_reports,
 )
 from .policy import evaluate_tool_access
-from .registry import descriptor_registry_summary, get_descriptor_set, list_descriptor_sets
+from .registry import (
+    descriptor_registry_summary,
+    get_descriptor_set,
+    list_descriptor_sets,
+)
 from .reports import control_report_registry_summary, list_control_reports
 from .sessions import (
     DEFAULT_CAPABILITY_PROFILES,
@@ -61,15 +71,25 @@ from .sessions import (
 from .targets import get_managed_target as get_target_descriptor
 from .targets import list_managed_targets as list_target_descriptors
 from .targets import managed_target_registry_summary
-from .tokens import access_token_registry_summary, get_access_token_record, issue_access_token, list_access_tokens, revoke_access_token
+from .tokens import (
+    access_token_registry_summary,
+    get_access_token_record,
+    issue_access_token,
+    list_access_tokens,
+    revoke_access_token,
+)
 from .applications_plane import contracts as application_tool_contracts
 from .applications_plane import handlers as application_tool_handlers
 from .users_access_plane import contracts as users_access_tool_contracts
 from .users_access_plane import handlers as users_access_tool_handlers
 
 
-_DESCRIPTIVE_TOOL_CACHE_TTL_S = max(0.0, float(os.getenv("ADAOS_ROOT_MCP_DESCRIPTIVE_CACHE_TTL_S", "30") or "30"))
-_DESCRIPTIVE_TOOL_CACHE_MAX = max(16, int(os.getenv("ADAOS_ROOT_MCP_DESCRIPTIVE_CACHE_MAX", "128") or "128"))
+_DESCRIPTIVE_TOOL_CACHE_TTL_S = max(
+    0.0, float(os.getenv("ADAOS_ROOT_MCP_DESCRIPTIVE_CACHE_TTL_S", "30") or "30")
+)
+_DESCRIPTIVE_TOOL_CACHE_MAX = max(
+    16, int(os.getenv("ADAOS_ROOT_MCP_DESCRIPTIVE_CACHE_MAX", "128") or "128")
+)
 _DESCRIPTIVE_TOOL_CACHE_LOCK = threading.RLock()
 _DESCRIPTIVE_TOOL_CACHE: dict[str, tuple[float, Any]] = {}
 _DESCRIPTIVE_TOOL_IDS = {
@@ -119,7 +139,9 @@ def _run_async_from_sync(coro: Any) -> Any:
         except BaseException as exc:  # pragma: no cover - re-raised in caller thread
             box["error"] = exc
 
-    thread = threading.Thread(target=_runner, name="root-mcp-async-handler", daemon=True)
+    thread = threading.Thread(
+        target=_runner, name="root-mcp-async-handler", daemon=True
+    )
     thread.start()
     thread.join()
     if "error" in box:
@@ -135,21 +157,33 @@ def _mcp_context(arguments: Mapping[str, Any]) -> dict[str, Any]:
 def _mcp_root_scope(arguments: Mapping[str, Any]) -> dict[str, Any]:
     context = _mcp_context(arguments)
     scope = context.get("scope") if isinstance(context.get("scope"), Mapping) else {}
-    auth_context = context.get("auth_context") if isinstance(context.get("auth_context"), Mapping) else {}
-    subnet_id = _text_or_none(scope.get("subnet_id")) or _text_or_none(auth_context.get("subnet_id"))
+    auth_context = (
+        context.get("auth_context")
+        if isinstance(context.get("auth_context"), Mapping)
+        else {}
+    )
+    subnet_id = _text_or_none(scope.get("subnet_id")) or _text_or_none(
+        auth_context.get("subnet_id")
+    )
     zone = _text_or_none(scope.get("zone")) or _text_or_none(auth_context.get("zone"))
-    target_id = _text_or_none(arguments.get("target_id")) or _text_or_none(scope.get("target_id"))
+    target_id = _text_or_none(arguments.get("target_id")) or _text_or_none(
+        scope.get("target_id")
+    )
     if target_id is None:
         allowed = auth_context.get("allowed_target_ids")
         if isinstance(allowed, list):
-            target_id = next((str(item).strip() for item in allowed if str(item or "").strip()), None)
+            target_id = next(
+                (str(item).strip() for item in allowed if str(item or "").strip()), None
+            )
     if target_id is None and subnet_id:
         target_id = f"hub:{subnet_id}"
     out = {"subnet_id": subnet_id, "zone": zone, "target_id": target_id}
     return {k: v for k, v in out.items() if v}
 
 
-def _locale_order(*, request_locale: str | None, preferred_locales: list[str]) -> list[str]:
+def _locale_order(
+    *, request_locale: str | None, preferred_locales: list[str]
+) -> list[str]:
     order: list[str] = []
     for item in [request_locale, *preferred_locales, "und"]:
         token = str(item or "").strip().lower()
@@ -166,13 +200,17 @@ def _root_host_summary() -> dict[str, Any]:
         "node_id": getattr(conf, "node_id", None),
         "subnet_id": getattr(conf, "subnet_id", None),
         "host_role": role,
-        "root_hosting_mode": "embedded_dev_root" if role == "hub" else "external_root_compatible",
+        "root_hosting_mode": "embedded_dev_root"
+        if role == "hub"
+        else "external_root_compatible",
     }
 
 
 def plane_registry() -> dict[str, Any]:
     descriptor = get_descriptor_set("mcp_plane_registry")
-    payload = descriptor.get("payload") if isinstance(descriptor.get("payload"), dict) else {}
+    payload = (
+        descriptor.get("payload") if isinstance(descriptor.get("payload"), dict) else {}
+    )
     planes = payload.get("planes") if isinstance(payload.get("planes"), list) else []
     return {
         "available": bool(payload.get("available", True)),
@@ -196,7 +234,9 @@ def get_plane(plane_id: str) -> dict[str, Any] | None:
 
 
 def _contract_plane_id(contract: RootMcpToolContract) -> str:
-    published_by = str((contract.metadata or {}).get("published_by") or "").strip().lower()
+    published_by = (
+        str((contract.metadata or {}).get("published_by") or "").strip().lower()
+    )
     if published_by.startswith("plane:"):
         return published_by.split(":", 1)[1].strip() or "foundation"
     if contract.id.startswith("adaos_dev."):
@@ -236,7 +276,11 @@ def _foundation_summary() -> dict[str, Any]:
                 "scope": "root-hosted contracts and managed-target descriptors before target-side infra_access_skill execution",
             },
         },
-        "planes": {str(item.get("plane_id") or ""): item for item in plane_items if str(item.get("plane_id") or "").strip()},
+        "planes": {
+            str(item.get("plane_id") or ""): item
+            for item in plane_items
+            if str(item.get("plane_id") or "").strip()
+        },
         "entrypoints": {
             "foundation": "/v1/root/mcp/foundation",
             "contracts": "/v1/root/mcp/contracts",
@@ -278,7 +322,11 @@ def _foundation_summary() -> dict[str, Any]:
         "plane_registry": {
             "available": True,
             "plane_count": len(plane_items),
-            "plane_ids": [str(item.get("plane_id") or "") for item in plane_items if str(item.get("plane_id") or "").strip()],
+            "plane_ids": [
+                str(item.get("plane_id") or "")
+                for item in plane_items
+                if str(item.get("plane_id") or "").strip()
+            ],
         },
         "descriptor_cache": {
             "enabled": True,
@@ -313,7 +361,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             summary="Return current root MCP tool contracts, including operational placeholders.",
             input_schema=schema_object(
                 properties={
-                    "surface": {"type": "string", "enum": [item.value for item in RootMcpSurface]},
+                    "surface": {
+                        "type": "string",
+                        "enum": [item.value for item in RootMcpSurface],
+                    },
                     "plane_id": {"type": "string"},
                 },
             ),
@@ -336,7 +387,9 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             title="Get MCP plane",
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Return one published Root MCP plane descriptor and its current catalog hints.",
-            input_schema=schema_object(properties={"plane_id": {"type": "string"}}, required=["plane_id"]),
+            input_schema=schema_object(
+                properties={"plane_id": {"type": "string"}}, required=["plane_id"]
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={"published_by": "root", "handler": "get_plane"},
@@ -375,8 +428,16 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(
                 properties={
                     "query": {"type": "string", "minLength": 1},
-                    "descriptor_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
-                    "kinds": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
+                    "descriptor_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 16,
+                    },
+                    "kinds": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 16,
+                    },
                     "limit": {"type": "integer", "minimum": 1, "maximum": 64},
                 },
                 required=["query"],
@@ -430,7 +491,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.scenario_contracts",
-            metadata={"published_by": "root", "handler": "get_scenario_manifest_schema"},
+            metadata={
+                "published_by": "root",
+                "handler": "get_scenario_manifest_schema",
+            },
         ),
         RootMcpToolContract(
             id="adaos_dev.get_architecture_catalog",
@@ -440,7 +504,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:adaos_dev", "handler": "adaos_dev_get_architecture_catalog"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "adaos_dev_get_architecture_catalog",
+            },
         ),
         RootMcpToolContract(
             id="adaos_dev.get_sdk_metadata",
@@ -459,7 +526,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:adaos_dev", "handler": "adaos_dev_get_sdk_metadata"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "adaos_dev_get_sdk_metadata",
+            },
         ),
         RootMcpToolContract(
             id="adaos_dev.get_template_catalog",
@@ -469,7 +539,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:adaos_dev", "handler": "adaos_dev_get_template_catalog"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "adaos_dev_get_template_catalog",
+            },
         ),
         RootMcpToolContract(
             id="adaos_dev.get_public_skill_registry",
@@ -479,7 +552,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:adaos_dev", "handler": "adaos_dev_get_public_skill_registry"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "adaos_dev_get_public_skill_registry",
+            },
         ),
         RootMcpToolContract(
             id="adaos_dev.get_public_scenario_registry",
@@ -489,7 +565,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:adaos_dev", "handler": "adaos_dev_get_public_scenario_registry"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "adaos_dev_get_public_scenario_registry",
+            },
         ),
         RootMcpToolContract(
             id="adaos_dev.get_named_entity_registry",
@@ -505,7 +584,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:adaos_dev", "handler": "adaos_dev_get_named_entity_registry"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "adaos_dev_get_named_entity_registry",
+            },
         ),
         RootMcpToolContract(
             id="builder.get_context",
@@ -525,7 +607,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:adaos_dev", "handler": "builder_get_context"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "builder_get_context",
+            },
         ),
         RootMcpToolContract(
             id="builder.source_recovery.plan",
@@ -537,7 +622,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             input_schema=schema_object(
                 properties={
-                    "kind": {"type": "string", "enum": ["project", "scenario", "skill"]},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["project", "scenario", "skill"],
+                    },
                     "artifact_id": {"type": "string"},
                     "project_id": {"type": "string"},
                 },
@@ -560,7 +648,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             input_schema=schema_object(
                 properties={
-                    "kind": {"type": "string", "enum": ["project", "scenario", "skill"]},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["project", "scenario", "skill"],
+                    },
                     "artifact_id": {"type": "string"},
                     "project_id": {"type": "string"},
                     "expected_plan_digest": {
@@ -615,7 +706,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.feedback",
-            metadata={"published_by": "plane:adaos_dev", "handler": "development_feedback_list"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "development_feedback_list",
+            },
         ),
         RootMcpToolContract(
             id="development_feedback.show",
@@ -628,7 +722,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.feedback",
-            metadata={"published_by": "plane:adaos_dev", "handler": "development_feedback_show"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "development_feedback_show",
+            },
         ),
         RootMcpToolContract(
             id="development_feedback.qualification_preview",
@@ -705,7 +802,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.write.feedback",
             side_effects="write",
-            metadata={"published_by": "plane:adaos_dev", "handler": "development_feedback_capture"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "development_feedback_capture",
+            },
         ),
         RootMcpToolContract(
             id="development_feedback.operate",
@@ -735,7 +835,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.write.feedback",
             side_effects="write",
-            metadata={"published_by": "plane:adaos_dev", "handler": "development_feedback_operate"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "development_feedback_operate",
+            },
         ),
         RootMcpToolContract(
             id="dev_ticket.list",
@@ -792,7 +895,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.tickets",
-            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_core_backlog"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "dev_ticket_core_backlog",
+            },
         ),
         RootMcpToolContract(
             id="dev_ticket.events",
@@ -820,7 +926,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.tickets",
-            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_events"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "dev_ticket_events",
+            },
         ),
         RootMcpToolContract(
             id="dev_ticket.create",
@@ -847,7 +956,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.write.tickets",
             side_effects="write",
-            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_create"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "dev_ticket_create",
+            },
         ),
         RootMcpToolContract(
             id="dev_ticket.operate",
@@ -859,7 +971,20 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "ticket_id": {"type": "string"},
                     "operation": {
                         "type": "string",
-                        "enum": ["claim", "start", "comment", "defer", "resolve", "verify", "close", "reopen", "duplicate", "related", "external_draft", "core_transition"],
+                        "enum": [
+                            "claim",
+                            "start",
+                            "comment",
+                            "defer",
+                            "resolve",
+                            "verify",
+                            "close",
+                            "reopen",
+                            "duplicate",
+                            "related",
+                            "external_draft",
+                            "core_transition",
+                        ],
                     },
                     "actor": {"type": "string"},
                     "payload": {"type": "object"},
@@ -871,7 +996,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.write.tickets",
             side_effects="write",
-            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_operate"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "dev_ticket_operate",
+            },
         ),
         RootMcpToolContract(
             id="dev_ticket.artifacts",
@@ -881,7 +1009,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(properties={"ticket_id": {"type": "string"}}),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.ticket_artifacts",
-            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_artifacts"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "dev_ticket_artifacts",
+            },
         ),
         RootMcpToolContract(
             id="dev_ticket.get_artifact",
@@ -894,7 +1025,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.ticket_artifacts",
-            metadata={"published_by": "plane:adaos_dev", "handler": "dev_ticket_get_artifact"},
+            metadata={
+                "published_by": "plane:adaos_dev",
+                "handler": "dev_ticket_get_artifact",
+            },
         ),
         RootMcpToolContract(
             id="context.search",
@@ -913,7 +1047,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="context.read",
-            metadata={"published_by": "plane:context_control", "handler": "context_search"},
+            metadata={
+                "published_by": "plane:context_control",
+                "handler": "context_search",
+            },
         ),
         RootMcpToolContract(
             id="context.get_capsule",
@@ -926,7 +1063,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="context.read",
-            metadata={"published_by": "plane:context_control", "handler": "context_get_capsule"},
+            metadata={
+                "published_by": "plane:context_control",
+                "handler": "context_get_capsule",
+            },
         ),
         RootMcpToolContract(
             id="context.resolve",
@@ -946,7 +1086,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="context.read",
-            metadata={"published_by": "plane:context_control", "handler": "context_resolve"},
+            metadata={
+                "published_by": "plane:context_control",
+                "handler": "context_resolve",
+            },
         ),
         RootMcpToolContract(
             id="context.plan",
@@ -963,7 +1106,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="context.read",
-            metadata={"published_by": "plane:context_control", "handler": "context_plan"},
+            metadata={
+                "published_by": "plane:context_control",
+                "handler": "context_plan",
+            },
         ),
         RootMcpToolContract(
             id="context.compile",
@@ -976,24 +1122,35 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "plan_id": {"type": "string"},
                     "plan_ref": {"type": "string"},
                     "base_packet_ref": {"type": "string"},
-                    "output_format": {"type": "string", "enum": ["json", "min_json", "jsonl", "toon"]},
+                    "output_format": {
+                        "type": "string",
+                        "enum": ["json", "min_json", "jsonl", "toon"],
+                    },
                     "role_authority": {"type": "object"},
                     "output_contract": {"type": "object"},
                 },
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="context.read",
-            metadata={"published_by": "plane:context_control", "handler": "context_compile"},
+            metadata={
+                "published_by": "plane:context_control",
+                "handler": "context_compile",
+            },
         ),
         RootMcpToolContract(
             id="context.inspect",
             title="Inspect context attribution",
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Inspect selected, omitted, denied, cost, cache, and validation receipts for an agent run.",
-            input_schema=schema_object(properties={"run_ref": {"type": "string"}}, required=["run_ref"]),
+            input_schema=schema_object(
+                properties={"run_ref": {"type": "string"}}, required=["run_ref"]
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="context.read",
-            metadata={"published_by": "plane:context_control", "handler": "context_inspect"},
+            metadata={
+                "published_by": "plane:context_control",
+                "handler": "context_inspect",
+            },
         ),
         RootMcpToolContract(
             id="context.record_receipt",
@@ -1004,7 +1161,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="context.receipt.write",
             side_effects="write",
-            metadata={"published_by": "plane:context_control", "handler": "context_record_receipt"},
+            metadata={
+                "published_by": "plane:context_control",
+                "handler": "context_record_receipt",
+            },
         ),
         RootMcpToolContract(
             id="context.propose_memory",
@@ -1015,17 +1175,25 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="context.memory.propose",
             side_effects="write",
-            metadata={"published_by": "plane:context_control", "handler": "context_propose_memory"},
+            metadata={
+                "published_by": "plane:context_control",
+                "handler": "context_propose_memory",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.get_status",
             title="Get Skill Factory status",
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Return Root Skill Factory queue, forge policy, dev-node registry, and ready-event diagnostics.",
-            input_schema=schema_object(properties={"include_tasks": {"type": "boolean"}}),
+            input_schema=schema_object(
+                properties={"include_tasks": {"type": "boolean"}}
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.read.status",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_get_status"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_get_status",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.submit_realize_request",
@@ -1044,7 +1212,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.submit.realize_request",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_submit_realize_request"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_submit_realize_request",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.register_dev_node",
@@ -1058,7 +1229,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.dev_node.register",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_register_dev_node"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_register_dev_node",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.heartbeat",
@@ -1078,18 +1252,26 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.dev_node.heartbeat",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_heartbeat"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_heartbeat",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.poll_assignment",
             title="Poll task assignment",
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Poll Root for the next queued Skill Factory task assignment for a dev node.",
-            input_schema=schema_object(properties={"node_id": {"type": "string"}}, required=["node_id"]),
+            input_schema=schema_object(
+                properties={"node_id": {"type": "string"}}, required=["node_id"]
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.dev_task.poll",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_poll_assignment"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_poll_assignment",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.report_progress",
@@ -1111,7 +1293,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.dev_task.report",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_report_progress"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_report_progress",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.complete_task",
@@ -1125,7 +1310,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.dev_task.report",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_complete_task"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_complete_task",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.fail_task",
@@ -1139,7 +1327,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.dev_task.report",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_fail_task"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_fail_task",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.cancel_task",
@@ -1147,13 +1338,19 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Cancel a queued or active Skill Factory task.",
             input_schema=schema_object(
-                properties={"task_id": {"type": "string"}, "reason": {"type": "string"}},
+                properties={
+                    "task_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
                 required=["task_id"],
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.dev_task.cancel",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_cancel_task"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_cancel_task",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.set_queue_paused",
@@ -1161,14 +1358,20 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Pause or resume Skill Factory task assignment without deleting queued tasks.",
             input_schema=schema_object(
-                properties={"paused": {"type": "boolean"}, "reason": {"type": "string"}},
+                properties={
+                    "paused": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                },
                 required=["paused"],
                 additional_properties=True,
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.operator.control",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_set_queue_paused"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_set_queue_paused",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.drain_dev_node",
@@ -1176,14 +1379,20 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Stop assigning new work to a registered dev node.",
             input_schema=schema_object(
-                properties={"node_id": {"type": "string"}, "reason": {"type": "string"}},
+                properties={
+                    "node_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
                 required=["node_id"],
                 additional_properties=True,
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.operator.control",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_drain_dev_node"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_drain_dev_node",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.quarantine_dev_node",
@@ -1191,14 +1400,20 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Quarantine a dev node so it cannot receive new Skill Factory assignments.",
             input_schema=schema_object(
-                properties={"node_id": {"type": "string"}, "reason": {"type": "string"}},
+                properties={
+                    "node_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
                 required=["node_id"],
                 additional_properties=True,
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.operator.control",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_quarantine_dev_node"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_quarantine_dev_node",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.revoke_dev_node_credentials",
@@ -1206,14 +1421,20 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Mark a dev node's task credentials as revoked and prevent further assignment polling.",
             input_schema=schema_object(
-                properties={"node_id": {"type": "string"}, "reason": {"type": "string"}},
+                properties={
+                    "node_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
                 required=["node_id"],
                 additional_properties=True,
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.operator.control",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_revoke_dev_node_credentials"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_revoke_dev_node_credentials",
+            },
         ),
         RootMcpToolContract(
             id="skill_factory.retry_task",
@@ -1232,7 +1453,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="skill_factory.operator.control",
             side_effects="write",
-            metadata={"published_by": "plane:skill_factory_task", "handler": "skill_factory_retry_task"},
+            metadata={
+                "published_by": "plane:skill_factory_task",
+                "handler": "skill_factory_retry_task",
+            },
         ),
         RootMcpToolContract(
             id="nlu_authoring.get_context",
@@ -1251,7 +1475,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_get_context"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "nlu_authoring_get_context",
+            },
         ),
         RootMcpToolContract(
             id="nlu_authoring.check_phrase",
@@ -1276,7 +1503,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             side_effects="trace_optional",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_check_phrase"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "nlu_authoring_check_phrase",
+            },
         ),
         RootMcpToolContract(
             id="nlu_authoring.get_trace",
@@ -1294,7 +1524,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_get_trace"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "nlu_authoring_get_trace",
+            },
         ),
         RootMcpToolContract(
             id="nlu_authoring.get_dialog_context",
@@ -1312,7 +1545,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_get_dialog_context"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "nlu_authoring_get_dialog_context",
+            },
         ),
         RootMcpToolContract(
             id="nlu_authoring.get_recent_failures",
@@ -1328,7 +1564,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_get_recent_failures"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "nlu_authoring_get_recent_failures",
+            },
         ),
         RootMcpToolContract(
             id="desktop.registry.lookup",
@@ -1344,7 +1583,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "desktop_registry_lookup"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "desktop_registry_lookup",
+            },
         ),
         RootMcpToolContract(
             id="skill.describe_nlu",
@@ -1360,7 +1602,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "skill_describe_nlu"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "skill_describe_nlu",
+            },
         ),
         RootMcpToolContract(
             id="scenario.describe_nlu",
@@ -1376,7 +1621,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "scenario_describe_nlu"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "scenario_describe_nlu",
+            },
         ),
         RootMcpToolContract(
             id="sdk.describe_surface",
@@ -1391,7 +1639,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "sdk_describe_surface"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "sdk_describe_surface",
+            },
         ),
         RootMcpToolContract(
             id="nlu_authoring.list_templates",
@@ -1402,14 +1653,20 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                 properties={
                     "target_id": {"type": "string"},
                     "webspace_id": {"type": "string"},
-                    "owner_type": {"type": "string", "enum": ["skill", "scenario", "system_action"]},
+                    "owner_type": {
+                        "type": "string",
+                        "enum": ["skill", "scenario", "system_action"],
+                    },
                     "owner_id": {"type": "string"},
                     "include_system_actions": {"type": "boolean"},
                 },
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_list_templates"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "nlu_authoring_list_templates",
+            },
         ),
         RootMcpToolContract(
             id="nlu_authoring.list_training_targets",
@@ -1425,7 +1682,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_list_training_targets"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "nlu_authoring_list_training_targets",
+            },
         ),
         RootMcpToolContract(
             id="nlu_authoring.preview_template_patch",
@@ -1436,10 +1696,16 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                 properties={
                     "target_id": {"type": "string"},
                     "webspace_id": {"type": "string"},
-                    "operation": {"type": "string", "enum": ["add_regex_rule", "save_example"]},
+                    "operation": {
+                        "type": "string",
+                        "enum": ["add_regex_rule", "save_example"],
+                    },
                     "target": {
                         "type": "object",
-                        "properties": {"type": {"type": "string"}, "id": {"type": "string"}},
+                        "properties": {
+                            "type": {"type": "string"},
+                            "id": {"type": "string"},
+                        },
                         "additionalProperties": True,
                     },
                     "intent": {"type": "string"},
@@ -1452,7 +1718,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_preview_template_patch"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "nlu_authoring_preview_template_patch",
+            },
         ),
         RootMcpToolContract(
             id="desktop.preview_action",
@@ -1471,7 +1740,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "desktop_preview_action"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "desktop_preview_action",
+            },
         ),
         RootMcpToolContract(
             id="nlu_authoring.add_device_alias",
@@ -1492,7 +1764,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.write.named_entities",
             side_effects="write",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_add_device_alias"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "nlu_authoring_add_device_alias",
+            },
         ),
         RootMcpToolContract(
             id="nlu_authoring.remove_device_alias",
@@ -1513,7 +1788,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.write.named_entities",
             side_effects="write",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_remove_device_alias"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "nlu_authoring_remove_device_alias",
+            },
         ),
         RootMcpToolContract(
             id="nlu_authoring.deprecate_device_alias",
@@ -1534,34 +1812,51 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.write.named_entities",
             side_effects="write",
-            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_deprecate_device_alias"},
+            metadata={
+                "published_by": "plane:nlu_authoring",
+                "handler": "nlu_authoring_deprecate_device_alias",
+            },
         ),
         RootMcpToolContract(
             id="hub.get_status",
             title="Get hub status",
             surface=RootMcpSurface.OPERATIONS,
             summary="Return the current managed-target descriptor and latest reported control state.",
-            input_schema=schema_object(properties={"target_id": {"type": "string"}}, required=["target_id"]),
+            input_schema=schema_object(
+                properties={"target_id": {"type": "string"}}, required=["target_id"]
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.get_status",
-            metadata={"published_by": "root", "handler": "hub_get_status", "environment_scope": "test-first"},
+            metadata={
+                "published_by": "root",
+                "handler": "hub_get_status",
+                "environment_scope": "test-first",
+            },
         ),
         RootMcpToolContract(
             id="hub.get_runtime_summary",
             title="Get hub runtime summary",
             surface=RootMcpSurface.OPERATIONS,
             summary="Return the latest reported runtime and transport summary for a managed target.",
-            input_schema=schema_object(properties={"target_id": {"type": "string"}}, required=["target_id"]),
+            input_schema=schema_object(
+                properties={"target_id": {"type": "string"}}, required=["target_id"]
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.get_runtime_summary",
-            metadata={"published_by": "root", "handler": "hub_get_runtime_summary", "environment_scope": "test-first"},
+            metadata={
+                "published_by": "root",
+                "handler": "hub_get_runtime_summary",
+                "environment_scope": "test-first",
+            },
         ),
         RootMcpToolContract(
             id="hub.get_operational_surface",
             title="Get target operational surface",
             surface=RootMcpSurface.OPERATIONS,
             summary="Inspect the published infra_access_skill surface, including web UI, observability, and token-management state.",
-            input_schema=schema_object(properties={"target_id": {"type": "string"}}, required=["target_id"]),
+            input_schema=schema_object(
+                properties={"target_id": {"type": "string"}}, required=["target_id"]
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.get_operational_surface",
             metadata={
@@ -1617,7 +1912,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="Return a bounded tail of local pilot hub logs through the infra_access_skill local adapter.",
             input_schema=schema_object(
-                properties={"target_id": {"type": "string"}, "tail": {"type": "integer", "minimum": 1}},
+                properties={
+                    "target_id": {"type": "string"},
+                    "tail": {"type": "integer", "minimum": 1},
+                },
                 required=["target_id"],
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
@@ -1634,7 +1932,9 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             title="Run hub healthchecks",
             surface=RootMcpSurface.OPERATIONS,
             summary="Run bounded local pilot healthchecks through the infra_access_skill local adapter.",
-            input_schema=schema_object(properties={"target_id": {"type": "string"}}, required=["target_id"]),
+            input_schema=schema_object(
+                properties={"target_id": {"type": "string"}}, required=["target_id"]
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.run_healthchecks",
             metadata={
@@ -1650,7 +1950,10 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="Restart an allowlisted local pilot service through the infra_access_skill local adapter.",
             input_schema=schema_object(
-                properties={"target_id": {"type": "string"}, "service": {"type": "string"}},
+                properties={
+                    "target_id": {"type": "string"},
+                    "service": {"type": "string"},
+                },
                 required=["target_id", "service"],
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
@@ -1690,7 +1993,9 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             title="Get test results",
             surface=RootMcpSurface.OPERATIONS,
             summary="Return the latest stored local pilot test results for a managed target.",
-            input_schema=schema_object(properties={"target_id": {"type": "string"}}, required=["target_id"]),
+            input_schema=schema_object(
+                properties={"target_id": {"type": "string"}}, required=["target_id"]
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.get_test_results",
             metadata={
@@ -1728,7 +2033,9 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             title="Rollback last test deploy",
             surface=RootMcpSurface.OPERATIONS,
             summary="Rollback the latest bounded local-pilot deployment ref through the infra_access_skill local adapter.",
-            input_schema=schema_object(properties={"target_id": {"type": "string"}}, required=["target_id"]),
+            input_schema=schema_object(
+                properties={"target_id": {"type": "string"}}, required=["target_id"]
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.rollback_last_test_deploy",
             side_effects="write",
@@ -1797,7 +2104,9 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             title="List 360log snapshots",
             surface=RootMcpSurface.OPERATIONS,
             summary="List persisted 360log flight-recorder snapshots.",
-            input_schema=schema_object(properties={"limit": {"type": "integer", "minimum": 1, "maximum": 100}}),
+            input_schema=schema_object(
+                properties={"limit": {"type": "integer", "minimum": 1, "maximum": 100}}
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="audit.read",
             metadata={"published_by": "root", "handler": "list_360log_snapshots"},
@@ -1811,7 +2120,11 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                 properties={
                     "snapshot_id": {"type": "string"},
                     "include_timeline": {"type": "boolean"},
-                    "timeline_limit": {"type": "integer", "minimum": 1, "maximum": 2000},
+                    "timeline_limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 2000,
+                    },
                     "include_sources": {"type": "boolean"},
                 },
                 required=["snapshot_id"],
@@ -1968,10 +2281,16 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             title="Get profiler status",
             surface=RootMcpSurface.OPERATIONS,
             summary="Return root-published profiler status and latest session summary for a managed target.",
-            input_schema=schema_object(properties={"target_id": {"type": "string"}}, required=["target_id"]),
+            input_schema=schema_object(
+                properties={"target_id": {"type": "string"}}, required=["target_id"]
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.memory.get_status",
-            metadata={"published_by": "plane:profile_ops", "handler": "hub_memory_get_status", "environment_scope": "test-first"},
+            metadata={
+                "published_by": "plane:profile_ops",
+                "handler": "hub_memory_get_status",
+                "environment_scope": "test-first",
+            },
         ),
         RootMcpToolContract(
             id="hub.memory.list_sessions",
@@ -1988,7 +2307,11 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.memory.list_sessions",
-            metadata={"published_by": "plane:profile_ops", "handler": "hub_memory_list_sessions", "environment_scope": "test-first"},
+            metadata={
+                "published_by": "plane:profile_ops",
+                "handler": "hub_memory_list_sessions",
+                "environment_scope": "test-first",
+            },
         ),
         RootMcpToolContract(
             id="hub.memory.get_session",
@@ -1996,22 +2319,35 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="Return one root-published profiler session for a managed target.",
             input_schema=schema_object(
-                properties={"target_id": {"type": "string"}, "session_id": {"type": "string"}},
+                properties={
+                    "target_id": {"type": "string"},
+                    "session_id": {"type": "string"},
+                },
                 required=["target_id", "session_id"],
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.memory.get_session",
-            metadata={"published_by": "plane:profile_ops", "handler": "hub_memory_get_session", "environment_scope": "test-first"},
+            metadata={
+                "published_by": "plane:profile_ops",
+                "handler": "hub_memory_get_session",
+                "environment_scope": "test-first",
+            },
         ),
         RootMcpToolContract(
             id="hub.memory.list_incidents",
             title="List profiler incidents",
             surface=RootMcpSurface.OPERATIONS,
             summary="List suspected profiler incidents for a managed target.",
-            input_schema=schema_object(properties={"target_id": {"type": "string"}}, required=["target_id"]),
+            input_schema=schema_object(
+                properties={"target_id": {"type": "string"}}, required=["target_id"]
+            ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.memory.list_incidents",
-            metadata={"published_by": "plane:profile_ops", "handler": "hub_memory_list_incidents", "environment_scope": "test-first"},
+            metadata={
+                "published_by": "plane:profile_ops",
+                "handler": "hub_memory_list_incidents",
+                "environment_scope": "test-first",
+            },
         ),
         RootMcpToolContract(
             id="hub.memory.list_artifacts",
@@ -2019,12 +2355,19 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="List root-published profiler artifacts for a profiler session.",
             input_schema=schema_object(
-                properties={"target_id": {"type": "string"}, "session_id": {"type": "string"}},
+                properties={
+                    "target_id": {"type": "string"},
+                    "session_id": {"type": "string"},
+                },
                 required=["target_id", "session_id"],
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.memory.list_artifacts",
-            metadata={"published_by": "plane:profile_ops", "handler": "hub_memory_list_artifacts", "environment_scope": "test-first"},
+            metadata={
+                "published_by": "plane:profile_ops",
+                "handler": "hub_memory_list_artifacts",
+                "environment_scope": "test-first",
+            },
         ),
         RootMcpToolContract(
             id="hub.memory.get_artifact",
@@ -2043,7 +2386,11 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="hub.memory.get_artifact",
-            metadata={"published_by": "plane:profile_ops", "handler": "hub_memory_get_artifact", "environment_scope": "test-first"},
+            metadata={
+                "published_by": "plane:profile_ops",
+                "handler": "hub_memory_get_artifact",
+                "environment_scope": "test-first",
+            },
         ),
         RootMcpToolContract(
             id="hub.memory.start_profile",
@@ -2141,7 +2488,9 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
     ]
 
 
-def list_tool_contracts(*, surface: str | None = None, plane_id: str | None = None) -> list[RootMcpToolContract]:
+def list_tool_contracts(
+    *, surface: str | None = None, plane_id: str | None = None
+) -> list[RootMcpToolContract]:
     items = [
         *_implemented_tool_contracts(),
         *application_tool_contracts(),
@@ -2220,7 +2569,12 @@ def list_managed_targets(
     subnet_id: str | None = None,
     zone: str | None = None,
 ) -> list[dict[str, Any]]:
-    return [item.to_dict() for item in list_target_descriptors(environment=environment, subnet_id=subnet_id, zone=zone)]
+    return [
+        item.to_dict()
+        for item in list_target_descriptors(
+            environment=environment, subnet_id=subnet_id, zone=zone
+        )
+    ]
 
 
 def get_managed_target(target_id: str) -> dict[str, Any] | None:
@@ -2262,14 +2616,23 @@ def get_target_operational_timeline(
     )
 
 
-def _handle_describe_foundation(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_describe_foundation(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return foundation_snapshot()
 
 
-def _handle_list_contracts(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_list_contracts(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     surface = str(arguments.get("surface") or "").strip().lower() or None
     plane_id = str(arguments.get("plane_id") or "").strip().lower() or None
-    return {"contracts": [item.to_dict() for item in list_tool_contracts(surface=surface, plane_id=plane_id)]}
+    return {
+        "contracts": [
+            item.to_dict()
+            for item in list_tool_contracts(surface=surface, plane_id=plane_id)
+        ]
+    }
 
 
 def _handle_list_planes(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -2286,11 +2649,18 @@ def _handle_get_plane(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, 
     return {"plane": plane}
 
 
-def _handle_list_descriptor_sets(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return {"descriptors": list_descriptor_registry(), "publication_mode": "root-curated"}
+def _handle_list_descriptor_sets(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    return {
+        "descriptors": list_descriptor_registry(),
+        "publication_mode": "root-curated",
+    }
 
 
-def _handle_get_descriptor_set(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_get_descriptor_set(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     descriptor_id = str(arguments.get("descriptor_id") or "").strip()
     if not descriptor_id:
         raise ValueError("descriptor_id is required")
@@ -2305,12 +2675,20 @@ def _handle_get_descriptor_set(arguments: dict[str, Any], *, dry_run: bool) -> d
     }
 
 
-def _handle_search_descriptors(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_search_descriptors(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     query = str(arguments.get("query") or "").strip()
     if not query:
         raise ValueError("descriptor search query is required")
-    descriptor_ids = [str(item).strip() for item in arguments.get("descriptor_ids") or [] if str(item).strip()]
-    kinds = [str(item).strip() for item in arguments.get("kinds") or [] if str(item).strip()]
+    descriptor_ids = [
+        str(item).strip()
+        for item in arguments.get("descriptor_ids") or []
+        if str(item).strip()
+    ]
+    kinds = [
+        str(item).strip() for item in arguments.get("kinds") or [] if str(item).strip()
+    ]
     return {
         "search": search_descriptors(
             query,
@@ -2321,7 +2699,9 @@ def _handle_search_descriptors(arguments: dict[str, Any], *, dry_run: bool) -> d
     }
 
 
-def _handle_get_descriptor_item(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_get_descriptor_item(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     descriptor_id = str(arguments.get("descriptor_id") or "").strip()
     item_id = str(arguments.get("item_id") or "").strip()
     if not descriptor_id:
@@ -2337,19 +2717,27 @@ def _handle_get_descriptor_item(arguments: dict[str, Any], *, dry_run: bool) -> 
     }
 
 
-def _handle_system_model_vocabulary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_system_model_vocabulary(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return get_descriptor_set("system_model_vocabulary")["payload"]
 
 
-def _handle_skill_manifest_schema(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_manifest_schema(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return {"schema": get_descriptor_set("skill_manifest_schema")["payload"]}
 
 
-def _handle_scenario_manifest_schema(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_scenario_manifest_schema(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return {"schema": get_descriptor_set("scenario_manifest_schema")["payload"]}
 
 
-def _handle_adaos_dev_descriptor(arguments: dict[str, Any], *, descriptor_id: str) -> dict[str, Any]:
+def _handle_adaos_dev_descriptor(
+    arguments: dict[str, Any], *, descriptor_id: str
+) -> dict[str, Any]:
     level = str(arguments.get("level") or "std").strip().lower() or "std"
     return {
         "descriptor": get_descriptor(
@@ -2365,7 +2753,9 @@ def _handle_adaos_dev_descriptor(arguments: dict[str, Any], *, descriptor_id: st
     }
 
 
-def _handle_adaos_dev_named_entity_registry(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_adaos_dev_named_entity_registry(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services import named_entities
 
     descriptor = get_descriptor("named_entity_registry", level="std")
@@ -2377,14 +2767,26 @@ def _handle_adaos_dev_named_entity_registry(arguments: dict[str, Any], *, dry_ru
     return {"descriptor": descriptor}
 
 
-def _builder_descriptor_summary(descriptor: Mapping[str, Any], *, include_payload: bool = False) -> dict[str, Any]:
-    metadata = descriptor.get("metadata") if isinstance(descriptor.get("metadata"), Mapping) else {}
-    payload = descriptor.get("payload") if isinstance(descriptor.get("payload"), Mapping) else {}
+def _builder_descriptor_summary(
+    descriptor: Mapping[str, Any], *, include_payload: bool = False
+) -> dict[str, Any]:
+    metadata = (
+        descriptor.get("metadata")
+        if isinstance(descriptor.get("metadata"), Mapping)
+        else {}
+    )
+    payload = (
+        descriptor.get("payload")
+        if isinstance(descriptor.get("payload"), Mapping)
+        else {}
+    )
     summary: dict[str, Any] = {
         "descriptor_id": descriptor.get("descriptor_id"),
         "title": descriptor.get("title"),
         "kind": descriptor.get("kind"),
-        "payload_keys": sorted(str(key) for key in payload.keys()) if isinstance(payload, Mapping) else [],
+        "payload_keys": sorted(str(key) for key in payload.keys())
+        if isinstance(payload, Mapping)
+        else [],
         "metadata": {
             "ttl_seconds": metadata.get("ttl_seconds"),
             "fresh_until": descriptor.get("fresh_until") or metadata.get("fresh_until"),
@@ -2393,7 +2795,14 @@ def _builder_descriptor_summary(descriptor: Mapping[str, Any], *, include_payloa
             "stability": metadata.get("stability"),
         },
     }
-    for key in ("available", "kind", "item_count", "page_count", "descriptor_count", "template_count"):
+    for key in (
+        "available",
+        "kind",
+        "item_count",
+        "page_count",
+        "descriptor_count",
+        "template_count",
+    ):
         if key in payload:
             summary[key] = payload.get(key)
     if include_payload:
@@ -2427,7 +2836,9 @@ def _builder_nlu_context_summary(value: Mapping[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def _handle_builder_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_builder_context(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
     level = (_text_or_none(arguments.get("level")) or "mini").lower()
     if level not in {"mini", "std", "rich"}:
@@ -2481,7 +2892,9 @@ def _handle_builder_context(arguments: dict[str, Any], *, dry_run: bool) -> dict
         ).get("context")
         if level == "mini" and isinstance(nlu_context, Mapping):
             nlu_context = _builder_nlu_context_summary(nlu_context)
-    except Exception as exc:  # pragma: no cover - defensive best-effort context enrichment.
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - defensive best-effort context enrichment.
         nlu_context = {
             "available": False,
             "status": "unavailable",
@@ -2498,9 +2911,13 @@ def _handle_builder_context(arguments: dict[str, Any], *, dry_run: bool) -> dict
             runtime_status = {
                 "available": True,
                 "status": "available",
-                "summary": _handle_hub_get_runtime_summary({"target_id": target_id}, dry_run=True),
+                "summary": _handle_hub_get_runtime_summary(
+                    {"target_id": target_id}, dry_run=True
+                ),
             }
-        except Exception as exc:  # pragma: no cover - defensive best-effort context enrichment.
+        except (
+            Exception
+        ) as exc:  # pragma: no cover - defensive best-effort context enrichment.
             runtime_status["error"] = type(exc).__name__
 
     return {
@@ -2549,29 +2966,49 @@ def _skill_factory_service():
     return SkillFactoryService()
 
 
-def _handle_skill_factory_get_status(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_factory_get_status(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     include_tasks = bool(arguments.get("include_tasks", True))
-    return {"skill_factory": _skill_factory_service().snapshot(include_tasks=include_tasks)}
+    return {
+        "skill_factory": _skill_factory_service().snapshot(include_tasks=include_tasks)
+    }
 
 
-def _handle_skill_factory_submit_realize_request(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    payload = dict(arguments.get("realize_request") if isinstance(arguments.get("realize_request"), Mapping) else arguments)
+def _handle_skill_factory_submit_realize_request(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    payload = dict(
+        arguments.get("realize_request")
+        if isinstance(arguments.get("realize_request"), Mapping)
+        else arguments
+    )
     if dry_run:
         return {
             "would_enqueue": True,
-            "realize_request": _skill_factory_service().normalize_realize_request(payload),
+            "realize_request": _skill_factory_service().normalize_realize_request(
+                payload
+            ),
         }
     return _skill_factory_service().submit_realize_request(payload)
 
 
-def _handle_skill_factory_register_dev_node(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    payload = dict(arguments.get("registration") if isinstance(arguments.get("registration"), Mapping) else arguments)
+def _handle_skill_factory_register_dev_node(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    payload = dict(
+        arguments.get("registration")
+        if isinstance(arguments.get("registration"), Mapping)
+        else arguments
+    )
     if dry_run:
         return {"would_register": True, "registration": payload}
     return _skill_factory_service().register_dev_node(payload)
 
 
-def _handle_skill_factory_heartbeat(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_factory_heartbeat(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     node_id = _text_or_none(arguments.get("node_id"))
     if not node_id:
         raise ValueError("node_id is required")
@@ -2580,39 +3017,65 @@ def _handle_skill_factory_heartbeat(arguments: dict[str, Any], *, dry_run: bool)
     return _skill_factory_service().heartbeat(node_id, arguments)
 
 
-def _handle_skill_factory_poll_assignment(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_factory_poll_assignment(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     node_id = _text_or_none(arguments.get("node_id"))
     if not node_id:
         raise ValueError("node_id is required")
     if dry_run:
-        return {"would_poll": True, "node_id": node_id, "skill_factory": _skill_factory_service().snapshot(include_tasks=False)}
+        return {
+            "would_poll": True,
+            "node_id": node_id,
+            "skill_factory": _skill_factory_service().snapshot(include_tasks=False),
+        }
     return _skill_factory_service().poll_assignment(node_id)
 
 
-def _handle_skill_factory_report_progress(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_factory_report_progress(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     task_id = _text_or_none(arguments.get("task_id"))
     if not task_id:
         raise ValueError("task_id is required")
     if dry_run:
-        return {"would_report_progress": True, "task_id": task_id, "status": arguments.get("status")}
+        return {
+            "would_report_progress": True,
+            "task_id": task_id,
+            "status": arguments.get("status"),
+        }
     return _skill_factory_service().report_progress(task_id, arguments)
 
 
-def _handle_skill_factory_complete_task(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    payload = dict(arguments.get("dev_result") if isinstance(arguments.get("dev_result"), Mapping) else arguments)
+def _handle_skill_factory_complete_task(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    payload = dict(
+        arguments.get("dev_result")
+        if isinstance(arguments.get("dev_result"), Mapping)
+        else arguments
+    )
     if dry_run:
         return {"would_complete": True, "dev_result": payload}
     return _skill_factory_service().complete_task(payload)
 
 
-def _handle_skill_factory_fail_task(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    payload = dict(arguments.get("failure") if isinstance(arguments.get("failure"), Mapping) else arguments)
+def _handle_skill_factory_fail_task(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    payload = dict(
+        arguments.get("failure")
+        if isinstance(arguments.get("failure"), Mapping)
+        else arguments
+    )
     if dry_run:
         return {"would_fail": True, "failure": payload}
     return _skill_factory_service().fail_task(payload)
 
 
-def _handle_skill_factory_cancel_task(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_factory_cancel_task(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     task_id = _text_or_none(arguments.get("task_id"))
     if not task_id:
         raise ValueError("task_id is required")
@@ -2625,7 +3088,9 @@ def _handle_skill_factory_cancel_task(arguments: dict[str, Any], *, dry_run: boo
     )
 
 
-def _handle_skill_factory_set_queue_paused(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_factory_set_queue_paused(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     paused = bool(arguments.get("paused"))
     if dry_run:
         return {"would_set_queue_paused": True, "paused": paused}
@@ -2636,7 +3101,9 @@ def _handle_skill_factory_set_queue_paused(arguments: dict[str, Any], *, dry_run
     )
 
 
-def _handle_skill_factory_drain_dev_node(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_factory_drain_dev_node(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     node_id = _text_or_none(arguments.get("node_id"))
     if not node_id:
         raise ValueError("node_id is required")
@@ -2649,7 +3116,9 @@ def _handle_skill_factory_drain_dev_node(arguments: dict[str, Any], *, dry_run: 
     )
 
 
-def _handle_skill_factory_quarantine_dev_node(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_factory_quarantine_dev_node(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     node_id = _text_or_none(arguments.get("node_id"))
     if not node_id:
         raise ValueError("node_id is required")
@@ -2662,7 +3131,9 @@ def _handle_skill_factory_quarantine_dev_node(arguments: dict[str, Any], *, dry_
     )
 
 
-def _handle_skill_factory_revoke_dev_node_credentials(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_factory_revoke_dev_node_credentials(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     node_id = _text_or_none(arguments.get("node_id"))
     if not node_id:
         raise ValueError("node_id is required")
@@ -2675,13 +3146,19 @@ def _handle_skill_factory_revoke_dev_node_credentials(arguments: dict[str, Any],
     )
 
 
-def _handle_skill_factory_retry_task(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_factory_retry_task(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     task_id = _text_or_none(arguments.get("task_id"))
     if not task_id:
         raise ValueError("task_id is required")
     avoid_previous_node = bool(arguments.get("avoid_previous_node", True))
     if dry_run:
-        return {"would_retry": True, "task_id": task_id, "avoid_previous_node": avoid_previous_node}
+        return {
+            "would_retry": True,
+            "task_id": task_id,
+            "avoid_previous_node": avoid_previous_node,
+        }
     return _skill_factory_service().retry_task(
         task_id,
         reason=_text_or_none(arguments.get("reason")),
@@ -2690,7 +3167,9 @@ def _handle_skill_factory_retry_task(arguments: dict[str, Any], *, dry_run: bool
     )
 
 
-def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_nlu_authoring_context(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services import named_entities
     from adaos.services.nlu.teacher_read_model import get_contextual_action_surface
 
@@ -2701,7 +3180,9 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
     preferred_locales = _text_list(arguments.get("preferred_locales"))
     include_live = bool(arguments.get("include_live", True))
     include_hints = bool(arguments.get("include_hints", True))
-    registry = named_entities.compact_registry_payload(kind=kind, webspace_id=webspace_id)
+    registry = named_entities.compact_registry_payload(
+        kind=kind, webspace_id=webspace_id
+    )
     action_surface = get_contextual_action_surface(
         webspace_id=webspace_id,
         include_live=include_live,
@@ -2719,28 +3200,46 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
             "locale": {
                 "request_locale": request_locale,
                 "preferred_locales": preferred_locales,
-                "effective_locale_order": _locale_order(request_locale=request_locale, preferred_locales=preferred_locales),
+                "effective_locale_order": _locale_order(
+                    request_locale=request_locale, preferred_locales=preferred_locales
+                ),
             },
             "named_entities": registry,
-            "runtime_state": action_surface.get("runtime_state") if isinstance(action_surface, Mapping) else {},
+            "runtime_state": action_surface.get("runtime_state")
+            if isinstance(action_surface, Mapping)
+            else {},
             "action_surface": {
-                "surface_id": action_surface.get("surface_id") if isinstance(action_surface, Mapping) else None,
-                "available_actions": list(action_surface.get("available_actions") or [])[:200]
+                "surface_id": action_surface.get("surface_id")
+                if isinstance(action_surface, Mapping)
+                else None,
+                "available_actions": list(
+                    action_surface.get("available_actions") or []
+                )[:200]
                 if isinstance(action_surface.get("available_actions"), list)
                 else [],
-                "voice_capabilities": list(action_surface.get("voice_capabilities") or [])[:200]
+                "voice_capabilities": list(
+                    action_surface.get("voice_capabilities") or []
+                )[:200]
                 if isinstance(action_surface.get("voice_capabilities"), list)
                 else [],
-                "voice_affordances": list(action_surface.get("voice_affordances") or [])[:200]
+                "voice_affordances": list(
+                    action_surface.get("voice_affordances") or []
+                )[:200]
                 if isinstance(action_surface.get("voice_affordances"), list)
                 else [],
-                "voice_surface": action_surface.get("voice_surface") if isinstance(action_surface.get("voice_surface"), Mapping) else {},
+                "voice_surface": action_surface.get("voice_surface")
+                if isinstance(action_surface.get("voice_surface"), Mapping)
+                else {},
                 "lookup_summary": list(action_surface.get("lookup_summary") or [])
                 if isinstance(action_surface.get("lookup_summary"), list)
                 else [],
-                "fingerprint": action_surface.get("fingerprint") if isinstance(action_surface, Mapping) else None,
+                "fingerprint": action_surface.get("fingerprint")
+                if isinstance(action_surface, Mapping)
+                else None,
             },
-            "process_state": action_surface.get("process_state") if isinstance(action_surface, Mapping) else {},
+            "process_state": action_surface.get("process_state")
+            if isinstance(action_surface, Mapping)
+            else {},
             "developer_hints": list(action_surface.get("developer_hints") or [])[:120]
             if isinstance(action_surface.get("developer_hints"), list)
             else [],
@@ -2773,7 +3272,9 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
     }
 
 
-def _handle_nlu_authoring_check_phrase(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_nlu_authoring_check_phrase(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.probe import probe_phrase
 
     text = _text_or_none(arguments.get("text"))
@@ -2814,7 +3315,9 @@ def _handle_nlu_authoring_check_phrase(arguments: dict[str, Any], *, dry_run: bo
     }
 
 
-def _handle_nlu_authoring_trace(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_nlu_authoring_trace(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.teacher_read_model import get_nlu_trace
 
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
@@ -2830,7 +3333,9 @@ def _handle_nlu_authoring_trace(arguments: dict[str, Any], *, dry_run: bool) -> 
     return result
 
 
-def _handle_nlu_authoring_dialog_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_nlu_authoring_dialog_context(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.teacher_read_model import get_nlu_dialog_context
 
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
@@ -2846,18 +3351,24 @@ def _handle_nlu_authoring_dialog_context(arguments: dict[str, Any], *, dry_run: 
     return result
 
 
-def _handle_nlu_authoring_recent_failures(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_nlu_authoring_recent_failures(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.teacher_read_model import get_nlu_recent_failures
 
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
     root_scope = _mcp_root_scope(arguments)
-    result = get_nlu_recent_failures(webspace_id=webspace_id, limit=int(arguments.get("limit") or 50))
+    result = get_nlu_recent_failures(
+        webspace_id=webspace_id, limit=int(arguments.get("limit") or 50)
+    )
     result["target_id"] = root_scope.get("target_id")
     result["root_scope"] = root_scope
     return result
 
 
-def _handle_desktop_registry_lookup(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_desktop_registry_lookup(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.teacher_read_model import get_desktop_registry_lookup
 
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
@@ -2871,33 +3382,49 @@ def _handle_desktop_registry_lookup(arguments: dict[str, Any], *, dry_run: bool)
     return result
 
 
-def _handle_skill_describe_nlu(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_skill_describe_nlu(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.teacher_read_model import describe_skill_nlu
 
     skill_id = _text_or_none(arguments.get("skill_id"))
     root_scope = _mcp_root_scope(arguments)
     if not skill_id:
-        return {"ok": False, "status": "invalid", "error": "skill_id_required", "root_scope": root_scope}
+        return {
+            "ok": False,
+            "status": "invalid",
+            "error": "skill_id_required",
+            "root_scope": root_scope,
+        }
     result = describe_skill_nlu(skill_id)
     result["target_id"] = root_scope.get("target_id")
     result["root_scope"] = root_scope
     return result
 
 
-def _handle_scenario_describe_nlu(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_scenario_describe_nlu(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.teacher_read_model import describe_scenario_nlu
 
     scenario_id = _text_or_none(arguments.get("scenario_id"))
     root_scope = _mcp_root_scope(arguments)
     if not scenario_id:
-        return {"ok": False, "status": "invalid", "error": "scenario_id_required", "root_scope": root_scope}
+        return {
+            "ok": False,
+            "status": "invalid",
+            "error": "scenario_id_required",
+            "root_scope": root_scope,
+        }
     result = describe_scenario_nlu(scenario_id)
     result["target_id"] = root_scope.get("target_id")
     result["root_scope"] = root_scope
     return result
 
 
-def _handle_sdk_describe_surface(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_sdk_describe_surface(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.teacher_read_model import describe_sdk_surface
 
     root_scope = _mcp_root_scope(arguments)
@@ -2907,7 +3434,9 @@ def _handle_sdk_describe_surface(arguments: dict[str, Any], *, dry_run: bool) ->
     return result
 
 
-def _handle_nlu_authoring_list_templates(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_nlu_authoring_list_templates(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.teacher_read_model import list_nlu_templates
 
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
@@ -2923,7 +3452,9 @@ def _handle_nlu_authoring_list_templates(arguments: dict[str, Any], *, dry_run: 
     return result
 
 
-def _handle_nlu_authoring_list_training_targets(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_nlu_authoring_list_training_targets(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.teacher_read_model import list_training_targets
 
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
@@ -2937,13 +3468,19 @@ def _handle_nlu_authoring_list_training_targets(arguments: dict[str, Any], *, dr
     return result
 
 
-def _handle_nlu_authoring_preview_template_patch(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_nlu_authoring_preview_template_patch(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.teacher_read_model import preview_template_patch
 
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
     root_scope = _mcp_root_scope(arguments)
-    target = arguments.get("target") if isinstance(arguments.get("target"), Mapping) else {}
-    slots = arguments.get("slots") if isinstance(arguments.get("slots"), Mapping) else {}
+    target = (
+        arguments.get("target") if isinstance(arguments.get("target"), Mapping) else {}
+    )
+    slots = (
+        arguments.get("slots") if isinstance(arguments.get("slots"), Mapping) else {}
+    )
     result = preview_template_patch(
         webspace_id=webspace_id,
         operation=_text_or_none(arguments.get("operation")) or "",
@@ -2959,12 +3496,16 @@ def _handle_nlu_authoring_preview_template_patch(arguments: dict[str, Any], *, d
     return result
 
 
-def _handle_desktop_preview_action(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_desktop_preview_action(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.nlu.teacher_read_model import preview_interface_action
 
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
     root_scope = _mcp_root_scope(arguments)
-    params = arguments.get("params") if isinstance(arguments.get("params"), Mapping) else {}
+    params = (
+        arguments.get("params") if isinstance(arguments.get("params"), Mapping) else {}
+    )
     result = preview_interface_action(
         webspace_id=webspace_id,
         action_id=_text_or_none(arguments.get("action_id")),
@@ -2988,22 +3529,53 @@ def _append_named_entity_alias_audit(
         return
     context = arguments.get("_mcp_context")
     mcp_context = dict(context) if isinstance(context, dict) else {}
-    result_payload = dict(result.get("result") or {}) if isinstance(result.get("result"), dict) else {}
-    proposal = dict(result_payload.get("proposal") or {}) if isinstance(result_payload.get("proposal"), dict) else {}
-    events = list(result_payload.get("events") or []) if isinstance(result_payload.get("events"), list) else []
-    entry = dict(result_payload.get("entry") or {}) if isinstance(result_payload.get("entry"), dict) else {}
-    updated_record = dict(result_payload.get("updated_record") or {}) if isinstance(result_payload.get("updated_record"), dict) else {}
-    status = str(result.get("status") or result_payload.get("status") or "").strip() or "unknown"
+    result_payload = (
+        dict(result.get("result") or {})
+        if isinstance(result.get("result"), dict)
+        else {}
+    )
+    proposal = (
+        dict(result_payload.get("proposal") or {})
+        if isinstance(result_payload.get("proposal"), dict)
+        else {}
+    )
+    events = (
+        list(result_payload.get("events") or [])
+        if isinstance(result_payload.get("events"), list)
+        else []
+    )
+    entry = (
+        dict(result_payload.get("entry") or {})
+        if isinstance(result_payload.get("entry"), dict)
+        else {}
+    )
+    updated_record = (
+        dict(result_payload.get("updated_record") or {})
+        if isinstance(result_payload.get("updated_record"), dict)
+        else {}
+    )
+    status = (
+        str(result.get("status") or result_payload.get("status") or "").strip()
+        or "unknown"
+    )
     now = _iso_now()
     try:
         append_audit_event(
             RootMcpAuditEvent(
                 event_id=new_id(),
-                request_id=str(mcp_context.get("request_id") or arguments.get("request_id") or new_id()),
+                request_id=str(
+                    mcp_context.get("request_id")
+                    or arguments.get("request_id")
+                    or new_id()
+                ),
                 trace_id=str(mcp_context.get("trace_id") or new_id()),
                 tool_id=f"entity.{operation}",
                 surface=RootMcpSurface.DEVELOPMENT,
-                actor=str(mcp_context.get("actor") or arguments.get("actor") or "root_mcp:nlu_authoring"),
+                actor=str(
+                    mcp_context.get("actor")
+                    or arguments.get("actor")
+                    or "root_mcp:nlu_authoring"
+                ),
                 auth_method=str(mcp_context.get("auth_method") or "unknown"),
                 capability="development.write.named_entities",
                 policy_decision="allow",
@@ -3014,24 +3586,47 @@ def _append_named_entity_alias_audit(
                 finished_at=now,
                 result_summary={
                     "status": status,
-                    "device_ref": str(result_payload.get("device_ref") or arguments.get("device_ref") or "").strip(),
-                    "canonical_ref": str(proposal.get("canonical_ref") or "").strip() or None,
-                    "alias": str(proposal.get("alias") or arguments.get("alias") or "").strip(),
+                    "device_ref": str(
+                        result_payload.get("device_ref")
+                        or arguments.get("device_ref")
+                        or ""
+                    ).strip(),
+                    "canonical_ref": str(proposal.get("canonical_ref") or "").strip()
+                    or None,
+                    "alias": str(
+                        proposal.get("alias") or arguments.get("alias") or ""
+                    ).strip(),
                     "operation": operation,
-                    "locale": str(proposal.get("locale") or arguments.get("locale") or "und").strip() or "und",
-                    "base_fingerprint": str(proposal.get("base_fingerprint") or arguments.get("base_fingerprint") or "").strip() or None,
-                    "entry_fingerprint": str(entry.get("fingerprint") or updated_record.get("fingerprint") or "").strip() or None,
+                    "locale": str(
+                        proposal.get("locale") or arguments.get("locale") or "und"
+                    ).strip()
+                    or "und",
+                    "base_fingerprint": str(
+                        proposal.get("base_fingerprint")
+                        or arguments.get("base_fingerprint")
+                        or ""
+                    ).strip()
+                    or None,
+                    "entry_fingerprint": str(
+                        entry.get("fingerprint")
+                        or updated_record.get("fingerprint")
+                        or ""
+                    ).strip()
+                    or None,
                     "event_topics": [
                         str(item.get("topic") or "").strip()
                         for item in events
-                        if isinstance(item, dict) and str(item.get("topic") or "").strip()
+                        if isinstance(item, dict)
+                        and str(item.get("topic") or "").strip()
                     ],
                 },
                 meta={
                     "domain": "named_entities",
                     "operation": operation,
-                    "entity_ref": str(proposal.get("canonical_ref") or "").strip() or None,
-                    "entity_kind": str(proposal.get("entity_kind") or "").strip() or None,
+                    "entity_ref": str(proposal.get("canonical_ref") or "").strip()
+                    or None,
+                    "entity_kind": str(proposal.get("entity_kind") or "").strip()
+                    or None,
                     "reason": str(proposal.get("reason") or "").strip() or None,
                 },
             )
@@ -3058,7 +3653,12 @@ def _handle_nlu_authoring_device_alias_state_change(
     if not device_ref:
         return {"ok": False, "status": "invalid", "error": "device_ref_required"}
     if not alias:
-        return {"ok": False, "status": "invalid", "error": "alias_required", "device_ref": device_ref}
+        return {
+            "ok": False,
+            "status": "invalid",
+            "error": "alias_required",
+            "device_ref": device_ref,
+        }
 
     parsed = device_inventory.parse_device_ref(device_ref)
     canonical_ref = named_entities.canonical_device_ref(device_ref)
@@ -3109,24 +3709,43 @@ def _handle_nlu_authoring_device_alias_state_change(
         "status": result.get("status") or ("applied" if result.get("ok") else "error"),
         "result": result,
     }
-    _append_named_entity_alias_audit(arguments, payload, dry_run=bool(dry_run), operation=action)
+    _append_named_entity_alias_audit(
+        arguments, payload, dry_run=bool(dry_run), operation=action
+    )
     return payload
 
 
-def _handle_nlu_authoring_add_device_alias(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return _handle_nlu_authoring_device_alias_state_change(arguments, dry_run=dry_run, action="alias.add")
+def _handle_nlu_authoring_add_device_alias(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    return _handle_nlu_authoring_device_alias_state_change(
+        arguments, dry_run=dry_run, action="alias.add"
+    )
 
 
-def _handle_nlu_authoring_remove_device_alias(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return _handle_nlu_authoring_device_alias_state_change(arguments, dry_run=dry_run, action="alias.remove")
+def _handle_nlu_authoring_remove_device_alias(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    return _handle_nlu_authoring_device_alias_state_change(
+        arguments, dry_run=dry_run, action="alias.remove"
+    )
 
 
-def _handle_nlu_authoring_deprecate_device_alias(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return _handle_nlu_authoring_device_alias_state_change(arguments, dry_run=dry_run, action="alias.deprecate")
+def _handle_nlu_authoring_deprecate_device_alias(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    return _handle_nlu_authoring_device_alias_state_change(
+        arguments, dry_run=dry_run, action="alias.deprecate"
+    )
 
 
-def _handle_operational_contracts(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    items = [item.to_dict() for item in list_tool_contracts(surface=RootMcpSurface.OPERATIONS.value)]
+def _handle_operational_contracts(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    items = [
+        item.to_dict()
+        for item in list_tool_contracts(surface=RootMcpSurface.OPERATIONS.value)
+    ]
     return {
         "contracts": items,
         "managed_targets": {
@@ -3137,14 +3756,22 @@ def _handle_operational_contracts(arguments: dict[str, Any], *, dry_run: bool) -
     }
 
 
-def _handle_managed_targets(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_managed_targets(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     environment = str(arguments.get("environment") or "").strip().lower() or None
     subnet_id = str(arguments.get("subnet_id") or "").strip() or None
     zone = str(arguments.get("zone") or "").strip() or None
-    return {"targets": list_managed_targets(environment=environment, subnet_id=subnet_id, zone=zone)}
+    return {
+        "targets": list_managed_targets(
+            environment=environment, subnet_id=subnet_id, zone=zone
+        )
+    }
 
 
-def _handle_get_managed_target(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_get_managed_target(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
@@ -3162,7 +3789,9 @@ def _latest_control_report(target_id: str) -> dict[str, Any] | None:
     return dict(latest.get("report") or {}) if isinstance(latest, dict) else None
 
 
-def _handle_hub_get_status(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_get_status(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
@@ -3180,7 +3809,9 @@ def _handle_hub_get_status(arguments: dict[str, Any], *, dry_run: bool) -> dict[
     }
 
 
-def _handle_hub_get_runtime_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_get_runtime_summary(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
@@ -3193,13 +3824,19 @@ def _handle_hub_get_runtime_summary(arguments: dict[str, Any], *, dry_run: bool)
         "runtime": dict((report or {}).get("runtime") or {}),
         "transport": dict((report or {}).get("transport") or {}),
         "lifecycle": dict((report or {}).get("lifecycle") or {}),
-        "operational_surface": dict((report or {}).get("operational_surface") or target.get("operational_surface") or {}),
+        "operational_surface": dict(
+            (report or {}).get("operational_surface")
+            or target.get("operational_surface")
+            or {}
+        ),
         "deployment_state": read_deploy_state(target_id=target_id),
         "last_reported_at": (report or {}).get("reported_at"),
     }
 
 
-def _handle_hub_get_operational_surface(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_get_operational_surface(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
@@ -3208,25 +3845,39 @@ def _handle_hub_get_operational_surface(arguments: dict[str, Any], *, dry_run: b
         raise KeyError(target_id)
     report = _latest_control_report(target_id)
     surface = dict(target.operational_surface or {})
-    token_management = dict(surface.get("token_management") or {}) if isinstance(surface.get("token_management"), dict) else {}
+    token_management = (
+        dict(surface.get("token_management") or {})
+        if isinstance(surface.get("token_management"), dict)
+        else {}
+    )
     return {
         "target_id": target_id,
         "operational_surface": surface,
-        "webui": dict(surface.get("webui") or {}) if isinstance(surface.get("webui"), dict) else {},
-        "observability": dict(surface.get("observability") or {}) if isinstance(surface.get("observability"), dict) else {},
+        "webui": dict(surface.get("webui") or {})
+        if isinstance(surface.get("webui"), dict)
+        else {},
+        "observability": dict(surface.get("observability") or {})
+        if isinstance(surface.get("observability"), dict)
+        else {},
         "token_management": token_management,
         "deployment_state": read_deploy_state(target_id=target_id),
         "access": dict(target.access or {}),
         "policy": dict(target.policy or {}),
         "report": {
-            "last_reported_at": (report or {}).get("reported_at") or (target.meta or {}).get("last_reported_at"),
+            "last_reported_at": (report or {}).get("reported_at")
+            or (target.meta or {}).get("last_reported_at"),
             "report_verified": bool((target.meta or {}).get("report_verified")),
-            "report_auth_method": str((target.meta or {}).get("report_auth_method") or "").strip() or "unknown",
+            "report_auth_method": str(
+                (target.meta or {}).get("report_auth_method") or ""
+            ).strip()
+            or "unknown",
         },
     }
 
 
-def _handle_hub_get_activity_log(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_get_activity_log(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
@@ -3247,7 +3898,9 @@ def _handle_hub_get_activity_log(arguments: dict[str, Any], *, dry_run: bool) ->
     }
 
 
-def _handle_hub_get_capability_usage_summary(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_get_capability_usage_summary(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
@@ -3265,18 +3918,32 @@ def _handle_hub_get_capability_usage_summary(arguments: dict[str, Any], *, dry_r
     }
 
 
-def _require_root_token_management(target_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _require_root_token_management(
+    target_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     surface = _target_operational_surface(target_id)
-    token_management = dict(surface.get("token_management") or {}) if isinstance(surface.get("token_management"), dict) else {}
+    token_management = (
+        dict(surface.get("token_management") or {})
+        if isinstance(surface.get("token_management"), dict)
+        else {}
+    )
     if not bool(token_management.get("enabled")):
-        raise ValueError(f"target '{target_id}' does not expose token management through infra_access_skill")
-    issuer_mode = str(token_management.get("issuer_mode") or "").strip().lower() or "unknown"
+        raise ValueError(
+            f"target '{target_id}' does not expose token management through infra_access_skill"
+        )
+    issuer_mode = (
+        str(token_management.get("issuer_mode") or "").strip().lower() or "unknown"
+    )
     if issuer_mode != "root_mcp":
-        raise ValueError(f"target '{target_id}' does not expose a root_mcp token-management route")
+        raise ValueError(
+            f"target '{target_id}' does not expose a root_mcp token-management route"
+        )
     return surface, token_management
 
 
-def _handle_hub_issue_access_token(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_issue_access_token(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     audience = str(arguments.get("audience") or "").strip()
     if not target_id:
@@ -3289,7 +3956,9 @@ def _handle_hub_issue_access_token(arguments: dict[str, Any], *, dry_run: bool) 
     surface, token_management = _require_root_token_management(target_id)
     ttl_seconds = int(arguments.get("ttl_seconds") or 3600)
     raw_caps = arguments.get("capabilities")
-    capabilities = [str(item).strip() for item in raw_caps] if isinstance(raw_caps, list) else []
+    capabilities = (
+        [str(item).strip() for item in raw_caps] if isinstance(raw_caps, list) else []
+    )
     note = str(arguments.get("note") or "").strip() or None
     issued = issue_access_token(
         audience=audience,
@@ -3305,12 +3974,16 @@ def _handle_hub_issue_access_token(arguments: dict[str, Any], *, dry_run: bool) 
     return {
         **issued,
         "target_id": target_id,
-        "issuer_mode": str(token_management.get("issuer_mode") or "").strip() or "root_mcp",
-        "published_by": str(surface.get("published_by") or "").strip() or "skill:infra_access_skill",
+        "issuer_mode": str(token_management.get("issuer_mode") or "").strip()
+        or "root_mcp",
+        "published_by": str(surface.get("published_by") or "").strip()
+        or "skill:infra_access_skill",
     }
 
 
-def _handle_hub_list_access_tokens(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_list_access_tokens(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
@@ -3320,13 +3993,19 @@ def _handle_hub_list_access_tokens(arguments: dict[str, Any], *, dry_run: bool) 
     active_only = bool(arguments.get("active_only"))
     return {
         "target_id": target_id,
-        "issuer_mode": str(token_management.get("issuer_mode") or "").strip() or "root_mcp",
-        "published_by": str(surface.get("published_by") or "").strip() or "skill:infra_access_skill",
-        "tokens": list_access_tokens(limit=limit, status=status, target_id=target_id, active_only=active_only),
+        "issuer_mode": str(token_management.get("issuer_mode") or "").strip()
+        or "root_mcp",
+        "published_by": str(surface.get("published_by") or "").strip()
+        or "skill:infra_access_skill",
+        "tokens": list_access_tokens(
+            limit=limit, status=status, target_id=target_id, active_only=active_only
+        ),
     }
 
 
-def _handle_hub_revoke_access_token(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_revoke_access_token(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     token_id = str(arguments.get("token_id") or "").strip()
     if not target_id:
@@ -3337,7 +4016,11 @@ def _handle_hub_revoke_access_token(arguments: dict[str, Any], *, dry_run: bool)
     record = get_access_token_record(token_id)
     if record is None:
         raise KeyError(token_id)
-    target_ids = [str(item).strip() for item in record.get("target_ids") or [] if str(item).strip()]
+    target_ids = [
+        str(item).strip()
+        for item in record.get("target_ids") or []
+        if str(item).strip()
+    ]
     if target_id not in target_ids:
         raise ValueError(f"token '{token_id}' is not scoped to target '{target_id}'")
     reason = str(arguments.get("reason") or "").strip() or None
@@ -3349,13 +4032,17 @@ def _handle_hub_revoke_access_token(arguments: dict[str, Any], *, dry_run: bool)
     )
     return {
         "target_id": target_id,
-        "issuer_mode": str(token_management.get("issuer_mode") or "").strip() or "root_mcp",
-        "published_by": str(surface.get("published_by") or "").strip() or "skill:infra_access_skill",
+        "issuer_mode": str(token_management.get("issuer_mode") or "").strip()
+        or "root_mcp",
+        "published_by": str(surface.get("published_by") or "").strip()
+        or "skill:infra_access_skill",
         "token": revoked,
     }
 
 
-def _handle_hub_issue_mcp_session(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_issue_mcp_session(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     audience = str(arguments.get("audience") or "").strip()
     if not target_id:
@@ -3369,7 +4056,9 @@ def _handle_hub_issue_mcp_session(arguments: dict[str, Any], *, dry_run: bool) -
     ttl_seconds = int(arguments.get("ttl_seconds") or 3600)
     capability_profile = str(arguments.get("capability_profile") or "").strip() or None
     raw_caps = arguments.get("capabilities")
-    capabilities = [str(item).strip() for item in raw_caps] if isinstance(raw_caps, list) else []
+    capabilities = (
+        [str(item).strip() for item in raw_caps] if isinstance(raw_caps, list) else []
+    )
     note = str(arguments.get("note") or "").strip() or None
     issued = issue_mcp_session_lease(
         audience=audience,
@@ -3386,12 +4075,16 @@ def _handle_hub_issue_mcp_session(arguments: dict[str, Any], *, dry_run: bool) -
     return {
         **issued,
         "target_id": target_id,
-        "issuer_mode": str(token_management.get("issuer_mode") or "").strip() or "root_mcp",
-        "published_by": str(surface.get("published_by") or "").strip() or "skill:infra_access_skill",
+        "issuer_mode": str(token_management.get("issuer_mode") or "").strip()
+        or "root_mcp",
+        "published_by": str(surface.get("published_by") or "").strip()
+        or "skill:infra_access_skill",
     }
 
 
-def _handle_hub_list_mcp_sessions(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_list_mcp_sessions(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
@@ -3402,8 +4095,10 @@ def _handle_hub_list_mcp_sessions(arguments: dict[str, Any], *, dry_run: bool) -
     active_only = bool(arguments.get("active_only"))
     return {
         "target_id": target_id,
-        "issuer_mode": str(token_management.get("issuer_mode") or "").strip() or "root_mcp",
-        "published_by": str(surface.get("published_by") or "").strip() or "skill:infra_access_skill",
+        "issuer_mode": str(token_management.get("issuer_mode") or "").strip()
+        or "root_mcp",
+        "published_by": str(surface.get("published_by") or "").strip()
+        or "skill:infra_access_skill",
         "sessions": list_mcp_session_leases(
             limit=limit,
             status=status,
@@ -3414,7 +4109,9 @@ def _handle_hub_list_mcp_sessions(arguments: dict[str, Any], *, dry_run: bool) -
     }
 
 
-def _handle_hub_revoke_mcp_session(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_revoke_mcp_session(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     session_id = str(arguments.get("session_id") or "").strip()
     if not target_id:
@@ -3425,9 +4122,15 @@ def _handle_hub_revoke_mcp_session(arguments: dict[str, Any], *, dry_run: bool) 
     record = get_mcp_session_lease_record(session_id)
     if record is None:
         raise KeyError(session_id)
-    target_ids = [str(item).strip() for item in record.get("target_ids") or [] if str(item).strip()]
+    target_ids = [
+        str(item).strip()
+        for item in record.get("target_ids") or []
+        if str(item).strip()
+    ]
     if target_id not in target_ids:
-        raise ValueError(f"session '{session_id}' is not scoped to target '{target_id}'")
+        raise ValueError(
+            f"session '{session_id}' is not scoped to target '{target_id}'"
+        )
     reason = str(arguments.get("reason") or "").strip() or None
     revoked = revoke_mcp_session_lease(
         session_id,
@@ -3437,17 +4140,25 @@ def _handle_hub_revoke_mcp_session(arguments: dict[str, Any], *, dry_run: bool) 
     )
     return {
         "target_id": target_id,
-        "issuer_mode": str(token_management.get("issuer_mode") or "").strip() or "root_mcp",
-        "published_by": str(surface.get("published_by") or "").strip() or "skill:infra_access_skill",
+        "issuer_mode": str(token_management.get("issuer_mode") or "").strip()
+        or "root_mcp",
+        "published_by": str(surface.get("published_by") or "").strip()
+        or "skill:infra_access_skill",
         "session": revoked,
     }
 
 
-def _filter_memory_reports_for_target(target_id: str, *, state: str | None = None, suspected_only: bool = False) -> list[dict[str, Any]]:
-    return list_memory_profile_reports(hub_id=target_id, session_state=state, suspected_only=suspected_only)
+def _filter_memory_reports_for_target(
+    target_id: str, *, state: str | None = None, suspected_only: bool = False
+) -> list[dict[str, Any]]:
+    return list_memory_profile_reports(
+        hub_id=target_id, session_state=state, suspected_only=suspected_only
+    )
 
 
-def _handle_hub_memory_get_status(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_memory_get_status(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
@@ -3457,23 +4168,33 @@ def _handle_hub_memory_get_status(arguments: dict[str, Any], *, dry_run: bool) -
     sessions = _filter_memory_reports_for_target(target_id)
     latest = sessions[0] if sessions else None
     latest_report = dict(latest.get("report") or {}) if isinstance(latest, dict) else {}
-    latest_session = dict(latest_report.get("session") or {}) if isinstance(latest_report.get("session"), dict) else {}
+    latest_session = (
+        dict(latest_report.get("session") or {})
+        if isinstance(latest_report.get("session"), dict)
+        else {}
+    )
     return {
         "target_id": target_id,
         "report_count": len(sessions),
         "latest_session": latest_session,
         "latest_reported_at": latest_report.get("reported_at"),
-        "suspected_session_count": len(_filter_memory_reports_for_target(target_id, suspected_only=True)),
+        "suspected_session_count": len(
+            _filter_memory_reports_for_target(target_id, suspected_only=True)
+        ),
     }
 
 
-def _handle_hub_memory_list_sessions(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_memory_list_sessions(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
     state = str(arguments.get("state") or "").strip() or None
     suspected_only = bool(arguments.get("suspected_only"))
-    sessions = _filter_memory_reports_for_target(target_id, state=state, suspected_only=suspected_only)
+    sessions = _filter_memory_reports_for_target(
+        target_id, state=state, suspected_only=suspected_only
+    )
     return {
         "target_id": target_id,
         "sessions": [
@@ -3489,7 +4210,9 @@ def _handle_hub_memory_list_sessions(arguments: dict[str, Any], *, dry_run: bool
     }
 
 
-def _handle_hub_memory_get_session(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_memory_get_session(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     session_id = str(arguments.get("session_id") or "").strip()
     if not target_id:
@@ -3500,11 +4223,15 @@ def _handle_hub_memory_get_session(arguments: dict[str, Any], *, dry_run: bool) 
     if item is None:
         raise KeyError(session_id)
     if str(item.get("hub_id") or "").strip() != target_id:
-        raise ValueError(f"session '{session_id}' is not scoped to target '{target_id}'")
+        raise ValueError(
+            f"session '{session_id}' is not scoped to target '{target_id}'"
+        )
     return {"target_id": target_id, "session": item}
 
 
-def _handle_hub_memory_list_incidents(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_memory_list_incidents(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
@@ -3512,7 +4239,11 @@ def _handle_hub_memory_list_incidents(arguments: dict[str, Any], *, dry_run: boo
     incidents: list[dict[str, Any]] = []
     for item in sessions:
         report = dict(item.get("report") or {})
-        session = dict(report.get("session") or {}) if isinstance(report.get("session"), dict) else {}
+        session = (
+            dict(report.get("session") or {})
+            if isinstance(report.get("session"), dict)
+            else {}
+        )
         incidents.append(
             {
                 "session_id": item.get("session_id"),
@@ -3527,7 +4258,9 @@ def _handle_hub_memory_list_incidents(arguments: dict[str, Any], *, dry_run: boo
     return {"target_id": target_id, "incidents": incidents}
 
 
-def _handle_hub_memory_list_artifacts(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_memory_list_artifacts(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     session_id = str(arguments.get("session_id") or "").strip()
     if not target_id:
@@ -3538,14 +4271,18 @@ def _handle_hub_memory_list_artifacts(arguments: dict[str, Any], *, dry_run: boo
     if session is None:
         raise KeyError(session_id)
     if str(session.get("hub_id") or "").strip() != target_id:
-        raise ValueError(f"session '{session_id}' is not scoped to target '{target_id}'")
+        raise ValueError(
+            f"session '{session_id}' is not scoped to target '{target_id}'"
+        )
     artifacts = list_memory_profile_artifacts(session_id)
     if artifacts is None:
         raise KeyError(session_id)
     return {"target_id": target_id, **artifacts}
 
 
-def _handle_hub_memory_get_artifact(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_memory_get_artifact(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     session_id = str(arguments.get("session_id") or "").strip()
     artifact_id = str(arguments.get("artifact_id") or "").strip()
@@ -3559,7 +4296,9 @@ def _handle_hub_memory_get_artifact(arguments: dict[str, Any], *, dry_run: bool)
     if session is None:
         raise KeyError(session_id)
     if str(session.get("hub_id") or "").strip() != target_id:
-        raise ValueError(f"session '{session_id}' is not scoped to target '{target_id}'")
+        raise ValueError(
+            f"session '{session_id}' is not scoped to target '{target_id}'"
+        )
     artifact = get_memory_profile_artifact(
         session_id,
         artifact_id,
@@ -3571,12 +4310,16 @@ def _handle_hub_memory_get_artifact(arguments: dict[str, Any], *, dry_run: bool)
     return {"target_id": target_id, **artifact}
 
 
-def _handle_hub_memory_start_profile(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_memory_start_profile(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
     if _target_execution_mode(target_id) != "local_process":
-        raise ValueError(f"target '{target_id}' does not expose local_process infra access execution")
+        raise ValueError(
+            f"target '{target_id}' does not expose local_process infra access execution"
+        )
     return {
         "target_id": target_id,
         "execution_mode": "local_process",
@@ -3588,7 +4331,9 @@ def _handle_hub_memory_start_profile(arguments: dict[str, Any], *, dry_run: bool
     }
 
 
-def _handle_hub_memory_stop_profile(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_memory_stop_profile(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     session_id = str(arguments.get("session_id") or "").strip()
     if not target_id:
@@ -3596,7 +4341,9 @@ def _handle_hub_memory_stop_profile(arguments: dict[str, Any], *, dry_run: bool)
     if not session_id:
         raise ValueError("session_id is required")
     if _target_execution_mode(target_id) != "local_process":
-        raise ValueError(f"target '{target_id}' does not expose local_process infra access execution")
+        raise ValueError(
+            f"target '{target_id}' does not expose local_process infra access execution"
+        )
     return {
         "target_id": target_id,
         "session_id": session_id,
@@ -3608,7 +4355,9 @@ def _handle_hub_memory_stop_profile(arguments: dict[str, Any], *, dry_run: bool)
     }
 
 
-def _handle_hub_memory_retry_profile(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_memory_retry_profile(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     session_id = str(arguments.get("session_id") or "").strip()
     if not target_id:
@@ -3616,7 +4365,9 @@ def _handle_hub_memory_retry_profile(arguments: dict[str, Any], *, dry_run: bool
     if not session_id:
         raise ValueError("session_id is required")
     if _target_execution_mode(target_id) != "local_process":
-        raise ValueError(f"target '{target_id}' does not expose local_process infra access execution")
+        raise ValueError(
+            f"target '{target_id}' does not expose local_process infra access execution"
+        )
     return {
         "target_id": target_id,
         "session_id": session_id,
@@ -3628,7 +4379,9 @@ def _handle_hub_memory_retry_profile(arguments: dict[str, Any], *, dry_run: bool
     }
 
 
-def _handle_hub_memory_publish_profile(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_memory_publish_profile(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     session_id = str(arguments.get("session_id") or "").strip()
     if not target_id:
@@ -3636,7 +4389,9 @@ def _handle_hub_memory_publish_profile(arguments: dict[str, Any], *, dry_run: bo
     if not session_id:
         raise ValueError("session_id is required")
     if _target_execution_mode(target_id) != "local_process":
-        raise ValueError(f"target '{target_id}' does not expose local_process infra access execution")
+        raise ValueError(
+            f"target '{target_id}' does not expose local_process infra access execution"
+        )
     return {
         "target_id": target_id,
         "session_id": session_id,
@@ -3668,7 +4423,9 @@ def _handle_hub_get_logs(arguments: dict[str, Any], *, dry_run: bool) -> dict[st
     if not target_id:
         raise ValueError("target_id is required")
     if _target_execution_mode(target_id) != "local_process":
-        raise ValueError(f"target '{target_id}' does not expose local_process infra access execution")
+        raise ValueError(
+            f"target '{target_id}' does not expose local_process infra access execution"
+        )
     tail = int(arguments.get("tail") or 200)
     return {
         "target_id": target_id,
@@ -3677,12 +4434,16 @@ def _handle_hub_get_logs(arguments: dict[str, Any], *, dry_run: bool) -> dict[st
     }
 
 
-def _handle_hub_run_healthchecks(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_run_healthchecks(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
     if _target_execution_mode(target_id) != "local_process":
-        raise ValueError(f"target '{target_id}' does not expose local_process infra access execution")
+        raise ValueError(
+            f"target '{target_id}' does not expose local_process infra access execution"
+        )
     return {
         "target_id": target_id,
         "execution_mode": "local_process",
@@ -3690,7 +4451,9 @@ def _handle_hub_run_healthchecks(arguments: dict[str, Any], *, dry_run: bool) ->
     }
 
 
-def _handle_hub_restart_service(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_restart_service(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     service_name = str(arguments.get("service") or "").strip()
     if not target_id:
@@ -3698,44 +4461,62 @@ def _handle_hub_restart_service(arguments: dict[str, Any], *, dry_run: bool) -> 
     if not service_name:
         raise ValueError("service is required")
     if _target_execution_mode(target_id) != "local_process":
-        raise ValueError(f"target '{target_id}' does not expose local_process infra access execution")
+        raise ValueError(
+            f"target '{target_id}' does not expose local_process infra access execution"
+        )
     surface = _target_operational_surface(target_id)
     return {
         "target_id": target_id,
         "execution_mode": "local_process",
         "service": restart_local_service(
             service=service_name,
-            allowed_services=surface.get("allowed_services") if isinstance(surface.get("allowed_services"), list) else [],
+            allowed_services=surface.get("allowed_services")
+            if isinstance(surface.get("allowed_services"), list)
+            else [],
         ),
     }
 
 
-def _handle_hub_run_allowed_tests(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_run_allowed_tests(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
     if _target_execution_mode(target_id) != "local_process":
-        raise ValueError(f"target '{target_id}' does not expose local_process infra access execution")
+        raise ValueError(
+            f"target '{target_id}' does not expose local_process infra access execution"
+        )
     surface = _target_operational_surface(target_id)
     raw_tests = arguments.get("tests")
-    requested_tests = [str(item).strip() for item in raw_tests if str(item).strip()] if isinstance(raw_tests, list) else []
+    requested_tests = (
+        [str(item).strip() for item in raw_tests if str(item).strip()]
+        if isinstance(raw_tests, list)
+        else []
+    )
     return {
         "target_id": target_id,
         "execution_mode": "local_process",
         "tests": run_allowed_tests(
             target_id=target_id,
-            allowed_test_paths=surface.get("allowed_test_paths") if isinstance(surface.get("allowed_test_paths"), list) else [],
+            allowed_test_paths=surface.get("allowed_test_paths")
+            if isinstance(surface.get("allowed_test_paths"), list)
+            else [],
             requested_tests=requested_tests,
         ),
     }
 
 
-def _handle_hub_get_test_results(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_get_test_results(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
     if _target_execution_mode(target_id) != "local_process":
-        raise ValueError(f"target '{target_id}' does not expose local_process infra access execution")
+        raise ValueError(
+            f"target '{target_id}' does not expose local_process infra access execution"
+        )
     return {
         "target_id": target_id,
         "execution_mode": "local_process",
@@ -3743,7 +4524,9 @@ def _handle_hub_get_test_results(arguments: dict[str, Any], *, dry_run: bool) ->
     }
 
 
-def _handle_hub_deploy_ref(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_deploy_ref(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     ref = str(arguments.get("ref") or "").strip()
     if not target_id:
@@ -3751,7 +4534,9 @@ def _handle_hub_deploy_ref(arguments: dict[str, Any], *, dry_run: bool) -> dict[
     if not ref:
         raise ValueError("ref is required")
     if _target_execution_mode(target_id) != "local_process":
-        raise ValueError(f"target '{target_id}' does not expose local_process infra access execution")
+        raise ValueError(
+            f"target '{target_id}' does not expose local_process infra access execution"
+        )
     surface = _target_operational_surface(target_id)
     note = str(arguments.get("note") or "").strip() or None
     return {
@@ -3760,18 +4545,24 @@ def _handle_hub_deploy_ref(arguments: dict[str, Any], *, dry_run: bool) -> dict[
         "deployment": deploy_local_ref(
             target_id=target_id,
             ref=ref,
-            allowed_refs=surface.get("allowed_deploy_refs") if isinstance(surface.get("allowed_deploy_refs"), list) else [],
+            allowed_refs=surface.get("allowed_deploy_refs")
+            if isinstance(surface.get("allowed_deploy_refs"), list)
+            else [],
             note=note,
         ),
     }
 
 
-def _handle_hub_rollback_last_test_deploy(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_hub_rollback_last_test_deploy(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     target_id = str(arguments.get("target_id") or "").strip()
     if not target_id:
         raise ValueError("target_id is required")
     if _target_execution_mode(target_id) != "local_process":
-        raise ValueError(f"target '{target_id}' does not expose local_process infra access execution")
+        raise ValueError(
+            f"target '{target_id}' does not expose local_process infra access execution"
+        )
     return {
         "target_id": target_id,
         "execution_mode": "local_process",
@@ -3779,14 +4570,17 @@ def _handle_hub_rollback_last_test_deploy(arguments: dict[str, Any], *, dry_run:
     }
 
 
-def _handle_create_360log_snapshot(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_create_360log_snapshot(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.diag360 import create_360log_snapshot
 
     query = {
         "reason": str(arguments.get("reason") or "").strip() or None,
         "scope": str(arguments.get("scope") or "auto").strip().lower() or "auto",
         "subnet_id": str(arguments.get("subnet_id") or "").strip() or None,
-        "webspace_id": str(arguments.get("webspace_id") or "desktop").strip() or "desktop",
+        "webspace_id": str(arguments.get("webspace_id") or "desktop").strip()
+        or "desktop",
         "lines": max(1, min(int(arguments.get("lines") or 300), 2000)),
         "files": max(1, min(int(arguments.get("files") or 8), 50)),
         "timeout": max(0.2, min(float(arguments.get("timeout") or 2.0), 15.0)),
@@ -3798,14 +4592,18 @@ def _handle_create_360log_snapshot(arguments: dict[str, Any], *, dry_run: bool) 
     return create_360log_snapshot(**query)
 
 
-def _handle_list_360log_snapshots(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_list_360log_snapshots(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.diag360 import list_360log_snapshots
 
     limit = max(1, min(int(arguments.get("limit") or 20), 100))
     return {"snapshots": list_360log_snapshots(limit=limit)}
 
 
-def _handle_get_360log_snapshot(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_get_360log_snapshot(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     from adaos.services.diag360 import view_360log_snapshot
 
     snapshot_id = str(arguments.get("snapshot_id") or "").strip()
@@ -3815,7 +4613,9 @@ def _handle_get_360log_snapshot(arguments: dict[str, Any], *, dry_run: bool) -> 
         "snapshot": view_360log_snapshot(
             snapshot_id,
             include_timeline=bool(arguments.get("include_timeline", True)),
-            timeline_limit=max(1, min(int(arguments.get("timeline_limit") or 300), 2000)),
+            timeline_limit=max(
+                1, min(int(arguments.get("timeline_limit") or 300), 2000)
+            ),
             include_sources=bool(arguments.get("include_sources", True)),
         )
     }
@@ -3827,7 +4627,9 @@ def _context_service():
     return ContextControlService()
 
 
-def _handle_context_search(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_context_search(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     query = str(arguments.get("query") or "").strip()
     if not query:
         raise ValueError("context search query is required")
@@ -3894,7 +4696,9 @@ def _development_feedback_sdk():
     return development_feedback
 
 
-def _handle_development_feedback_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_development_feedback_list(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     filters = {
         key: value
         for key, value in arguments.items()
@@ -3919,7 +4723,9 @@ def _handle_development_feedback_list(arguments: dict[str, Any], *, dry_run: boo
     return {"items": items, "count": len(items)}
 
 
-def _handle_development_feedback_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_development_feedback_show(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     feedback_id = str(arguments.get("feedback_id") or "").strip()
     if not feedback_id:
         raise ValueError("feedback_id is required")
@@ -3935,9 +4741,7 @@ def _handle_development_feedback_qualification_preview(
     feedback_id = str(arguments.get("feedback_id") or "").strip()
     if not feedback_id:
         raise ValueError("feedback_id is required")
-    return {
-        "preview": _development_feedback_sdk().qualification_preview(feedback_id)
-    }
+    return {"preview": _development_feedback_sdk().qualification_preview(feedback_id)}
 
 
 def _handle_development_feedback_qualify(
@@ -3963,7 +4767,9 @@ def _handle_development_feedback_qualify(
     }
 
 
-def _handle_development_feedback_capture(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_development_feedback_capture(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     summary = str(request.pop("summary", "") or "").strip()
     if not summary:
@@ -3974,7 +4780,9 @@ def _handle_development_feedback_capture(arguments: dict[str, Any], *, dry_run: 
     return _development_feedback_sdk().capture_feedback(summary, **request)
 
 
-def _handle_development_feedback_operate(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_development_feedback_operate(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     feedback_id = str(request.pop("feedback_id", "") or "").strip()
     operation = str(request.pop("operation", "") or "").strip().lower()
@@ -3982,7 +4790,12 @@ def _handle_development_feedback_operate(arguments: dict[str, Any], *, dry_run: 
         raise ValueError("feedback_id and operation are required")
     request.setdefault("actor", "codex:mcp")
     if dry_run:
-        return {"would_operate": True, "feedback_id": feedback_id, "operation": operation, "request": request}
+        return {
+            "would_operate": True,
+            "feedback_id": feedback_id,
+            "operation": operation,
+            "request": request,
+        }
     expected_revision = request.pop("expected_revision", None)
     if operation == "comment":
         return {
@@ -3998,7 +4811,9 @@ def _handle_development_feedback_operate(arguments: dict[str, Any], *, dry_run: 
             feedback_id,
             str(request.get("route") or ""),
             actor=request["actor"],
-            payload=request.get("payload") if isinstance(request.get("payload"), dict) else {},
+            payload=request.get("payload")
+            if isinstance(request.get("payload"), dict)
+            else {},
             expected_revision=expected_revision,
         )
     statuses = {"triage": "triaged", "accept": "accepted", "reject": "rejected"}
@@ -4010,7 +4825,9 @@ def _handle_development_feedback_operate(arguments: dict[str, Any], *, dry_run: 
             statuses[operation],
             actor=request["actor"],
             reason=str(request.get("reason") or ""),
-            classification=request.get("classification") if isinstance(request.get("classification"), dict) else {},
+            classification=request.get("classification")
+            if isinstance(request.get("classification"), dict)
+            else {},
             expected_revision=expected_revision,
         )
     }
@@ -4043,7 +4860,9 @@ def _handle_builder_source_recovery_apply(
     return {"receipt": _builder_source_recovery_sdk().apply(**request)}
 
 
-def _handle_dev_ticket_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_dev_ticket_list(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     filters = {
         key: value
         for key, value in arguments.items()
@@ -4064,7 +4883,9 @@ def _handle_dev_ticket_list(arguments: dict[str, Any], *, dry_run: bool) -> dict
     return {"tickets": tickets, "count": len(tickets)}
 
 
-def _handle_dev_ticket_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_dev_ticket_show(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     ticket_id = str(arguments.get("ticket_id") or "").strip()
     if not ticket_id:
         raise ValueError("ticket_id is required")
@@ -4074,7 +4895,9 @@ def _handle_dev_ticket_show(arguments: dict[str, Any], *, dry_run: bool) -> dict
     return {"ticket": ticket}
 
 
-def _handle_dev_ticket_core_backlog(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_dev_ticket_core_backlog(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     filters = {
         key: value
         for key, value in arguments.items()
@@ -4094,11 +4917,14 @@ def _handle_dev_ticket_core_backlog(arguments: dict[str, Any], *, dry_run: bool)
     return _development_ticket_sdk().list_core_backlog(**filters)
 
 
-def _handle_dev_ticket_events(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_dev_ticket_events(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     filters = {
         key: value
         for key, value in arguments.items()
-        if key in {
+        if key
+        in {
             "after",
             "updated_since",
             "ticket_id",
@@ -4123,19 +4949,29 @@ def _handle_dev_ticket_events(arguments: dict[str, Any], *, dry_run: bool) -> di
             for key, value in filters.items()
             if key in {"after", "updated_since", "owner_area", "limit"}
         }
-        events = _development_ticket_sdk().list_events(ticket_id=ticket_id, **event_filters)
+        events = _development_ticket_sdk().list_events(
+            ticket_id=ticket_id, **event_filters
+        )
         ticket = _development_ticket_sdk().get_ticket(ticket_id)
         return {
-            "snapshot": [ticket] if filters.get("include_snapshot", True) and not filters.get("after") and ticket else [],
+            "snapshot": [ticket]
+            if filters.get("include_snapshot", True)
+            and not filters.get("after")
+            and ticket
+            else [],
             "events": events,
             "count": len(events),
-            "cursor": events[-1]["event_id"] if events else str(arguments.get("after") or "").strip() or None,
+            "cursor": events[-1]["event_id"]
+            if events
+            else str(arguments.get("after") or "").strip() or None,
         }
     feed = _development_ticket_sdk().read_feed(**filters)
     return {**feed, "count": len(feed.get("events") or [])}
 
 
-def _handle_dev_ticket_create(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_dev_ticket_create(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_create": True, "request": request}
@@ -4145,7 +4981,9 @@ def _handle_dev_ticket_create(arguments: dict[str, Any], *, dry_run: bool) -> di
     return _development_ticket_sdk().create_ticket(summary, **request)
 
 
-def _handle_dev_ticket_operate(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_dev_ticket_operate(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     ticket_id = str(request.pop("ticket_id", "") or "").strip()
     operation = str(request.pop("operation", "") or "").strip()
@@ -4163,13 +5001,17 @@ def _handle_dev_ticket_operate(arguments: dict[str, Any], *, dry_run: bool) -> d
     return _development_ticket_sdk().operate_ticket(ticket_id, operation, **request)
 
 
-def _handle_dev_ticket_artifacts(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_dev_ticket_artifacts(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     ticket_id = str(arguments.get("ticket_id") or "").strip() or None
     artifacts = _development_ticket_sdk().list_artifacts(ticket_id=ticket_id)
     return {"artifacts": artifacts, "count": len(artifacts)}
 
 
-def _handle_dev_ticket_get_artifact(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_dev_ticket_get_artifact(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     artifact_id = str(arguments.get("artifact_id") or "").strip()
     if not artifact_id:
         raise ValueError("artifact_id is required")
@@ -4179,7 +5021,9 @@ def _handle_dev_ticket_get_artifact(arguments: dict[str, Any], *, dry_run: bool)
     return {"artifact": artifact}
 
 
-def _handle_context_resolve(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_context_resolve(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_resolve": True, "request": request}
@@ -4193,28 +5037,36 @@ def _handle_context_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[st
     return {"plan": _context_service().plan(request)}
 
 
-def _handle_context_compile(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_context_compile(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_compile": True, "request": request}
     return {"compilation": _context_service().compile(request)}
 
 
-def _handle_context_inspect(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_context_inspect(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     run_ref = str(arguments.get("run_ref") or "").strip()
     if not run_ref:
         raise ValueError("run_ref is required")
     return {"inspection": _context_service().inspect(run_ref)}
 
 
-def _handle_context_record_receipt(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_context_record_receipt(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_record": True, "request": request}
     return {"receipt": _context_service().record_receipt(request)}
 
 
-def _handle_context_propose_memory(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_context_propose_memory(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_propose": True, "request": request}
@@ -4224,112 +5076,263 @@ def _handle_context_propose_memory(arguments: dict[str, Any], *, dry_run: bool) 
 _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     **application_tool_handlers(),
     **users_access_tool_handlers(),
-    "development.describe_foundation": lambda arguments, dry_run=False: _handle_describe_foundation(arguments, dry_run=dry_run),
-    "development.list_contracts": lambda arguments, dry_run=False: _handle_list_contracts(arguments, dry_run=dry_run),
-    "development.list_planes": lambda arguments, dry_run=False: _handle_list_planes(arguments, dry_run=dry_run),
-    "development.get_plane": lambda arguments, dry_run=False: _handle_get_plane(arguments, dry_run=dry_run),
-    "development.list_descriptor_sets": lambda arguments, dry_run=False: _handle_list_descriptor_sets(arguments, dry_run=dry_run),
-    "development.get_descriptor_set": lambda arguments, dry_run=False: _handle_get_descriptor_set(arguments, dry_run=dry_run),
-    "development.search_descriptors": lambda arguments, dry_run=False: _handle_search_descriptors(arguments, dry_run=dry_run),
-    "development.get_descriptor_item": lambda arguments, dry_run=False: _handle_get_descriptor_item(arguments, dry_run=dry_run),
-    "development.get_system_model_vocabulary": lambda arguments, dry_run=False: _handle_system_model_vocabulary(arguments, dry_run=dry_run),
-    "development.get_skill_manifest_schema": lambda arguments, dry_run=False: _handle_skill_manifest_schema(arguments, dry_run=dry_run),
-    "development.get_scenario_manifest_schema": lambda arguments, dry_run=False: _handle_scenario_manifest_schema(arguments, dry_run=dry_run),
-    "adaos_dev.get_architecture_catalog": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="architecture_catalog"),
-    "adaos_dev.get_sdk_metadata": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="sdk_metadata"),
-    "adaos_dev.get_template_catalog": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="template_catalog"),
-    "adaos_dev.get_public_skill_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_skill_registry_summary"),
-    "adaos_dev.get_public_scenario_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_scenario_registry_summary"),
-    "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
-    "builder.get_context": lambda arguments, dry_run=False: _handle_builder_context(arguments, dry_run=dry_run),
-    "builder.source_recovery.plan": lambda arguments, dry_run=False: _handle_builder_source_recovery_plan(arguments, dry_run=dry_run),
-    "builder.source_recovery.apply": lambda arguments, dry_run=False: _handle_builder_source_recovery_apply(arguments, dry_run=dry_run),
-    "development_feedback.list": lambda arguments, dry_run=False: _handle_development_feedback_list(arguments, dry_run=dry_run),
-    "development_feedback.show": lambda arguments, dry_run=False: _handle_development_feedback_show(arguments, dry_run=dry_run),
-    "development_feedback.qualification_preview": lambda arguments, dry_run=False: _handle_development_feedback_qualification_preview(arguments, dry_run=dry_run),
-    "development_feedback.qualify": lambda arguments, dry_run=False: _handle_development_feedback_qualify(arguments, dry_run=dry_run),
-    "development_feedback.capture": lambda arguments, dry_run=False: _handle_development_feedback_capture(arguments, dry_run=dry_run),
-    "development_feedback.operate": lambda arguments, dry_run=False: _handle_development_feedback_operate(arguments, dry_run=dry_run),
-    "dev_ticket.list": lambda arguments, dry_run=False: _handle_dev_ticket_list(arguments, dry_run=dry_run),
-    "dev_ticket.show": lambda arguments, dry_run=False: _handle_dev_ticket_show(arguments, dry_run=dry_run),
-    "dev_ticket.core_backlog": lambda arguments, dry_run=False: _handle_dev_ticket_core_backlog(arguments, dry_run=dry_run),
-    "dev_ticket.events": lambda arguments, dry_run=False: _handle_dev_ticket_events(arguments, dry_run=dry_run),
-    "dev_ticket.create": lambda arguments, dry_run=False: _handle_dev_ticket_create(arguments, dry_run=dry_run),
-    "dev_ticket.operate": lambda arguments, dry_run=False: _handle_dev_ticket_operate(arguments, dry_run=dry_run),
-    "dev_ticket.artifacts": lambda arguments, dry_run=False: _handle_dev_ticket_artifacts(arguments, dry_run=dry_run),
-    "dev_ticket.get_artifact": lambda arguments, dry_run=False: _handle_dev_ticket_get_artifact(arguments, dry_run=dry_run),
-    "context.search": lambda arguments, dry_run=False: _handle_context_search(arguments, dry_run=dry_run),
-    "context.get_capsule": lambda arguments, dry_run=False: _handle_context_get_capsule(arguments, dry_run=dry_run),
-    "context.resolve": lambda arguments, dry_run=False: _handle_context_resolve(arguments, dry_run=dry_run),
-    "context.plan": lambda arguments, dry_run=False: _handle_context_plan(arguments, dry_run=dry_run),
-    "context.compile": lambda arguments, dry_run=False: _handle_context_compile(arguments, dry_run=dry_run),
-    "context.inspect": lambda arguments, dry_run=False: _handle_context_inspect(arguments, dry_run=dry_run),
-    "context.record_receipt": lambda arguments, dry_run=False: _handle_context_record_receipt(arguments, dry_run=dry_run),
-    "context.propose_memory": lambda arguments, dry_run=False: _handle_context_propose_memory(arguments, dry_run=dry_run),
-    "skill_factory.get_status": lambda arguments, dry_run=False: _handle_skill_factory_get_status(arguments, dry_run=dry_run),
-    "skill_factory.submit_realize_request": lambda arguments, dry_run=False: _handle_skill_factory_submit_realize_request(arguments, dry_run=dry_run),
-    "skill_factory.register_dev_node": lambda arguments, dry_run=False: _handle_skill_factory_register_dev_node(arguments, dry_run=dry_run),
-    "skill_factory.heartbeat": lambda arguments, dry_run=False: _handle_skill_factory_heartbeat(arguments, dry_run=dry_run),
-    "skill_factory.poll_assignment": lambda arguments, dry_run=False: _handle_skill_factory_poll_assignment(arguments, dry_run=dry_run),
-    "skill_factory.report_progress": lambda arguments, dry_run=False: _handle_skill_factory_report_progress(arguments, dry_run=dry_run),
-    "skill_factory.complete_task": lambda arguments, dry_run=False: _handle_skill_factory_complete_task(arguments, dry_run=dry_run),
-    "skill_factory.fail_task": lambda arguments, dry_run=False: _handle_skill_factory_fail_task(arguments, dry_run=dry_run),
-    "skill_factory.cancel_task": lambda arguments, dry_run=False: _handle_skill_factory_cancel_task(arguments, dry_run=dry_run),
-    "skill_factory.set_queue_paused": lambda arguments, dry_run=False: _handle_skill_factory_set_queue_paused(arguments, dry_run=dry_run),
-    "skill_factory.drain_dev_node": lambda arguments, dry_run=False: _handle_skill_factory_drain_dev_node(arguments, dry_run=dry_run),
-    "skill_factory.quarantine_dev_node": lambda arguments, dry_run=False: _handle_skill_factory_quarantine_dev_node(arguments, dry_run=dry_run),
-    "skill_factory.revoke_dev_node_credentials": lambda arguments, dry_run=False: _handle_skill_factory_revoke_dev_node_credentials(arguments, dry_run=dry_run),
-    "skill_factory.retry_task": lambda arguments, dry_run=False: _handle_skill_factory_retry_task(arguments, dry_run=dry_run),
-    "nlu_authoring.get_context": lambda arguments, dry_run=False: _handle_nlu_authoring_context(arguments, dry_run=dry_run),
-    "nlu_authoring.check_phrase": lambda arguments, dry_run=False: _handle_nlu_authoring_check_phrase(arguments, dry_run=dry_run),
-    "nlu_authoring.get_trace": lambda arguments, dry_run=False: _handle_nlu_authoring_trace(arguments, dry_run=dry_run),
-    "nlu_authoring.get_dialog_context": lambda arguments, dry_run=False: _handle_nlu_authoring_dialog_context(arguments, dry_run=dry_run),
-    "nlu_authoring.get_recent_failures": lambda arguments, dry_run=False: _handle_nlu_authoring_recent_failures(arguments, dry_run=dry_run),
-    "desktop.registry.lookup": lambda arguments, dry_run=False: _handle_desktop_registry_lookup(arguments, dry_run=dry_run),
-    "skill.describe_nlu": lambda arguments, dry_run=False: _handle_skill_describe_nlu(arguments, dry_run=dry_run),
-    "scenario.describe_nlu": lambda arguments, dry_run=False: _handle_scenario_describe_nlu(arguments, dry_run=dry_run),
-    "sdk.describe_surface": lambda arguments, dry_run=False: _handle_sdk_describe_surface(arguments, dry_run=dry_run),
-    "nlu_authoring.list_templates": lambda arguments, dry_run=False: _handle_nlu_authoring_list_templates(arguments, dry_run=dry_run),
-    "nlu_authoring.list_training_targets": lambda arguments, dry_run=False: _handle_nlu_authoring_list_training_targets(arguments, dry_run=dry_run),
-    "nlu_authoring.preview_template_patch": lambda arguments, dry_run=False: _handle_nlu_authoring_preview_template_patch(arguments, dry_run=dry_run),
-    "desktop.preview_action": lambda arguments, dry_run=False: _handle_desktop_preview_action(arguments, dry_run=dry_run),
-    "nlu_authoring.add_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_add_device_alias(arguments, dry_run=dry_run),
-    "nlu_authoring.remove_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_remove_device_alias(arguments, dry_run=dry_run),
-    "nlu_authoring.deprecate_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_deprecate_device_alias(arguments, dry_run=dry_run),
-    "hub.get_status": lambda arguments, dry_run=False: _handle_hub_get_status(arguments, dry_run=dry_run),
-    "hub.get_runtime_summary": lambda arguments, dry_run=False: _handle_hub_get_runtime_summary(arguments, dry_run=dry_run),
-    "hub.get_operational_surface": lambda arguments, dry_run=False: _handle_hub_get_operational_surface(arguments, dry_run=dry_run),
-    "hub.get_activity_log": lambda arguments, dry_run=False: _handle_hub_get_activity_log(arguments, dry_run=dry_run),
-    "hub.get_capability_usage_summary": lambda arguments, dry_run=False: _handle_hub_get_capability_usage_summary(arguments, dry_run=dry_run),
-    "hub.get_logs": lambda arguments, dry_run=False: _handle_hub_get_logs(arguments, dry_run=dry_run),
-    "hub.run_healthchecks": lambda arguments, dry_run=False: _handle_hub_run_healthchecks(arguments, dry_run=dry_run),
-    "hub.restart_service": lambda arguments, dry_run=False: _handle_hub_restart_service(arguments, dry_run=dry_run),
-    "hub.run_allowed_tests": lambda arguments, dry_run=False: _handle_hub_run_allowed_tests(arguments, dry_run=dry_run),
-    "hub.get_test_results": lambda arguments, dry_run=False: _handle_hub_get_test_results(arguments, dry_run=dry_run),
-    "hub.deploy_ref": lambda arguments, dry_run=False: _handle_hub_deploy_ref(arguments, dry_run=dry_run),
-    "hub.rollback_last_test_deploy": lambda arguments, dry_run=False: _handle_hub_rollback_last_test_deploy(arguments, dry_run=dry_run),
-    "hub.issue_access_token": lambda arguments, dry_run=False: _handle_hub_issue_access_token(arguments, dry_run=dry_run),
-    "hub.list_access_tokens": lambda arguments, dry_run=False: _handle_hub_list_access_tokens(arguments, dry_run=dry_run),
-    "hub.revoke_access_token": lambda arguments, dry_run=False: _handle_hub_revoke_access_token(arguments, dry_run=dry_run),
-    "hub.issue_mcp_session": lambda arguments, dry_run=False: _handle_hub_issue_mcp_session(arguments, dry_run=dry_run),
-    "hub.list_mcp_sessions": lambda arguments, dry_run=False: _handle_hub_list_mcp_sessions(arguments, dry_run=dry_run),
-    "hub.revoke_mcp_session": lambda arguments, dry_run=False: _handle_hub_revoke_mcp_session(arguments, dry_run=dry_run),
-    "hub.memory.get_status": lambda arguments, dry_run=False: _handle_hub_memory_get_status(arguments, dry_run=dry_run),
-    "hub.memory.list_sessions": lambda arguments, dry_run=False: _handle_hub_memory_list_sessions(arguments, dry_run=dry_run),
-    "hub.memory.get_session": lambda arguments, dry_run=False: _handle_hub_memory_get_session(arguments, dry_run=dry_run),
-    "hub.memory.list_incidents": lambda arguments, dry_run=False: _handle_hub_memory_list_incidents(arguments, dry_run=dry_run),
-    "hub.memory.list_artifacts": lambda arguments, dry_run=False: _handle_hub_memory_list_artifacts(arguments, dry_run=dry_run),
-    "hub.memory.get_artifact": lambda arguments, dry_run=False: _handle_hub_memory_get_artifact(arguments, dry_run=dry_run),
-    "hub.memory.start_profile": lambda arguments, dry_run=False: _handle_hub_memory_start_profile(arguments, dry_run=dry_run),
-    "hub.memory.stop_profile": lambda arguments, dry_run=False: _handle_hub_memory_stop_profile(arguments, dry_run=dry_run),
-    "hub.memory.retry_profile": lambda arguments, dry_run=False: _handle_hub_memory_retry_profile(arguments, dry_run=dry_run),
-    "hub.memory.publish_profile": lambda arguments, dry_run=False: _handle_hub_memory_publish_profile(arguments, dry_run=dry_run),
-    "operations.list_contracts": lambda arguments, dry_run=False: _handle_operational_contracts(arguments, dry_run=dry_run),
-    "operations.list_managed_targets": lambda arguments, dry_run=False: _handle_managed_targets(arguments, dry_run=dry_run),
-    "operations.get_managed_target": lambda arguments, dry_run=False: _handle_get_managed_target(arguments, dry_run=dry_run),
-    "operations.create_360log_snapshot": lambda arguments, dry_run=False: _handle_create_360log_snapshot(arguments, dry_run=dry_run),
-    "operations.list_360log_snapshots": lambda arguments, dry_run=False: _handle_list_360log_snapshots(arguments, dry_run=dry_run),
-    "operations.get_360log_snapshot": lambda arguments, dry_run=False: _handle_get_360log_snapshot(arguments, dry_run=dry_run),
+    "development.describe_foundation": lambda arguments,
+    dry_run=False: _handle_describe_foundation(arguments, dry_run=dry_run),
+    "development.list_contracts": lambda arguments,
+    dry_run=False: _handle_list_contracts(arguments, dry_run=dry_run),
+    "development.list_planes": lambda arguments, dry_run=False: _handle_list_planes(
+        arguments, dry_run=dry_run
+    ),
+    "development.get_plane": lambda arguments, dry_run=False: _handle_get_plane(
+        arguments, dry_run=dry_run
+    ),
+    "development.list_descriptor_sets": lambda arguments,
+    dry_run=False: _handle_list_descriptor_sets(arguments, dry_run=dry_run),
+    "development.get_descriptor_set": lambda arguments,
+    dry_run=False: _handle_get_descriptor_set(arguments, dry_run=dry_run),
+    "development.search_descriptors": lambda arguments,
+    dry_run=False: _handle_search_descriptors(arguments, dry_run=dry_run),
+    "development.get_descriptor_item": lambda arguments,
+    dry_run=False: _handle_get_descriptor_item(arguments, dry_run=dry_run),
+    "development.get_system_model_vocabulary": lambda arguments,
+    dry_run=False: _handle_system_model_vocabulary(arguments, dry_run=dry_run),
+    "development.get_skill_manifest_schema": lambda arguments,
+    dry_run=False: _handle_skill_manifest_schema(arguments, dry_run=dry_run),
+    "development.get_scenario_manifest_schema": lambda arguments,
+    dry_run=False: _handle_scenario_manifest_schema(arguments, dry_run=dry_run),
+    "adaos_dev.get_architecture_catalog": lambda arguments,
+    dry_run=False: _handle_adaos_dev_descriptor(
+        arguments, descriptor_id="architecture_catalog"
+    ),
+    "adaos_dev.get_sdk_metadata": lambda arguments,
+    dry_run=False: _handle_adaos_dev_descriptor(
+        arguments, descriptor_id="sdk_metadata"
+    ),
+    "adaos_dev.get_template_catalog": lambda arguments,
+    dry_run=False: _handle_adaos_dev_descriptor(
+        arguments, descriptor_id="template_catalog"
+    ),
+    "adaos_dev.get_public_skill_registry": lambda arguments,
+    dry_run=False: _handle_adaos_dev_descriptor(
+        arguments, descriptor_id="public_skill_registry_summary"
+    ),
+    "adaos_dev.get_public_scenario_registry": lambda arguments,
+    dry_run=False: _handle_adaos_dev_descriptor(
+        arguments, descriptor_id="public_scenario_registry_summary"
+    ),
+    "adaos_dev.get_named_entity_registry": lambda arguments,
+    dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
+    "builder.get_context": lambda arguments, dry_run=False: _handle_builder_context(
+        arguments, dry_run=dry_run
+    ),
+    "builder.source_recovery.plan": lambda arguments,
+    dry_run=False: _handle_builder_source_recovery_plan(arguments, dry_run=dry_run),
+    "builder.source_recovery.apply": lambda arguments,
+    dry_run=False: _handle_builder_source_recovery_apply(arguments, dry_run=dry_run),
+    "development_feedback.list": lambda arguments,
+    dry_run=False: _handle_development_feedback_list(arguments, dry_run=dry_run),
+    "development_feedback.show": lambda arguments,
+    dry_run=False: _handle_development_feedback_show(arguments, dry_run=dry_run),
+    "development_feedback.qualification_preview": lambda arguments,
+    dry_run=False: _handle_development_feedback_qualification_preview(
+        arguments, dry_run=dry_run
+    ),
+    "development_feedback.qualify": lambda arguments,
+    dry_run=False: _handle_development_feedback_qualify(arguments, dry_run=dry_run),
+    "development_feedback.capture": lambda arguments,
+    dry_run=False: _handle_development_feedback_capture(arguments, dry_run=dry_run),
+    "development_feedback.operate": lambda arguments,
+    dry_run=False: _handle_development_feedback_operate(arguments, dry_run=dry_run),
+    "dev_ticket.list": lambda arguments, dry_run=False: _handle_dev_ticket_list(
+        arguments, dry_run=dry_run
+    ),
+    "dev_ticket.show": lambda arguments, dry_run=False: _handle_dev_ticket_show(
+        arguments, dry_run=dry_run
+    ),
+    "dev_ticket.core_backlog": lambda arguments,
+    dry_run=False: _handle_dev_ticket_core_backlog(arguments, dry_run=dry_run),
+    "dev_ticket.events": lambda arguments, dry_run=False: _handle_dev_ticket_events(
+        arguments, dry_run=dry_run
+    ),
+    "dev_ticket.create": lambda arguments, dry_run=False: _handle_dev_ticket_create(
+        arguments, dry_run=dry_run
+    ),
+    "dev_ticket.operate": lambda arguments, dry_run=False: _handle_dev_ticket_operate(
+        arguments, dry_run=dry_run
+    ),
+    "dev_ticket.artifacts": lambda arguments,
+    dry_run=False: _handle_dev_ticket_artifacts(arguments, dry_run=dry_run),
+    "dev_ticket.get_artifact": lambda arguments,
+    dry_run=False: _handle_dev_ticket_get_artifact(arguments, dry_run=dry_run),
+    "context.search": lambda arguments, dry_run=False: _handle_context_search(
+        arguments, dry_run=dry_run
+    ),
+    "context.get_capsule": lambda arguments, dry_run=False: _handle_context_get_capsule(
+        arguments, dry_run=dry_run
+    ),
+    "context.resolve": lambda arguments, dry_run=False: _handle_context_resolve(
+        arguments, dry_run=dry_run
+    ),
+    "context.plan": lambda arguments, dry_run=False: _handle_context_plan(
+        arguments, dry_run=dry_run
+    ),
+    "context.compile": lambda arguments, dry_run=False: _handle_context_compile(
+        arguments, dry_run=dry_run
+    ),
+    "context.inspect": lambda arguments, dry_run=False: _handle_context_inspect(
+        arguments, dry_run=dry_run
+    ),
+    "context.record_receipt": lambda arguments,
+    dry_run=False: _handle_context_record_receipt(arguments, dry_run=dry_run),
+    "context.propose_memory": lambda arguments,
+    dry_run=False: _handle_context_propose_memory(arguments, dry_run=dry_run),
+    "skill_factory.get_status": lambda arguments,
+    dry_run=False: _handle_skill_factory_get_status(arguments, dry_run=dry_run),
+    "skill_factory.submit_realize_request": lambda arguments,
+    dry_run=False: _handle_skill_factory_submit_realize_request(
+        arguments, dry_run=dry_run
+    ),
+    "skill_factory.register_dev_node": lambda arguments,
+    dry_run=False: _handle_skill_factory_register_dev_node(arguments, dry_run=dry_run),
+    "skill_factory.heartbeat": lambda arguments,
+    dry_run=False: _handle_skill_factory_heartbeat(arguments, dry_run=dry_run),
+    "skill_factory.poll_assignment": lambda arguments,
+    dry_run=False: _handle_skill_factory_poll_assignment(arguments, dry_run=dry_run),
+    "skill_factory.report_progress": lambda arguments,
+    dry_run=False: _handle_skill_factory_report_progress(arguments, dry_run=dry_run),
+    "skill_factory.complete_task": lambda arguments,
+    dry_run=False: _handle_skill_factory_complete_task(arguments, dry_run=dry_run),
+    "skill_factory.fail_task": lambda arguments,
+    dry_run=False: _handle_skill_factory_fail_task(arguments, dry_run=dry_run),
+    "skill_factory.cancel_task": lambda arguments,
+    dry_run=False: _handle_skill_factory_cancel_task(arguments, dry_run=dry_run),
+    "skill_factory.set_queue_paused": lambda arguments,
+    dry_run=False: _handle_skill_factory_set_queue_paused(arguments, dry_run=dry_run),
+    "skill_factory.drain_dev_node": lambda arguments,
+    dry_run=False: _handle_skill_factory_drain_dev_node(arguments, dry_run=dry_run),
+    "skill_factory.quarantine_dev_node": lambda arguments,
+    dry_run=False: _handle_skill_factory_quarantine_dev_node(
+        arguments, dry_run=dry_run
+    ),
+    "skill_factory.revoke_dev_node_credentials": lambda arguments,
+    dry_run=False: _handle_skill_factory_revoke_dev_node_credentials(
+        arguments, dry_run=dry_run
+    ),
+    "skill_factory.retry_task": lambda arguments,
+    dry_run=False: _handle_skill_factory_retry_task(arguments, dry_run=dry_run),
+    "nlu_authoring.get_context": lambda arguments,
+    dry_run=False: _handle_nlu_authoring_context(arguments, dry_run=dry_run),
+    "nlu_authoring.check_phrase": lambda arguments,
+    dry_run=False: _handle_nlu_authoring_check_phrase(arguments, dry_run=dry_run),
+    "nlu_authoring.get_trace": lambda arguments,
+    dry_run=False: _handle_nlu_authoring_trace(arguments, dry_run=dry_run),
+    "nlu_authoring.get_dialog_context": lambda arguments,
+    dry_run=False: _handle_nlu_authoring_dialog_context(arguments, dry_run=dry_run),
+    "nlu_authoring.get_recent_failures": lambda arguments,
+    dry_run=False: _handle_nlu_authoring_recent_failures(arguments, dry_run=dry_run),
+    "desktop.registry.lookup": lambda arguments,
+    dry_run=False: _handle_desktop_registry_lookup(arguments, dry_run=dry_run),
+    "skill.describe_nlu": lambda arguments, dry_run=False: _handle_skill_describe_nlu(
+        arguments, dry_run=dry_run
+    ),
+    "scenario.describe_nlu": lambda arguments,
+    dry_run=False: _handle_scenario_describe_nlu(arguments, dry_run=dry_run),
+    "sdk.describe_surface": lambda arguments,
+    dry_run=False: _handle_sdk_describe_surface(arguments, dry_run=dry_run),
+    "nlu_authoring.list_templates": lambda arguments,
+    dry_run=False: _handle_nlu_authoring_list_templates(arguments, dry_run=dry_run),
+    "nlu_authoring.list_training_targets": lambda arguments,
+    dry_run=False: _handle_nlu_authoring_list_training_targets(
+        arguments, dry_run=dry_run
+    ),
+    "nlu_authoring.preview_template_patch": lambda arguments,
+    dry_run=False: _handle_nlu_authoring_preview_template_patch(
+        arguments, dry_run=dry_run
+    ),
+    "desktop.preview_action": lambda arguments,
+    dry_run=False: _handle_desktop_preview_action(arguments, dry_run=dry_run),
+    "nlu_authoring.add_device_alias": lambda arguments,
+    dry_run=False: _handle_nlu_authoring_add_device_alias(arguments, dry_run=dry_run),
+    "nlu_authoring.remove_device_alias": lambda arguments,
+    dry_run=False: _handle_nlu_authoring_remove_device_alias(
+        arguments, dry_run=dry_run
+    ),
+    "nlu_authoring.deprecate_device_alias": lambda arguments,
+    dry_run=False: _handle_nlu_authoring_deprecate_device_alias(
+        arguments, dry_run=dry_run
+    ),
+    "hub.get_status": lambda arguments, dry_run=False: _handle_hub_get_status(
+        arguments, dry_run=dry_run
+    ),
+    "hub.get_runtime_summary": lambda arguments,
+    dry_run=False: _handle_hub_get_runtime_summary(arguments, dry_run=dry_run),
+    "hub.get_operational_surface": lambda arguments,
+    dry_run=False: _handle_hub_get_operational_surface(arguments, dry_run=dry_run),
+    "hub.get_activity_log": lambda arguments,
+    dry_run=False: _handle_hub_get_activity_log(arguments, dry_run=dry_run),
+    "hub.get_capability_usage_summary": lambda arguments,
+    dry_run=False: _handle_hub_get_capability_usage_summary(arguments, dry_run=dry_run),
+    "hub.get_logs": lambda arguments, dry_run=False: _handle_hub_get_logs(
+        arguments, dry_run=dry_run
+    ),
+    "hub.run_healthchecks": lambda arguments,
+    dry_run=False: _handle_hub_run_healthchecks(arguments, dry_run=dry_run),
+    "hub.restart_service": lambda arguments, dry_run=False: _handle_hub_restart_service(
+        arguments, dry_run=dry_run
+    ),
+    "hub.run_allowed_tests": lambda arguments,
+    dry_run=False: _handle_hub_run_allowed_tests(arguments, dry_run=dry_run),
+    "hub.get_test_results": lambda arguments,
+    dry_run=False: _handle_hub_get_test_results(arguments, dry_run=dry_run),
+    "hub.deploy_ref": lambda arguments, dry_run=False: _handle_hub_deploy_ref(
+        arguments, dry_run=dry_run
+    ),
+    "hub.rollback_last_test_deploy": lambda arguments,
+    dry_run=False: _handle_hub_rollback_last_test_deploy(arguments, dry_run=dry_run),
+    "hub.issue_access_token": lambda arguments,
+    dry_run=False: _handle_hub_issue_access_token(arguments, dry_run=dry_run),
+    "hub.list_access_tokens": lambda arguments,
+    dry_run=False: _handle_hub_list_access_tokens(arguments, dry_run=dry_run),
+    "hub.revoke_access_token": lambda arguments,
+    dry_run=False: _handle_hub_revoke_access_token(arguments, dry_run=dry_run),
+    "hub.issue_mcp_session": lambda arguments,
+    dry_run=False: _handle_hub_issue_mcp_session(arguments, dry_run=dry_run),
+    "hub.list_mcp_sessions": lambda arguments,
+    dry_run=False: _handle_hub_list_mcp_sessions(arguments, dry_run=dry_run),
+    "hub.revoke_mcp_session": lambda arguments,
+    dry_run=False: _handle_hub_revoke_mcp_session(arguments, dry_run=dry_run),
+    "hub.memory.get_status": lambda arguments,
+    dry_run=False: _handle_hub_memory_get_status(arguments, dry_run=dry_run),
+    "hub.memory.list_sessions": lambda arguments,
+    dry_run=False: _handle_hub_memory_list_sessions(arguments, dry_run=dry_run),
+    "hub.memory.get_session": lambda arguments,
+    dry_run=False: _handle_hub_memory_get_session(arguments, dry_run=dry_run),
+    "hub.memory.list_incidents": lambda arguments,
+    dry_run=False: _handle_hub_memory_list_incidents(arguments, dry_run=dry_run),
+    "hub.memory.list_artifacts": lambda arguments,
+    dry_run=False: _handle_hub_memory_list_artifacts(arguments, dry_run=dry_run),
+    "hub.memory.get_artifact": lambda arguments,
+    dry_run=False: _handle_hub_memory_get_artifact(arguments, dry_run=dry_run),
+    "hub.memory.start_profile": lambda arguments,
+    dry_run=False: _handle_hub_memory_start_profile(arguments, dry_run=dry_run),
+    "hub.memory.stop_profile": lambda arguments,
+    dry_run=False: _handle_hub_memory_stop_profile(arguments, dry_run=dry_run),
+    "hub.memory.retry_profile": lambda arguments,
+    dry_run=False: _handle_hub_memory_retry_profile(arguments, dry_run=dry_run),
+    "hub.memory.publish_profile": lambda arguments,
+    dry_run=False: _handle_hub_memory_publish_profile(arguments, dry_run=dry_run),
+    "operations.list_contracts": lambda arguments,
+    dry_run=False: _handle_operational_contracts(arguments, dry_run=dry_run),
+    "operations.list_managed_targets": lambda arguments,
+    dry_run=False: _handle_managed_targets(arguments, dry_run=dry_run),
+    "operations.get_managed_target": lambda arguments,
+    dry_run=False: _handle_get_managed_target(arguments, dry_run=dry_run),
+    "operations.create_360log_snapshot": lambda arguments,
+    dry_run=False: _handle_create_360log_snapshot(arguments, dry_run=dry_run),
+    "operations.list_360log_snapshots": lambda arguments,
+    dry_run=False: _handle_list_360log_snapshots(arguments, dry_run=dry_run),
+    "operations.get_360log_snapshot": lambda arguments,
+    dry_run=False: _handle_get_360log_snapshot(arguments, dry_run=dry_run),
 }
 
 
@@ -4342,9 +5345,16 @@ def _result_summary(result: Any) -> dict[str, Any]:
     return {"kind": type(result).__name__}
 
 
-def _descriptive_cache_key(tool_id: str, arguments: dict[str, Any], scope: dict[str, Any], auth_context: dict[str, Any] | None) -> str:
+def _descriptive_cache_key(
+    tool_id: str,
+    arguments: dict[str, Any],
+    scope: dict[str, Any],
+    auth_context: dict[str, Any] | None,
+) -> str:
     auth_scope = auth_context.get("scope") if isinstance(auth_context, dict) else None
-    auth_subnet = auth_context.get("subnet_id") if isinstance(auth_context, dict) else None
+    auth_subnet = (
+        auth_context.get("subnet_id") if isinstance(auth_context, dict) else None
+    )
     payload = {
         "tool_id": str(tool_id or "").strip(),
         "arguments": arguments,
@@ -4353,7 +5363,13 @@ def _descriptive_cache_key(tool_id: str, arguments: dict[str, Any], scope: dict[
         "auth_subnet": auth_subnet,
     }
     try:
-        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        return json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
     except Exception:
         return str(payload)
 
@@ -4381,7 +5397,11 @@ def _write_descriptive_cache(key: str, result: Any) -> None:
         _DESCRIPTIVE_TOOL_CACHE[key] = (now, deepcopy(result))
         if len(_DESCRIPTIVE_TOOL_CACHE) > _DESCRIPTIVE_TOOL_CACHE_MAX:
             cutoff = now - max(_DESCRIPTIVE_TOOL_CACHE_TTL_S, 1.0)
-            stale = [item_key for item_key, (stored_at, _) in _DESCRIPTIVE_TOOL_CACHE.items() if stored_at < cutoff]
+            stale = [
+                item_key
+                for item_key, (stored_at, _) in _DESCRIPTIVE_TOOL_CACHE.items()
+                if stored_at < cutoff
+            ]
             for item_key in stale:
                 _DESCRIPTIVE_TOOL_CACHE.pop(item_key, None)
             while len(_DESCRIPTIVE_TOOL_CACHE) > _DESCRIPTIVE_TOOL_CACHE_MAX:
@@ -4400,16 +5420,22 @@ def _nested_mapping(value: Any, *keys: str) -> dict[str, Any]:
     return dict(current) if isinstance(current, dict) else {}
 
 
-def _profile_ops_meta(tool_id: str, *, arguments: dict[str, Any], result: Any) -> dict[str, Any]:
+def _profile_ops_meta(
+    tool_id: str, *, arguments: dict[str, Any], result: Any
+) -> dict[str, Any]:
     token = str(tool_id or "").strip()
-    if token != "hub.memory_profile_report.ingest" and not token.startswith("hub.memory."):
+    if token != "hub.memory_profile_report.ingest" and not token.startswith(
+        "hub.memory."
+    ):
         return {}
 
     payload: dict[str, Any] = {"plane": "profile_ops"}
     if token == "hub.memory_profile_report.ingest":
         payload["action"] = "report_ingest"
         payload["session_id"] = str(arguments.get("session_id") or "").strip() or None
-        payload["profile_mode"] = str(arguments.get("profile_mode") or "").strip() or None
+        payload["profile_mode"] = (
+            str(arguments.get("profile_mode") or "").strip() or None
+        )
         payload["artifact_id"] = str(arguments.get("artifact_id") or "").strip() or None
         return {key: value for key, value in payload.items() if value is not None}
 
@@ -4421,15 +5447,44 @@ def _profile_ops_meta(tool_id: str, *, arguments: dict[str, Any], result: Any) -
     direct_session = _nested_mapping(result, "session")
     control_session = _nested_mapping(result, "profile", "control", "session")
     if not session_id:
-        session_id = str(control_session.get("session_id") or direct_session.get("session_id") or result.get("session_id") or "").strip() or None
+        session_id = (
+            str(
+                control_session.get("session_id")
+                or direct_session.get("session_id")
+                or result.get("session_id")
+                or ""
+            ).strip()
+            or None
+        )
     if not profile_mode:
-        profile_mode = str(control_session.get("profile_mode") or direct_session.get("profile_mode") or "").strip() or None
+        profile_mode = (
+            str(
+                control_session.get("profile_mode")
+                or direct_session.get("profile_mode")
+                or ""
+            ).strip()
+            or None
+        )
     if not artifact_id:
         artifact = _nested_mapping(result, "artifact")
         artifact_id = str(artifact.get("artifact_id") or "").strip() or None
 
-    publish_state = str(_nested_mapping(result, "profile", "control", "session").get("publish_state") or "").strip() or None
-    retry_of_session_id = str(_nested_mapping(result, "profile", "control").get("retry_of_session_id") or "").strip() or None
+    publish_state = (
+        str(
+            _nested_mapping(result, "profile", "control", "session").get(
+                "publish_state"
+            )
+            or ""
+        ).strip()
+        or None
+    )
+    retry_of_session_id = (
+        str(
+            _nested_mapping(result, "profile", "control").get("retry_of_session_id")
+            or ""
+        ).strip()
+        or None
+    )
 
     payload["session_id"] = session_id
     payload["artifact_id"] = artifact_id
@@ -4443,6 +5498,8 @@ def _redactions_for_tool(tool_id: str) -> list[str]:
     token = str(tool_id or "").strip()
     if token == "applications.issue_trial_access":
         return ["result.trial_access.link"]
+    if token == "applications.setup.credential":
+        return ["arguments.value"]
     if token in {"hub.issue_access_token", "root.access_tokens.issue"}:
         return ["result.access_token"]
     if token in {"hub.issue_mcp_session", "root.mcp_sessions.issue"}:
@@ -4452,7 +5509,11 @@ def _redactions_for_tool(tool_id: str) -> list[str]:
 
 def _execution_adapter_for_tool(tool_id: str) -> str:
     token = str(tool_id or "").strip()
-    if token in {"hub.get_status", "hub.get_runtime_summary", "hub.get_operational_surface"}:
+    if token in {
+        "hub.get_status",
+        "hub.get_runtime_summary",
+        "hub.get_operational_surface",
+    }:
         return "root.control_report_projection"
     if token == "hub.get_activity_log":
         return "root.audit_projection.activity"
@@ -4559,14 +5620,25 @@ def _trace_meta(
             "scope": dict(scope_meta),
         },
         "policy": {
-            "decision": str((policy_decision.policy_decision if policy_decision is not None else "allow") or "allow"),
+            "decision": str(
+                (
+                    policy_decision.policy_decision
+                    if policy_decision is not None
+                    else "allow"
+                )
+                or "allow"
+            ),
             "required_capability": policy_meta.get("required_capability"),
             "grant_source": policy_meta.get("grant_source"),
         },
         "routing": {
             "mode": routing_mode,
-            "surface": contract.surface.value if contract is not None else RootMcpSurface.DEVELOPMENT.value,
-            "published_by": (contract.metadata.get("published_by") if contract is not None else None),
+            "surface": contract.surface.value
+            if contract is not None
+            else RootMcpSurface.DEVELOPMENT.value,
+            "published_by": (
+                contract.metadata.get("published_by") if contract is not None else None
+            ),
             "target_environment": policy_meta.get("target_environment"),
             "target_zone": policy_meta.get("target_zone"),
             "target_execution_mode": policy_meta.get("target_execution_mode"),
@@ -4609,7 +5681,9 @@ def invoke_tool(
             ok=False,
             status="error",
             dry_run=bool(dry_run),
-            error=RootMcpError(code="tool_not_found", message=f"Unknown MCP tool '{tool_token}'."),
+            error=RootMcpError(
+                code="tool_not_found", message=f"Unknown MCP tool '{tool_token}'."
+            ),
             meta=scope_meta,
         )
     else:
@@ -4640,8 +5714,15 @@ def invoke_tool(
                 ok=False,
                 status="error",
                 dry_run=bool(dry_run),
-                error=RootMcpError(code=policy_decision.code, message=policy_decision.message),
-                meta={**scope_meta, **policy_decision.to_meta(), "trace": trace, "redactions": _redactions_for_tool(contract.id)},
+                error=RootMcpError(
+                    code=policy_decision.code, message=policy_decision.message
+                ),
+                meta={
+                    **scope_meta,
+                    **policy_decision.to_meta(),
+                    "trace": trace,
+                    "redactions": _redactions_for_tool(contract.id),
+                },
             )
         elif contract.availability is not RootMcpAvailability.ENABLED:
             trace = _trace_meta(
@@ -4651,7 +5732,10 @@ def invoke_tool(
                 scope_meta=scope_meta,
                 policy_decision=policy_decision,
                 routing_mode=routing_mode,
-                error_summary={"code": "tool_not_available", "availability": contract.availability.value},
+                error_summary={
+                    "code": "tool_not_available",
+                    "availability": contract.availability.value,
+                },
             )
             response = RootMcpResponseEnvelope(
                 request_id=effective_request_id,
@@ -4694,15 +5778,25 @@ def invoke_tool(
                     ok=False,
                     status="error",
                     dry_run=bool(dry_run),
-                    error=RootMcpError(code="handler_missing", message=f"No handler is registered for '{contract.id}'."),
-                    meta={**scope_meta, **policy_decision.to_meta(), "trace": trace, "redactions": _redactions_for_tool(contract.id)},
+                    error=RootMcpError(
+                        code="handler_missing",
+                        message=f"No handler is registered for '{contract.id}'.",
+                    ),
+                    meta={
+                        **scope_meta,
+                        **policy_decision.to_meta(),
+                        "trace": trace,
+                        "redactions": _redactions_for_tool(contract.id),
+                    },
                 )
             else:
                 try:
                     cache_key = ""
                     cache_hit = False
                     if bool(dry_run) and contract.id in _DESCRIPTIVE_TOOL_IDS:
-                        cache_key = _descriptive_cache_key(contract.id, payload_arguments, scope_meta, auth_context)
+                        cache_key = _descriptive_cache_key(
+                            contract.id, payload_arguments, scope_meta, auth_context
+                        )
                         cached_result = _read_descriptive_cache(cache_key)
                         if cached_result is not None:
                             result = cached_result
@@ -4757,7 +5851,11 @@ def invoke_tool(
                             "routing_mode": routing_mode,
                             **scope_meta,
                             **policy_decision.to_meta(),
-                            "cache": {"descriptive_tool": True, "hit": True} if cache_hit else {"descriptive_tool": True, "hit": False} if cache_key else {},
+                            "cache": {"descriptive_tool": True, "hit": True}
+                            if cache_hit
+                            else {"descriptive_tool": True, "hit": False}
+                            if cache_key
+                            else {},
                             "trace": trace,
                             "redactions": _redactions_for_tool(contract.id),
                         },
@@ -4785,7 +5883,12 @@ def invoke_tool(
                             code="not_found",
                             message=f"Requested MCP object '{missing}' was not found.",
                         ),
-                        meta={**scope_meta, **policy_decision.to_meta(), "trace": trace, "redactions": _redactions_for_tool(contract.id)},
+                        meta={
+                            **scope_meta,
+                            **policy_decision.to_meta(),
+                            "trace": trace,
+                            "redactions": _redactions_for_tool(contract.id),
+                        },
                     )
                 except ValueError as exc:
                     trace = _trace_meta(
@@ -4807,9 +5910,15 @@ def invoke_tool(
                         dry_run=bool(dry_run),
                         error=RootMcpError(
                             code="invalid_request",
-                            message=str(exc) or f"Invalid arguments for '{contract.id}'.",
+                            message=str(exc)
+                            or f"Invalid arguments for '{contract.id}'.",
                         ),
-                        meta={**scope_meta, **policy_decision.to_meta(), "trace": trace, "redactions": _redactions_for_tool(contract.id)},
+                        meta={
+                            **scope_meta,
+                            **policy_decision.to_meta(),
+                            "trace": trace,
+                            "redactions": _redactions_for_tool(contract.id),
+                        },
                     )
                 except Exception as exc:
                     trace = _trace_meta(
@@ -4834,12 +5943,25 @@ def invoke_tool(
                             message=f"Tool '{contract.id}' failed during execution.",
                             details={"error": str(exc)},
                         ),
-                        meta={**scope_meta, **policy_decision.to_meta(), "trace": trace, "redactions": _redactions_for_tool(contract.id)},
+                        meta={
+                            **scope_meta,
+                            **policy_decision.to_meta(),
+                            "trace": trace,
+                            "redactions": _redactions_for_tool(contract.id),
+                        },
                     )
 
     target_id = str(payload_arguments.get("target_id") or "").strip() or None
-    audit_trace = dict(response.meta.get("trace") or {}) if isinstance(response.meta.get("trace"), dict) else {}
-    profile_ops = dict(audit_trace.get("profile_ops") or {}) if isinstance(audit_trace.get("profile_ops"), dict) else {}
+    audit_trace = (
+        dict(response.meta.get("trace") or {})
+        if isinstance(response.meta.get("trace"), dict)
+        else {}
+    )
+    profile_ops = (
+        dict(audit_trace.get("profile_ops") or {})
+        if isinstance(audit_trace.get("profile_ops"), dict)
+        else {}
+    )
     if _should_audit_tool(response.tool_id):
         event = RootMcpAuditEvent(
             event_id=new_id(),
@@ -4851,7 +5973,9 @@ def invoke_tool(
             auth_method=auth_method,
             capability=(contract.required_capability if contract else None),
             target_id=target_id,
-            policy_decision=policy_decision.policy_decision if policy_decision is not None else "allow",
+            policy_decision=policy_decision.policy_decision
+            if policy_decision is not None
+            else "allow",
             execution_adapter=_execution_adapter_for_tool(response.tool_id),
             dry_run=bool(dry_run),
             status=response.status,
@@ -4861,7 +5985,9 @@ def invoke_tool(
             error=(response.error.to_dict() if response.error else {}),
             redactions=_redactions_for_tool(response.tool_id),
             meta={
-                "tool_availability": contract.availability.value if contract else "missing",
+                "tool_availability": contract.availability.value
+                if contract
+                else "missing",
                 **scope_meta,
                 **(policy_decision.to_meta() if policy_decision is not None else {}),
                 "trace": audit_trace,

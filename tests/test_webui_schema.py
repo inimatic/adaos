@@ -164,6 +164,7 @@ def test_webui_schema_accepts_grouped_filterable_image_cards() -> None:
                                 "inputs": {
                                     "variant": "cards",
                                     "titleKey": "title",
+                                    "accentKey": "release_cycle.accent",
                                     "imageKey": "media.src",
                                     "initialsKey": "owner.initials",
                                     "imageAltKey": "media.alt",
@@ -172,6 +173,12 @@ def test_webui_schema_accepts_grouped_filterable_image_cards() -> None:
                                     "cardMinWidth": 220,
                                     "cardImageRatio": "4 / 3",
                                     "meta": [
+                                        {
+                                            "key": "attention.icon",
+                                            "kind": "icon",
+                                            "titleKey": "attention.message",
+                                            "colorKey": "attention.color",
+                                        },
                                         {"key": "duration", "label": "Time", "kind": "badge"},
                                         {"key": "favorite", "kind": "boolean", "trueLabel": "Favorite"},
                                     ],

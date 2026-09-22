@@ -103,9 +103,9 @@ BOUNDED_REPAIR_COMMAND_OUTPUT_LINES = 120
 BOUNDED_REPAIR_DISCOVERY_LINES = 400
 BOUNDED_REPAIR_TARGET_CONTEXT_BYTES = 48 * 1024
 DESCRIPTOR_WORKING_SET_QUERY_CHARS = 1600
-DESCRIPTOR_WORKING_SET_SEARCH_LIMIT = 4
-DESCRIPTOR_WORKING_SET_DETAIL_LIMIT = 3
-DESCRIPTOR_WORKING_SET_MAX_BYTES = 32 * 1024
+DESCRIPTOR_WORKING_SET_SEARCH_LIMIT = 12
+DESCRIPTOR_WORKING_SET_DETAIL_LIMIT = 8
+DESCRIPTOR_WORKING_SET_MAX_BYTES = 96 * 1024
 STRUCTURED_EDIT_SCHEMA = "adaos.builder.structured_edit_set.v1"
 
 
@@ -540,8 +540,66 @@ def _descriptor_working_set_query(assignment: Mapping[str, Any]) -> str:
     iteration = str(artifacts.get("iteration_instruction") or "").strip()
     if iteration:
         values.append(iteration)
+    prototype_acceptance = artifacts.get("prototype_acceptance")
+    prototype_acceptance = (
+        dict(prototype_acceptance) if isinstance(prototype_acceptance, Mapping) else {}
+    )
+    # Accepted Automation requirements are the most precise capability query
+    # available for a broad application build.  A single prose brief often
+    # ranks one generic SDK symbol above every catalog/lifecycle/setup contract.
+    # Include each bounded statement and acceptance clause so descriptor search
+    # can return the orthogonal operation groups the candidate actually needs.
+    for requirement in list(prototype_acceptance.get("automation_requirements") or [])[
+        :16
+    ]:
+        if not isinstance(requirement, Mapping):
+            continue
+        values.extend(
+            [
+                requirement.get("requirement_ref"),
+                requirement.get("statement"),
+                requirement.get("acceptance"),
+            ]
+        )
     query = "\n".join(str(item).strip() for item in values if str(item or "").strip())
     return query[:DESCRIPTOR_WORKING_SET_QUERY_CHARS]
+
+
+def _required_application_contract_groups(
+    assignment: Mapping[str, Any],
+) -> list[str]:
+    request = assignment.get("realize_request")
+    request = dict(request) if isinstance(request, Mapping) else {}
+    artifacts = request.get("artifacts")
+    artifacts = dict(artifacts) if isinstance(artifacts, Mapping) else {}
+    acceptance = artifacts.get("prototype_acceptance")
+    acceptance = dict(acceptance) if isinstance(acceptance, Mapping) else {}
+    requirements = [
+        item
+        for item in acceptance.get("automation_requirements") or []
+        if isinstance(item, Mapping)
+    ]
+    mapping = (
+        (("catalog", "detail"), "catalog_and_detail"),
+        (("lifecycle",), "lifecycle"),
+        (("access", "permission", "role", "connected_account"), "access"),
+        (("setup", "placement", "credential"), "setup_and_placement"),
+        (
+            ("builder", "prototype", "automation", "trial", "stable"),
+            "builder_lifecycle",
+        ),
+        (("prerelease", "trial_access"), "trial_and_prerelease"),
+    )
+    selected: list[str] = []
+    for requirement in requirements:
+        text = " ".join(
+            str(requirement.get(key) or "").lower()
+            for key in ("requirement_ref", "statement", "acceptance")
+        )
+        for terms, group_id in mapping:
+            if any(term in text for term in terms) and group_id not in selected:
+                selected.append(group_id)
+    return selected[:8]
 
 
 def _task_mcp_descriptor_working_set(
@@ -570,7 +628,11 @@ def _task_mcp_descriptor_working_set(
         tool="search_descriptors",
         arguments={
             "query": query,
-            "descriptor_ids": ["sdk_metadata", "architecture_catalog"],
+            "descriptor_ids": [
+                "sdk_metadata",
+                "application_contracts",
+                "architecture_catalog",
+            ],
             "limit": DESCRIPTOR_WORKING_SET_SEARCH_LIMIT,
             "model_text_format": "min_json",
         },
@@ -597,11 +659,33 @@ def _task_mcp_descriptor_working_set(
             ).hexdigest(),
         }
     ]
-    for index, header in enumerate(headers[:DESCRIPTOR_WORKING_SET_DETAIL_LIMIT]):
-        descriptor_id = str(header.get("descriptor_id") or "").strip()
-        item_id = str(header.get("item_id") or "").strip()
-        if not descriptor_id or not item_id:
+    # A broad Application build needs several orthogonal contracts.  Global
+    # semantic ranking can otherwise spend the entire detail budget on similar
+    # SDK functions (for example, access helpers) and hide lifecycle/setup.
+    # Exact group drill-downs are still served and evidenced by Root MCP; the
+    # worker does not manufacture or read these contracts from source.
+    required_groups = _required_application_contract_groups(assignment)
+    detail_requests: list[tuple[str, str]] = [
+        ("application_contracts", group_id) for group_id in required_groups
+    ]
+    detail_requests.extend(
+        (
+            str(header.get("descriptor_id") or "").strip(),
+            str(header.get("item_id") or "").strip(),
+        )
+        for header in headers
+    )
+    seen_detail_refs: set[tuple[str, str]] = set()
+    bounded_detail_requests: list[tuple[str, str]] = []
+    for detail_ref in detail_requests:
+        if not all(detail_ref) or detail_ref in seen_detail_refs:
             continue
+        seen_detail_refs.add(detail_ref)
+        bounded_detail_requests.append(detail_ref)
+        if len(bounded_detail_requests) >= DESCRIPTOR_WORKING_SET_DETAIL_LIMIT:
+            break
+
+    for index, (descriptor_id, item_id) in enumerate(bounded_detail_requests):
         detail_payload, detail_result = _call_task_root_mcp_tool(
             assignment=assignment,
             root_mcp=profile,
@@ -3778,8 +3862,7 @@ class SubprocessCodexExecutor:
                 if client_result.returncode:
                     detail = (client_result.stderr or client_result.stdout).strip()
                     raise RuntimeError(
-                        "cannot materialize filtered AdaOS Client reference: "
-                        f"{detail}"
+                        f"cannot materialize filtered AdaOS Client reference: {detail}"
                     )
                 client_destination = (sdk_root / client_relative).resolve()
                 client_destination.mkdir(parents=True, exist_ok=True)
@@ -6214,6 +6297,10 @@ class LocalSkillFactoryWorker:
             }
             and "Generated project validation failed:" in failure_message
         )
+        manifest_scope_requalified = (
+            continuation_reason == "manifest_scope_requalified_after_guard"
+            and "large declarative manifest rewrite is not admitted" in failure_message
+        )
         feedback_message = (
             requalified_feedback_message(
                 self.runs_root / _safe_token(source_task_id), failure
@@ -6221,7 +6308,12 @@ class LocalSkillFactoryWorker:
             if continuation_reason == "development_feedback_requalified"
             else None
         )
-        if not token_boundary and not deterministic_validation and not feedback_message:
+        if (
+            not token_boundary
+            and not deterministic_validation
+            and not manifest_scope_requalified
+            and not feedback_message
+        ):
             raise ValueError(
                 "continuation source task did not stop at an eligible preservation boundary"
             )
@@ -8691,7 +8783,11 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                             if str(result_paths.get(section) or "").strip()
                         }
                         expected_paths = requested_paths or allowed_paths
-                        if actual_path and expected_paths and actual_path not in expected_paths:
+                        if (
+                            actual_path
+                            and expected_paths
+                            and actual_path not in expected_paths
+                        ):
                             findings.append(
                                 {
                                     "code": "webui.automation.mcp_result_path_unknown",

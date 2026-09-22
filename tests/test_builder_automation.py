@@ -910,6 +910,21 @@ def test_builder_execution_budget_defaults_to_fresh_tokens_with_aggregate_guard(
     assert explicit["max_billable_tokens"] == 300_000
 
 
+def test_prototype_execution_budget_has_room_for_full_manifest_revisions() -> None:
+    default = automation_module._prototype_execution_budget(None)
+
+    assert default == {
+        "schema": "adaos.builder.execution_budget.v1",
+        "source": "builder.prototype.default",
+        "max_model_tokens": 2_000_000,
+        "max_billable_tokens": 20_000_000,
+        "max_wall_seconds": 10_800,
+        "token_budget_metric": "fresh_plus_output",
+    }
+    explicit = {"max_model_tokens": 3_000_000, "max_wall_seconds": 12_000}
+    assert automation_module._prototype_execution_budget(explicit) == explicit
+
+
 def test_explicit_context_budget_is_a_hard_limit_with_diagnostics() -> None:
     assert _context_budget_window(
         {"max_model_tokens": 12_000, "max_context_tokens": 8_000}
@@ -2528,6 +2543,12 @@ def test_validation_only_budget_projection_is_not_applicable() -> None:
             "manifest_scope_requalified_after_guard",
         ),
         (
+            "RuntimeError: Generated project validation failed: large declarative "
+            "manifest rewrite is not admitted for this bounded Builder task: "
+            "scenarios/demo/webui.json (+1141/-870)",
+            "manifest_scope_requalified_after_guard",
+        ),
+        (
             "ValueError: validation-only repair requires source preconditions "
             "for every exact path",
             "validation_scope_requalified_after_guard",
@@ -2631,10 +2652,158 @@ def test_manifest_scope_requalification_admits_only_the_preserved_candidate(
     assert not automation_module._continuation_allows_large_manifest_rewrite(
         {**checkpoint, "reason": "codex_token_budget_exceeded"}
     )
+    assert automation_module._continuation_allows_large_manifest_rewrite(
+        {
+            **checkpoint,
+            "reason": "deterministic_validation_failure",
+            "allow_large_manifest_rewrite": True,
+        }
+    )
     assert not automation_module._continuation_allows_large_manifest_rewrite(
         {**checkpoint, "source_task_id": ""}
     )
     assert not automation_module._continuation_allows_large_manifest_rewrite(None)
+
+
+def test_initial_manifest_guard_failure_preserves_its_own_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.initial-manifest-candidate"
+    run_root = service.runs_root / task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    continuation_contract = automation_module._continuation_contract()
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {"continuation_contract": continuation_contract}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda current_task_id: {
+            "task_id": current_task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.initial-manifest",
+                    "message": (
+                        "RuntimeError: Generated project validation failed: large "
+                        "declarative manifest rewrite is not admitted for this "
+                        "bounded Builder task"
+                    ),
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: True,
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": task_id}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["source_task_id"] == task_id
+    assert checkpoint["failure_id"] == "failure.initial-manifest"
+    assert checkpoint["reason"] == "manifest_scope_requalified_after_guard"
+    assert automation_module._continuation_allows_large_manifest_rewrite(checkpoint)
+
+
+def test_manifest_candidate_survives_a_worker_boundary_compatibility_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    source_task_id = "task.manifest-source"
+    retry_task_id = "task.manifest-retry"
+    continuation_contract = automation_module._continuation_contract()
+    for task_id in (source_task_id, retry_task_id):
+        (service.runs_root / task_id / "workspace" / ".git").mkdir(parents=True)
+        (service.runs_root / task_id / "input").mkdir(parents=True)
+    (service.runs_root / source_task_id / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {"continuation_contract": continuation_contract}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    source_checkpoint = {
+        "mode": "validate_preserved_candidate",
+        "source_task_id": source_task_id,
+        "reason": "manifest_scope_requalified_after_guard",
+        "continuation_contract": continuation_contract,
+    }
+    (service.runs_root / retry_task_id / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_contract": continuation_contract,
+                        "continuation_checkpoint": source_checkpoint,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    tasks = {
+        source_task_id: {
+            "task_id": source_task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.manifest-source",
+                    "message": (
+                        "Generated project validation failed: large declarative "
+                        "manifest rewrite is not admitted"
+                    ),
+                }
+            ],
+        },
+        retry_task_id: {
+            "task_id": retry_task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.compatibility",
+                    "message": (
+                        "continuation source task did not stop at an eligible "
+                        "preservation boundary"
+                    ),
+                }
+            ],
+        },
+    }
+    service.factory = SimpleNamespace(read_task=lambda task_id: tasks[task_id])
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: True,
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {
+            "current_task_id": retry_task_id,
+            "task_history": [source_task_id, retry_task_id],
+        }
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["trigger_failure_id"] == "failure.compatibility"
+    assert checkpoint["reason"] == "manifest_scope_requalified_after_guard"
 
 
 def test_mcp_retry_preserves_underlying_validation_candidate(

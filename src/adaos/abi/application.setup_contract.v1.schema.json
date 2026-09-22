@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.setup_contract.v1.schema.json",
+  "title": "AdaOS Application Setup Contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "application_id",
+    "release_digest",
+    "version",
+    "components",
+    "connected_accounts",
+    "permissions",
+    "placement",
+    "verification"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.application.setup_contract.v1" },
+    "application_id": { "$ref": "#/$defs/id" },
+    "release_digest": { "$ref": "#/$defs/digest" },
+    "version": { "const": 1 },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["component_ref", "settings", "credentials"],
+        "properties": {
+          "component_ref": { "$ref": "#/$defs/componentRef" },
+          "settings": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["schema", "defaults"],
+                "properties": {
+                  "schema": { "type": "object" },
+                  "defaults": { "type": "object" }
+                }
+              }
+            ]
+          },
+          "credentials": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/credential" }
+          }
+        }
+      }
+    },
+    "connected_accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "purpose", "required", "scopes"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "title": { "$ref": "#/$defs/title" },
+          "purpose": { "$ref": "#/$defs/purpose" },
+          "required": { "type": "boolean" },
+          "scopes": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+          }
+        }
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "purpose", "required"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "title": { "$ref": "#/$defs/title" },
+          "purpose": { "$ref": "#/$defs/purpose" },
+          "required": { "type": "boolean" }
+        }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "title"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "title": { "$ref": "#/$defs/title" }
+      }
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "required"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "title": { "$ref": "#/$defs/title" },
+          "required": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "componentRef": { "type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "purpose": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "credential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot", "title", "purpose", "required"],
+      "properties": {
+        "slot": { "type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,127}$" },
+        "title": { "$ref": "#/$defs/title" },
+        "purpose": { "$ref": "#/$defs/purpose" },
+        "required": { "type": "boolean" }
+      }
+    }
+  }
+}

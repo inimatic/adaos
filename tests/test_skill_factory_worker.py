@@ -639,7 +639,12 @@ def test_task_mcp_descriptor_working_set_prefetches_search_and_exact_items(
         "get_descriptor_item",
         "get_descriptor_item",
     ]
-    assert calls[0]["params"]["arguments"]["limit"] == 4
+    assert calls[0]["params"]["arguments"]["limit"] == 12
+    assert calls[0]["params"]["arguments"]["descriptor_ids"] == [
+        "sdk_metadata",
+        "application_contracts",
+        "architecture_catalog",
+    ]
 
 
 def test_task_mcp_descriptor_working_set_uses_automation_brief_without_required_mcp(
@@ -713,6 +718,126 @@ Preserve the accepted design and implement it.
     assert "navigation commands" in observed["query"]
     assert "configuration contracts" in observed["query"]
     assert "Preserve the accepted design" not in observed["query"]
+
+
+def test_descriptor_query_includes_accepted_automation_requirements() -> None:
+    query = worker_module._descriptor_working_set_query(
+        {
+            "target": {"type": "scenario", "id": "applications"},
+            "realize_request": {
+                "artifacts": {
+                    "implementation_brief": "Use the public SDK contract.",
+                    "prototype_acceptance": {
+                        "automation_requirements": [
+                            {
+                                "requirement_ref": "applications.setup.runtime",
+                                "statement": "Bind typed setup and credential handoff.",
+                                "acceptance": "Never retain a credential value.",
+                            }
+                        ]
+                    },
+                }
+            },
+        }
+    )
+
+    assert "applications.setup.runtime" in query
+    assert "typed setup and credential handoff" in query
+    assert "Never retain a credential value" in query
+
+
+def test_application_automation_prefetches_exact_contract_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class _Response:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return self.payload
+
+    def _post(_url: str, **kwargs: Any) -> _Response:
+        params = dict(kwargs["json"]["params"])
+        arguments = dict(params["arguments"])
+        calls.append((params["name"], arguments))
+        if params["name"] == "search_descriptors":
+            result = {
+                "search": {
+                    "schema": "adaos.descriptor.search.v1",
+                    "query_digest": "sha256:apps",
+                    "items": [],
+                }
+            }
+        else:
+            result = {
+                "descriptor_item": {
+                    "schema": "adaos.descriptor.item.v1",
+                    "descriptor_id": arguments["descriptor_id"],
+                    "item_id": arguments["item_id"],
+                    "level": "std",
+                    "item": {
+                        "group_id": arguments["item_id"],
+                        "tools": [],
+                    },
+                }
+            }
+        return _Response(
+            {
+                "result": {
+                    "structuredContent": {
+                        "ok": True,
+                        "response": {"ok": True, "result": result},
+                    }
+                }
+            }
+        )
+
+    monkeypatch.setattr(worker_module.httpx, "post", _post)
+    result = _task_mcp_descriptor_working_set(
+        assignment={
+            "task_id": "task.applications",
+            "target": {"type": "scenario", "id": "applications"},
+            "realize_request": {
+                "artifacts": {
+                    "prototype_acceptance": {
+                        "automation_requirements": [
+                            {"requirement_ref": "applications.catalog.runtime"},
+                            {"requirement_ref": "applications.lifecycle.runtime"},
+                            {"requirement_ref": "applications.setup.runtime"},
+                        ]
+                    }
+                }
+            },
+        },
+        root_mcp={
+            "enabled": True,
+            "server_name": "adaos_task_root",
+            "url": "http://127.0.0.1:8777/v1/root/mcp/task/task.applications",
+            "enabled_tools": ["search_descriptors", "get_descriptor_item"],
+            "_bearer_token_value": "secret-not-evidence",
+        },
+    )
+
+    assert result is not None
+    assert [item["item"]["group_id"] for item in result["details"]] == [
+        "catalog_and_detail",
+        "lifecycle",
+        "setup_and_placement",
+    ]
+    assert [
+        arguments["item_id"]
+        for name, arguments in calls
+        if name == "get_descriptor_item"
+    ] == [
+        "catalog_and_detail",
+        "lifecycle",
+        "setup_and_placement",
+    ]
 
 
 def test_persisted_descriptor_working_set_evidence_is_reusable(
@@ -2487,9 +2612,9 @@ def test_automation_rejects_unpublished_root_mcp_result_path(tmp_path: Path) -> 
     ]
     assert "result.people" in errors[0]
 
-    document["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0][
-        "dataSource"
-    ]["resultPath"] = "response.result.users_access.people"
+    document["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["dataSource"][
+        "resultPath"
+    ] = "response.result.users_access.people"
     webui_path.write_text(json.dumps(document), encoding="utf-8")
     checks = []
     errors = []
@@ -2584,13 +2709,10 @@ def test_worker_rejects_webui_capability_drift_before_browser(tmp_path):
 
     assert not rejected["ok"]
     assert any(
-        "ui.desktop_widgets.source_invalid" in error
-        for error in rejected["errors"]
+        "ui.desktop_widgets.source_invalid" in error for error in rejected["errors"]
     )
     check = next(
-        item
-        for item in rejected["checks"]
-        if item["kind"] == "ui.capability_catalog"
+        item for item in rejected["checks"] if item["kind"] == "ui.capability_catalog"
     )
     assert check["ok"] is False
 
@@ -3576,7 +3698,9 @@ def test_full_automation_prompt_does_not_duplicate_identical_iteration(
     input_dir = tmp_path / "input"
     scenario = workspace / "scenarios" / "demo"
     scenario.mkdir(parents=True)
-    (scenario / "scenario.yaml").write_text("id: demo\nversion: 0.1.0\n", encoding="utf-8")
+    (scenario / "scenario.yaml").write_text(
+        "id: demo\nversion: 0.1.0\n", encoding="utf-8"
+    )
     instruction = "Audit the current implementation against real data sources."
     assignment = {
         "task_id": "task.compact-iteration",
@@ -4659,13 +4783,16 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
         text=True,
     ).stdout.strip()
     assert receipt["core_commit"] == expected_commit
-    assert receipt["client_commit"] == subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=client_root,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    assert (
+        receipt["client_commit"]
+        == subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=client_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
     environment = executor._execution_environment(sdk_root=snapshot)
     assert environment["ADAOS_REPO_ROOT"] == str(snapshot.resolve())
 
@@ -7644,6 +7771,7 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
         "deterministic_validation_failure",
         "publication_gate_validation_failure",
         "development_feedback_requalified",
+        "manifest_scope_requalified_after_guard",
     ],
 )
 def test_worker_restores_candidate_after_deterministic_project_validation(
@@ -7712,6 +7840,11 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
                     "message": (
                         "ValueError: development feedback target_refs are invalid"
                         if continuation_reason == "development_feedback_requalified"
+                        else "RuntimeError: Generated project validation failed: "
+                        "large declarative manifest rewrite is not admitted for "
+                        "this bounded Builder task"
+                        if continuation_reason
+                        == "manifest_scope_requalified_after_guard"
                         else "RuntimeError: Generated project validation failed: "
                         "skills/demo/skill.yaml: data_routes.budget_missing"
                     ),
@@ -8489,9 +8622,7 @@ def test_worker_binds_new_external_mcp_contract_named_by_approved_brief(
     worker._build_packet(assignment, workspace, tmp_path / "input")
 
     contracts = json.loads(
-        (tmp_path / "input" / "external-mcp-contracts.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "input" / "external-mcp-contracts.json").read_text(encoding="utf-8")
     )
     assert contracts["unresolved_tool_ids"] == []
     assert [item["id"] for item in contracts["contracts"]] == [

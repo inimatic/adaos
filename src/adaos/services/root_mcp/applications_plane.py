@@ -3,7 +3,12 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Callable, Mapping
 
-from .model import ROOT_MCP_RESPONSE_SCHEMA, RootMcpSurface, RootMcpToolContract, schema_object
+from .model import (
+    ROOT_MCP_RESPONSE_SCHEMA,
+    RootMcpSurface,
+    RootMcpToolContract,
+    schema_object,
+)
 
 
 def _sdk():
@@ -24,7 +29,9 @@ def _builder_contracts() -> list[RootMcpToolContract]:
         "published_by": "plane:applications",
         "adapter": "adaos.sdk.builder.applications",
     }
-    application_id = {"application_id": {"type": "string", "minLength": 1, "maxLength": 128}}
+    application_id = {
+        "application_id": {"type": "string", "minLength": 1, "maxLength": 128}
+    }
     mutation = {
         **application_id,
         "expected_revision": {"type": "integer", "minimum": 0},
@@ -34,7 +41,8 @@ def _builder_contracts() -> list[RootMcpToolContract]:
     source_webspace = {"type": "string", "minLength": 1, "maxLength": 128}
     candidate_id = {"type": "string", "minLength": 1, "maxLength": 180}
     digest_or_null = {
-        "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": ["string", "null"],
+        "pattern": "^sha256:[0-9a-f]{64}$",
     }
     reports = {
         "type": "array",
@@ -51,7 +59,10 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(properties={**application_id}),
             output_schema=deepcopy(response),
             required_capability="applications.develop",
-            metadata={**metadata, "handler": "applications_development_list_operations"},
+            metadata={
+                **metadata,
+                "handler": "applications_development_list_operations",
+            },
         ),
         RootMcpToolContract(
             id="applications.development.get_operation",
@@ -59,7 +70,9 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Read one durable Builder lifecycle operation and recovery state.",
             input_schema=schema_object(
-                properties={"operation_id": {"type": "string", "minLength": 1, "maxLength": 180}},
+                properties={
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 180}
+                },
                 required=["operation_id"],
             ),
             output_schema=deepcopy(response),
@@ -95,7 +108,10 @@ def _builder_contracts() -> list[RootMcpToolContract]:
                     **mutation,
                     "title": {"type": "string", "minLength": 1, "maxLength": 200},
                     "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
-                    "template": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+                    "template": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$",
+                    },
                     "visibility": {"enum": ["private", "public"]},
                     "protection": {
                         "type": "object",
@@ -248,13 +264,20 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Publish an accepted Candidate as an exact access-controlled link-only Trial.",
             input_schema=schema_object(
-                properties={**mutation, "candidate_id": candidate_id, "addresses_report_ids": reports},
+                properties={
+                    **mutation,
+                    "candidate_id": candidate_id,
+                    "addresses_report_ids": reports,
+                },
                 required=[*mutation_required, "candidate_id"],
             ),
             output_schema=deepcopy(response),
             required_capability="applications.publish",
             side_effects="write",
-            metadata={**metadata, "handler": "applications_development_publish_link_trial"},
+            metadata={
+                **metadata,
+                "handler": "applications_development_publish_link_trial",
+            },
         ),
         RootMcpToolContract(
             id="applications.development.publish_prerelease",
@@ -268,12 +291,19 @@ def _builder_contracts() -> list[RootMcpToolContract]:
                     "expected_prerelease_digest": digest_or_null,
                     "addresses_report_ids": reports,
                 },
-                required=[*mutation_required, "candidate_id", "expected_prerelease_digest"],
+                required=[
+                    *mutation_required,
+                    "candidate_id",
+                    "expected_prerelease_digest",
+                ],
             ),
             output_schema=deepcopy(response),
             required_capability="applications.publish",
             side_effects="write",
-            metadata={**metadata, "handler": "applications_development_publish_prerelease"},
+            metadata={
+                **metadata,
+                "handler": "applications_development_publish_prerelease",
+            },
         ),
         RootMcpToolContract(
             id="applications.development.promote_stable",
@@ -301,7 +331,10 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(
                 properties={
                     **mutation,
-                    "release_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                    "release_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
                     "release_notes": {"type": "string", "maxLength": 20000},
                 },
                 required=[*mutation_required, "release_digest", "release_notes"],
@@ -309,7 +342,10 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(response),
             required_capability="applications.publish",
             side_effects="write",
-            metadata={**metadata, "handler": "applications_development_publish_stable_source"},
+            metadata={
+                **metadata,
+                "handler": "applications_development_publish_stable_source",
+            },
         ),
     ]
 
@@ -318,7 +354,10 @@ def contracts() -> list[RootMcpToolContract]:
     def response() -> dict[str, Any]:
         return deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
 
-    published = {"published_by": "plane:applications", "adapter": "adaos.sdk.applications"}
+    published = {
+        "published_by": "plane:applications",
+        "adapter": "adaos.sdk.applications",
+    }
     identity = {
         "application_id": {"type": "string"},
         "expected_revision": {"type": "integer", "minimum": 0},
@@ -349,10 +388,13 @@ def contracts() -> list[RootMcpToolContract]:
                 "additionalProperties": False,
                 "properties": {
                     "expanded_size_bytes": {
-                        "type": "integer", "minimum": 0, "maximum": 50_000_000,
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 50_000_000,
                     },
                     "entries": {
-                        "type": "array", "items": {"type": "string", "maxLength": 500},
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 500},
                         "maxItems": 1000,
                     },
                 },
@@ -397,6 +439,100 @@ def contracts() -> list[RootMcpToolContract]:
             metadata={**published, "handler": "applications_show"},
         ),
         RootMcpToolContract(
+            id="applications.assess_updates",
+            title="Assess Application updates",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Assess installed Applications and return bounded update eligibility without mutation.",
+            input_schema=schema_object(
+                properties={
+                    "application_ids": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                        "maxItems": 100,
+                        "uniqueItems": True,
+                    },
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                }
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_assess_updates"},
+        ),
+        RootMcpToolContract(
+            id="applications.plan_updates",
+            title="Plan available Application updates",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Persist an exact reviewable batch of eligible Application updates.",
+            input_schema=schema_object(
+                properties={
+                    "application_ids": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                        "maxItems": 100,
+                        "uniqueItems": True,
+                    },
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240,
+                    },
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                required=["idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.plan",
+            side_effects="write",
+            metadata={**published, "handler": "applications_plan_updates"},
+        ),
+        RootMcpToolContract(
+            id="applications.get_update_batch",
+            title="Get Application update batch",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Read one exact update batch with its review plan and durable outcomes.",
+            input_schema=schema_object(
+                properties={
+                    "batch_id": {
+                        "type": "string",
+                        "pattern": "^appbatch\\.[0-9a-f]{32}$",
+                    }
+                },
+                required=["batch_id"],
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_get_update_batch"},
+        ),
+        RootMcpToolContract(
+            id="applications.apply_updates",
+            title="Apply reviewed Application updates",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Apply or resume one exact reviewed update batch and preserve partial outcomes.",
+            input_schema=schema_object(
+                properties={
+                    "batch_id": {
+                        "type": "string",
+                        "pattern": "^appbatch\\.[0-9a-f]{32}$",
+                    },
+                    "plan_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240,
+                    },
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                required=["batch_id", "plan_digest", "idempotency_key"],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_apply_updates"},
+        ),
+        RootMcpToolContract(
             id="applications.list_components",
             title="List Application components",
             surface=RootMcpSurface.OPERATIONS,
@@ -414,6 +550,126 @@ def contracts() -> list[RootMcpToolContract]:
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list_components"},
+        ),
+        RootMcpToolContract(
+            id="applications.list_placements",
+            title="List Application execution placements",
+            surface=RootMcpSurface.OPERATIONS,
+            summary=(
+                "Compare bounded desired and observed Application execution "
+                "at component and node granularity."
+            ),
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                required=["application_id"],
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_list_placements"},
+        ),
+        RootMcpToolContract(
+            id="applications.setup.show",
+            title="Show Application setup",
+            surface=RootMcpSurface.OPERATIONS,
+            summary=(
+                "Read the exact release-owned setup contract, secret-redacted "
+                "readiness state and typed configuration revisions."
+            ),
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {
+                        "type": ["string", "null"],
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                required=["application_id"],
+            ),
+            output_schema=response(),
+            required_capability="applications.read",
+            metadata={**published, "handler": "applications_setup_show"},
+        ),
+        RootMcpToolContract(
+            id="applications.setup.configure",
+            title="Configure Application component",
+            surface=RootMcpSurface.OPERATIONS,
+            summary=(
+                "CAS-update typed non-secret values declared by the exact "
+                "Application release setup contract."
+            ),
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "component_ref": {
+                        "type": "string",
+                        "pattern": "^(skill|scenario):",
+                    },
+                    "values": {"type": "object"},
+                    "expected_revision": {"type": "integer", "minimum": 0},
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                required=[
+                    "application_id",
+                    "release_digest",
+                    "component_ref",
+                    "values",
+                    "expected_revision",
+                ],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={**published, "handler": "applications_setup_configure"},
+        ),
+        RootMcpToolContract(
+            id="applications.setup.credential",
+            title="Bind Application credential",
+            surface=RootMcpSurface.OPERATIONS,
+            summary=(
+                "Write or revoke one purpose-bound credential through the node "
+                "vault; responses and durable setup state never contain its value."
+            ),
+            input_schema=schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "component_ref": {
+                        "type": "string",
+                        "pattern": "^(skill|scenario):",
+                    },
+                    "slot": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "value": {"type": ["string", "null"], "maxLength": 65536},
+                    "expected_revision": {"type": "integer", "minimum": 0},
+                    "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                required=[
+                    "application_id",
+                    "release_digest",
+                    "component_ref",
+                    "slot",
+                    "value",
+                    "expected_revision",
+                ],
+            ),
+            output_schema=response(),
+            required_capability="applications.apply",
+            side_effects="write",
+            metadata={
+                **published,
+                "handler": "applications_setup_credential",
+                "sensitive_input_paths": ["value"],
+            },
         ),
         RootMcpToolContract(
             id="applications.set_home_pin",
@@ -463,7 +719,11 @@ def contracts() -> list[RootMcpToolContract]:
                     "use_prerelease": {"type": "boolean"},
                     "paused": {"type": "boolean"},
                     "expected_revision": {"type": "integer", "minimum": 0},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240,
+                    },
                     "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
                 },
                 required=[
@@ -516,7 +776,10 @@ def contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="Find long-lived guests, stale holders, unused grants and sensitive access due for review.",
             input_schema=schema_object(
-                properties={"application_id": {"type": ["string", "null"]}, "stale_days": {"type": "integer", "minimum": 1, "maximum": 3650}},
+                properties={
+                    "application_id": {"type": ["string", "null"]},
+                    "stale_days": {"type": "integer", "minimum": 1, "maximum": 3650},
+                },
             ),
             output_schema=response(),
             required_capability="applications.read",
@@ -528,7 +791,10 @@ def contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="Compare declared and observed data, models, network, secrets, notifications and background use.",
             input_schema=schema_object(
-                properties={"application_id": {"type": "string"}, "release_digest": {"type": "string"}},
+                properties={
+                    "application_id": {"type": "string"},
+                    "release_digest": {"type": "string"},
+                },
                 required=["application_id", "release_digest"],
             ),
             output_schema=response(),
@@ -548,13 +814,27 @@ def contracts() -> list[RootMcpToolContract]:
                     "permission_id": {"type": "string"},
                     "app_capability": {"type": "string"},
                     "application_roles": {"type": "array", "items": {"type": "string"}},
-                    "permission_ceiling": {"type": "array", "items": {"type": "string"}},
+                    "permission_ceiling": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "explicit_denies": {"type": "array", "items": {"type": "string"}},
                     "constraints": {"type": "object"},
                     "actor_chain": {"type": "object"},
-                    "component_capabilities": {"type": "array", "items": {"type": "string"}},
+                    "component_capabilities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                 },
-                required=["application_id", "release_digest", "subject_ref", "permission_id", "app_capability", "application_roles", "permission_ceiling"],
+                required=[
+                    "application_id",
+                    "release_digest",
+                    "subject_ref",
+                    "permission_id",
+                    "app_capability",
+                    "application_roles",
+                    "permission_ceiling",
+                ],
             ),
             output_schema=response(),
             required_capability="applications.read",
@@ -578,7 +858,14 @@ def contracts() -> list[RootMcpToolContract]:
                     "constraints": {"type": "object"},
                     "expires_at": {"type": ["string", "null"]},
                 },
-                required=["application_id", "release_digest", "subject_ref", "application_roles", "expected_revision", "idempotency_key"],
+                required=[
+                    "application_id",
+                    "release_digest",
+                    "subject_ref",
+                    "application_roles",
+                    "expected_revision",
+                    "idempotency_key",
+                ],
             ),
             output_schema=response(),
             required_capability="applications.apply",
@@ -606,7 +893,13 @@ def contracts() -> list[RootMcpToolContract]:
                     "expected_revision": {"type": "integer", "minimum": 1},
                     "idempotency_key": {"type": "string"},
                 },
-                required=["grant_id", "release_digest", "application_roles", "expected_revision", "idempotency_key"],
+                required=[
+                    "grant_id",
+                    "release_digest",
+                    "application_roles",
+                    "expected_revision",
+                    "idempotency_key",
+                ],
             ),
             output_schema=response(),
             required_capability="applications.apply",
@@ -619,7 +912,11 @@ def contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="Revoke a subject's live Application grant with optimistic concurrency.",
             input_schema=schema_object(
-                properties={"grant_id": {"type": "string"}, "expected_revision": {"type": "integer", "minimum": 1}, "idempotency_key": {"type": "string"}},
+                properties={
+                    "grant_id": {"type": "string"},
+                    "expected_revision": {"type": "integer", "minimum": 1},
+                    "idempotency_key": {"type": "string"},
+                },
                 required=["grant_id", "expected_revision", "idempotency_key"],
             ),
             output_schema=response(),
@@ -632,7 +929,10 @@ def contracts() -> list[RootMcpToolContract]:
             title="Export Application access snapshot",
             surface=RootMcpSurface.OPERATIONS,
             summary="Export a digest-bound, secret-free Application access policy snapshot.",
-            input_schema=schema_object(properties={"application_id": {"type": "string"}}, required=["application_id"]),
+            input_schema=schema_object(
+                properties={"application_id": {"type": "string"}},
+                required=["application_id"],
+            ),
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_access_export"},
@@ -643,7 +943,11 @@ def contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="Validate or apply a digest-bound Application access snapshot.",
             input_schema=schema_object(
-                properties={"snapshot": {"type": "object"}, "apply": {"type": "boolean"}, "idempotency_key": {"type": "string"}},
+                properties={
+                    "snapshot": {"type": "object"},
+                    "apply": {"type": "boolean"},
+                    "idempotency_key": {"type": "string"},
+                },
                 required=["snapshot", "apply", "idempotency_key"],
             ),
             output_schema=response(),
@@ -665,14 +969,22 @@ def contracts() -> list[RootMcpToolContract]:
                     "subject_ref": {"type": "string"},
                     "mode": {"enum": ["delegated_user", "app_service"]},
                     "scopes": {"type": "array", "items": {"type": "string"}},
-                    "status": {"enum": ["missing", "connected", "expired", "revoked", "denied"]},
+                    "status": {
+                        "enum": ["missing", "connected", "expired", "revoked", "denied"]
+                    },
                     "token_expires_at": {"type": ["string", "null"]},
                     "scope_changed_at": {"type": ["string", "null"]},
                     "idempotency_key": {"type": "string"},
                 },
                 required=[
-                    "application_id", "release_digest", "account_id", "provider_id",
-                    "subject_ref", "mode", "status", "idempotency_key",
+                    "application_id",
+                    "release_digest",
+                    "account_id",
+                    "provider_id",
+                    "subject_ref",
+                    "mode",
+                    "status",
+                    "idempotency_key",
                 ],
             ),
             output_schema=response(),
@@ -706,8 +1018,14 @@ def contracts() -> list[RootMcpToolContract]:
                 properties={
                     "application_id": {"type": "string"},
                     "release_digest": {"type": "string"},
-                    "observed_capabilities": {"type": "array", "items": {"type": "string"}},
-                    "inferred_capabilities": {"type": "array", "items": {"type": "string"}},
+                    "observed_capabilities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "inferred_capabilities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "previous_release_digest": {"type": ["string", "null"]},
                 },
                 required=["application_id", "release_digest"],
@@ -726,20 +1044,31 @@ def contracts() -> list[RootMcpToolContract]:
                     "application_id": {"type": "string"},
                     "release_digest": {"type": "string"},
                     "source_commit": {"type": "string"},
-                    "observed_capabilities": {"type": "array", "items": {"type": "string"}},
-                    "inferred_capabilities": {"type": "array", "items": {"type": "string"}},
+                    "observed_capabilities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "inferred_capabilities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "regression_evidence": deepcopy(string_list),
                     "access_matrix_evidence": deepcopy(string_list),
                     "pending_action_evidence": deepcopy(string_list),
                     "audit_evidence": deepcopy(string_list),
                     "disclosure_evidence": deepcopy(string_list),
                     "redaction_evidence": deepcopy(string_list),
-                    "release_scope": {"enum": ["dev", "candidate", "trial", "publication"]},
+                    "release_scope": {
+                        "enum": ["dev", "candidate", "trial", "publication"]
+                    },
                     "idempotency_key": {"type": "string"},
                 },
                 required=[
-                    "application_id", "release_digest", "source_commit",
-                    "release_scope", "idempotency_key",
+                    "application_id",
+                    "release_digest",
+                    "source_commit",
+                    "release_scope",
+                    "idempotency_key",
                 ],
             ),
             output_schema=response(),
@@ -752,7 +1081,10 @@ def contracts() -> list[RootMcpToolContract]:
             title="List Application releases",
             surface=RootMcpSurface.OPERATIONS,
             summary="List immutable releases and effective channel bindings for one Application.",
-            input_schema=schema_object(properties={"application_id": {"type": "string"}}, required=["application_id"]),
+            input_schema=schema_object(
+                properties={"application_id": {"type": "string"}},
+                required=["application_id"],
+            ),
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list_releases"},
@@ -762,7 +1094,9 @@ def contracts() -> list[RootMcpToolContract]:
             title="List Application operations",
             surface=RootMcpSurface.OPERATIONS,
             summary="Poll durable Application operations after reconnect.",
-            input_schema=schema_object(properties={"application_id": {"type": "string"}}),
+            input_schema=schema_object(
+                properties={"application_id": {"type": "string"}}
+            ),
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list_operations"},
@@ -788,7 +1122,10 @@ def contracts() -> list[RootMcpToolContract]:
             title="Get Application operation",
             surface=RootMcpSurface.OPERATIONS,
             summary="Read one durable operation and structured recovery reason.",
-            input_schema=schema_object(properties={"operation_id": {"type": "string"}}, required=["operation_id"]),
+            input_schema=schema_object(
+                properties={"operation_id": {"type": "string"}},
+                required=["operation_id"],
+            ),
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_get_operation"},
@@ -798,7 +1135,9 @@ def contracts() -> list[RootMcpToolContract]:
             title="List Trial access grants",
             surface=RootMcpSurface.OPERATIONS,
             summary="List bounded Trial grant metadata without capability bearer tokens.",
-            input_schema=schema_object(properties={"application_id": {"type": "string"}}),
+            input_schema=schema_object(
+                properties={"application_id": {"type": "string"}}
+            ),
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list_trial_access"},
@@ -809,7 +1148,8 @@ def contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="Read the one current prerelease staged-rollout policy and aggregate health.",
             input_schema=schema_object(
-                properties={"application_id": {"type": "string"}}, required=["application_id"]
+                properties={"application_id": {"type": "string"}},
+                required=["application_id"],
             ),
             output_schema=response(),
             required_capability="applications.read",
@@ -835,7 +1175,10 @@ def contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=response(),
             required_capability="applications.report",
-            metadata={**published, "handler": "applications_get_development_report_status"},
+            metadata={
+                **published,
+                "handler": "applications_get_development_report_status",
+            },
         ),
         RootMcpToolContract(
             id="applications.list_development_report_intakes",
@@ -845,27 +1188,40 @@ def contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(),
             output_schema=response(),
             required_capability="applications.publisher.read",
-            metadata={**published, "handler": "applications_list_development_report_intakes"},
+            metadata={
+                **published,
+                "handler": "applications_list_development_report_intakes",
+            },
         ),
         RootMcpToolContract(
             id="applications.list_development_report_appeals",
             title="List Development Report appeals",
             surface=RootMcpSurface.OPERATIONS,
             summary="List appeal state for reports created by the local subnet.",
-            input_schema=schema_object(properties={"report_id": {"type": ["string", "null"]}}),
+            input_schema=schema_object(
+                properties={"report_id": {"type": ["string", "null"]}}
+            ),
             output_schema=response(),
             required_capability="applications.report",
-            metadata={**published, "handler": "applications_list_development_report_appeals"},
+            metadata={
+                **published,
+                "handler": "applications_list_development_report_appeals",
+            },
         ),
         RootMcpToolContract(
             id="applications.list_publisher_development_report_appeals",
             title="List publisher Development Report appeals",
             surface=RootMcpSurface.OPERATIONS,
             summary="List encrypted appeals received for publisher-local report intakes.",
-            input_schema=schema_object(properties={"report_id": {"type": ["string", "null"]}}),
+            input_schema=schema_object(
+                properties={"report_id": {"type": ["string", "null"]}}
+            ),
             output_schema=response(),
             required_capability="applications.publisher.read",
-            metadata={**published, "handler": "applications_list_publisher_development_report_appeals"},
+            metadata={
+                **published,
+                "handler": "applications_list_publisher_development_report_appeals",
+            },
         ),
         RootMcpToolContract(
             id="applications.get_development_report_triage",
@@ -882,7 +1238,10 @@ def contracts() -> list[RootMcpToolContract]:
             ),
             output_schema=response(),
             required_capability="applications.publisher.read",
-            metadata={**published, "handler": "applications_get_development_report_triage"},
+            metadata={
+                **published,
+                "handler": "applications_get_development_report_triage",
+            },
         ),
         RootMcpToolContract(
             id="applications.submit_development_report",
@@ -894,9 +1253,20 @@ def contracts() -> list[RootMcpToolContract]:
                     "application_id": {"type": "string"},
                     "summary": {"type": "string", "minLength": 1, "maxLength": 500},
                     "details": {"type": "string", "minLength": 1, "maxLength": 16000},
-                    "evidence": {"type": "array", "items": evidence_item, "maxItems": 20},
-                    "installed_release_digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "evidence": {
+                        "type": "array",
+                        "items": evidence_item,
+                        "maxItems": 20,
+                    },
+                    "installed_release_digest": {
+                        "type": ["string", "null"],
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 180,
+                    },
                 },
                 required=["application_id", "summary", "details", "idempotency_key"],
             ),
@@ -913,7 +1283,11 @@ def contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(
                 properties={
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 180,
+                    },
                 },
                 required=["idempotency_key"],
             ),
@@ -932,7 +1306,11 @@ def contracts() -> list[RootMcpToolContract]:
                     "report_id": {"type": "string"},
                     "outcome": {"enum": ["triaged", "declined", "duplicate"]},
                     "reason_code": {"type": ["string", "null"]},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 180,
+                    },
                 },
                 required=["report_id", "outcome", "idempotency_key"],
             ),
@@ -950,7 +1328,11 @@ def contracts() -> list[RootMcpToolContract]:
                 properties={
                     "report_id": {"type": "string"},
                     "policy_ref": {"type": ["string", "null"]},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 180,
+                    },
                 },
                 required=["report_id", "idempotency_key"],
             ),
@@ -969,15 +1351,25 @@ def contracts() -> list[RootMcpToolContract]:
                     "report_id": {"type": "string"},
                     "status": {"enum": ["planned", "prerelease_available", "released"]},
                     "reason_code": {"type": ["string", "null"]},
-                    "release_digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "release_digest": {
+                        "type": ["string", "null"],
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 180,
+                    },
                 },
                 required=["report_id", "status", "idempotency_key"],
             ),
             output_schema=response(),
             required_capability="applications.publisher.triage",
             side_effects="write",
-            metadata={**published, "handler": "applications_set_development_report_status"},
+            metadata={
+                **published,
+                "handler": "applications_set_development_report_status",
+            },
         ),
         RootMcpToolContract(
             id="applications.submit_development_report_appeal",
@@ -988,14 +1380,21 @@ def contracts() -> list[RootMcpToolContract]:
                 properties={
                     "report_id": {"type": "string"},
                     "statement": {"type": "string", "minLength": 1, "maxLength": 4000},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 180,
+                    },
                 },
                 required=["report_id", "statement", "idempotency_key"],
             ),
             output_schema=response(),
             required_capability="applications.report",
             side_effects="write",
-            metadata={**published, "handler": "applications_submit_development_report_appeal"},
+            metadata={
+                **published,
+                "handler": "applications_submit_development_report_appeal",
+            },
         ),
         RootMcpToolContract(
             id="applications.resolve_development_report_appeal",
@@ -1007,14 +1406,21 @@ def contracts() -> list[RootMcpToolContract]:
                     "appeal_id": {"type": "string"},
                     "resolution": {"enum": ["reopened", "corrected", "upheld"]},
                     "rationale": {"type": "string", "minLength": 1, "maxLength": 4000},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 180,
+                    },
                 },
                 required=["appeal_id", "resolution", "rationale", "idempotency_key"],
             ),
             output_schema=response(),
             required_capability="applications.publisher.triage",
             side_effects="write",
-            metadata={**published, "handler": "applications_resolve_development_report_appeal"},
+            metadata={
+                **published,
+                "handler": "applications_resolve_development_report_appeal",
+            },
         ),
         RootMcpToolContract(
             id="applications.verify_development_report_release",
@@ -1025,15 +1431,25 @@ def contracts() -> list[RootMcpToolContract]:
                 properties={
                     "report_id": {"type": "string"},
                     "outcome": {"enum": ["verified", "still_reproduces"]},
-                    "release_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "release_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 180,
+                    },
                 },
                 required=["report_id", "outcome", "release_digest", "idempotency_key"],
             ),
             output_schema=response(),
             required_capability="applications.report",
             side_effects="write",
-            metadata={**published, "handler": "applications_verify_development_report_release"},
+            metadata={
+                **published,
+                "handler": "applications_verify_development_report_release",
+            },
         ),
         RootMcpToolContract(
             id="applications.request_development_report_resync",
@@ -1045,14 +1461,21 @@ def contracts() -> list[RootMcpToolContract]:
                     "report_id": {"type": "string"},
                     "after_revision": {"type": "integer", "minimum": 0},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 200},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 180,
+                    },
                 },
                 required=["report_id", "after_revision", "idempotency_key"],
             ),
             output_schema=response(),
             required_capability="applications.report",
             side_effects="write",
-            metadata={**published, "handler": "applications_request_development_report_resync"},
+            metadata={
+                **published,
+                "handler": "applications_request_development_report_resync",
+            },
         ),
         RootMcpToolContract(
             id="applications.plan",
@@ -1064,14 +1487,21 @@ def contracts() -> list[RootMcpToolContract]:
                     **identity,
                     "kind": {"enum": ["install", "update", "remove", "select_track"]},
                     "release_digest": {"type": ["string", "null"]},
-                    "data_policy": {"enum": ["retain", "delete", "snapshot_then_delete"]},
+                    "data_policy": {
+                        "enum": ["retain", "delete", "snapshot_then_delete"]
+                    },
                     "update_track": {"enum": ["stable", "prerelease"]},
                     "update_policy": {"enum": ["notify", "auto_compatible", "pinned"]},
                     "paused": {"type": "boolean"},
                     "pinned_release_digest": {"type": ["string", "null"]},
                     "access_redemption_id": {"type": ["string", "null"]},
                 },
-                required=["application_id", "kind", "expected_revision", "idempotency_key"],
+                required=[
+                    "application_id",
+                    "kind",
+                    "expected_revision",
+                    "idempotency_key",
+                ],
             ),
             output_schema=response(),
             required_capability="applications.plan",
@@ -1086,8 +1516,15 @@ def contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(
                 properties={
                     "operation_id": {"type": "string"},
-                    "plan_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "plan_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240,
+                    },
                     "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
                 },
                 required=["operation_id", "plan_digest", "idempotency_key"],
@@ -1102,7 +1539,10 @@ def contracts() -> list[RootMcpToolContract]:
             title="Explain Application plan",
             surface=RootMcpSurface.OPERATIONS,
             summary="Explain exact release, compatibility, snapshot, removal, and conflict decisions.",
-            input_schema=schema_object(properties={"operation_id": {"type": "string"}}, required=["operation_id"]),
+            input_schema=schema_object(
+                properties={"operation_id": {"type": "string"}},
+                required=["operation_id"],
+            ),
             output_schema=response(),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_explain_plan"},
@@ -1120,19 +1560,37 @@ def contracts() -> list[RootMcpToolContract]:
                     "scope": {"enum": ["exact_release", "follow_prerelease"]},
                     "release_digest": {"type": ["string", "null"]},
                     "expires_at": {"type": "string", "format": "date-time"},
-                    "allowed_zones": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 16},
+                    "allowed_zones": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 16,
+                    },
                     "max_uses": {"type": "integer", "minimum": 1, "maximum": 100},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240,
+                    },
                 },
                 required=[
-                    "application_id", "recipient_subnet_ref", "recipient_key_ref", "scope",
-                    "expires_at", "allowed_zones", "idempotency_key",
+                    "application_id",
+                    "recipient_subnet_ref",
+                    "recipient_key_ref",
+                    "scope",
+                    "expires_at",
+                    "allowed_zones",
+                    "idempotency_key",
                 ],
             ),
             output_schema=response(),
             required_capability="applications.apply",
             side_effects="write",
-            metadata={**published, "handler": "applications_issue_trial_access", "sensitive_output_paths": ["result.link"]},
+            metadata={
+                **published,
+                "handler": "applications_issue_trial_access",
+                "sensitive_output_paths": ["result.link"],
+            },
         ),
         RootMcpToolContract(
             id="applications.revoke_trial_access",
@@ -1158,16 +1616,27 @@ def contracts() -> list[RootMcpToolContract]:
             summary="Redeem a capability link for the authenticated subnet, key, and zone.",
             input_schema=schema_object(
                 properties={
-                    "link": {"type": "string", "pattern": "^adaos://applications/trial/"},
+                    "link": {
+                        "type": "string",
+                        "pattern": "^adaos://applications/trial/",
+                    },
                     "recipient_key_ref": {"type": "string"},
-                    "redemption_id": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "redemption_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240,
+                    },
                 },
                 required=["link", "recipient_key_ref", "redemption_id"],
             ),
             output_schema=response(),
             required_capability="applications.trial.redeem",
             side_effects="write",
-            metadata={**published, "handler": "applications_resolve_trial_link", "sensitive_input_paths": ["link"]},
+            metadata={
+                **published,
+                "handler": "applications_resolve_trial_link",
+                "sensitive_input_paths": ["link"],
+            },
         ),
         RootMcpToolContract(
             id="applications.plan_trial_link_install",
@@ -1176,16 +1645,32 @@ def contracts() -> list[RootMcpToolContract]:
             summary="Redeem a Trial link and persist an exact reviewed installation plan.",
             input_schema=schema_object(
                 properties={
-                    "link": {"type": "string", "pattern": "^adaos://applications/trial/"},
+                    "link": {
+                        "type": "string",
+                        "pattern": "^adaos://applications/trial/",
+                    },
                     "recipient_key_ref": {"type": "string"},
-                    "redemption_id": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "redemption_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240,
+                    },
                     "expected_revision": {"type": "integer", "minimum": 0},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
-                    "data_policy": {"enum": ["retain", "delete", "snapshot_then_delete"]},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240,
+                    },
+                    "data_policy": {
+                        "enum": ["retain", "delete", "snapshot_then_delete"]
+                    },
                 },
                 required=[
-                    "link", "recipient_key_ref", "redemption_id",
-                    "expected_revision", "idempotency_key",
+                    "link",
+                    "recipient_key_ref",
+                    "redemption_id",
+                    "expected_revision",
+                    "idempotency_key",
                 ],
             ),
             output_schema=response(),
@@ -1205,18 +1690,38 @@ def contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(
                 properties={
                     "application_id": {"type": "string"},
-                    "release_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                    "release_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
                     "percentage": {"type": "integer", "minimum": 0, "maximum": 100},
                     "paused": {"type": "boolean"},
-                    "minimum_health_subnets": {"type": "integer", "minimum": 1, "maximum": 10000},
-                    "failure_threshold": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+                    "minimum_health_subnets": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10000,
+                    },
+                    "failure_threshold": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 1,
+                    },
                     "expected_revision": {"type": "integer", "minimum": 0},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240,
+                    },
                     "resume_after_halt": {"type": "boolean"},
                 },
                 required=[
-                    "application_id", "release_digest", "percentage", "paused",
-                    "minimum_health_subnets", "failure_threshold", "expected_revision",
+                    "application_id",
+                    "release_digest",
+                    "percentage",
+                    "paused",
+                    "minimum_health_subnets",
+                    "failure_threshold",
+                    "expected_revision",
                     "idempotency_key",
                 ],
             ),
@@ -1233,16 +1738,30 @@ def contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(
                 properties={
                     "application_id": {"type": "string"},
-                    "release_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                    "release_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
                     "outcome": {"enum": ["healthy", "failed"]},
                     "installation_revision": {"type": "integer", "minimum": 1},
-                    "evidence_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                    "evidence_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                    },
                     "observed_at": {"type": "string", "format": "date-time"},
-                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 240,
+                    },
                 },
                 required=[
-                    "application_id", "release_digest", "outcome",
-                    "installation_revision", "evidence_digest", "observed_at",
+                    "application_id",
+                    "release_digest",
+                    "outcome",
+                    "installation_revision",
+                    "evidence_digest",
+                    "observed_at",
                     "idempotency_key",
                 ],
             ),
@@ -1259,7 +1778,11 @@ def _context(arguments: Mapping[str, Any]) -> tuple[str, str]:
     raw = arguments.get("_mcp_context")
     context = dict(raw) if isinstance(raw, Mapping) else {}
     scope = context.get("scope") if isinstance(context.get("scope"), Mapping) else {}
-    auth = context.get("auth_context") if isinstance(context.get("auth_context"), Mapping) else {}
+    auth = (
+        context.get("auth_context")
+        if isinstance(context.get("auth_context"), Mapping)
+        else {}
+    )
     actor = str(context.get("actor") or auth.get("actor") or "").strip()
     subnet_id = str(scope.get("subnet_id") or auth.get("subnet_id") or "").strip()
     if not actor:
@@ -1298,7 +1821,9 @@ def _string_list(value: Any) -> tuple[str, ...]:
         values = value
     else:
         raise ValueError("expected a string or list of strings")
-    return tuple(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
+    return tuple(
+        dict.fromkeys(str(item).strip() for item in values if str(item).strip())
+    )
 
 
 def _mcp_mutation_context(
@@ -1336,6 +1861,60 @@ def _handle_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     }
 
 
+def _handle_assess_updates(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    return {
+        "assessment": _sdk().assess_updates(
+            application_ids=tuple(arguments.get("application_ids") or ()) or None,
+            webspace_id=_webspace_id(arguments),
+        )
+    }
+
+
+def _handle_plan_updates(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_plan_updates": True, "request": request}
+    actor_ref, subnet_ref = _context(arguments)
+    return {
+        "batch": _sdk().plan_available_updates(
+            application_ids=tuple(arguments.get("application_ids") or ()) or None,
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability="applications.plan",
+            idempotency_key=str(arguments.get("idempotency_key") or ""),
+            webspace_id=_webspace_id(arguments),
+        )
+    }
+
+
+def _handle_get_update_batch(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    return {"batch": _sdk().get_update_batch(str(arguments.get("batch_id") or ""))}
+
+
+def _handle_apply_updates(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
+    if dry_run:
+        return {"would_apply_updates": True, "request": request}
+    actor_ref, subnet_ref = _context(arguments)
+    return {
+        "batch": _sdk().apply_update_batch(
+            str(arguments.get("batch_id") or ""),
+            plan_digest=str(arguments.get("plan_digest") or ""),
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            capability="applications.apply",
+            idempotency_key=str(arguments.get("idempotency_key") or ""),
+            webspace_id=_webspace_id(arguments),
+        )
+    }
+
+
 def _handle_list_components(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
@@ -1346,9 +1925,80 @@ def _handle_list_components(
     }
 
 
-def _handle_set_home_pin(
+def _handle_list_placements(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
+    return {
+        "placements": _sdk().list_application_placements(
+            _application_id(arguments), webspace_id=_webspace_id(arguments)
+        )
+    }
+
+
+def _handle_setup_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return {
+        "setup": _sdk().get_application_setup(
+            _application_id(arguments),
+            release_digest=str(arguments.get("release_digest") or "").strip() or None,
+            webspace_id=_webspace_id(arguments),
+        )
+    }
+
+
+def _handle_setup_configure(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_configure": True,
+            "application_id": _application_id(arguments),
+            "component_ref": str(arguments.get("component_ref") or ""),
+            "release_digest": str(arguments.get("release_digest") or ""),
+            "expected_revision": int(arguments.get("expected_revision") or 0),
+            "field_names": sorted(str(key) for key in (arguments.get("values") or {})),
+        }
+    actor_ref, subnet_ref = _context(arguments)
+    return _sdk().update_application_configuration(
+        _application_id(arguments),
+        str(arguments.get("component_ref") or ""),
+        dict(arguments.get("values") or {}),
+        release_digest=str(arguments.get("release_digest") or ""),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        actor_ref=actor_ref,
+        subnet_ref=subnet_ref,
+        capability="applications.apply",
+        webspace_id=_webspace_id(arguments),
+    )
+
+
+def _handle_setup_credential(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    if dry_run:
+        return {
+            "would_update_credential": True,
+            "application_id": _application_id(arguments),
+            "component_ref": str(arguments.get("component_ref") or ""),
+            "slot": str(arguments.get("slot") or ""),
+            "present": arguments.get("value") is not None,
+            "expected_revision": int(arguments.get("expected_revision") or 0),
+        }
+    actor_ref, subnet_ref = _context(arguments)
+    return _sdk().update_application_credential(
+        _application_id(arguments),
+        str(arguments.get("component_ref") or ""),
+        str(arguments.get("slot") or ""),
+        arguments.get("value"),
+        release_digest=str(arguments.get("release_digest") or ""),
+        expected_revision=int(arguments.get("expected_revision") or 0),
+        actor_ref=actor_ref,
+        subnet_ref=subnet_ref,
+        capability="applications.apply",
+        webspace_id=_webspace_id(arguments),
+    )
+
+
+def _handle_set_home_pin(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {
             "would_set_home_pin": True,
@@ -1365,9 +2015,7 @@ def _handle_set_home_pin(
     }
 
 
-def _handle_reorder_home(
-    arguments: dict[str, Any], *, dry_run: bool
-) -> dict[str, Any]:
+def _handle_reorder_home(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {
             "would_reorder_home": True,
@@ -1396,9 +2044,13 @@ def _handle_update_settings(
     sdk = _sdk()
     planned = sdk.plan_update_track(
         application_id,
-        update_track="prerelease" if bool(arguments.get("use_prerelease")) else "stable",
+        update_track="prerelease"
+        if bool(arguments.get("use_prerelease"))
+        else "stable",
         update_policy=(
-            "auto_compatible" if bool(arguments.get("auto_update_enabled")) else "notify"
+            "auto_compatible"
+            if bool(arguments.get("auto_update_enabled"))
+            else "notify"
         ),
         paused=bool(arguments.get("paused", False)),
         expected_revision=int(arguments.get("expected_revision") or 0),
@@ -1444,7 +2096,9 @@ def _handle_access_users(arguments: dict[str, Any], *, dry_run: bool) -> dict[st
     }
 
 
-def _handle_access_reviews(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_access_reviews(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return {
         "findings": _sdk().list_application_access_reviews(
             str(arguments.get("application_id") or "").strip() or None,
@@ -1453,14 +2107,18 @@ def _handle_access_reviews(arguments: dict[str, Any], *, dry_run: bool) -> dict[
     }
 
 
-def _handle_access_privacy(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_access_privacy(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return _sdk().get_application_privacy_report(
         _application_id(arguments),
         release_digest=str(arguments.get("release_digest") or ""),
     )
 
 
-def _handle_access_simulate(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_access_simulate(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return _sdk().simulate_application_access(
         _application_id(arguments),
         release_digest=str(arguments.get("release_digest") or ""),
@@ -1497,7 +2155,9 @@ def _handle_access_grant(arguments: dict[str, Any], *, dry_run: bool) -> dict[st
     }
 
 
-def _handle_access_change(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_access_change(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     if dry_run:
         return {"would_change": True, "grant_id": arguments.get("grant_id")}
     mutation = _mcp_mutation_context(arguments, "applications.apply")
@@ -1510,7 +2170,9 @@ def _handle_access_change(arguments: dict[str, Any], *, dry_run: bool) -> dict[s
             release_digest=str(arguments.get("release_digest") or ""),
             application_roles=_string_list(arguments.get("application_roles")),
             expected_revision=int(arguments.get("expected_revision") or 0),
-            permission_ceiling=(_string_list(ceiling) or None) if ceiling is not None else None,
+            permission_ceiling=(_string_list(ceiling) or None)
+            if ceiling is not None
+            else None,
             explicit_denies=_string_list(denies) if denies is not None else None,
             constraints=dict(constraints) if isinstance(constraints, Mapping) else None,
             expires_at=str(arguments.get("expires_at") or "").strip() or None,
@@ -1520,7 +2182,9 @@ def _handle_access_change(arguments: dict[str, Any], *, dry_run: bool) -> dict[s
     }
 
 
-def _handle_access_revoke(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_access_revoke(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     if dry_run:
         return {"would_revoke": True, "grant_id": arguments.get("grant_id")}
     mutation = _mcp_mutation_context(arguments, "applications.apply")
@@ -1535,11 +2199,19 @@ def _handle_access_revoke(arguments: dict[str, Any], *, dry_run: bool) -> dict[s
     }
 
 
-def _handle_access_export(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return {"snapshot": _sdk().export_application_access_snapshot(_application_id(arguments))}
+def _handle_access_export(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    return {
+        "snapshot": _sdk().export_application_access_snapshot(
+            _application_id(arguments)
+        )
+    }
 
 
-def _handle_access_import(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_access_import(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     mutation = _mcp_mutation_context(arguments, "applications.apply")
     return _sdk().import_application_access_snapshot(
         dict(arguments.get("snapshot") or {}),
@@ -1561,8 +2233,15 @@ def _handle_access_connected_account(
     account = {
         key: arguments.get(key)
         for key in (
-            "release_digest", "account_id", "provider_id", "subject_ref", "mode",
-            "scopes", "status", "token_expires_at", "scope_changed_at",
+            "release_digest",
+            "account_id",
+            "provider_id",
+            "subject_ref",
+            "mode",
+            "scopes",
+            "status",
+            "token_expires_at",
+            "scope_changed_at",
         )
     }
     account["scopes"] = _string_list(account.get("scopes"))
@@ -1585,7 +2264,9 @@ def _handle_access_update_review(
     )
 
 
-def _handle_access_profile(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_access_profile(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return _sdk().profile_application_permissions(
         _application_id(arguments),
         release_digest=str(arguments.get("release_digest") or ""),
@@ -1633,7 +2314,9 @@ def _handle_operations(arguments: dict[str, Any], *, dry_run: bool) -> dict[str,
     return {"operations": _sdk().list_operations(application_id)}
 
 
-def _handle_operation_events(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_operation_events(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return _sdk().poll_operation_events(
         application_id=str(arguments.get("application_id") or "").strip() or None,
         cursor=str(arguments.get("cursor") or "").strip() or None,
@@ -1641,27 +2324,37 @@ def _handle_operation_events(arguments: dict[str, Any], *, dry_run: bool) -> dic
     )
 
 
-def _handle_get_operation(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_get_operation(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     operation_id = str(arguments.get("operation_id") or "").strip()
     if not operation_id:
         raise ValueError("operation_id is required")
     return {"operation": _sdk().get_operation(operation_id)}
 
 
-def _handle_list_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_list_trial_access(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     application_id = str(arguments.get("application_id") or "").strip() or None
     return {"grants": _sdk().list_trial_access(application_id)}
 
 
-def _handle_get_prerelease_rollout(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_get_prerelease_rollout(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return {"rollout": _sdk().get_prerelease_rollout(_application_id(arguments))}
 
 
-def _handle_list_development_reports(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_list_development_reports(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return {"reports": _sdk().list_development_reports()}
 
 
-def _handle_development_report_status(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_development_report_status(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     report_id = str(arguments.get("report_id") or "").strip()
     if not report_id:
         raise ValueError("report_id is required")
@@ -1671,7 +2364,9 @@ def _handle_development_report_status(arguments: dict[str, Any], *, dry_run: boo
     }
 
 
-def _handle_development_report_intakes(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_development_report_intakes(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     return {"intakes": _sdk().list_development_report_intakes()}
 
 
@@ -1871,7 +2566,10 @@ def _handle_development_create(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
     if dry_run:
-        return {"would_create_application": True, "request": _builder_request(arguments)}
+        return {
+            "would_create_application": True,
+            "request": _builder_request(arguments),
+        }
     return _builder_sdk().create_application(
         _application_id(arguments),
         title=str(arguments.get("title") or ""),
@@ -1892,7 +2590,10 @@ def _handle_development_materialize(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
     if dry_run:
-        return {"would_materialize_application": True, "request": _builder_request(arguments)}
+        return {
+            "would_materialize_application": True,
+            "request": _builder_request(arguments),
+        }
     return _builder_sdk().materialize_application(
         _application_id(arguments),
         revision=str(arguments.get("revision") or ""),
@@ -1942,7 +2643,10 @@ def _handle_development_preview(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
     if dry_run:
-        return {"would_preview_application": True, "request": _builder_request(arguments)}
+        return {
+            "would_preview_application": True,
+            "request": _builder_request(arguments),
+        }
     return _builder_sdk().preview_development(
         _application_id(arguments),
         source_webspace_id=str(arguments.get("source_webspace_id") or "desktop"),
@@ -1981,7 +2685,10 @@ def _handle_development_publish_link_trial(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
     if dry_run:
-        return {"would_publish_link_trial": True, "request": _builder_request(arguments)}
+        return {
+            "would_publish_link_trial": True,
+            "request": _builder_request(arguments),
+        }
     return _builder_sdk().publish_link_trial(
         _application_id(arguments),
         str(arguments.get("candidate_id") or ""),
@@ -1995,7 +2702,10 @@ def _handle_development_publish_prerelease(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
     if dry_run:
-        return {"would_publish_prerelease": True, "request": _builder_request(arguments)}
+        return {
+            "would_publish_prerelease": True,
+            "request": _builder_request(arguments),
+        }
     return _builder_sdk().publish_prerelease(
         _application_id(arguments),
         str(arguments.get("candidate_id") or ""),
@@ -2028,7 +2738,10 @@ def _handle_development_publish_stable_source(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
     if dry_run:
-        return {"would_publish_stable_source": True, "request": _builder_request(arguments)}
+        return {
+            "would_publish_stable_source": True,
+            "request": _builder_request(arguments),
+        }
     return _builder_sdk().publish_stable_source(
         _application_id(arguments),
         str(arguments.get("release_digest") or ""),
@@ -2054,18 +2767,24 @@ def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     }
     sdk = _sdk()
     if kind == "install":
-            operation = sdk.plan_install(
+        operation = sdk.plan_install(
             application_id,
             release_digest=str(arguments.get("release_digest") or "").strip() or None,
             data_policy=str(arguments.get("data_policy") or "retain"),
-            access_redemption_id=str(arguments.get("access_redemption_id") or "").strip() or None,
+            access_redemption_id=str(
+                arguments.get("access_redemption_id") or ""
+            ).strip()
+            or None,
             **common,
         )
     elif kind == "update":
         operation = sdk.plan_update(
             application_id,
             release_digest=str(arguments.get("release_digest") or "").strip() or None,
-            access_redemption_id=str(arguments.get("access_redemption_id") or "").strip() or None,
+            access_redemption_id=str(
+                arguments.get("access_redemption_id") or ""
+            ).strip()
+            or None,
             **common,
         )
     elif kind == "remove":
@@ -2080,7 +2799,10 @@ def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
             update_track=str(arguments.get("update_track") or "stable"),
             update_policy=str(arguments.get("update_policy") or "auto_compatible"),
             paused=bool(arguments.get("paused", False)),
-            pinned_release_digest=str(arguments.get("pinned_release_digest") or "").strip() or None,
+            pinned_release_digest=str(
+                arguments.get("pinned_release_digest") or ""
+            ).strip()
+            or None,
             **common,
         )
     else:
@@ -2113,7 +2835,9 @@ def _handle_explain(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
     return {"explanation": _sdk().explain_plan(operation_id)}
 
 
-def _handle_issue_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_issue_trial_access(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_issue": True, "request": request}
@@ -2137,7 +2861,9 @@ def _handle_issue_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> d
     }
 
 
-def _handle_revoke_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_revoke_trial_access(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_revoke": True, "request": request}
@@ -2154,8 +2880,14 @@ def _handle_revoke_trial_access(arguments: dict[str, Any], *, dry_run: bool) -> 
     }
 
 
-def _handle_resolve_trial_link(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    request = {key: value for key, value in arguments.items() if key not in {"_mcp_context", "link"}}
+def _handle_resolve_trial_link(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = {
+        key: value
+        for key, value in arguments.items()
+        if key not in {"_mcp_context", "link"}
+    }
     if dry_run:
         return {"would_redeem": True, "request": request}
     raw = arguments.get("_mcp_context")
@@ -2178,9 +2910,13 @@ def _handle_resolve_trial_link(arguments: dict[str, Any], *, dry_run: bool) -> d
     }
 
 
-def _handle_plan_trial_link_install(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_plan_trial_link_install(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {
-        key: value for key, value in arguments.items() if key not in {"_mcp_context", "link"}
+        key: value
+        for key, value in arguments.items()
+        if key not in {"_mcp_context", "link"}
     }
     if dry_run:
         return {"would_plan_trial_install": True, "request": request}
@@ -2205,7 +2941,9 @@ def _handle_plan_trial_link_install(arguments: dict[str, Any], *, dry_run: bool)
     )
 
 
-def _handle_set_prerelease_rollout(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_set_prerelease_rollout(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_set_rollout": True, "request": request}
@@ -2228,7 +2966,9 @@ def _handle_set_prerelease_rollout(arguments: dict[str, Any], *, dry_run: bool) 
     }
 
 
-def _handle_record_prerelease_health(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_record_prerelease_health(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     if dry_run:
         return {"would_record_health": True, "request": request}
@@ -2251,7 +2991,15 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "applications.list": _handle_list,
         "applications.show": _handle_show,
+        "applications.assess_updates": _handle_assess_updates,
+        "applications.plan_updates": _handle_plan_updates,
+        "applications.get_update_batch": _handle_get_update_batch,
+        "applications.apply_updates": _handle_apply_updates,
         "applications.list_components": _handle_list_components,
+        "applications.list_placements": _handle_list_placements,
+        "applications.setup.show": _handle_setup_show,
+        "applications.setup.configure": _handle_setup_configure,
+        "applications.setup.credential": _handle_setup_credential,
         "applications.set_home_pin": _handle_set_home_pin,
         "applications.reorder_home": _handle_reorder_home,
         "applications.update_settings": _handle_update_settings,

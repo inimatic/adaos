@@ -20,6 +20,16 @@
       "items": {"$ref": "#/$defs/applicationRole"}
     },
     "role_model_digest": {"$ref": "#/$defs/digest"},
+    "setup_contract": {
+      "type": "object",
+      "required": ["schema", "application_id", "release_digest"],
+      "properties": {
+        "schema": {"const": "adaos.application.setup_contract.v1"},
+        "application_id": {"$ref": "#/$defs/id"},
+        "release_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "setup_contract_digest": {"$ref": "#/$defs/digest"},
     "addresses_report_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
     "lifecycle": {"enum": ["candidate", "trial", "prerelease", "stable", "superseded", "retired", "archived", "yanked"]},
     "published_at": {"type": "string", "format": "date-time"}

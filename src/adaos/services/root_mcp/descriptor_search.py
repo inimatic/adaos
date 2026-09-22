@@ -10,6 +10,7 @@ from .registry import get_descriptor_set, list_descriptor_sets
 
 _CHILD_INDEX_DESCRIPTORS = {
     "sdk_metadata",
+    "application_contracts",
     "ui_capability_catalog",
     "architecture_catalog",
     "template_catalog",
@@ -29,7 +30,9 @@ def _terms(value: str | None) -> list[str]:
 
 
 def _fingerprint(value: Mapping[str, Any]) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return f"sha256:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
 
 
@@ -66,11 +69,16 @@ def _header(
 
 def _catalog_header(entry: Mapping[str, Any]) -> dict[str, Any]:
     descriptor_id = str(entry.get("descriptor_id") or "")
-    overview = entry.get("overview") if isinstance(entry.get("overview"), Mapping) else {}
+    overview = (
+        entry.get("overview") if isinstance(entry.get("overview"), Mapping) else {}
+    )
     return _header(
         descriptor_id=descriptor_id,
         item_id=descriptor_id,
-        kind=str(overview.get("kind") or f"descriptor.{entry.get('descriptor_class') or 'set'}"),
+        kind=str(
+            overview.get("kind")
+            or f"descriptor.{entry.get('descriptor_class') or 'set'}"
+        ),
         title=str(entry.get("title") or descriptor_id),
         summary=str(entry.get("summary") or ""),
         owner=str(overview.get("owner") or "root"),
@@ -80,14 +88,24 @@ def _catalog_header(entry: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
-def _payload_headers(descriptor_id: str, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _payload_headers(
+    descriptor_id: str, payload: Mapping[str, Any]
+) -> list[dict[str, Any]]:
     if descriptor_id == "sdk_metadata":
         rows: list[dict[str, Any]] = []
         for item in payload.get("overview_rows") or []:
             if not isinstance(item, Mapping):
                 continue
-            drill_down = item.get("drill_down") if isinstance(item.get("drill_down"), Mapping) else {}
-            metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
+            drill_down = (
+                item.get("drill_down")
+                if isinstance(item.get("drill_down"), Mapping)
+                else {}
+            )
+            metadata = (
+                item.get("metadata")
+                if isinstance(item.get("metadata"), Mapping)
+                else {}
+            )
             item_id = str(drill_down.get("item_id") or item.get("row_id") or "")
             if not item_id:
                 continue
@@ -105,6 +123,24 @@ def _payload_headers(descriptor_id: str, payload: Mapping[str, Any]) -> list[dic
                 )
             )
         return rows
+    if descriptor_id == "application_contracts":
+        return [
+            _header(
+                descriptor_id=descriptor_id,
+                item_id=str(item.get("group_id") or ""),
+                kind="application.operation_group",
+                title=str(item.get("title") or item.get("group_id") or ""),
+                summary=str(item.get("summary") or ""),
+                owner="adaos.root.applications",
+                stability="beta",
+                tags=[
+                    *[str(value) for value in item.get("tool_ids") or []],
+                    *[str(value) for value in item.get("capabilities") or []],
+                ],
+            )
+            for item in payload.get("operation_groups") or []
+            if isinstance(item, Mapping) and str(item.get("group_id") or "").strip()
+        ]
     if descriptor_id == "ui_capability_catalog":
         rows = []
         for key, fallback_kind in (
@@ -118,7 +154,11 @@ def _payload_headers(descriptor_id: str, payload: Mapping[str, Any]) -> list[dic
                 item_id = str(item.get("id") or "").strip()
                 if not item_id:
                     continue
-                aliases = item.get("aliases") if isinstance(item.get("aliases"), Mapping) else {}
+                aliases = (
+                    item.get("aliases")
+                    if isinstance(item.get("aliases"), Mapping)
+                    else {}
+                )
                 tags = [
                     str(alias)
                     for values in aliases.values()
@@ -149,14 +189,22 @@ def _payload_headers(descriptor_id: str, payload: Mapping[str, Any]) -> list[dic
                 summary=str(item.get("summary") or ""),
             )
             for item in payload.get("pages") or []
-            if isinstance(item, Mapping) and str(item.get("path") or item.get("title") or "").strip()
+            if isinstance(item, Mapping)
+            and str(item.get("path") or item.get("title") or "").strip()
         ]
-    if descriptor_id in {"public_skill_registry_summary", "public_scenario_registry_summary"}:
+    if descriptor_id in {
+        "public_skill_registry_summary",
+        "public_scenario_registry_summary",
+    }:
         rows = []
         for item in payload.get("items") or []:
             if not isinstance(item, Mapping):
                 continue
-            overview = item.get("overview") if isinstance(item.get("overview"), Mapping) else {}
+            overview = (
+                item.get("overview")
+                if isinstance(item.get("overview"), Mapping)
+                else {}
+            )
             item_id = str(item.get("id") or overview.get("row_id") or "")
             if not item_id:
                 continue
@@ -164,9 +212,13 @@ def _payload_headers(descriptor_id: str, payload: Mapping[str, Any]) -> list[dic
                 _header(
                     descriptor_id=descriptor_id,
                     item_id=item_id,
-                    kind=str(overview.get("kind") or payload.get("kind") or "registry.item"),
+                    kind=str(
+                        overview.get("kind") or payload.get("kind") or "registry.item"
+                    ),
                     title=str(item.get("name") or overview.get("title") or item_id),
-                    summary=str(item.get("description") or overview.get("summary") or ""),
+                    summary=str(
+                        item.get("description") or overview.get("summary") or ""
+                    ),
                     owner=str(overview.get("owner") or "workspace"),
                     stability=str(overview.get("stability") or "published"),
                     fingerprint=str(overview.get("fingerprint") or "") or None,
@@ -230,11 +282,15 @@ def search_descriptors(
     query_terms = _terms(text)
     catalog = list_descriptor_sets()
     available_ids = {str(item.get("descriptor_id") or "") for item in catalog}
-    selected_ids = {str(item).strip().lower() for item in descriptor_ids or () if str(item).strip()}
+    selected_ids = {
+        str(item).strip().lower() for item in descriptor_ids or () if str(item).strip()
+    }
     unknown_ids = sorted(selected_ids - available_ids)
     if unknown_ids:
         raise KeyError(unknown_ids[0])
-    selected_kinds = {str(item).strip().lower() for item in kinds or () if str(item).strip()}
+    selected_kinds = {
+        str(item).strip().lower() for item in kinds or () if str(item).strip()
+    }
     ranked: list[tuple[int, int, dict[str, Any]]] = []
     ordinal = 0
     for entry in catalog:
@@ -245,7 +301,8 @@ def search_descriptors(
         descriptor_class = str(entry.get("descriptor_class") or "").lower()
         parent_score = _score(parent, query_terms)
         if descriptor_id in _CHILD_INDEX_DESCRIPTORS and text.casefold() not in {
-            descriptor_id.casefold(), str(parent.get("title") or "").casefold()
+            descriptor_id.casefold(),
+            str(parent.get("title") or "").casefold(),
         }:
             # Container vocabulary must not outrank actionable methods merely
             # because a request says "public SDK" or "skill".
@@ -268,10 +325,18 @@ def search_descriptors(
             )
         except RuntimeError:
             continue
-        payload = descriptor.get("payload") if isinstance(descriptor.get("payload"), Mapping) else {}
+        payload = (
+            descriptor.get("payload")
+            if isinstance(descriptor.get("payload"), Mapping)
+            else {}
+        )
         for index, child in enumerate(_payload_headers(descriptor_id, payload)):
             child_kind = str(child.get("kind") or "").lower()
-            if selected_kinds and child_kind not in selected_kinds and descriptor_class not in selected_kinds:
+            if (
+                selected_kinds
+                and child_kind not in selected_kinds
+                and descriptor_class not in selected_kinds
+            ):
                 continue
             child_score = _score(child, query_terms)
             if descriptor_id == "sdk_metadata":
@@ -313,14 +378,22 @@ def get_descriptor_item(
     if effective_level not in {"mini", "std", "rich"}:
         effective_level = "std"
     if token == "sdk_metadata" and selected_item_id == token:
-        entry = next(item for item in list_descriptor_sets() if item["descriptor_id"] == token)
+        entry = next(
+            item for item in list_descriptor_sets() if item["descriptor_id"] == token
+        )
         return {
-            "schema": "adaos.descriptor.item.v1", "descriptor_id": token,
-            "item_id": token, "level": "mini",
-            "item": {**_catalog_header(entry), "discovery": {
-                "tool": "search_descriptors", "descriptor_ids": [token],
-                "guidance": "Search one required capability or exact public symbol, then read its returned item_id. This is a catalog, not a method contract.",
-            }},
+            "schema": "adaos.descriptor.item.v1",
+            "descriptor_id": token,
+            "item_id": token,
+            "level": "mini",
+            "item": {
+                **_catalog_header(entry),
+                "discovery": {
+                    "tool": "search_descriptors",
+                    "descriptor_ids": [token],
+                    "guidance": "Search one required capability or exact public symbol, then read its returned item_id. This is a catalog, not a method contract.",
+                },
+            },
         }
     descriptor = get_descriptor_set(
         token,
@@ -331,14 +404,19 @@ def get_descriptor_item(
     if selected_item_id == token:
         item: Any = descriptor
     else:
-        payload = descriptor.get("payload") if isinstance(descriptor.get("payload"), Mapping) else {}
+        payload = (
+            descriptor.get("payload")
+            if isinstance(descriptor.get("payload"), Mapping)
+            else {}
+        )
         if token == "sdk_metadata" and effective_level != "mini":
             item = next(
                 (
                     dict(candidate)
                     for candidate in payload.get("tools") or []
                     if isinstance(candidate, Mapping)
-                    and str(candidate.get("name") or candidate.get("n") or "") == selected_item_id
+                    and str(candidate.get("name") or candidate.get("n") or "")
+                    == selected_item_id
                 ),
                 None,
             )
@@ -348,7 +426,8 @@ def get_descriptor_item(
                     dict(candidate)
                     for candidate in payload.get("pages") or []
                     if isinstance(candidate, Mapping)
-                    and str(candidate.get("path") or candidate.get("title") or "") == selected_item_id
+                    and str(candidate.get("path") or candidate.get("title") or "")
+                    == selected_item_id
                 ),
                 None,
             )
@@ -363,18 +442,36 @@ def get_descriptor_item(
                 ),
                 None,
             )
-        elif token in {"public_skill_registry_summary", "public_scenario_registry_summary"}:
+        elif token == "application_contracts":
+            item = next(
+                (
+                    dict(candidate)
+                    for candidate in payload.get("operation_groups") or []
+                    if isinstance(candidate, Mapping)
+                    and str(candidate.get("group_id") or "") == selected_item_id
+                ),
+                None,
+            )
+        elif token in {
+            "public_skill_registry_summary",
+            "public_scenario_registry_summary",
+        }:
             item = next(
                 (
                     dict(candidate)
                     for candidate in payload.get("items") or []
-                    if isinstance(candidate, Mapping) and str(candidate.get("id") or "") == selected_item_id
+                    if isinstance(candidate, Mapping)
+                    and str(candidate.get("id") or "") == selected_item_id
                 ),
                 None,
             )
         elif token == "template_catalog" and ":" in selected_item_id:
             kind, name = selected_item_id.split(":", 1)
-            item = {"kind": kind[:-1], "name": name} if name in (payload.get(kind) or []) else None
+            item = (
+                {"kind": kind[:-1], "name": name}
+                if name in (payload.get(kind) or [])
+                else None
+            )
         else:
             item = next(
                 (

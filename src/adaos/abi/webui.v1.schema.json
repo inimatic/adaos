@@ -1737,6 +1737,7 @@
         "itemIdKey": { "$ref": "#/$defs/fieldPath" },
         "titleKey": { "$ref": "#/$defs/fieldPath" },
         "subtitleKey": { "$ref": "#/$defs/fieldPath" },
+        "accentKey": { "$ref": "#/$defs/fieldPath" },
         "previewKey": { "$ref": "#/$defs/fieldPath" },
         "imageKey": { "$ref": "#/$defs/fieldPath" },
         "initialsKey": { "$ref": "#/$defs/fieldPath" },
@@ -1779,7 +1780,9 @@
             "properties": {
               "key": { "$ref": "#/$defs/fieldPath" },
               "label": { "type": "string" },
-              "kind": { "type": "string", "enum": ["text", "badge", "boolean"] },
+              "kind": { "type": "string", "enum": ["text", "badge", "boolean", "icon"] },
+              "titleKey": { "$ref": "#/$defs/fieldPath" },
+              "colorKey": { "$ref": "#/$defs/fieldPath" },
               "trueLabel": { "type": "string" },
               "falseLabel": { "type": "string" }
             }

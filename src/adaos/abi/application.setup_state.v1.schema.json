@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/application.setup_state.v1.schema.json",
+  "title": "AdaOS Application Setup State v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "application_id",
+    "release_digest",
+    "channel",
+    "contract_digest",
+    "status",
+    "requirements",
+    "summary",
+    "revision",
+    "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.application.setup_state.v1" },
+    "application_id": { "$ref": "#/$defs/id" },
+    "release_digest": { "$ref": "#/$defs/digest" },
+    "channel": { "enum": ["stable", "beta", "development"] },
+    "contract_digest": { "$ref": "#/$defs/digest" },
+    "status": { "enum": ["configuring", "action_required", "validating", "ready", "failed", "unknown"] },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement_id", "kind", "title", "required", "status", "action"],
+        "properties": {
+          "requirement_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "kind": { "enum": ["setting", "credential", "connected_account", "permission", "placement", "verification"] },
+          "component_ref": { "$ref": "#/$defs/componentRef" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "detail": { "type": "string", "maxLength": 1000 },
+          "required": { "type": "boolean" },
+          "status": { "enum": ["ready", "missing", "pending", "denied", "invalid", "expired", "revoked", "failed", "unknown", "not_applicable"] },
+          "action": { "enum": ["configure", "provide_secret", "connect_account", "review_access", "manage_placement", "retry_validation", "none"] }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_total", "ready_total", "action_required_total", "optional_missing_total"],
+      "properties": {
+        "required_total": { "type": "integer", "minimum": 0 },
+        "ready_total": { "type": "integer", "minimum": 0 },
+        "action_required_total": { "type": "integer", "minimum": 0 },
+        "optional_missing_total": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "revision": { "type": "integer", "minimum": 1 },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "componentRef": { "type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" }
+  }
+}
