@@ -41,8 +41,8 @@ The implementation sequence and deletion gates are tracked in
 
 | Legacy capability | Target owner | Target presentation |
 | --- | --- | --- |
-| Application/project/skill/scenario inventory | Applications | Application summary plus expandable component topology |
-| Marketplace install/update/remove | Applications | Reviewed lifecycle operations |
+| Application/project/skill/scenario inventory | Applications | Application summary, typed conditions, compact attention, and expandable component topology |
+| Marketplace install/update/remove | Applications | Reviewed lifecycle operations and bounded reviewed batch updates |
 | desired/observed runtime placement | Applications | Application detail, node/component drill-down |
 | node, browser, session and link state | Desktop Devices | Device list, current-device context, connection detail |
 | people, roles, grants, invitations and recovery | Users & Access | Subject-centric administration and audit |
@@ -134,6 +134,13 @@ During migration, legacy routes may adapt to these contracts. New consumers
 must use only the neutral contracts. Compatibility adapters must carry usage
 telemetry and a removal version; they must not contain an independent cache or
 authority.
+
+Legacy `Test all`, `Validate all`, and `Update all` buttons are not migration
+requirements by themselves. Applications owns release-aware readiness and
+reviewed product updates with per-Application evidence. Desktop System owns
+Core/node validation, update, slot, drain, and rollback. Shared diagnostics and
+operation services provide the reusable evidence; neither product recreates an
+Infrastate-shaped action dispatcher.
 
 ## Data And Security Boundary
 

@@ -355,6 +355,29 @@ Automation binds each semantic activity to code or explicitly retains it as
 fixture-only. Missing mappings block handoff or candidate promotion. The same
 stories are rerun against implementation bindings.
 
+The durable handoff is semantic rather than tool-specific:
+
+```text
+semantic activity and state need
+  -> ApplicationRequirement and state-port refs
+  -> simulation BindingDefinition for Prototype
+  -> production-capable BindingDefinition for Automation
+  -> admitted ApplicationResolution
+```
+
+Builder may inspect bounded SDK, Root MCP, provider-contract, and package
+catalog records to discover candidates. The accepted semantic Application must
+not persist an MCP tool ID, skill ID, package member, provider account, endpoint,
+or credential as the requirement. These belong to binding, delivery, local
+configuration, or evidence records. If no admitted contract represents the
+need, handoff emits a typed capability gap; it does not invent a direct tool
+dependency.
+
+Prototype acceptance freezes the observable semantic revision and stories, not
+the selected simulation package. Replacing a fixture or simulation binding with
+a conforming production binding must preserve that semantic revision and rerun
+the same contract stories.
+
 ## Deferred General Workflow Projection And Round Trip
 
 The following target is retained but is not part of the MVP implementation.
@@ -449,6 +472,11 @@ an evaluation corpus, but never become runtime authority or implicit context.
 10. Screenshot input and general workflow projection remain off by default and
     cannot become implicit context or authority; an explicitly requested,
     bounded post-deterministic visual gate may contribute review evidence.
+11. Persisted Prototype requirements contain semantic contract refs, never raw
+    tool, skill, provider, package-member, endpoint, or credential identities.
+12. Prototype acceptance does not grant production viability; exact package,
+    evidence, permission, state, migration, and activation admission remain
+    mandatory.
 
 ## MVP Acceptance Evidence
 

@@ -1,6 +1,6 @@
 # Builder-Safe Skill Development Guide
 
-Status: current guidance and target contract.
+Status: current guidance and target contract, reviewed 2026-09-22.
 
 This guide is written for Builder workflows that create or update AdaOS skills.
 The Builder may be a human, an AI-assisted agent, or a human-in-the-loop
@@ -18,6 +18,16 @@ Read this together with:
 - [Semantic State Plane](../architecture/semantic-state-plane.md)
 - [Runtime Guarding](../architecture/runtime-guarding.md)
 - [Projection Subscription Roadmap](../architecture/projection-subscription-roadmap.md)
+- [Capability, Binding, and State Separation](../architecture/capability-binding-state-separation.md)
+- [Semantic Application Composition And Evolution Roadmap](../architecture/application-semantic-composition-roadmap.md)
+
+This guide governs implementation/runtime components. A skill is not itself the
+semantic capability identity required by an Application. When a skill provides
+reusable behavior, its implementation is described by a `BindingDefinition`,
+delivered through an immutable package, and verified against an admitted
+`CapabilityContract`. `skill.yaml.capabilities` remains requested SDK authority,
+and `provider_contracts` remains implementation-side contract evidence; neither
+field is automatically a semantic capability declaration.
 
 ## Golden rule
 

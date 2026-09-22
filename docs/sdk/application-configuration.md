@@ -58,7 +58,9 @@ configuration:
   defaults: {}
   credentials:
     service_token:
+      title: Service API token
       purpose: Read the user-configured external service
+      required: false
 ```
 
 `adaos.sdk.data.secrets.get/set/delete` uses the node's existing vault for these
@@ -81,6 +83,21 @@ fixtures, release packages, ordinary configuration, screenshots or logs. Backend
 errors are sanitized and cannot switch the caller to the legacy/global vault.
 Failed binding CAS can retain an unreferenced private vault item; credential
 retention/garbage collection is separate from channel acceptance.
+
+## Setup Projection
+
+The release-owned setup compiler combines these declarations with connected
+account, permission, runtime placement and verification requirements. It stores
+only slot metadata and a digest in `ApplicationSetupContract`; values and opaque
+credential refs are excluded. Applications projects a revisioned,
+secret-redacted `ApplicationSetupState` and uses that state to render its
+Configure flow.
+
+`required: false` is the default for a credential slot. A missing optional slot
+is shown as an available action but does not block Application readiness. A
+missing required slot produces `action_required`. Secret entry is write-only to
+the scoped vault facade; clients must clear the input after submit and retain
+only presence, health and last-change evidence.
 
 ## Qualification Boundary
 

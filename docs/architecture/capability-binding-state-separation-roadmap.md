@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Capability, Binding, and State Separation](capability-binding-state-separation.md).
 
-Last reviewed: 2026-09-17.
+Last reviewed: 2026-09-22.
 
 Implementation checkpoint: the bounded CRUD-first `must` scope of `CBS1`
 through `CBS5` is executable as of 2026-09-22. Exact implementation,
@@ -145,6 +145,7 @@ explicitly re-prioritized requirement.
 | distributed state placement and fencing | [Distributed Topology](distributed-service-and-data-topology-roadmap.md) | establishes local v1 fields and invariants; distributed protocols remain with that owner |
 | Builder authoring and prototype compilation | [Builder Intent-to-Prototype](builder-intent-to-prototype-roadmap.md) | adds requirement and resolution reports without replacing semantic prototype ABI |
 | Evolver governance | [Governed Evolution](governed-evolution-roadmap.md) | supplies derived observations and candidate proposals only |
+| end-to-end Application creation, evolution, and capability-package extraction | [Semantic Application Composition And Evolution](application-semantic-composition-roadmap.md) | orders milestones from the owning roadmaps; owns no duplicate schema, resolver, package, or activation mechanism |
 
 When another roadmap owns a mechanism, this roadmap closes only its adapter,
 contract, or end-to-end proof. It does not duplicate the owning checklist.
@@ -168,6 +169,10 @@ CBS0 vocabulary and legacy inventory
 Native state adoption does not begin before deterministic legacy projection and
 round-trip tests exist. `CBS8` must not become a prerequisite for `CBS3` or
 `CBS4`.
+
+The user-facing linear delivery order is maintained by the Semantic Application
+Composition roadmap. This roadmap remains the implementation authority for the
+capability, binding, state, resolution, and plan milestones referenced there.
 
 ## Milestone CBS0: Vocabulary And Compatibility Inventory
 
@@ -623,9 +628,13 @@ canonical edges and impact results; no activation or identity record is lost.
   stale evidence.
 - [ ] `[should]` `CBS8-06` Add candidate proposal records for capability
   extraction, composition, deprecation, or migration; require normal review and
-  publication paths.
+  publication paths. The proposal is not a package and grants no source,
+  publication, data, or activation authority.
 - [ ] `[should]` `CBS8-07` Define and enforce capability maturity
-  `application-local -> candidate -> reusable -> platform`.
+  `application-local -> candidate -> reusable -> platform`. Advancement to
+  `reusable` requires an extracted package, conformance evidence, and an
+  independent consumer; execution of that curation path is coordinated by
+  `ASC7` in the Semantic Application Composition roadmap.
 - [ ] `[could]` `CBS8-08` Add graph and impact visualization to Builder,
   Applications component detail, or Desktop System diagnostics.
 - [ ] `[could]` `CBS8-09` Use a graph database or incremental cache only after
@@ -849,5 +858,6 @@ migration, or public registry federation.
 - [Application Lifecycle and Distribution Roadmap](application-lifecycle-and-distribution-roadmap.md)
 - [Declarative Resource Workbench Roadmap](declarative-resource-workbench-roadmap.md)
 - [Builder Intent-to-Prototype Roadmap](builder-intent-to-prototype-roadmap.md)
+- [Semantic Application Composition And Evolution Roadmap](application-semantic-composition-roadmap.md)
 - [Governed Evolution Roadmap](governed-evolution-roadmap.md)
 - [Distributed Service and Data Topology Roadmap](distributed-service-and-data-topology-roadmap.md)

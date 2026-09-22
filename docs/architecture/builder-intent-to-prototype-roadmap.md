@@ -452,11 +452,20 @@ Exit/remaining work: Publish the authoritative contract and derive Client regist
 
 - [ ] `[must]` **Capability Discovery And Gaps**. Status: `partial`.
 
-Owner/dependencies: Core capability service + SDK/MCP.
+Owner/dependencies: Core capability service + SDK/MCP; consumes
+`CapabilityContract` and `BindingDefinition` from the Capability, Binding, and
+State roadmap.
 
 Implementation boundary: Bounded search/get and typed gaps exist in slices. Discovery can return low-relevance results and metadata-only drill-down; not every Prototype request supplies the advertised retrieval tool.
 
-Exit/remaining work: Admit contracts by shape/operation/authority before optional ranking; expose callable bounded read-only retrieval and distinguish unsupported capability, absent index and irrelevant matches. Evaluate retrieval on independent queries without subject rewrites.
+Exit/remaining work: Admit semantic contracts by shape, operation, effects,
+authority, state ports, supported mode and evidence before optional ranking;
+expose callable bounded read-only retrieval and distinguish unsupported
+capability, absent index, missing production binding and irrelevant matches.
+Provider contracts, Root MCP tools and skills are candidate implementation
+evidence, not semantic capability identity. Evaluate retrieval on independent
+queries without subject rewrites and reject persisted raw tool/skill/provider
+dependencies in semantic Application output.
 
 ### BIP-10
 
@@ -508,7 +517,8 @@ Exit/remaining work: Implement constrained residual interpretation, semantic-ID 
 
 - [ ] `[must]` **Semantic Authority And Incremental Compilation**. Status: `partial`.
 
-Owner/dependencies: Core semantic compiler + Client mappings.
+Owner/dependencies: Core semantic compiler + Client mappings; emits
+`ApplicationRequirement` and state-port refs consumed by semantic resolution.
 
 Implementation boundary: Semantic-v2 multi-resource generation, typed links, structural state proof, source maps and lookup-only resources exist. This is not a total contract for the admitted component set or proof of one-way semantic authority on all managed edits.
 
@@ -520,8 +530,23 @@ Implementation boundary: Semantic-v2 multi-resource generation, typed links, str
   media, settings-driven visibility, layout, interactions and locales. Retain
   actual model inputs and both source identities; never hide drift by regenerating
   from a title or silently reverse-compiling arbitrary renderer JSON.
+- [ ] `[must]` Compile semantic activities and state needs to versioned
+  `ApplicationRequirement` and state-port refs. Keep UI command refs stable
+  while simulation and production bindings change independently.
+- [ ] `[must]` Admit only semantic refs supplied through bounded capability
+  context. Raw MCP tool IDs, skill IDs, provider IDs, package members, endpoints
+  and credential refs fail semantic validation or remain non-authoritative
+  candidate annotations.
+- [ ] `[must]` Preserve one semantic Application revision across fixture,
+  simulation, Trial and production materializations; bind each materialization
+  to its own resolution/evidence instead of rewriting semantic source.
 
-Exit/remaining work: Complete the supported semantic ABI and requirement-to-runtime mapping; qualify empty-state reachability, granularity, typed gaps, reference/display capacity and incremental preservation. Retain atomic full-artifact promotion; no lossy fallback or forced collection screen for lookup-only data.
+Exit/remaining work: Complete the supported semantic ABI and
+requirement-to-resolution/runtime mapping; qualify empty-state reachability,
+granularity, typed gaps, reference/display capacity and incremental
+preservation. Retain atomic full-artifact promotion; no lossy fallback or
+forced collection screen for lookup-only data. The linear cross-roadmap proof
+is `ASC2` through `ASC6` in the Semantic Application Composition roadmap.
 
 ### BIP-12
 

@@ -2,7 +2,7 @@
 
 Status: target architecture with core projection slice implemented.
 
-Last reviewed: 2026-09-16.
+Last reviewed: 2026-09-22.
 
 This document defines the target AdaOS Application Registry Projection: a
 private, rebuildable, SQLite-backed read model for Application catalog,
@@ -28,6 +28,10 @@ Related owners:
 - [Application Access, Permissions, and Roles](application-access-permissions.md)
   owns permission profiles, Application roles, grants, effective authorization,
   and Builder final verification.
+- [Capability, Binding, and State Separation](capability-binding-state-separation.md)
+  owns semantic requirements, contracts, bindings, state-space identity,
+  resolutions, plans, evidence, and viability. This projection indexes their
+  browser-safe facts but never admits or mutates them.
 - [Personalization, Identity, and Access](personalization-identity-access.md)
   owns profiles, devices, sessions, memberships, local access facts, and audit.
 - [Declarative Resource Workbench](declarative-resource-workbench.md) defines
@@ -139,13 +143,58 @@ concepts.
 | `projection_epoch` | Runtime epoch, schema version, open/dirty/closed state, trusted seal receipt, startup and shutdown evidence. |
 | `projection_source` | Source identity, path or store ref, source kind, mtime, size, content digest, schema digest, parse status, and last observed time. |
 | `application_index` | Application display, identity, publisher, visibility, lifecycle, channel pointers, installed state, local beta state, search fields, and payload digest. |
+| `application_semantic_revision_index` | Immutable semantic revision ref/digest, Application relation, source/provenance, requirement and entrypoint counts, validation state, and compatibility-projection marker. |
 | `application_component_index` | Application to component refs, package digests, component roles, lifecycle, exposure, and reverse ownership lookup. |
 | `application_entrypoint_index` | Launch targets, presentation refs, default entrypoint, supported surfaces, and binding summaries. |
+| `application_requirement_index` | Semantic Application revision to capability/state requirement refs, ranges, target modes, policy constraints, resolution status, and typed gap summary. |
+| `application_resolution_index` | Admitted resolution ref/digest, selected contract and binding-definition summaries, exact package-set digest, target viability, rejection/gap counts, and observed freshness. |
+| `application_state_space_index` | Browser-safe state-space ref, contract, logical/lifecycle owner, portability class, migration impact, health/freshness summary, and redacted custodian binding. |
+| `application_evidence_index` | Current assessment summary for exact capability, binding, package, migration, installation, and environment subjects; immutable claim payloads remain with their owner. |
 | `application_permission_profile_index` | Release-bound permission profile digest, required/optional permission ids, compatibility flat list, privacy labels, secret/provider declarations, and validation state. |
 | `application_role_index` | Release-bound Application role ids, titles, assignability, default rules, sensitive flags, and expanded app capabilities. |
 | `validation_report` | Validator version, status, errors, warnings, checked digest, checked time, next retry, and last-known-good binding. |
 | `federated_application_fact` | Signed remote catalog, release, permission-profile, component, channel, and availability facts with origin, trust, observed time, and expiry. |
 | `projection_journal` | Rebuild, reconcile, validation, import, invalidation, and seal operations with idempotency and diagnostic payloads. |
+
+The browser-safe Application summary reserves one additive semantic-composition
+envelope before the resolver is implemented:
+
+```yaml
+semantic_composition:
+  source: native | compatibility_projection | unavailable
+  status: not_available | unresolved | admitted | stale | blocked
+  semantic_revision_ref: application-revision:recipes/17 | null
+  semantic_revision_digest: sha256:... | null
+  application_resolution_ref: application-resolution:... | null
+  application_resolution_digest: sha256:... | null
+  requirements:
+    total: 4
+    satisfied: 3
+    unresolved: 1
+  viability:
+    simulation: admitted
+    trial: blocked
+    production: blocked
+  state:
+    spaces: 1
+    migration_required: 0
+    portability_attention: false
+  evidence:
+    admissible: 7
+    stale: 0
+    missing: 1
+  attention:
+    reason: missing_production_binding
+    action_ref: application:recipes/requirements
+  observed_at: 2026-09-22T00:00:00Z
+  source_generation: 42
+```
+
+Null refs are required for unavailable compatibility data; generated placeholder
+refs are forbidden. Full requirement, binding, state-space, and evidence rows
+use paginated detail queries. The summary carries bounded counts and one
+deterministic attention item so card and list reads do not embed an unbounded
+dependency graph.
 
 Text search may use SQLite FTS5 where available. If FTS5 is unavailable, the
 service may fall back to indexed normalized tokens and bounded `LIKE` queries,
@@ -378,6 +427,13 @@ Initial fact families:
   visibility, compatibility, entrypoints, and public readiness summaries.
 - `ApplicationReleaseFact`: immutable release digest, channel, package set
   digest, provenance digest, and signing evidence.
+- `ApplicationRequirementFact`: semantic Application revision digest,
+  capability/state contract refs, target modes, authority classes, and portable
+  evidence requirements. It contains no local resolution, account, endpoint,
+  state-space, or placement facts.
+- `BindingAvailabilityFact`: portable binding-definition and package-delivery
+  refs, supported environment classes, maturity, and redacted conformance
+  summary. Local eligibility is still decided by the receiving resolver.
 - `PermissionProfileFact`: release-bound permission profile digest, required
   permissions, optional permissions, role ids, role-impact summary, and
   disclosure labels.
@@ -632,6 +688,35 @@ opening SQLite manually.
 rebuild, validation, SQLite query, access-policy cache miss, or browser
 projection export.
 
+### APREG9. Semantic Composition Projection
+
+**Outcome:** Applications and Builder can explain what an Application requires,
+how the current environment satisfies it, and which facts are missing without
+scanning component source or exposing local secrets.
+
+- [ ] `[must]` `APREG9-01` Add semantic-revision, requirement, resolution,
+  state-space, and evidence-assessment indexes keyed by stable ref plus exact
+  digest.
+- [ ] `[must]` `APREG9-02` Preserve `not_available`, `unresolved`, `rejected`,
+  `admitted`, `stale`, and `blocked` as distinct states. A missing compatibility
+  field must not be projected as an empty successful resolution.
+- [ ] `[must]` `APREG9-03` Export bounded browser-safe summaries for the five
+  Applications detail sections while retaining a paginated advanced path to
+  requirement-to-binding explanations and exact provenance.
+- [ ] `[must]` `APREG9-04` Redact secret, credential, raw endpoint, local path,
+  protected account, and private evidence payloads. Export stable opaque refs
+  only when a user action needs them.
+- [ ] `[must]` `APREG9-05` Invalidate projections on semantic revision,
+  resolution, package, state-space revision, evidence assessment, placement,
+  access, and WorkspaceLock changes with source-specific freshness.
+- [ ] `[should]` `APREG9-06` Add reverse impact queries from changed contract,
+  binding, package, provider observation, or evidence assessment to affected
+  installed Applications.
+
+**Exit proof:** Applications can distinguish an old component-first release
+from an admitted semantic resolution, explain one satisfied and one blocked
+requirement, and remain truthful after evidence or placement becomes stale.
+
 ## Completion Definition
 
 The Application Registry Projection medium step is complete when:
@@ -646,6 +731,8 @@ The Application Registry Projection medium step is complete when:
   closed on invalid input;
 - permission and role declaration indexes feed Application Access without
   replacing dynamic access-policy freshness or audit;
+- semantic requirement/resolution projections explain availability and gaps
+  without becoming resolution or activation authority;
 - federated Application facts are admitted as signed, freshness-bound
   projection inputs;
 - Yjs carries only browser-safe, redacted, bounded summaries derived from the

@@ -2,7 +2,7 @@
 
 Status: target architecture.
 
-Last reviewed: 2026-09-21.
+Last reviewed: 2026-09-22.
 
 This document defines the canonical AdaOS model for creating, testing,
 publishing, discovering, installing, updating, removing, and improving an
@@ -23,6 +23,7 @@ The compatibility mapping is structural and one-to-one:
 | Canonical contract | Compatibility source | Identity rule |
 | --- | --- | --- |
 | `Application` | Project definition | stores `legacy_project_id`; `application_id` remains distinct |
+| `SemanticApplicationRevision` | semantic Prototype/Application document or deterministic compatibility projection | immutable revision ref/digest; no implementation topology |
 | `ApplicationRelease` | `ProjectRelease` | embeds the exact legacy record and preserves its `release_digest` |
 | `ApplicationInstallation` | `ProjectDeployment` plus exact package refs | stores `legacy_deployment_id`; placement becomes component state |
 | `ApplicationSubscription` | `StableSubscription` | maps `channel` to `stable|prerelease` update intent |
@@ -59,6 +60,13 @@ projection is a private, rebuildable read model. It does not replace immutable
 release/package records, Application lifecycle operations, skill-owned data,
 or access-policy authority.
 
+Portable Application requirements, semantic capability/state contracts,
+implementation bindings, local state identities, admitted resolution, and
+resolution planning are owned by
+[Capability, Binding, and State Separation](capability-binding-state-separation.md).
+The linear creation and evolution integration sequence is coordinated by the
+[Semantic Application Composition And Evolution Roadmap](application-semantic-composition-roadmap.md).
+
 In this document, `dev/.runtime` is a logical shorthand for the per-subnet,
 component-scoped preview slots, for example
 `.adaos/dev/<subnet-id>/skills/.runtime`; it never means a shared
@@ -70,9 +78,15 @@ component-scoped preview slots, for example
 1. Application is the canonical user-facing and distributable product object.
    A Scenario is an implementation host, not a separately installable product
    identity merely because it can be launched.
-2. An Application may compose one or more owned or shared skills, scenarios,
-   workflows, providers, and launch targets. An immutable ApplicationRelease
-   locks the complete resolved composition.
+2. A semantic Application composes capability/state requirements, product
+   behavior, access intent, and launch intent. It does not depend on skill,
+   package, provider, node, path, or credential identities. An immutable
+   `ApplicationRelease` binds the semantic revision, owned artifacts, launch
+   declarations, constraints, and portable delivery metadata. A local
+   `ApplicationResolution` then selects the exact binding, package, state, and
+   environment configuration; `WorkspaceLock` records the active resolved
+   closure. Legacy component-first releases retain their exact physical
+   closure as a compatibility form.
 3. Builder mutates only Application DEV source. Mutable source runs only from
    `dev/.runtime`; it never activates in the stable Workspace and is never a
    remotely followed channel.
@@ -295,9 +309,8 @@ application:
     title: Research Workbench
     summary: Governed research workspace
   visibility: private | link | public
-  entrypoints:
-    - entrypoint_id: main
-      presentation_ref: scenario:research_workbench
+  entrypoint_ids: [main]
+  default_entrypoint_id: main
   lifecycle: active
 ```
 
@@ -312,20 +325,60 @@ skill. The initial value may be a known vector icon name. Future raster or
 generated artwork extends the same metadata object with media identity and crop
 information rather than adding a product-specific desktop field.
 
+### Semantic Application Revision
+
+A semantic Application revision is immutable authoring authority for one
+version of product behavior. It includes resources, views, commands, workflows,
+access intent, launch intent, `ApplicationRequirement` records, state-port
+needs, and traceability to accepted user requirements. It does not include
+skill, scenario, package, provider, node, endpoint, path, account, or credential
+selection.
+
+```yaml
+semantic_application_revision:
+  revision_ref: application-revision:research-workbench/17
+  revision_digest: sha256:...
+  application_id: app_01...
+  requirements:
+    - requirement_ref: requirement:research-records
+      capability_ref: capability:resource.records.manage/research-record
+      version: ^1
+      target_modes: [simulation, production]
+  entrypoints:
+    - entrypoint_id: main
+      launch_intent_ref: launch-intent:research-workbench/main
+      supported_surfaces: [page]
+```
+
+Builder may compile a physical scenario presentation for one target, but that
+selection belongs to binding/delivery and local resolution. Changing a
+conforming host or package does not rewrite the semantic revision.
+
 ### ApplicationRelease
 
 An `ApplicationRelease` is immutable and includes:
 
-- Application definition and composition digest;
+- Application definition and semantic Application revision ref/digest;
 - semantic version and exact release digest;
 - release-owned catalog metadata, including the universal Application icon;
-- exact component package and Application dependency locks;
+- owned immutable artifacts, binding-delivery catalog, portable dependency
+  constraints, and compatibility component locks where required;
 - source revision and deterministic builder/build-policy identity;
-- launch-target bindings and required AdaOS/core ABI;
-- permission/capability requirements;
+- launch intents, supported surfaces, and required AdaOS/core ABI;
+- semantic capability/state requirements and Application permission profile;
+- a secret-free setup contract compiled from typed settings, credential slots,
+  connected-account requirements, permissions, placement and verification;
 - data schema and migration contract;
-- validation, Trial acceptance, and activation-health evidence;
+- validation, publisher Trial acceptance, conformance claims, and release
+  qualification evidence;
 - publisher signature and publication receipts.
+
+The portable release never embeds local binding instances, state spaces,
+provider accounts, credentials, node placement, or an environment-specific
+`ApplicationResolution`. Installation resolves those facts under local policy.
+The legacy `ProjectRelease` may still contain an exact component closure; that
+is a compatibility delivery form, not a reason to add physical identities to
+new semantic Application source.
 
 The legacy `ProjectRelease` record is the current storage-compatible form of
 this object. Migration must preserve its digest and evidence lineage.
@@ -334,7 +387,8 @@ this object. Migration must preserve its digest and evidence lineage.
 
 An `ApplicationInstallation` is the local aggregate that binds one Application
 to one exact installed release, component references, data-retention policy,
-and placement state. It is distinct from source and channel state.
+local resolution, activation-health evidence, and placement state. It is
+distinct from source and channel state.
 
 Installation scope is the subnet, not a node or Webspace. A node is an eligible
 execution location for one or more Application components and may change while
@@ -348,12 +402,23 @@ installation:
   application_id: app_01...
   subnet_ref: subnet:sn_...
   installed_release_digest: sha256:...
+  application_resolution_ref: application-resolution:app_01/local-production/17
+  application_resolution_digest: sha256:...
+  workspace_lock_digest: sha256:...
   component_refs:
     - package_digest: sha256:...
       lifecycle: bound | shared
+  state_space_refs:
+    - state-space:workspace/research-records
   data_policy: retain
   status: active
 ```
+
+`application_resolution_ref` and `workspace_lock_digest` may be absent for an
+unmigrated compatibility installation. Applications must then show
+`semantic_resolution=not_available`; it must not infer a resolution by
+matching component or provider names. `component_refs` are a resolved physical
+projection and recovery input, not semantic requirements.
 
 `ProjectDeployment` remains the canonical desired placement and rollout
 contract. Its `ComponentPlacementPolicy` records constraints and selected
@@ -722,43 +787,71 @@ Applications is a full-screen scenario modeled after the information density
 and navigation ergonomics of a mature extension manager, without copying an
 IDE-specific information architecture.
 
-The wide layout has three stable information zones:
+The wide layout has two primary information zones: a catalog sidebar with
+`Installed`, `Marketplace`, and `Builder`, and one selected Application detail.
+An optional inspector is reserved for contextual review evidence; it must not
+repeat version, installation, or Marketplace fields already visible in the
+detail. Installed is the default operational view, while Marketplace remains
+the explicit discovery view. `Builder` is a read-only projection of existing
+local developments and distinguishes Alpha/Preview from the one selected Beta.
 
-- a catalog sidebar with `Marketplace`, `Installed`, and `My developments`;
-- the selected Application identity, lifecycle commands, settings, and tab
-  content in the main area;
-- compact `Installation`, `Marketplace`, `Categories`, and conditional
-  `My development` metadata in an auxiliary rail.
-
-`Installation` is explicitly subnet-scoped. Its summary shows the installed
-release, effective channel, aggregate execution state, placement policy, active
-component/node count, last observation, and any degraded or unknown evidence.
-An expandable execution view shows desired component placement separately from
-observed node activations. Node identity is operational metadata, not the
-Application identity and not a second per-node install control. Relocation,
-drain, and placement-policy changes use reviewed deployment operations.
-
-Compact layouts expose the catalog as a drawer, keep the selected Application
-as the primary surface, and stack metadata after the main detail. Marketplace
-is the default discovery section and contains public stable Applications only;
-the initial product does not search prereleases globally. Installed is an
-explicit projection rather than a client-side guess. `My developments` is a
-read-only list of development records that already exist for the local
-publisher. Merely opening or filtering that list never creates an Application,
-Project, Builder session, or preview topology.
+Compact layouts expose the catalog as a drawer and the selected Application as
+the primary sheet. Marketplace contains public stable Applications only; the
+initial product does not search prereleases globally. Installed is an explicit
+projection rather than a client-side guess. Merely opening or filtering Builder
+never creates an Application, Project, Builder session, or preview topology.
 
 The selected detail starts with product identity, bounded summary, publisher,
-installed version, and current Marketplace version. A compact lifecycle bar
-then exposes only commands valid for the current state: `Install`, `Update`,
-`Uninstall` when policy permits it, and `Open in Builder` for an existing local
-development. `Plan install`, `Plan update`, and `Apply reviewed plan` are
+installed version, active channel, and latest available version. A compact
+lifecycle bar then exposes only commands valid for the current state: `Open`,
+`Configure`, `Runtime placement`, `Install`, `Update`, `Uninstall`, direct
+`Pin/Unpin`, and `Open in Builder` for an existing local development. `Plan
+install`, `Plan update`, and `Apply reviewed plan` are
 protocol concepts, not primary user commands. A direct lifecycle command
 obtains a bounded plan and opens `Review`; confirmation applies that exact plan
 digest. Pre-release following and automatic update are explicit direct
 preferences. They apply idempotently without a separate `Save update settings`
 command or review modal, disable while pending, and expose failure/retry state.
 New intent defaults to prerelease following `false` and automatic update
-`true`. `Details`, `Versions`, `Operations`, and `Reports` are peer tabs.
+`true`. The default detail is a compact scrollable summary: About/README,
+Configuration, Runtime placement, Access and Categories. Versions are expressed
+by active/latest/channel fields and lifecycle actions rather than a permanent
+low-information section. Activity and diagnostics appear only when they carry
+actionable evidence.
+
+Configuration and Runtime placement open focused task modals. Configuration is
+rendered from the release-owned setup contract and separates ordinary settings,
+write-only credential slots, connected accounts, permission review, placement,
+and verification. Runtime placement distinguishes relocation of the primary
+Application runtime from install/uninstall of distributable components on
+eligible nodes. The Application may govern its own redistribution policy; the
+Applications product governs the user-visible desired placement and reviewed
+operation. Each summary renders an
+explicit `unknown`, `not available in this release`, `unresolved`, `stale`, or
+`blocked` state when it does not. An empty panel never means success.
+
+Applications keeps the following identities and fields independent in its read
+model and UI:
+
+- Application, SemanticApplicationRevision, ApplicationRelease,
+  ApplicationInstallation, ApplicationResolution, and RuntimeSelection;
+- required capability and selected `BindingDefinition`;
+- package publisher/source and connected external provider/account;
+- Catalog channel, installed release, selected update track, and update
+  availability;
+- desired placement and observed binding/service instances;
+- state-space identity, portability class, migration impact, and physical
+  storage health;
+- semantic viability, package admission, runtime health, and evidence
+  freshness.
+
+Compact cards project only product identity, lifecycle state, one typed
+attention condition, and relevant actions. Raw skill/scenario/package details
+remain available in advanced diagnostics but never become peer products or
+card identity. Provider substitution, connected-account changes, migrations,
+and implementation changes enter the same digest-bound reviewed-plan protocol
+as install and update.
+
 The pre-release toggle selects the one effective Application version; it never
 adds a parallel Beta launcher. Turning it off requests an admitted transition,
 not an unconditional downgrade of the current data schema. A required snapshot
@@ -775,6 +868,29 @@ horizontal scroll position. Local Workspace, Trial and DEV records may be
 combined by the Application read model, but public catalog/Root delivery
 remains separately authoritative. A local fallback is not evidence that the
 public `inimatic.com` path is healthy.
+
+Application health is projected as typed conditions rather than inferred from
+card decoration. Each condition carries type, status, reason, message, and the
+observed generation. A deterministic attention projection selects the most
+important condition for compact lists; it never replaces the complete
+condition set in detail. Release-cycle decoration is an independent visual
+channel: prerelease/Beta uses `warning`, an installed current release uses
+`success`, an installed release that differs from the selected Marketplace
+release uses `tertiary`, and an uninstalled Marketplace item has no border.
+Health severity therefore cannot be hidden by release-source color.
+
+`Update available Applications` is a reviewed batch operation:
+
+1. `assess` performs a bounded, side-effect-free inventory read;
+2. `plan` persists exact per-Application plans and one aggregate digest;
+3. the user reviews versions, skipped items, and blockers;
+4. `apply` consumes only that digest and records each durable result.
+
+The batch is resumable and idempotent but deliberately not described as an
+atomic transaction across Applications. Partial completion is an explicit
+terminal state with per-item recovery evidence. Core/node update, slot
+selection, drain, and rollback remain System operations even when their status
+is summarized from an Application detail.
 
 For an installed Workspace project that predates the Application aggregate,
 Versions exposes one read-only stable projection identified by its immutable
@@ -1130,6 +1246,24 @@ fenced for reconciliation, not blind re-execution. Snapshot rollback is an
 exceptional recovery action, not a second active channel.
 
 ### Parameters And Secrets Across Channels
+
+Every immutable release may bind an `ApplicationSetupContract`. The contract is
+compiled from component configuration declarations plus release-owned connected
+account, permission, placement, and verification requirements. It contains
+schemas, defaults, slot names, purpose, required/optional semantics and scopes;
+it never contains setting overrides, credential references, tokens, account
+bindings, grants, or node selections. The release records the exact contract
+digest so installation and update cannot silently substitute another setup.
+
+Applications reconciles that contract into a revisioned, secret-redacted
+`ApplicationSetupState` per Application release and channel. Its deterministic
+status is `configuring`, `action_required`, `validating`, or `ready`; optional
+missing inputs remain visible but do not block Ready. Install/update completes
+only after required settings, credentials, accounts, permissions and placement
+are admitted and required release checks pass. Retries use compare-and-swap and
+idempotent lifecycle operations. A secret form writes directly to the scoped
+vault adapter, clears its input after submit, and persists only presence/status
+evidence in setup state.
 
 Application configuration and credential bindings are not disposable Beta
 fixtures or business records to reseed on every candidate. Inherit the local

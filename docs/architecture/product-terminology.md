@@ -12,6 +12,9 @@ pack, solution agent, endpoint, and channel is governed by the
 
 The canonical product and distribution boundary is governed by
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
+Semantic capability, binding, package, local state, and resolution identities
+are governed by
+[Capability, Binding, and State Separation](capability-binding-state-separation.md).
 Application permissions, Application-defined roles, per-user/child/guest
 Application access, Builder final verification, and the Users & Access product
 projection are governed by
@@ -120,9 +123,17 @@ future workbenches whose domain instances outnumber useful launchable apps.
 | `webspace`, `default`, `main` | Webspace, Main | Webspace is an access/projection context, not a folder. |
 | `scenario` | Application host | Scenario remains the implementation/authoring term; an Application launch target may bind one host to different skills, so the mapping is not always one-to-one. |
 | `web_desktop` | Capabilities | Default overview application. Keep `web_desktop` as the stable ID. |
-| `skill` | Skill | Executable capability used by applications and agents. |
-| `project` | Application definition (compatibility) | Current internal versioned composition of skills/scenarios, launch targets, and lifecycle policy. New product UI says Application; keep Project only in compatibility diagnostics and APIs. |
-| `project_release` | Application release | Current immutable dependency-locked release record. New public contracts use `ApplicationRelease` while preserving legacy digest identity. |
+| `capability_contract` | Capability | Stable semantic behavior an Application requires; independent of package, provider, node, and credential. Normal UI uses a localized capability title and keeps the ref in advanced detail. |
+| `application_requirement` | App requirement | Versioned requirement for a capability/state contract plus policy and evidence constraints. It is not a skill or package dependency. |
+| `semantic_application_revision` | App definition revision | Immutable implementation-free product behavior, requirements, state needs, launch/access intent, UI/workflow semantics, and requirement traceability accepted for one revision. |
+| `skill` | Skill | Executable runtime component that may implement or support one or more capabilities. It is not the semantic capability identity. |
+| `binding_definition` | Implementation | Portable implementation/adapter contract that satisfies a capability under declared conditions. |
+| `binding_instance` | Connected implementation | Local configured instance of an implementation, including opaque provider/account references. |
+| `state_space` | App data space | Stable local data identity with independent owner, lifecycle, custodian, portability, and physical location. |
+| `application_resolution` | Resolved composition | Immutable admitted mapping from requirements to contracts, implementations, exact packages, local bindings/state obligations, and evidence. |
+| `package_release`, `ArtifactPackageRef` | Implementation package | Immutable delivery bytes. Do not confuse this with a Capability, Application, or portfolio-level Solution pack. |
+| `project` | Application source composition (compatibility) | Current internal physical ownership/composition of skills/scenarios, launch targets, and lifecycle policy. New semantic Application source declares requirements; keep Project for compatibility diagnostics and APIs. |
+| `project_release` | Application release (compatibility) | Current immutable component/dependency-locked release record. Native `ApplicationRelease` binds the semantic revision and portable delivery metadata; the environment-specific exact selection belongs to `ApplicationResolution` and `WorkspaceLock`. Preserve legacy digest identity. |
 | `builder development session` | Development session | Mutable Builder overlay with explicit targets and read-only context. Never shown as an installed application. |
 | `presentation` | Application view or launch target | Explicit scenario host/binding for a skill or Project entry point. |
 | `research direction` | Research direction | Live scientific aggregate presented by Research Workbench; not a Project, skill, or scenario identity. |
@@ -161,6 +172,12 @@ Catalog categories are discovery labels, not runtime types. For example,
 `adaos.research.implementation.v1` is a machine-readable profile and `member` or
 `home_subnet` is a deployment scope. UI filters must not collapse those three
 axes into one category field.
+
+Applications presents product behavior first. Capability requirements may be
+shown as a concise `Capabilities` summary, while selected implementations,
+packages, providers, state spaces, and runtime components remain advanced
+details. The UI must not use `Skill`, `Capability`, `Integration`, and
+`Application` as interchangeable labels.
 
 ## Compatibility Policy
 

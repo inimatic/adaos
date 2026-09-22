@@ -185,8 +185,11 @@ established authorization patterns:
 
 1. User consent is Application-scoped; enforcement remains action, resource,
    actor, and component scoped.
-2. A skill manifest declares component capabilities. The Application
-   declaration composes them into a product-level permission profile.
+2. A semantic capability contract declares required authority classes. The
+   Application composes those needs into a product-level permission profile;
+   the selected binding and runtime skill additionally declare concrete SDK,
+   network, secret, provider, and side-effect permissions. Semantic capability
+   and component permission are different identities and both must agree.
 3. Profiles are identity and preference records. Access policy lives in grants,
    memberships, role assignments, constraints, consent, and audit facts.
 4. Deny by default. Validate on every request. Explicit denies, revocation,
@@ -218,6 +221,11 @@ established authorization patterns:
 : Stable machine-readable token used by enforcement, such as `workspace.read`,
   `workspace.write`, `llm.generate`, `network.egress`, `secrets.use`,
   `notifications.send`, or `app.task.complete`.
+
+`PermissionCapability` and an Application-local role capability are
+authorization tokens. They are not semantic `CapabilityContract` identities.
+A semantic contract declares authority requirements that are expanded into
+these enforcement tokens during resolution and permission-profile compilation.
 
 `AuthorizationDetails`
 : Structured permission detail inspired by OAuth RAR: actions, resources,
@@ -360,7 +368,10 @@ Runtime access is allowed only when all relevant layers admit it:
 ```text
 effective_permission =
   application declares the permission
+  AND requested ApplicationRequirement is part of the admitted resolution
+  AND selected CapabilityContract and BindingDefinition admit the operation
   AND installation or owner grant admits that permission profile
+  AND runtime component authority is a subset of the admitted binding/profile
   AND actor has platform membership/capability for the requested scope
   AND subject has an ApplicationAccessGrant or default access profile
   AND assigned Application role grants the app capability
@@ -375,8 +386,10 @@ Every decision records:
 - `actor`: who initiated or approved;
 - `subject`: whose access or data is affected;
 - `application_id` and release digest;
-- `component_id` and tool/action when applicable;
-- `actor_chain`: user -> application -> skill -> agent/service -> external API;
+- `capability_ref`, `binding_definition_ref`, `binding_instance_ref`,
+  `component_id`, and tool/action when applicable;
+- `actor_chain`: user -> application -> capability -> binding -> runtime
+  skill/agent/service -> external API;
 - `scope`, `resource`, `webspace_id`, `workspace_id`, and external audience;
 - `device_id`, `session_id`, holder binding, and credential purpose;
 - permission id, Application role, platform role, decision, reason, and
@@ -587,7 +600,10 @@ but the V1 surface must avoid creating a separate, invisible secret authority.
 
 Builder needs a permission profiler:
 
-- statically declared permissions from Application declaration and skills;
+- authority requirements from Application requirements and capability
+  contracts;
+- statically declared permissions from the selected binding, package/runtime
+  skills, and Application permission profile;
 - inferred permissions from tool side effects, LLM/content APIs, network
   destinations, data routes, notifications, background jobs, and secrets;
 - observed runtime permission use;

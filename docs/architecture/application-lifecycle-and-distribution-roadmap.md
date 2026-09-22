@@ -2,7 +2,7 @@
 
 Status: target implementation roadmap.
 
-Last reviewed: 2026-09-21.
+Last reviewed: 2026-09-22.
 
 Target architecture:
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
@@ -10,6 +10,8 @@ Companion access architecture:
 [Application Access, Permissions, and Roles](application-access-permissions.md).
 Companion fast-read projection architecture and embedded roadmap:
 [Application Registry Projection](application-registry-projection.md).
+Cross-roadmap semantic creation and evolution sequence:
+[Semantic Application Composition And Evolution](application-semantic-composition-roadmap.md).
 
 This roadmap sequences the Application domain, SDK/MCP surface, Builder-built
 Applications product, trusted prerelease pilot, stable release proof, and later
@@ -52,6 +54,12 @@ tests, operation receipts, or end-to-end evidence.
     background manifest validation, and federated Application fact indexing are
     owned by the Application Registry Projection roadmap. This roadmap consumes
     those read models but does not redefine their trust or rebuild semantics.
+11. Semantic requirements and admitted implementation/state resolution precede
+    new native Application releases. Exact skill/scenario/package closure
+    remains a resolved delivery fact; it is not a semantic source dependency.
+12. Applications adopts additive browser-safe requirement/resolution fields
+    before the semantic resolver is complete and renders unavailable facts
+    explicitly. It must not invent them from component names.
 
 ## Current Baseline
 
@@ -120,6 +128,18 @@ later implementation shares one object and state model.
   Treat node and endpoint identity as mutable component-placement and activation
   metadata backed by `ProjectDeployment`; never create per-node Application
   identities, installations, subscriptions, or desktop entries.
+- [ ] `[must]` `APP0-13` Extend native `ApplicationRelease` with an immutable
+  semantic revision ref and portable binding-delivery metadata. Define the
+  versioned, implementation-free `SemanticApplicationRevision` schema. Extend
+  `ApplicationInstallation`/`RuntimeSelection` with an optional admitted
+  `application_resolution_ref`/digest. Compatibility Applications may omit
+  these fields and must then report `semantic_resolution=not_available`, not an
+  inferred success. Never embed the environment-specific resolution in the
+  portable release.
+- [ ] `[must]` `APP0-14` Keep semantic requirements, selected bindings, package
+  delivery closure, local installation, runtime selection, state spaces, and
+  observed placement as separate refs and projections. No display model may
+  collapse them into one component or provider field.
 
 **Exit proof:** schema round trips and compatibility fixtures distinguish all
 seven Application objects, preserve legacy release identity, and reject
@@ -245,6 +265,17 @@ Project/Application identity collapse.
   `ProjectDeploymentRuntime`. Include aggregate state, node/component counts,
   health, freshness, partial-result markers, and an honest `not_reported`
   state without creating a parallel placement store.
+- [~] `[must]` `APP1-18` Make release-owned setup a first-class lifecycle rail.
+  Compile typed settings, required/optional credential slots, connected-account
+  requirements, permissions, placement and verification into an immutable
+  secret-free `ApplicationSetupContract`; bind its digest to the exact release
+  and reconcile a revisioned `ApplicationSetupState`. The contract/state ABI,
+  deterministic compiler/projector, CAS store and optional Weather credential
+  fixture are implemented and covered locally. Wire setup reads/mutations to
+  Applications SDK/MCP, vault/account/permission/placement adapters and the
+  install/update operation journal; qualify restart, denial, stale revision,
+  revoked secret, required versus optional inputs and failed verification in a
+  real Beta before marking complete.
 - [x] `[must]` Qualify the `APP1-14` failed-preparation recovery primitive:
   exact Candidate/contract, unchanged Stable verification, durable interrupted
   recovery, retained evidence and no false completed-migration admission.
@@ -449,11 +480,15 @@ Builder development and consumes only public contracts.
   Application Access roadmap.
 - [~] `[must]` `APP4-05` Make Applications the product inventory authority and
   remove duplicate Inventory from Infrastate UI while preserving diagnostics.
-  Applications Beta `0.1.25` now renders the authoritative inventory and the
-  current DEV Infrascope composition omits product Inventory. The previously
-  published compatibility surface remains installed until the replacement
-  diagnostics/lifecycle matrix and zero-use gate in the Infrascope retirement
-  roadmap pass.
+  Applications Beta `0.1.25` renders the authoritative inventory and the
+  current DEV Infrascope composition omits product Inventory. DEV revision
+  `028` adds typed Application conditions, deterministic compact attention,
+  independent release-cycle accents, Installed/Marketplace/My developments
+  sections, and reviewed batch update assessment/plan/apply. Browser
+  qualification and promotion remain open. The previously published
+  compatibility surface stays installed until the replacement diagnostics/
+  lifecycle matrix and zero-use gate in the Infrascope retirement roadmap
+  pass.
 - [ ] `[must]` `APP4-06` Mark Applications as a protected system Application:
   bootstrap-capable, ordinary-release updatable, unable to remove its active
   installation, and recoverable through CLI/MCP.
@@ -474,7 +509,10 @@ Builder development and consumes only public contracts.
   hiding the original prompt. Lost-response recovery is idempotent.
 - [ ] `[must]` `APP4-14` Exercise real browser `plan -> review -> apply` for
   install/update/track/remove, including stale revision, failed apply, restart,
-  and operation-state recovery before the Automation/Trial exit gate.
+  and operation-state recovery before the Automation/Trial exit gate. The
+  batch update contracts and review surface are implemented and covered by
+  SDK/MCP/scenario tests; browser proof must include zero-eligible, partial,
+  resumed, and successful batches.
 - [x] `[must]` `APP4-15` Store scenario-owned EN/RU dictionaries as declared
   Prototype resources, verify both locales during qualification, bind their
   exact digest into acceptance, and invalidate acceptance after locale changes.
@@ -691,6 +729,45 @@ Builder development and consumes only public contracts.
   extended release schema; the older RU Root rejects the unknown field instead
   of silently dropping it. Raster/generated variants remain a compatible media
   extension rather than a Desktop-only contract.
+- [~] `[must]` `APP4-48` Replace legacy inventory status heuristics with typed
+  Application conditions and a deterministic attention projection. Keep
+  health severity separate from release-cycle decoration: Beta is warning,
+  installed-current is success, installed-outdated is tertiary, and
+  Marketplace-only is unmarked. Core projection, generic Client rendering,
+  DEV UI, and contract tests are complete; wide/compact and routed browser
+  qualification remains open.
+- [~] `[must]` `APP4-49` Provide a bounded reviewed batch-update workflow:
+  assess, durable exact plan, human review, idempotent apply, resumable item
+  receipts, and explicit partial completion. SDK and Root MCP contracts plus
+  the DEV review modal are implemented. Do not claim cross-Application
+  atomicity. Real update, failed item, restart-resume, and audit evidence are
+  still required before promotion.
+- [ ] `[must]` `APP4-50` Reserve typed browser-safe detail projections for
+  semantic requirements, admitted resolution, binding summaries, state-space
+  portability, evidence freshness, and unresolved gaps. Until the owning
+  contracts exist, render `not_available` with source/freshness metadata; do
+  not derive capability identity from skills, tools, providers, or titles.
+- [~] `[must]` `APP4-51` Keep the default detail compact instead of preserving
+  five low-information peer sections. Show active/latest/channel identity and
+  direct valid actions first, then About, Configuration, Runtime placement,
+  Access and Categories summaries. Open focused task modals for setup and
+  placement; show Activity/diagnostics only when evidence is actionable. DEV
+  Prototype `0.1.54`, UI revision `009` (`proto 034`) and wide/compact browser
+  review qualify this composition with static fixtures. Live read models,
+  mutations and production Beta qualification remain open.
+- [ ] `[should]` `APP4-52` Add reviewed implementation/provider substitution
+  and state-migration impact views after `ApplicationResolution` and
+  `ResolutionPlan` are implemented. The UI must show identity preservation,
+  state portability, access changes, evidence freshness, and rollback limits
+  before applying the exact plan.
+- [~] `[must]` `APP4-53` Render and operate release-owned setup without
+  Application-specific UI code. Separate typed settings, write-only credential
+  slots, connected accounts, access, runtime placement and verification;
+  optional gaps stay visible without blocking Ready. The Applications
+  Prototype and optional Weather token fixture pass desktop/compact review,
+  including secret non-retention, primary relocation, eligible-node install and
+  reviewed distributed-component uninstall. SDK/MCP adapter wiring and a real
+  Beta install/update/restart cycle remain open under `APP1-18`.
 - [ ] `[could]` `APP4-10` Add saved Catalog filters and locally pinned
   Application detail sections.
 - [ ] `[could]` `APP4-38` Store UI revisions as base plus content-addressed

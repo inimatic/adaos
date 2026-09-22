@@ -6,7 +6,7 @@ milestone are specified here. Canonical product/distribution naming, channels,
 Applications UI, publisher identity, and external feedback are governed by
 [Application Lifecycle, Distribution, and Feedback](application-lifecycle-and-distribution.md).
 
-Last reviewed: 2026-09-05.
+Last reviewed: 2026-09-22.
 
 This page defines composition, Builder development sessions, presentation
 hosts, and model-facing artifact context. Existing code and persisted records
@@ -17,21 +17,29 @@ consumer, not a special implementation path in AdaOS core.
 
 The package, release, activation, and rollback mechanics remain owned by
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
+Semantic Application requirements and implementation resolution are owned by
+[Capability, Binding, and State Separation](capability-binding-state-separation.md).
+The current `Project*` component model remains the physical source-ownership
+and resolved-delivery compatibility layer during that migration.
 The research-domain workflow remains owned by
 [AdaOS Research Fabric](research-fabric.md).
 
 ## Decision Summary
 
-1. An **Application** is a versioned declarative distribution and user-facing
-   product identity. It names an arbitrary non-empty set of owned
-   skill/scenario components, external dependencies, launch targets, catalog
-   metadata, and lifecycle policy. `Project` is its current compatibility name.
+1. An **Application** is a versioned semantic product identity. It declares
+   behavior, capability/state requirements, launch intent, catalog metadata,
+   access intent, and lifecycle policy without naming implementation topology.
+   The current **Project** compatibility record describes its writable physical
+   source members and resolved delivery composition.
 2. An Application is not a chat session, editor tab, Codex prompt, mutable
    checkout, or runtime state store. Those concerns belong to a **Builder
    Development Session**.
-3. An **ApplicationRelease** is the immutable, dependency-locked release of one
-   Application. `ProjectRelease` is its current compatibility record. A
-   one-skill Application is valid; an Application need not contain a scenario.
+3. An **ApplicationRelease** is the immutable release of one semantic
+   Application revision and its portable delivery metadata. `ProjectRelease`
+   is its current component/dependency-locked compatibility record. Local
+   `ApplicationResolution` selects the exact environment closure. A one-skill
+   Project compatibility composition is valid; an Application need not expose
+   a scenario-based UI.
 4. A launch target binds a scenario presentation to one or more skills. An
    Application may have multiple launch targets without creating multiple
    product or installation identities.
@@ -117,7 +125,8 @@ The research-domain workflow remains owned by
 
 ## Project Distribution Contract
 
-The target source contract is additive to the existing component manifests:
+The current physical source-ownership contract is additive to the existing
+component manifests:
 
 ```yaml
 schema: adaos.project.v1
@@ -172,6 +181,13 @@ into the Project or granted source ownership. A Project may contain any
 non-empty combination of skills and scenarios, including one standalone
 headless skill.
 
+This block is not the target semantic dependency language. A native semantic
+Application declares `ApplicationRequirement` records. Resolution selects
+`BindingDefinition` records and an exact package closure; only then is that
+closure projected into the physical component/release records described here.
+Existing component-first Projects remain valid compatibility inputs and may be
+deterministically projected as Application-local bindings until migrated.
+
 `components.owned` is also the sole authority for Builder's mutable source
 envelope. Builder does not infer writable companion skills from
 `scenario.yaml.runtime.skills`, `depends`, an installed Workspace edition, a
@@ -196,6 +212,14 @@ Owned members have orthogonal metadata:
 digests, signatures, dependency locks, and direct diagnostic addressing. They
 are omitted from normal Catalog/Desktop discovery and are not independently
 installed or removed. Hiding a component is never a security boundary.
+
+Extraction of an owned implementation into a reusable package changes source
+ownership and package delivery, not Application identity by implication. The
+operation preserves explicit contracts, state/data ownership, credentials,
+access grants, migration provenance, conformance evidence, and a reviewed
+fallback. Shared dependencies remain read-only context in the originating
+Development Session unless a separate package-development task grants write
+authority.
 
 ### Data, telemetry, and managed-component ownership
 
@@ -439,6 +463,11 @@ immutable ProjectRelease.
 Scenario remains the implementation term for a UI/workflow host. Application
 is the product-facing launchable projection. The mapping is no longer assumed
 to be globally one-to-one.
+
+For native semantic Applications, launch intent is resolved to an exact
+presentation/runtime closure before publication. Scenario and skill refs in
+that closure are physical runtime facts. They do not become stable semantic
+requirements merely because the same host is selected repeatedly.
 
 A skill can advertise presentations independently of the Project that later
 selects an entry point:
@@ -873,6 +902,8 @@ the domain boundary.
 - [AdaOS Builder](builder.md)
 - [Builder Roadmap](builder-roadmap.md)
 - [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md)
+- [Capability, Binding, and State Separation](capability-binding-state-separation.md)
+- [Semantic Application Composition And Evolution Roadmap](application-semantic-composition-roadmap.md)
 - [Registry, Marketplace, and Operations Roadmap](registry-marketplace-operations-roadmap.md)
 - [AdaOS Research Fabric](research-fabric.md)
 - [Research Fabric Roadmap](research-fabric-roadmap.md)

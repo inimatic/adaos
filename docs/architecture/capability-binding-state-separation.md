@@ -2,7 +2,7 @@
 
 Status: target architecture and normative vocabulary.
 
-Last reviewed: 2026-09-17.
+Last reviewed: 2026-09-22.
 
 Implementation sequencing is owned by
 [Capability, Binding, and State Separation Roadmap](capability-binding-state-separation-roadmap.md).
@@ -844,6 +844,48 @@ application-local -> candidate -> reusable -> platform
 Promotion requires independent consumers and conformance evidence, not size or
 usage count alone.
 
+## Capability Package Curation
+
+Capability reuse is a governed product and engineering lifecycle, not a naming
+convention and not an automatic consequence of moving a skill directory.
+
+An Application-local binding is allowed when no admitted reusable
+implementation satisfies the requirement. It remains part of that
+Application's writable source envelope and does not count as reuse. Promotion
+to `candidate` starts only after Builder or Evolver identifies a semantic
+responsibility that is useful outside the originating Application.
+
+A reviewed curation operation then:
+
+1. reuses, refines, composes, forks, or rejects an existing
+   `CapabilityContract`;
+2. fixes contract ownership, compatibility, versioning, deprecation, trust,
+   conformance, and support policy;
+3. extracts a `BindingDefinition` and implementation without transferring
+   Application state, credentials, grants, or publisher authority;
+4. builds and publishes an immutable package through the existing Artifact
+   Pipeline;
+5. resolves the originating Application and at least one independent consumer
+   against the package;
+6. retains the old binding as a reviewed fallback until substitution and
+   rollback evidence pass;
+7. deprecates embedded implementations only after consumer impact and recovery
+   are understood.
+
+Package boundaries are allowed to change during this process. Capability and
+binding-definition identities change only when their semantics or
+implementation contract changes. `PackageRelease` remains delivery identity;
+it never becomes the semantic identity merely because a package is reusable.
+
+Similarity search, repeated package co-occurrence, contract diffs,
+conformance results, and impact projections may recommend curation work. Those
+signals are not publication authority. Human or explicitly delegated authority
+remains responsible for contract admission, package publication, consumer
+migration, and deprecation.
+
+The linear integration and acceptance sequence is owned by the
+[Semantic Application Composition And Evolution Roadmap](application-semantic-composition-roadmap.md).
+
 ## Relationship To Builder And Client
 
 Builder authors the semantic Application revision and its requirements. It may
@@ -851,6 +893,19 @@ use simulation bindings for an executable prototype, but it must not bake
 simulation package names into the Application document. Its final report
 explains unresolved requirements, selected contracts, viability, and evidence
 gaps.
+
+The semantic compiler lowers declared activities and state needs into
+`ApplicationRequirement` and state-port references. It may consume bounded
+SDK, Root MCP, provider-contract, and package metadata as discovery input, but
+the persisted semantic Application refers only to admitted semantic contracts.
+Raw tool IDs, skill IDs, provider IDs, package members, endpoints, and local
+paths are implementation candidates or evidence, never semantic dependencies.
+
+Prototype acceptance freezes observable behavior and the semantic Application
+revision. It does not freeze the simulation package topology. Automation may
+reuse an existing admitted binding or create an Application-local binding, but
+both paths converge on the same resolution, evidence, planning, and activation
+contracts before Trial.
 
 The existing semantic prototype ABI and fixed `adaos.webui.v1` client remain
 the first compiler target. Composite capability authoring and resolution occur
@@ -888,6 +943,20 @@ locators, owner-scoped bindings, and migration ownership are inputs to
 effective state guarantees. They are not discarded. The new state contract
 adds semantic state identity and consumer ports above those provider
 negotiation records.
+
+### Current provider and Root MCP contracts
+
+`skill.yaml.provider_contracts`, Root MCP tool contracts, SDK operation
+descriptors, side-effect metadata, and Web UI data bindings are useful
+implementation discovery and conformance inputs. They do not automatically
+become `CapabilityContract` identities.
+
+A compatibility projector may propose a `BindingDefinition` candidate from
+those records only when it can bind exact operation schemas, effects,
+authority, state support, environment constraints, and evidence. Contract
+admission is explicit. The original tool/provider refs remain implementation
+entry points in delivery metadata; Applications depend on the admitted
+capability contract, not those refs.
 
 ### Current package and activation pipeline
 
@@ -1117,6 +1186,7 @@ alone:
 - [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md)
 - [Declarative Resource Workbench](declarative-resource-workbench.md)
 - [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md)
+- [Semantic Application Composition And Evolution Roadmap](application-semantic-composition-roadmap.md)
 - [Governed Evolution](governed-evolution.md)
 - [Distributed Service and Data Topology](distributed-service-and-data-topology.md)
 - [Application Access, Permissions, and Roles](application-access-permissions.md)

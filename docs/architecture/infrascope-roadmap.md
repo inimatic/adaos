@@ -23,9 +23,11 @@ Status markers: `[x]` complete, `[~]` partial, `[ ]` open.
 
 - [~] `[must]` Move Application inventory, Marketplace, lifecycle, release,
   permissions, component topology, and placement to Applications. Authoritative
-  inventory and desired/observed placement reads are live in Applications Beta;
-  reviewed relocation/drain and full lifecycle failure/retry qualification stay
-  open under `APP4`.
+  inventory and desired/observed placement reads are live in Applications Beta.
+  DEV revision `028` adds typed conditions, release-cycle accents, and durable
+  reviewed batch updates without copying legacy `Update/Test/Validate all`
+  dispatch. Browser qualification, reviewed relocation/drain, and complete
+  lifecycle failure/retry handling stay open under `APP4`.
 - [~] `[must]` Move people, invitations, grants, recovery, sessions, and device
   trust to Users & Access. The Root-backed Beta is active; richer permission
   mutation and some connected-session cutoff UX remain open in the identity and

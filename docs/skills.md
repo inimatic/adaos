@@ -4,6 +4,14 @@
 
 In the current AdaOS runtime, a skill is a managed unit that can be scaffolded, validated, installed, updated, activated, and in some cases supervised as a long-running service.
 
+A skill is an implementation/runtime component, not the stable semantic
+capability identity required by an Application. Native semantic Applications
+declare `ApplicationRequirement`; a resolver selects a `BindingDefinition` and
+immutable package that may be implemented by one or more skills. Existing
+direct skill dependencies remain supported as compatibility and resolved
+runtime closure. See
+[Capability, Binding, and State Separation](architecture/capability-binding-state-separation.md).
+
 ## Common commands
 
 ```bash

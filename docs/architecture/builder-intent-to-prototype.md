@@ -6,7 +6,7 @@ residual Brief interpretation, total component contracts and clean held-out
 reliability are not complete. Historical Applications recipe-guided results
 must not be conflated with the newer pack-free development cohorts.
 
-Last reviewed: 2026-09-14.
+Last reviewed: 2026-09-22.
 
 This page owns how Builder turns an ordinary user request into an executable
 Prototype. [AdaOS Builder](builder.md) continues to own the complete governed
@@ -18,6 +18,11 @@ The [Builder E2E Evaluation Pipeline](builder-evaluation-pipeline.md) owns
 reproducible evaluation contracts and the single technological CLI entry. The
 [Client Component System Roadmap](client-component-system-roadmap.md) owns
 Client decontamination and component-system growth.
+Portable requirements and implementation resolution are governed by
+[Capability, Binding, and State Separation](capability-binding-state-separation.md).
+The end-to-end creation/evolution order across Builder, Applications, packages,
+Trial and Stable is coordinated by the
+[Semantic Application Composition And Evolution Roadmap](application-semantic-composition-roadmap.md).
 
 ## Architecture Decision
 
@@ -795,6 +800,17 @@ completeness evidence. During development evaluation, AdaOS first retains and
 examines the complete provider response and exact sanitized request. It may
 reduce a limit only after showing that the removed tail is unnecessary rather
 than truncating the response and tuning against an incomplete artifact.
+
+The current Prototype-generation defaults preserve headroom for complete large
+manifests: 64,000 output tokens for the GPT-5/root full-document route, 128,000
+for GPT-5 semantic-v2 output, and 32,000 for GPT-4.1. These are ceilings, not
+generation targets. A per-request override remains bounded at 128,000 and is
+part of request identity. Codex realization has a separate execution budget;
+raising one budget must never be presented as raising the other.
+
+These defaults are active in the `builder@0.2.177` DEV Candidate. A locked
+Workspace Builder adopts them only through the normal Trial/Publication
+decision; direct mutation of its selected immutable package is forbidden.
 
 Ceilings and timeouts are safety controls, not latency remediations. Stage
 timings must first distinguish local orchestration, validation, Root transport

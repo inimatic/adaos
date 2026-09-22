@@ -58,9 +58,10 @@ That means:
 
 This is preferred over dynamic subscribe and unsubscribe wiring because it is simpler, safer, and easier to roll out incrementally across existing skills.
 
-### One source of truth for dependency ownership
+### One source of truth for physical runtime dependency ownership
 
-Scenario dependency ownership belongs to the scenario manifest.
+Within the current physical runtime closure, scenario-to-skill dependency
+ownership belongs to the scenario manifest.
 
 That means:
 
@@ -69,6 +70,17 @@ That means:
 - skill manifests do not own scenario dependency truth
 
 This avoids a fragile fully mirrored declaration model.
+
+This rule does not make a skill ID a semantic Application requirement. Native
+Applications declare `ApplicationRequirement` records against capability/state
+contracts. Resolution selects binding definitions and exact packages, then
+projects the selected physical scenario/skill closure into the manifests and
+release records interpreted here. Existing component-first Applications remain
+valid compatibility inputs.
+
+The activation policy below therefore answers when an already selected runtime
+component is loaded or active. It does not select the implementation that
+satisfies an Application capability.
 
 ### Activation policy belongs to the skill
 

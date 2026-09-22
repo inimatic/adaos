@@ -3,7 +3,7 @@
 Status: active target delivery roadmap; implemented mechanisms do not imply
 complete user, lifecycle or production acceptance.
 
-Last reviewed: 2026-09-21.
+Last reviewed: 2026-09-22.
 
 ## Document Ownership Audit
 
@@ -33,6 +33,7 @@ cannot change a gate or define a competing target; link decisions back here.
 | [Scenario development guide](../guides/builder-scenario-development.md) | Normative stage-aware authoring procedure, not experimental results |
 | [Verification guide](../guides/builder-verification.md) | Verification procedure, not permission or a completion verdict |
 | [Application access roadmap](application-access-permissions-roadmap.md) | Application permission, role, access, and Builder final-verification release gates |
+| [Semantic Application composition roadmap](application-semantic-composition-roadmap.md) | Cross-roadmap integration gates from intent through semantic resolution, Trial/Stable evolution, and reusable-package extraction; owns no Builder implementation task |
 | [Functional parity fixture](builder-functional-parity.json) | Executable Builder-product compatibility data; not generic model context |
 | [Engineering journal](builder-engineering-journal.md) | The only incremental Builder observation record |
 | [Client roadmap](client-component-system-roadmap.md) | Client-owned integrity, component contracts and renderer acceptance |
@@ -181,8 +182,11 @@ For Applications, the release-owned verification contract is the
 `ApplicationVerificationReport` from the Application Access roadmap; Builder
 surfaces and produces it, but the access roadmap owns its checklist semantics.
 
-- [ ] `[could]` Add a setup assistant that renders missing inputs, secret refs,
-  capability review and verification results from that contract.
+- [~] `[must]` Add a setup assistant that renders typed settings, write-only
+  credential slots, connected-account requirements, capability review,
+  placement and verification from that contract. The release/state ABI,
+  deterministic projector and Applications Prototype flow exist; live
+  SDK/MCP/vault/account/placement wiring and Beta qualification remain open.
 - [ ] `[deferred]` Generate or execute setup automatically before publication
   and durable source-checkpoint contracts are stable.
 

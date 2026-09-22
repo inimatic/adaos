@@ -4,6 +4,13 @@
 
 A scenario is a managed workflow artifact that can be installed into the workspace, validated, executed, and tested.
 
+A scenario is a presentation/orchestration host, not a semantic Application
+dependency or product identity by itself. Native Applications declare
+capability/state requirements and launch intent; resolution produces the exact
+scenario/skill runtime closure. Existing `depends` and `runtime.skills` fields
+remain the physical compatibility contract for that closure. See
+[Capability, Binding, and State Separation](architecture/capability-binding-state-separation.md).
+
 `scenario.yaml` is the canonical scenario manifest and the only version
 authority. A package may reference its adjacent declarative UI through
 `ui.manifest: webui.json`; runtime resolution and source fingerprinting follow

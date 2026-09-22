@@ -21,6 +21,9 @@ Implementation order is owned by the
 Project package placement remains owned by
 [Project Composition](project-composition-and-development-context.md) and the
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
+Semantic implementation selection, local binding identity, state-space
+identity, and portability are owned by
+[Capability, Binding, and State Separation](capability-binding-state-separation.md).
 
 ## Decision
 
@@ -55,7 +58,10 @@ state safely replicated.
 The layers remain distinct:
 
 ```text
-ProjectDefinition / ProjectRelease       exact software and compatibility
+ApplicationResolution                    selected semantic implementation/state obligations
+                 |
+                 v
+ProjectDefinition / ProjectRelease       exact software and compatibility closure
                  |
                  v
 ProjectDeployment / ComponentActivation  desired and observed node placement
@@ -69,6 +75,17 @@ Dataset / Partition / Replica             data ownership and availability
                  v
 domain API and payloads                   skill/service semantics
 ```
+
+Placement is resolved after semantic implementation selection. A capability
+contract never names a node. A binding definition may declare environment and
+topology constraints; an admitted binding instance and deployment plan select
+eligible nodes. Moving a conforming instance between nodes changes placement
+and operational evidence, not Application, capability, or package identity.
+
+`StateSpace` is the stable logical data identity used by the capability model.
+`Dataset`, `Partition`, and `Replica` describe its distributed materialization
+where applicable. They must reference the state-space revision and authority
+epoch rather than creating a second logical owner.
 
 `ComponentActivation` proves that a package is active on a node. A
 `ServiceInstance` proves that a compatible runtime instance has registered,
@@ -303,9 +320,11 @@ zero is valid for derived replicas that have no writer authority.
 
 ## Placement And Rebalance
 
-The topology planner consumes trusted node inventory, ComponentActivations,
-ServiceDefinitions, capacity, locality, anti-affinity, current assignments, and
-domain-supplied partition facts. It emits an immutable reviewed plan.
+The topology planner consumes trusted node inventory, the admitted binding and
+state obligations, ComponentActivations, ServiceDefinitions, capacity,
+locality, anti-affinity, current assignments, and domain-supplied partition
+facts. It emits an immutable reviewed plan linked to the parent
+`ResolutionPlan` when placement is part of Application activation.
 
 A safe partition move normally follows:
 

@@ -17,6 +17,12 @@ output repair. Recipe-guided evidence remains valid only in that narrower
 scope and does not prove generic prompt autonomy. The corrective sequence is
 owned by the
 [Builder Intent-to-Prototype Roadmap](builder-intent-to-prototype-roadmap.md).
+Semantic Application requirements, capability/state contracts, implementation
+bindings, and local resolution are governed by
+[Capability, Binding, and State Separation](capability-binding-state-separation.md).
+Their linear integration with Builder, Applications, packages, Trial, Stable,
+and reusable-package extraction is coordinated by the
+[Semantic Application Composition And Evolution Roadmap](application-semantic-composition-roadmap.md).
 
 Implementation alignment (2026-07-24): the single-user Builder delivery path
 now uses immutable source checkpoints, component packages, a dependency-locked
@@ -35,9 +41,11 @@ That document refines the current `change_set` and per-turn Builder Change
 compatibility terminology; this page continues to own the active implementation
 pipeline until migration is complete.
 
-AdaOS Builder is the role and workflow that turns an idea into governed AdaOS
-artifacts: skills, scenarios, manifests, UI descriptors, NLU hints, tests, and
-runtime-ready changes.
+AdaOS Builder is the role and workflow that turns an idea into a governed
+semantic Application revision and, after resolution, the required AdaOS
+artifacts: capability/state requirements, bindings, skills, scenarios,
+manifests, UI descriptors, NLU hints, tests, evidence, and runtime-ready
+changes.
 
 The role is intentionally not tied to one executor. A Builder may be:
 
@@ -112,11 +120,14 @@ and supervisor/runtime governance.
 
 ## Project And Development Session Boundary
 
-Builder's durable distribution input is a Project definition, not a mutable
-editor session. A Project may own one skill, one scenario with companion
-skills, or another non-empty component set. It declares dependencies, entry
-points/presentations, catalog metadata, and lifecycle policy. Publication
-resolves it into an immutable ProjectRelease.
+Builder's target durable authoring input is a semantic Application revision,
+not a mutable editor session. It declares product behavior, capability/state
+requirements, launch intent, catalog metadata, access intent, and lifecycle
+policy. The current Project definition remains the physical source-ownership
+and delivery compatibility input: it may own one skill, one scenario with
+companion skills, or another non-empty component set. Publication binds the
+semantic revision to an immutable ApplicationRelease/ProjectRelease; local
+resolution and activation select the exact environment closure separately.
 
 Builder opens that definition through a separate Development Session. The
 session owns current focus, admitted read/write targets, filtered read-only
@@ -129,7 +140,7 @@ The detailed contract and local-first artifact policy are defined by
 Artifact release and activation remain owned by
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
 
-Builder templates may create different Project topologies:
+Compatibility templates may create different physical Project topologies:
 
 - a standalone/headless skill Project;
 - an interactive application Project with a scenario and companion skill;
@@ -137,9 +148,10 @@ Builder templates may create different Project topologies:
 - a domain-specific profile such as a research-direction Project;
 - a Project assembled from existing components.
 
-The topology is selected by the template; core must not require every skill to
-own a scenario or every scenario to generate a new skill. Components may be
-added later through the same Project contract.
+The topology is selected only after semantic requirements are understood; core
+must not require every skill to own a scenario or every scenario to generate a
+new skill. Components may be added later through the same Project contract,
+but their identities do not become semantic Application requirements.
 
 ## Builder Pipeline
 
@@ -377,7 +389,12 @@ The scenario version source of truth is `scenario.yaml`. Compatibility
 
 ## Relationship To Skills
 
-Skills remain the reusable capability unit.
+Skills remain executable runtime and source components. The reusable semantic
+unit is a `CapabilityContract` implemented by a `BindingDefinition` and
+delivered by one or more immutable packages. One skill may implement or support
+several capabilities; one capability may have implementations in different
+skills or packages. Application-local skills remain valid while no reusable
+binding is admitted, but they do not count as ecosystem reuse.
 
 Builder-created skills must follow:
 
@@ -430,11 +447,12 @@ Builder-created scenarios must follow:
 
 The Builder should decide whether an idea is:
 
-- a reusable skill capability
-- a scenario flow over existing skills
+- a requirement already satisfied by an admitted reusable capability/binding
+- an Application-local implementation that may later become a package candidate
+- a scenario/runtime flow selected after semantic resolution
 - a UI/catalog binding
 - an NLU/action descriptor improvement
-- a missing capability that needs a new skill or scenario artifact
+- a missing semantic capability contract or implementation binding
 
 Scenario is the implementation host for an Application/presentation. Builder
 preview resolves an explicit Project entry point, then a skill's default
@@ -1150,7 +1168,9 @@ Relevant documents:
 ## Source Of Truth
 
 This page owns the Builder role, terminology, and end-to-end capability
-creation boundary.
+creation boundary. Capability, binding, state, package, release, access, and
+activation identities remain owned by their respective architectures; Builder
+coordinates them and records traceability rather than redefining them.
 
 It does not own Support intake, the durable AdaOS Issue aggregate, managed
 deployment economics, or trusted collaboration between independently owned

@@ -113,6 +113,14 @@ groups, and Builder context policy are defined by
 This page owns how that definition becomes immutable packages, ProjectRelease,
 WorkspaceLock, Trial, activation, and rollback.
 
+Semantic Application requirements, capability/state contracts, implementation
+bindings, and admitted `ApplicationResolution` are owned by
+[Capability, Binding, and State Separation](capability-binding-state-separation.md).
+This page is the physical delivery and activation layer below that resolution.
+It may resolve package conflicts and reject an impossible closure, but it does
+not reinterpret a skill, package, or member path as the capability requested by
+an Application.
+
 ## Architectural Planes
 
 ### 1. Public Source
@@ -425,6 +433,17 @@ produces a new digest. Reusing a version for a different digest is rejected.
 
 ### Declared And Resolved Dependencies
 
+There are two different dependency planes:
+
+1. a semantic Application declares `ApplicationRequirement` records and is
+   resolved to binding definitions plus package constraints;
+2. package/project source declares physical build or runtime dependencies and
+   `ProjectRelease` locks their exact package closure.
+
+The example below belongs to the second plane. It remains valid for legacy
+source and for resolved implementation packages. New semantic Application
+source must not copy this skill identity into its requirements.
+
 Source manifests declare compatibility intent:
 
 ```yaml
@@ -481,10 +500,15 @@ without changing package identity.
 
 ## Project Definition Boundary
 
-The source Project definition is the declarative input to release planning. It
-may own one standalone skill, one scenario with companion skills, or another
-non-empty combination. Shared components are declared as dependencies rather
-than copied into each Project.
+The source Project definition is the current physical source-ownership input to
+release planning. It may own one standalone skill, one scenario with companion
+skills, or another non-empty combination. Shared components are declared as
+dependencies rather than copied into each Project. For a native semantic
+Application, this physical definition is produced or validated against the
+accepted semantic revision, binding definitions, and package-delivery
+contracts; it is not the source of semantic capability requirements. A target
+environment admits `ApplicationResolution` later from these portable inputs
+and other eligible packages.
 
 Transient Builder state is not serialized into the distributable Project:
 
@@ -514,6 +538,10 @@ project_release:
     schema: adaos.project.v1
     digest: sha256:...
     composition_digest: sha256:...
+  semantic_application:
+    revision_ref: application-revision:recipes/17
+    revision_digest: sha256:...
+  binding_delivery_catalog_digest: sha256:...
 
   components:
     - kind: scenario
@@ -552,6 +580,14 @@ A simple standalone skill Project is a one-component ProjectRelease. A
 scenario with dedicated companion skills can be released as one locked set.
 Shared skills and shared Projects remain separate packages/releases and are
 pinned by digest.
+
+`semantic_application` and binding delivery metadata are required for native
+semantic releases after the resolver cutover. They are absent, not fabricated,
+for immutable legacy component-first releases. An environment-specific
+`ApplicationResolution` is not embedded in the portable Project/Application
+release. It selects the exact package closure and local bindings/state for one
+target and is pinned by the activation operation and `WorkspaceLock`. The
+physical component closure remains necessary for activation and recovery.
 
 The Project definition is part of the release identity, not publication-time
 advice. The release locks member roles, exposure, bound/shared lifecycle,
