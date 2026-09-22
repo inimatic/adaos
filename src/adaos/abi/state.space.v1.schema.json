@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/state.space.v1.schema.json",
+  "title": "AdaOS State Space Revision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "state_space_ref", "revision", "state_contract_ref", "state_contract_version", "state_contract_digest", "workspace_ref", "logical_owner_ref", "lifecycle_authority_ref", "custodian_binding_instance_ref", "mutation_authority_ref", "locator_ref", "generation", "authority_epoch", "portability_class", "schema_locks", "revision_digest"],
+  "properties": {
+    "schema": {"const": "adaos.state.space.v1"},
+    "state_space_ref": {"type": "string", "pattern": "^state-space:"},
+    "revision": {"type": "integer", "minimum": 1},
+    "predecessor_digest": {"$ref": "#/$defs/digest"},
+    "state_contract_ref": {"type": "string", "pattern": "^state-contract:"},
+    "state_contract_version": {"type": "string", "minLength": 1},
+    "state_contract_digest": {"$ref": "#/$defs/digest"},
+    "workspace_ref": {"type": "string", "minLength": 1},
+    "tenant_ref": {"type": "string", "minLength": 1},
+    "logical_owner_ref": {"type": "string", "minLength": 1},
+    "lifecycle_authority_ref": {"type": "string", "minLength": 1},
+    "custodian_binding_instance_ref": {"type": "string", "pattern": "^binding-instance:"},
+    "mutation_authority_ref": {"type": "string", "minLength": 1},
+    "locator_ref": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
+    "generation": {"type": "integer", "minimum": 1},
+    "authority_epoch": {"type": "integer", "minimum": 1},
+    "portability_class": {"enum": ["portable", "migration_required", "provider_bound", "external_authoritative", "reconstructible"]},
+    "schema_locks": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["lock_id", "digest"],
+        "properties": {"lock_id": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/$defs/digest"}}
+      }
+    },
+    "revision_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

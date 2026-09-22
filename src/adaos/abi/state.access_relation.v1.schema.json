@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/state.access_relation.v1.schema.json",
+  "title": "AdaOS State Access Relation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "relation_ref", "binding_instance_ref", "binding_instance_revision_digest", "state_space_ref", "state_space_revision_digest", "port_id", "access", "relation_digest"],
+  "properties": {
+    "schema": {"const": "adaos.state.access_relation.v1"},
+    "relation_ref": {"type": "string", "pattern": "^state-access:"},
+    "binding_instance_ref": {"type": "string", "pattern": "^binding-instance:"},
+    "binding_instance_revision_digest": {"$ref": "#/$defs/digest"},
+    "state_space_ref": {"type": "string", "pattern": "^state-space:"},
+    "state_space_revision_digest": {"$ref": "#/$defs/digest"},
+    "port_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+    "access": {"enum": ["reads", "writes", "appends", "caches"]},
+    "relation_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

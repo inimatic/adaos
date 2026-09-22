@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/local_revision.observation.v1.schema.json",
+  "title": "AdaOS Local Revision Observation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "observation_ref", "subject_kind", "subject_ref", "subject_revision_digest", "observation_kind", "status", "observed_at", "details", "observation_digest"],
+  "properties": {
+    "schema": {"const": "adaos.local_revision.observation.v1"},
+    "observation_ref": {"type": "string", "pattern": "^observation:"},
+    "subject_kind": {"enum": ["binding_instance", "state_space"]},
+    "subject_ref": {"type": "string", "minLength": 1},
+    "subject_revision_digest": {"$ref": "#/$defs/digest"},
+    "observation_kind": {"enum": ["readiness", "health", "capacity", "backup"]},
+    "status": {"enum": ["ready", "not_ready", "healthy", "degraded", "failed", "unknown"]},
+    "observed_at": {"type": "string", "minLength": 1},
+    "details": {"type": "object"},
+    "observation_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

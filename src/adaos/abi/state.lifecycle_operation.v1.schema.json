@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/state.lifecycle_operation.v1.schema.json",
+  "title": "AdaOS State Lifecycle Operation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "operation_ref", "operation", "state_space_ref", "state_space_revision_digest", "authority_ref", "requested_at", "reason", "operation_digest"],
+  "properties": {
+    "schema": {"const": "adaos.state.lifecycle_operation.v1"},
+    "operation_ref": {"type": "string", "pattern": "^state-operation:"},
+    "operation": {"enum": ["allocate", "attach", "adopt", "import", "fork", "reconstruct", "detach", "archive", "destroy"]},
+    "state_space_ref": {"type": "string", "pattern": "^state-space:"},
+    "state_space_revision_digest": {"$ref": "#/$defs/digest"},
+    "authority_ref": {"type": "string", "minLength": 1},
+    "requested_at": {"type": "string", "minLength": 1},
+    "reason": {"type": "string", "minLength": 1},
+    "target_locator_ref": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
+    "operation_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

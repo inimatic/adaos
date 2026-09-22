@@ -280,6 +280,11 @@ class LocalCrudResourceService:
         state = self._state(resource_type)
         return _clone(state["definition"]) if state else None
 
+    def snapshot(self, resource_type: str) -> dict[str, Any] | None:
+        """Return one isolated legacy state snapshot for compatibility projection."""
+
+        return self._state(resource_type)
+
     def query(
         self,
         resource_type: str,

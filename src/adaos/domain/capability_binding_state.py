@@ -31,6 +31,11 @@ EVIDENCE_CLAIM_SCHEMA = "adaos.evidence.claim.v1"
 EVIDENCE_ASSESSMENT_SCHEMA = "adaos.evidence.assessment.v1"
 ENVIRONMENT_PROFILE_SCHEMA = "adaos.environment.profile.v1"
 APPLICATION_REQUIREMENT_SCHEMA = "adaos.application.requirement.v1"
+BINDING_INSTANCE_SCHEMA = "adaos.binding.instance.v1"
+STATE_SPACE_SCHEMA = "adaos.state.space.v1"
+STATE_ACCESS_RELATION_SCHEMA = "adaos.state.access_relation.v1"
+STATE_LIFECYCLE_OPERATION_SCHEMA = "adaos.state.lifecycle_operation.v1"
+LOCAL_REVISION_OBSERVATION_SCHEMA = "adaos.local_revision.observation.v1"
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$")
@@ -603,6 +608,260 @@ class ApplicationRequirement(CanonicalRecord):
         return str(self._payload["capability_ref"])
 
 
+@dataclass(frozen=True, slots=True)
+class BindingInstance(CanonicalRecord):
+    SCHEMA: ClassVar[str] = BINDING_INSTANCE_SCHEMA
+    DIGEST_FIELD: ClassVar[str] = "revision_digest"
+    PORTABLE: ClassVar[bool] = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        binding_instance_ref: str,
+        revision: int,
+        predecessor_digest: str | None,
+        workspace_ref: str,
+        tenant_ref: str | None,
+        binding_definition_ref: str,
+        binding_definition_digest: str,
+        delivery_digest: str,
+        environment_profile_ref: str,
+        environment_profile_digest: str,
+        mode: str,
+        local_binding_ref: str,
+        authority_epoch: int,
+    ) -> "BindingInstance":
+        _validate_ref(
+            binding_instance_ref,
+            prefix="binding-instance:",
+            field="binding_instance_ref",
+        )
+        value: dict[str, Any] = {
+            "binding_instance_ref": binding_instance_ref,
+            "revision": revision,
+            "workspace_ref": workspace_ref,
+            "binding_definition_ref": binding_definition_ref,
+            "binding_definition_digest": binding_definition_digest,
+            "delivery_digest": delivery_digest,
+            "environment_profile_ref": environment_profile_ref,
+            "environment_profile_digest": environment_profile_digest,
+            "mode": mode,
+            "local_binding_ref": local_binding_ref,
+            "authority_epoch": authority_epoch,
+        }
+        if predecessor_digest is not None:
+            value["predecessor_digest"] = predecessor_digest
+        if tenant_ref is not None:
+            value["tenant_ref"] = tenant_ref
+        return cls._create(value)
+
+    @property
+    def stable_ref(self) -> str:
+        return str(self._payload["binding_instance_ref"])
+
+    @property
+    def revision(self) -> int:
+        return int(self._payload["revision"])
+
+    @property
+    def predecessor_digest(self) -> str | None:
+        value = self._payload.get("predecessor_digest")
+        return str(value) if value is not None else None
+
+    @property
+    def authority_epoch(self) -> int:
+        return int(self._payload["authority_epoch"])
+
+
+@dataclass(frozen=True, slots=True)
+class StateSpace(CanonicalRecord):
+    SCHEMA: ClassVar[str] = STATE_SPACE_SCHEMA
+    DIGEST_FIELD: ClassVar[str] = "revision_digest"
+    PORTABLE: ClassVar[bool] = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        state_space_ref: str,
+        revision: int,
+        predecessor_digest: str | None,
+        state_contract_ref: str,
+        state_contract_version: str,
+        state_contract_digest: str,
+        workspace_ref: str,
+        tenant_ref: str | None,
+        logical_owner_ref: str,
+        lifecycle_authority_ref: str,
+        custodian_binding_instance_ref: str,
+        mutation_authority_ref: str,
+        locator_ref: str,
+        generation: int,
+        authority_epoch: int,
+        portability_class: str,
+        schema_locks: Iterable[Mapping[str, Any]],
+    ) -> "StateSpace":
+        _validate_ref(state_space_ref, prefix="state-space:", field="state_space_ref")
+        _validate_ref(
+            state_contract_ref,
+            prefix="state-contract:",
+            field="state_contract_ref",
+        )
+        _validate_version(state_contract_version, field="state_contract_version")
+        value: dict[str, Any] = {
+            "state_space_ref": state_space_ref,
+            "revision": revision,
+            "state_contract_ref": state_contract_ref,
+            "state_contract_version": state_contract_version,
+            "state_contract_digest": state_contract_digest,
+            "workspace_ref": workspace_ref,
+            "logical_owner_ref": logical_owner_ref,
+            "lifecycle_authority_ref": lifecycle_authority_ref,
+            "custodian_binding_instance_ref": custodian_binding_instance_ref,
+            "mutation_authority_ref": mutation_authority_ref,
+            "locator_ref": locator_ref,
+            "generation": generation,
+            "authority_epoch": authority_epoch,
+            "portability_class": portability_class,
+            "schema_locks": [dict(item) for item in schema_locks],
+        }
+        if predecessor_digest is not None:
+            value["predecessor_digest"] = predecessor_digest
+        if tenant_ref is not None:
+            value["tenant_ref"] = tenant_ref
+        return cls._create(value)
+
+    @property
+    def stable_ref(self) -> str:
+        return str(self._payload["state_space_ref"])
+
+    @property
+    def revision(self) -> int:
+        return int(self._payload["revision"])
+
+    @property
+    def predecessor_digest(self) -> str | None:
+        value = self._payload.get("predecessor_digest")
+        return str(value) if value is not None else None
+
+    @property
+    def generation(self) -> int:
+        return int(self._payload["generation"])
+
+    @property
+    def authority_epoch(self) -> int:
+        return int(self._payload["authority_epoch"])
+
+
+@dataclass(frozen=True, slots=True)
+class StateAccessRelation(CanonicalRecord):
+    SCHEMA: ClassVar[str] = STATE_ACCESS_RELATION_SCHEMA
+    DIGEST_FIELD: ClassVar[str] = "relation_digest"
+    PORTABLE: ClassVar[bool] = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        relation_ref: str,
+        binding_instance_ref: str,
+        binding_instance_revision_digest: str,
+        state_space_ref: str,
+        state_space_revision_digest: str,
+        port_id: str,
+        access: str,
+    ) -> "StateAccessRelation":
+        _validate_ref(relation_ref, prefix="state-access:", field="relation_ref")
+        return cls._create(
+            {
+                "relation_ref": relation_ref,
+                "binding_instance_ref": binding_instance_ref,
+                "binding_instance_revision_digest": binding_instance_revision_digest,
+                "state_space_ref": state_space_ref,
+                "state_space_revision_digest": state_space_revision_digest,
+                "port_id": port_id,
+                "access": access,
+            }
+        )
+
+    @property
+    def stable_ref(self) -> str:
+        return str(self._payload["relation_ref"])
+
+
+@dataclass(frozen=True, slots=True)
+class StateLifecycleOperation(CanonicalRecord):
+    SCHEMA: ClassVar[str] = STATE_LIFECYCLE_OPERATION_SCHEMA
+    DIGEST_FIELD: ClassVar[str] = "operation_digest"
+    PORTABLE: ClassVar[bool] = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        operation_ref: str,
+        operation: str,
+        state_space_ref: str,
+        state_space_revision_digest: str,
+        authority_ref: str,
+        requested_at: str,
+        reason: str,
+        target_locator_ref: str | None = None,
+    ) -> "StateLifecycleOperation":
+        _validate_ref(operation_ref, prefix="state-operation:", field="operation_ref")
+        value: dict[str, Any] = {
+            "operation_ref": operation_ref,
+            "operation": operation,
+            "state_space_ref": state_space_ref,
+            "state_space_revision_digest": state_space_revision_digest,
+            "authority_ref": authority_ref,
+            "requested_at": requested_at,
+            "reason": reason,
+        }
+        if target_locator_ref is not None:
+            value["target_locator_ref"] = target_locator_ref
+        return cls._create(value)
+
+
+@dataclass(frozen=True, slots=True)
+class LocalRevisionObservation(CanonicalRecord):
+    SCHEMA: ClassVar[str] = LOCAL_REVISION_OBSERVATION_SCHEMA
+    DIGEST_FIELD: ClassVar[str] = "observation_digest"
+    PORTABLE: ClassVar[bool] = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        observation_ref: str,
+        subject_kind: str,
+        subject_ref: str,
+        subject_revision_digest: str,
+        observation_kind: str,
+        status: str,
+        observed_at: str,
+        details: Mapping[str, Any] | None = None,
+    ) -> "LocalRevisionObservation":
+        _validate_ref(observation_ref, prefix="observation:", field="observation_ref")
+        return cls._create(
+            {
+                "observation_ref": observation_ref,
+                "subject_kind": subject_kind,
+                "subject_ref": subject_ref,
+                "subject_revision_digest": subject_revision_digest,
+                "observation_kind": observation_kind,
+                "status": status,
+                "observed_at": observed_at,
+                "details": dict(details or {}),
+            }
+        )
+
+    @property
+    def stable_ref(self) -> str:
+        return str(self._payload["observation_ref"])
+
+
 def validate_state_contract_locks(
     contract: StateContract,
     *,
@@ -638,23 +897,33 @@ def validate_state_contract_locks(
 
 __all__ = [
     "APPLICATION_REQUIREMENT_SCHEMA",
+    "BINDING_INSTANCE_SCHEMA",
     "BINDING_DEFINITION_SCHEMA",
     "BINDING_DELIVERY_SCHEMA",
     "CAPABILITY_CONTRACT_SCHEMA",
     "ENVIRONMENT_PROFILE_SCHEMA",
     "EVIDENCE_ASSESSMENT_SCHEMA",
     "EVIDENCE_CLAIM_SCHEMA",
+    "LOCAL_REVISION_OBSERVATION_SCHEMA",
     "STATE_CONTRACT_SCHEMA",
+    "STATE_ACCESS_RELATION_SCHEMA",
+    "STATE_LIFECYCLE_OPERATION_SCHEMA",
+    "STATE_SPACE_SCHEMA",
     "ApplicationRequirement",
     "BindingDefinition",
     "BindingDelivery",
+    "BindingInstance",
     "CanonicalRecord",
     "CapabilityBindingStateContractError",
     "CapabilityContract",
     "EnvironmentProfile",
     "EvidenceAssessment",
     "EvidenceClaim",
+    "LocalRevisionObservation",
     "StateContract",
+    "StateAccessRelation",
+    "StateLifecycleOperation",
+    "StateSpace",
     "validate_state_contract_locks",
     "version_satisfies",
 ]

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/binding.instance.v1.schema.json",
+  "title": "AdaOS Binding Instance Revision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "binding_instance_ref", "revision", "workspace_ref", "binding_definition_ref", "binding_definition_digest", "delivery_digest", "environment_profile_ref", "environment_profile_digest", "mode", "local_binding_ref", "authority_epoch", "revision_digest"],
+  "properties": {
+    "schema": {"const": "adaos.binding.instance.v1"},
+    "binding_instance_ref": {"type": "string", "pattern": "^binding-instance:"},
+    "revision": {"type": "integer", "minimum": 1},
+    "predecessor_digest": {"$ref": "#/$defs/digest"},
+    "workspace_ref": {"type": "string", "minLength": 1},
+    "tenant_ref": {"type": "string", "minLength": 1},
+    "binding_definition_ref": {"type": "string", "pattern": "^binding-definition:"},
+    "binding_definition_digest": {"$ref": "#/$defs/digest"},
+    "delivery_digest": {"$ref": "#/$defs/digest"},
+    "environment_profile_ref": {"type": "string", "pattern": "^profile:"},
+    "environment_profile_digest": {"$ref": "#/$defs/digest"},
+    "mode": {"enum": ["simulation", "sandbox", "production"]},
+    "local_binding_ref": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
+    "authority_epoch": {"type": "integer", "minimum": 1},
+    "revision_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}
