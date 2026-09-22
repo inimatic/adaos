@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.cbs_compilation.v1",
+  "title": "AdaOS Builder CBS Compilation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "compiler_version",
+    "application_ref",
+    "source_acceptance_digest",
+    "semantic_revision_digest",
+    "environment_target",
+    "requirements",
+    "simulation_attachments",
+    "automation_obligations",
+    "viability",
+    "compilation_digest"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.cbs_compilation.v1" },
+    "compiler_version": { "const": "1.0.0" },
+    "application_ref": {
+      "type": "string",
+      "pattern": "^(project|scenario|skill):[A-Za-z0-9_.-]+$"
+    },
+    "source_acceptance_digest": { "$ref": "#/$defs/digest" },
+    "semantic_revision_digest": { "$ref": "#/$defs/digest" },
+    "environment_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_ref", "allowed_modes"],
+      "properties": {
+        "profile_ref": { "type": "string", "pattern": "^profile:" },
+        "allowed_modes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["simulation", "sandbox", "production"] }
+        }
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": [
+          "schema",
+          "requirement_ref",
+          "capability_ref",
+          "contract_range",
+          "environment_target",
+          "policy_constraints",
+          "evidence_threshold",
+          "requirement_digest"
+        ]
+      }
+    },
+    "simulation_attachments": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resource_type",
+          "state_space_ref",
+          "portability_class",
+          "generation",
+          "definition_digest",
+          "records_digest"
+        ],
+        "properties": {
+          "resource_type": { "type": "string", "pattern": "^prototype\\." },
+          "state_space_ref": { "type": "string", "pattern": "^state-space:" },
+          "portability_class": { "const": "reconstructible" },
+          "generation": { "type": "integer", "minimum": 0 },
+          "definition_digest": { "$ref": "#/$defs/digest" },
+          "records_digest": { "$ref": "#/$defs/digest" }
+        }
+      }
+    },
+    "automation_obligations": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_requirement_ref",
+          "requirement_ref",
+          "capability_ref",
+          "statement_digest",
+          "status"
+        ],
+        "properties": {
+          "source_requirement_ref": { "type": "string", "minLength": 1 },
+          "requirement_ref": { "type": "string", "pattern": "^requirement:" },
+          "capability_ref": { "type": "string", "pattern": "^capability:" },
+          "statement_digest": { "$ref": "#/$defs/digest" },
+          "status": { "const": "unresolved" }
+        }
+      }
+    },
+    "viability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["semantic", "simulation", "production", "unresolved_requirement_refs"],
+      "properties": {
+        "semantic": { "const": "compiled" },
+        "simulation": { "enum": ["accepted", "pending"] },
+        "production": { "const": "unresolved" },
+        "unresolved_requirement_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^requirement:" }
+        }
+      }
+    },
+    "compilation_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

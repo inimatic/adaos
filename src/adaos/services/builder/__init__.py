@@ -11,6 +11,7 @@ from .composition import extract_composition_slice
 from .conversational_prototype import validate_conversational_workflow_slice
 from .prototype_handoff import admit_automation_handoff, build_automation_handoff
 from .sources import BuilderProjectSourceService
+from .cbs import compile_prototype_cbs, validate_cbs_compilation
 
 __all__ = [
     "BuilderAutomationService",
@@ -27,4 +28,6 @@ __all__ = [
     "validate_conversational_workflow_slice",
     "build_automation_handoff",
     "admit_automation_handoff",
+    "compile_prototype_cbs",
+    "validate_cbs_compilation",
 ]

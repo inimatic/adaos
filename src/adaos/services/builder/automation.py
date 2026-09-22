@@ -2274,6 +2274,19 @@ class BuilderAutomationService:
             kind,
             project_id,
         )
+        # Compile and register the accepted semantic revision before any
+        # implementation task is admitted. This is package-neutral evidence;
+        # it does not resolve or activate a binding.
+        cbs_application_ref = f"{kind}:{project_id}"
+        from adaos.services.builder.cbs import compile_prototype_cbs
+
+        cbs_compilation = (
+            compile_prototype_cbs(prototype_acceptance)
+            if isinstance(prototype_acceptance, Mapping)
+            and prototype_acceptance.get("schema")
+            == "adaos.builder.prototype_acceptance.v1"
+            else None
+        )
         active_change_set = (
             workflow_before.get("change_set")
             if isinstance(workflow_before.get("change_set"), Mapping)
@@ -2467,6 +2480,19 @@ class BuilderAutomationService:
                 "tests_running",
                 "commit_ready",
             }:
+                current_cbs = (
+                    dict(current.get("cbs_compilation"))
+                    if isinstance(current.get("cbs_compilation"), Mapping)
+                    else None
+                )
+                if current_cbs and cbs_compilation and current_cbs != cbs_compilation:
+                    raise ValueError(
+                        "another accepted semantic revision already owns the active Automation session"
+                    )
+                if current_cbs is None and cbs_compilation is not None:
+                    current["cbs_compilation"] = copy.deepcopy(cbs_compilation)
+                    current["updated_at"] = _now_iso()
+                    self._save_session(current)
                 if admitted_handoff is not None:
                     current_handoff = (
                         current.get("prototype_handoff")
@@ -2689,6 +2715,19 @@ class BuilderAutomationService:
                 )
                 if refreshed_companion_skill_ids != companion_skill_ids:
                     companion_skill_ids = refreshed_companion_skill_ids
+            from adaos.services.applications.cbs import ApplicationCBSService
+
+            if cbs_compilation is not None:
+                cbs_service = ApplicationCBSService(self.state_dir)
+                previous_cbs = cbs_service.inspect(cbs_application_ref)
+                cbs_compilation = cbs_service.register(
+                    cbs_compilation,
+                    expected_previous_digest=(
+                        str(previous_cbs.get("compilation_digest") or "")
+                        if previous_cbs
+                        else None
+                    ),
+                )
             session = {
                 "schema": AUTOMATION_SESSION_SCHEMA,
                 "session_id": f"automation.{kind}.{project_id}",
@@ -2706,6 +2745,7 @@ class BuilderAutomationService:
                     kind, project_id
                 ),
                 "prototype_acceptance": prototype_acceptance,
+                "cbs_compilation": cbs_compilation,
                 "prototype_handoff": admitted_handoff,
                 "development_session_id": admitted_development_session_id,
                 "execution_budget": admitted_execution_budget,
@@ -8736,6 +8776,7 @@ class BuilderAutomationService:
                 "prototype_acceptance": copy.deepcopy(
                     session.get("prototype_acceptance")
                 ),
+                "cbs_compilation": copy.deepcopy(session.get("cbs_compilation")),
                 "accepted_prototype_identity": self._retained_accepted_prototype_identity(
                     session
                 ),
@@ -8789,6 +8830,13 @@ class BuilderAutomationService:
                 or None,
                 "prototype_acceptance_digest": str(
                     dict(session.get("prototype_acceptance") or {}).get("digest") or ""
+                )
+                or None,
+                "cbs_compilation_digest": str(
+                    dict(session.get("cbs_compilation") or {}).get(
+                        "compilation_digest"
+                    )
+                    or ""
                 )
                 or None,
                 "development_session_id": development_session_id or None,
