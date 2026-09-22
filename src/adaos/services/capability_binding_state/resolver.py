@@ -55,6 +55,7 @@ class ResolutionFailure(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class SemanticCandidate:
     capability_contract: CapabilityContract
+    supporting_contracts: tuple[CapabilityContract, ...]
     state_contracts: tuple[StateContract, ...]
     binding_definition: BindingDefinition
     delivery: BindingDelivery
@@ -249,6 +250,38 @@ class SemanticResolver:
         result: list[SemanticCandidate] = []
         for contract in matching_contracts:
             contract_value = contract.to_dict()
+            supporting_contracts: list[CapabilityContract] = []
+            missing_dependency = False
+            for dependency in contract_value["dependencies"]:
+                matches = sorted(
+                    (
+                        item
+                        for item in capability_contracts
+                        if item.capability_ref == dependency["capability_ref"]
+                        and version_satisfies(
+                            item.version,
+                            dependency["contract_range"],
+                        )
+                    ),
+                    key=lambda item: (Version(item.version), item.digest),
+                    reverse=True,
+                )
+                if not matches:
+                    if dependency.get("optional") is True:
+                        continue
+                    rejections.append(
+                        ResolutionRejection(
+                            "missing_capability_dependency",
+                            "no CapabilityContract satisfies dependency "
+                            f"{dependency['capability_ref']} {dependency['contract_range']}",
+                            contract.capability_ref,
+                        )
+                    )
+                    missing_dependency = True
+                    break
+                supporting_contracts.append(matches[0])
+            if missing_dependency:
+                continue
             definitions = [
                 item
                 for item in binding_definitions
@@ -361,6 +394,7 @@ class SemanticResolver:
                         result.append(
                             SemanticCandidate(
                                 capability_contract=contract,
+                                supporting_contracts=tuple(supporting_contracts),
                                 state_contracts=tuple(selected_states),
                                 binding_definition=definition,
                                 delivery=delivery,
@@ -422,6 +456,7 @@ class SemanticResolver:
             if kind == "capability_conformance" and not {
                 candidate.capability_contract.digest,
                 candidate.binding_definition.digest,
+                *(item.digest for item in candidate.supporting_contracts),
             }.issubset(subject_digests):
                 continue
             if kind == "state_compatibility" and not (
@@ -493,6 +528,15 @@ class SemanticResolver:
                 "version": candidate.capability_contract.version,
                 "digest": candidate.capability_contract.digest,
             },
+            *(
+                {
+                    "kind": "capability",
+                    "ref": item.capability_ref,
+                    "version": item.version,
+                    "digest": item.digest,
+                }
+                for item in candidate.supporting_contracts
+            ),
             *(
                 {
                     "kind": "state",
