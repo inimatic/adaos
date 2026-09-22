@@ -158,6 +158,7 @@ class SemanticResolver:
                 environment_profile,
                 claims,
                 assessments,
+                target_mode=target_mode,
             )
             if rejection is not None:
                 rejections.append(rejection)
@@ -395,10 +396,14 @@ class SemanticResolver:
         profile: EnvironmentProfile,
         claims: tuple[EvidenceClaim, ...],
         assessments: tuple[EvidenceAssessment, ...],
+        *,
+        target_mode: str,
     ) -> tuple[tuple[tuple[EvidenceClaim, EvidenceAssessment], ...], ResolutionRejection | None]:
         threshold = requirement.to_dict()["evidence_threshold"]
         required_kinds = set(threshold["required_claim_kinds"])
-        allow_stale = bool(threshold["allow_stale"])
+        # Stale evidence can be made visible to semantic/simulation workflows,
+        # but never silently admits a production resolution.
+        allow_stale = bool(threshold["allow_stale"]) and target_mode != "production"
         assessment_by_claim = {
             item.to_dict()["claim_digest"]: item for item in assessments
         }

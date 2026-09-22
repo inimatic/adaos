@@ -192,6 +192,31 @@ def test_cbs_activation_commits_one_v2_workspace_authority_and_pins_journal(tmp_
         )
 
 
+def test_evidence_is_rechecked_at_authority_commit(tmp_path: Path) -> None:
+    fixture = _setup(tmp_path)
+    plan = fixture["planner"].build(fixture["resolution"], current_lock=None)
+    calls = 0
+
+    def evidence_status(evidence):
+        nonlocal calls
+        calls += 1
+        status = "admissible" if calls == 1 else "stale"
+        return {item["claim_digest"]: status for item in evidence}
+
+    fixture["coordinator"].evidence_status_observer = evidence_status
+
+    with pytest.raises(ActivationError, match="evidence freshness changed after planning"):
+        fixture["coordinator"].activate(
+            plan,
+            resolution=fixture["resolution"],
+            release_plan=fixture["release_plan"],
+            idempotency_key="cbs-evidence-drift",
+            **_policies(),
+        )
+
+    assert fixture["manager"].load_lock() is None
+
+
 def test_precommit_failure_preserves_old_lock_generation_and_writer(tmp_path: Path) -> None:
     fixture = _setup(tmp_path)
     first_plan = fixture["planner"].build(fixture["resolution"], current_lock=None)

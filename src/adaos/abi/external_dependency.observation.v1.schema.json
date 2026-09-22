@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/external_dependency.observation.v1.schema.json",
+  "title": "AdaOS External Dependency Observation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "observation_ref",
+    "dependency_ref",
+    "observed_at",
+    "trust_domain",
+    "source",
+    "provenance",
+    "observation_digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.external_dependency.observation.v1"},
+    "observation_ref": {"type": "string", "pattern": "^external-observation:"},
+    "dependency_ref": {"type": "string", "minLength": 1},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "observed_version": {"type": "string", "minLength": 1},
+    "fingerprint": {"type": "string", "minLength": 1},
+    "trust_domain": {"type": "string", "minLength": 1},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": {"enum": ["external_api", "provider", "registry", "manual", "test"]},
+        "ref": {"type": "string", "minLength": 1}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observer"],
+      "properties": {
+        "observer": {"type": "string", "minLength": 1},
+        "run_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "observation_digest": {"$ref": "#/$defs/digest"}
+  },
+  "anyOf": [
+    {"required": ["observed_version"]},
+    {"required": ["fingerprint"]}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

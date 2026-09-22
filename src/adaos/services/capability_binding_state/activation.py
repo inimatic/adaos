@@ -161,6 +161,9 @@ class CBSActivationCoordinator:
     identity_store: LocalIdentityStore
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
     state_generation_observer: Callable[[str], int] | None = None
+    evidence_status_observer: Callable[
+        [tuple[Mapping[str, Any], ...]], Mapping[str, str]
+    ] | None = None
 
     def activate(
         self,
@@ -177,6 +180,7 @@ class CBSActivationCoordinator:
     ) -> CBSActivationResult:
         self._validate_static(resolution_plan, resolution, release_plan)
         self._validate_preconditions(resolution_plan)
+        self._validate_evidence_preconditions(resolution_plan)
         plan_value = resolution_plan.to_dict()
         resolution_value = resolution.to_dict()
         evidence_set_digest = canonical_payload_digest(resolution_value["evidence"])
@@ -195,6 +199,7 @@ class CBSActivationCoordinator:
         def checked_phase(phase: str) -> None:
             if phase == "switch-lock":
                 self._validate_preconditions(resolution_plan)
+                self._validate_evidence_preconditions(resolution_plan)
             if phase_hook is not None:
                 phase_hook(phase)
 
@@ -251,8 +256,28 @@ class CBSActivationCoordinator:
             raise ResolutionPlanError(
                 "unproven irreversible actions require an attended external workflow"
             )
-        if any(item.get("status") not in {"admissible", "stale"} for item in value["evidence"]):
-            raise ResolutionPlanError("ResolutionPlan contains inadmissible evidence")
+        if any(item.get("status") != "admissible" for item in value["evidence"]):
+            raise ResolutionPlanError(
+                "ResolutionPlan activation requires currently admissible evidence"
+            )
+
+    def _validate_evidence_preconditions(self, plan: ResolutionPlan) -> None:
+        if self.evidence_status_observer is None:
+            return
+        evidence = tuple(dict(item) for item in plan.to_dict()["evidence"])
+        observed = {
+            str(key): str(value)
+            for key, value in self.evidence_status_observer(evidence).items()
+        }
+        invalid = [
+            item["claim_digest"]
+            for item in evidence
+            if observed.get(str(item["claim_digest"])) != "admissible"
+        ]
+        if invalid:
+            raise ActivationConflictError(
+                "evidence freshness changed after planning: " + ", ".join(invalid)
+            )
 
     def _validate_preconditions(self, plan: ResolutionPlan) -> None:
         value = plan.to_dict()

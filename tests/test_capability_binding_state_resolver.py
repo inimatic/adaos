@@ -8,6 +8,7 @@ import pytest
 
 from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
 from adaos.domain.capability_binding_state import (
+    ApplicationRequirement,
     BindingInstance,
     EvidenceAssessment,
     StateAccessRelation,
@@ -270,6 +271,58 @@ def test_stale_evidence_is_typed_and_does_not_silently_fallback(tmp_path: Path) 
             mode="production",
             evidence_assessments=stale,
         )
+    assert "stale_evidence" in {item.code for item in caught.value.rejections}
+
+
+def test_production_never_admits_stale_evidence_even_when_requirement_allows_visibility(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    contracts = fixture["contracts"]
+    value = contracts.requirement.to_dict()
+    requirement = ApplicationRequirement.create(
+        requirement_ref=value["requirement_ref"],
+        capability_ref=value["capability_ref"],
+        contract_range=value["contract_range"],
+        environment_target=value["environment_target"],
+        policy_constraints=value["policy_constraints"],
+        evidence_threshold={
+            **value["evidence_threshold"],
+            "allow_stale": True,
+        },
+    )
+    stale = tuple(
+        EvidenceAssessment.create(
+            assessment_ref=item.to_dict()["assessment_ref"],
+            claim_ref=item.to_dict()["claim_ref"],
+            claim_digest=item.to_dict()["claim_digest"],
+            evaluated_at=item.to_dict()["evaluated_at"],
+            policy_digest=item.to_dict()["policy_digest"],
+            status="stale",
+            reasons=("external dependency changed",),
+        )
+        for item in fixture["assessments"]
+    )
+    resolver = SemanticResolver(now=lambda: datetime(2026, 9, 22, tzinfo=timezone.utc))
+
+    with pytest.raises(ResolutionFailure) as caught:
+        resolver.resolve(
+            requirement,
+            semantic_revision_digest=SEMANTIC_REVISION,
+            target_mode="production",
+            capability_contracts=(contracts.capability,),
+            state_contracts=(contracts.state,),
+            binding_definitions=(contracts.production_binding, contracts.simulation_binding),
+            deliveries=fixture["deliveries"],
+            environment_profile=contracts.profile,
+            binding_instances=fixture["instances"],
+            state_spaces=fixture["spaces"],
+            relations=fixture["relations"],
+            evidence_claims=fixture["claims"],
+            evidence_assessments=stale,
+            package_resolver=fixture["package_resolver"],
+        )
+
     assert "stale_evidence" in {item.code for item in caught.value.rejections}
 
 

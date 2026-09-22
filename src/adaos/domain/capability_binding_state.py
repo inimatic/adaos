@@ -29,6 +29,7 @@ BINDING_DEFINITION_SCHEMA = "adaos.binding.definition.v1"
 BINDING_DELIVERY_SCHEMA = "adaos.binding.delivery.v1"
 EVIDENCE_CLAIM_SCHEMA = "adaos.evidence.claim.v1"
 EVIDENCE_ASSESSMENT_SCHEMA = "adaos.evidence.assessment.v1"
+EXTERNAL_DEPENDENCY_OBSERVATION_SCHEMA = "adaos.external_dependency.observation.v1"
 ENVIRONMENT_PROFILE_SCHEMA = "adaos.environment.profile.v1"
 APPLICATION_REQUIREMENT_SCHEMA = "adaos.application.requirement.v1"
 BINDING_INSTANCE_SCHEMA = "adaos.binding.instance.v1"
@@ -571,6 +572,51 @@ class EvidenceAssessment(CanonicalRecord):
                 "reasons": list(reasons),
             }
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalDependencyObservation(CanonicalRecord):
+    """Immutable observation of a dependency outside package authority."""
+
+    SCHEMA: ClassVar[str] = EXTERNAL_DEPENDENCY_OBSERVATION_SCHEMA
+    DIGEST_FIELD: ClassVar[str] = "observation_digest"
+    PORTABLE: ClassVar[bool] = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        observation_ref: str,
+        dependency_ref: str,
+        observed_at: str,
+        trust_domain: str,
+        source: Mapping[str, Any],
+        provenance: Mapping[str, Any],
+        observed_version: str | None = None,
+        fingerprint: str | None = None,
+    ) -> "ExternalDependencyObservation":
+        _validate_ref(
+            observation_ref,
+            prefix="external-observation:",
+            field="observation_ref",
+        )
+        value: dict[str, Any] = {
+            "observation_ref": observation_ref,
+            "dependency_ref": str(dependency_ref).strip(),
+            "observed_at": observed_at,
+            "trust_domain": str(trust_domain).strip(),
+            "source": dict(source),
+            "provenance": dict(provenance),
+        }
+        if observed_version is not None:
+            value["observed_version"] = str(observed_version).strip()
+        if fingerprint is not None:
+            value["fingerprint"] = str(fingerprint).strip()
+        return cls._create(value)
+
+    @property
+    def dependency_ref(self) -> str:
+        return str(self._payload["dependency_ref"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -1158,6 +1204,7 @@ __all__ = [
     "ENVIRONMENT_PROFILE_SCHEMA",
     "EVIDENCE_ASSESSMENT_SCHEMA",
     "EVIDENCE_CLAIM_SCHEMA",
+    "EXTERNAL_DEPENDENCY_OBSERVATION_SCHEMA",
     "LOCAL_REVISION_OBSERVATION_SCHEMA",
     "RESOLUTION_PLAN_SCHEMA",
     "STATE_CONTRACT_SCHEMA",
@@ -1177,6 +1224,7 @@ __all__ = [
     "EnvironmentProfile",
     "EvidenceAssessment",
     "EvidenceClaim",
+    "ExternalDependencyObservation",
     "LocalRevisionObservation",
     "ResolutionPlan",
     "StateContract",

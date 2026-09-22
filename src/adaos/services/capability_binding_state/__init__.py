@@ -35,6 +35,14 @@ from .telemetry import (
     CBSBenchmarkTelemetryStore,
     CBSCrudProofStore,
 )
+from .evidence import (
+    EvidenceAssessmentResult,
+    EvidenceAssessmentService,
+    EvidenceFreshnessError,
+    ExternalChangeMonitorStore,
+    build_reverification_claim,
+    dependency_evidence_impact,
+)
 
 __all__ = [
     "CBSActivationCoordinator",
@@ -42,6 +50,10 @@ __all__ = [
     "CBSBenchmarkTelemetryConflict",
     "CBSBenchmarkTelemetryStore",
     "CBSCrudProofStore",
+    "EvidenceAssessmentResult",
+    "EvidenceAssessmentService",
+    "EvidenceFreshnessError",
+    "ExternalChangeMonitorStore",
     "FencedLocalCrudWriter",
     "LegacyCrudProjection",
     "LegacyCrudProjector",
@@ -62,6 +74,8 @@ __all__ = [
     "StagedAuthorityTransition",
     "StaleWriterError",
     "calculate_effective_guarantees",
+    "build_reverification_claim",
+    "dependency_evidence_impact",
     "redacted_graph_record",
     "stage_authority_transition",
     "validate_state_attachment",
