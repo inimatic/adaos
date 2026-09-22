@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/state.contract.v1.schema.json",
+  "title": "AdaOS State Contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "state_contract_ref", "version", "schema_locks", "invariant_refs", "guarantees", "lifecycle", "ownership_constraints", "portability_class", "migration_compatibility", "contract_digest"],
+  "properties": {
+    "schema": {"const": "adaos.state.contract.v1"},
+    "state_contract_ref": {"type": "string", "pattern": "^state-contract:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
+    "version": {"$ref": "#/$defs/version"},
+    "schema_locks": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["lock_id", "digest"],
+        "properties": {"lock_id": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/$defs/digest"}}
+      }
+    },
+    "invariant_refs": {"$ref": "#/$defs/textSet"},
+    "guarantees": {"$ref": "#/$defs/guarantees"},
+    "lifecycle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["retention", "destruction"],
+      "properties": {
+        "retention": {"type": "string", "minLength": 1},
+        "destruction": {"enum": ["explicit_authority", "reconstructible", "external"]},
+        "backup_required": {"type": "boolean"}
+      }
+    },
+    "ownership_constraints": {
+      "type": "object", "additionalProperties": false,
+      "required": ["allowed_owner_kinds", "custodian_may_differ", "mutation_authority_required"],
+      "properties": {
+        "allowed_owner_kinds": {"$ref": "#/$defs/textSet"},
+        "custodian_may_differ": {"type": "boolean"},
+        "mutation_authority_required": {"type": "boolean"}
+      }
+    },
+    "portability_class": {"enum": ["portable", "migration_required", "provider_bound", "external_authoritative", "reconstructible"]},
+    "migration_compatibility": {
+      "type": "object", "additionalProperties": false,
+      "required": ["strategy", "from_versions"],
+      "properties": {
+        "strategy": {"enum": ["none", "compatible", "explicit_edge", "reconstruct"]},
+        "from_versions": {"type": "array", "items": {"$ref": "#/$defs/version"}, "uniqueItems": true},
+        "migration_lock_refs": {"$ref": "#/$defs/textSet"}
+      }
+    },
+    "contract_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "textSet": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "guarantees": {
+      "type": "object", "additionalProperties": false,
+      "required": ["consistency", "durability", "isolation"],
+      "properties": {
+        "consistency": {"$ref": "#/$defs/textSet"},
+        "durability": {"$ref": "#/$defs/textSet"},
+        "isolation": {"$ref": "#/$defs/textSet"}
+      }
+    }
+  }
+}

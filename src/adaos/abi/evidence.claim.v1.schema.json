@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/evidence.claim.v1.schema.json",
+  "title": "AdaOS Evidence Claim v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "claim_ref", "claim_kind", "subjects", "environment", "dependencies", "suite_digest", "evidence_digest", "provenance", "issued_at", "freshness", "result", "redaction", "portability_scope", "claim_digest"],
+  "properties": {
+    "schema": {"const": "adaos.evidence.claim.v1"},
+    "claim_ref": {"type": "string", "pattern": "^evidence-claim:"},
+    "claim_kind": {"enum": ["capability_conformance", "state_compatibility"]},
+    "subjects": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["kind", "ref", "digest"],
+        "properties": {
+          "kind": {"enum": ["capability_contract", "state_contract", "binding_definition", "binding_delivery"]},
+          "ref": {"type": "string", "minLength": 1},
+          "digest": {"$ref": "#/$defs/digest"}
+        }
+      }
+    },
+    "environment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile_ref", "profile_digest"],
+      "properties": {"profile_ref": {"type": "string", "pattern": "^profile:"}, "profile_digest": {"$ref": "#/$defs/digest"}}
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["ref"],
+        "properties": {
+          "ref": {"type": "string", "minLength": 1},
+          "observed_version": {"type": "string", "minLength": 1},
+          "fingerprint": {"type": "string", "minLength": 1}
+        },
+        "anyOf": [{"required": ["observed_version"]}, {"required": ["fingerprint"]}]
+      }
+    },
+    "suite_digest": {"$ref": "#/$defs/digest"},
+    "evidence_digest": {"$ref": "#/$defs/digest"},
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["issuer", "runner"],
+      "properties": {"issuer": {"type": "string", "minLength": 1}, "runner": {"type": "string", "minLength": 1}, "run_id": {"type": "string", "minLength": 1}}
+    },
+    "issued_at": {"type": "string", "minLength": 1},
+    "freshness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_age_seconds", "invalidated_by"],
+      "properties": {
+        "max_age_seconds": {"type": "integer", "minimum": 0},
+        "invalidated_by": {"type": "array", "items": {"enum": ["dependency_change", "environment_change", "policy_change", "revocation"]}, "uniqueItems": true}
+      }
+    },
+    "result": {"enum": ["verified", "incompatible"]},
+    "redaction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["portable", "omitted_fields"],
+      "properties": {"portable": {"type": "boolean"}, "omitted_fields": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}}
+    },
+    "portability_scope": {"enum": ["portable", "local"]},
+    "claim_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

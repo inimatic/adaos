@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/binding.delivery.v1.schema.json",
+  "title": "AdaOS Binding Delivery v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "binding_definition_ref", "binding_definition_digest", "logical_entrypoint", "package", "physical_member", "delivery_digest"],
+  "properties": {
+    "schema": {"const": "adaos.binding.delivery.v1"},
+    "binding_definition_ref": {"type": "string", "pattern": "^binding-definition:"},
+    "binding_definition_digest": {"$ref": "#/$defs/digest"},
+    "logical_entrypoint": {"type": "string", "minLength": 1},
+    "package": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "id", "version", "digest"],
+      "properties": {
+        "kind": {"enum": ["skill", "scenario"]},
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]*$"},
+        "version": {"type": "string", "minLength": 1},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "physical_member": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"},
+    "delivery_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

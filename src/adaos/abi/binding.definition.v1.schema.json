@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/binding.definition.v1.schema.json",
+  "title": "AdaOS Binding Definition v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "binding_definition_ref", "version", "capability_ref", "capability_version", "entry_protocol", "implementation_entrypoint", "state_support", "modes", "environment_constraints", "authority_requirements", "conformance_obligations", "definition_digest"],
+  "properties": {
+    "schema": {"const": "adaos.binding.definition.v1"},
+    "binding_definition_ref": {"type": "string", "pattern": "^binding-definition:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
+    "version": {"$ref": "#/$defs/version"},
+    "capability_ref": {"type": "string", "pattern": "^capability:"},
+    "capability_version": {"$ref": "#/$defs/version"},
+    "entry_protocol": {"type": "string", "minLength": 1},
+    "implementation_entrypoint": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*(?::[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*)?$"},
+    "state_support": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["state_contract_ref", "contract_range", "access_modes", "guarantees"],
+        "properties": {
+          "state_contract_ref": {"type": "string", "pattern": "^state-contract:"},
+          "contract_range": {"type": "string", "minLength": 1},
+          "access_modes": {"type": "array", "items": {"enum": ["reads", "writes", "appends", "caches"]}, "uniqueItems": true},
+          "guarantees": {"$ref": "#/$defs/guarantees"}
+        }
+      }
+    },
+    "modes": {"type": "array", "minItems": 1, "items": {"enum": ["semantic", "simulation", "sandbox", "production"]}, "uniqueItems": true},
+    "environment_constraints": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile_classes", "provider_features"],
+      "properties": {
+        "profile_classes": {"$ref": "#/$defs/textSet"},
+        "provider_features": {"$ref": "#/$defs/textSet"}
+      }
+    },
+    "authority_requirements": {"$ref": "#/$defs/textSet"},
+    "conformance_obligations": {"$ref": "#/$defs/textSet"},
+    "definition_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "textSet": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "guarantees": {
+      "type": "object", "additionalProperties": false,
+      "required": ["consistency", "durability", "isolation"],
+      "properties": {
+        "consistency": {"$ref": "#/$defs/textSet"},
+        "durability": {"$ref": "#/$defs/textSet"},
+        "isolation": {"$ref": "#/$defs/textSet"}
+      }
+    }
+  }
+}

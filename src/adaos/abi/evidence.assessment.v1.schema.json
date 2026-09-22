@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/evidence.assessment.v1.schema.json",
+  "title": "AdaOS Evidence Assessment v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "assessment_ref", "claim_ref", "claim_digest", "evaluated_at", "policy_digest", "status", "reasons", "assessment_digest"],
+  "properties": {
+    "schema": {"const": "adaos.evidence.assessment.v1"},
+    "assessment_ref": {"type": "string", "pattern": "^evidence-assessment:"},
+    "claim_ref": {"type": "string", "pattern": "^evidence-claim:"},
+    "claim_digest": {"$ref": "#/$defs/digest"},
+    "evaluated_at": {"type": "string", "minLength": 1},
+    "policy_digest": {"$ref": "#/$defs/digest"},
+    "status": {"enum": ["admissible", "stale", "superseded", "incompatible", "revoked"]},
+    "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "assessment_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

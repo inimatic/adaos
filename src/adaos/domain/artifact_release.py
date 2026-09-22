@@ -36,6 +36,7 @@ class ArtifactReleaseContractError(ValueError):
 def canonical_json_bytes(value: Mapping[str, Any] | list[Any]) -> bytes:
     return json.dumps(
         value,
+        allow_nan=False,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
