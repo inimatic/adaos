@@ -77,6 +77,14 @@ from .graphs import (
     create_evolver_proposal,
     promote_evolver_proposal,
 )
+from .benchmark import (
+    CBSBenchmarkError,
+    build_benchmark_report,
+    create_benchmark_observation,
+    freeze_benchmark_case,
+    load_cbs_telemetry,
+    observation_from_cbs_telemetry,
+)
 
 __all__ = [
     "CBSActivationCoordinator",
@@ -141,4 +149,10 @@ __all__ = [
     "build_viability_projection",
     "create_evolver_proposal",
     "promote_evolver_proposal",
+    "CBSBenchmarkError",
+    "build_benchmark_report",
+    "create_benchmark_observation",
+    "freeze_benchmark_case",
+    "load_cbs_telemetry",
+    "observation_from_cbs_telemetry",
 ]
