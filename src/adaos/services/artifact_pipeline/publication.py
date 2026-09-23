@@ -1493,6 +1493,7 @@ class ArtifactPublicationService:
             ref=checkpoint.ref,
             archive_bytes=checkpoint_bytes,
             package_manifest=checkpoint.package_manifest,
+            binding_deliveries=checkpoint.binding_deliveries,
         )
 
     def verify_pushed_source(
@@ -1538,6 +1539,7 @@ class ArtifactPublicationService:
             ref=checkpoint.ref,
             archive_bytes=checkpoint_bytes,
             package_manifest=checkpoint.package_manifest,
+            binding_deliveries=checkpoint.binding_deliveries,
         )
 
     @staticmethod

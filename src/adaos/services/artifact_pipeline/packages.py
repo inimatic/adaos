@@ -26,6 +26,13 @@ from adaos.domain.artifact_release import (
     canonical_payload_digest,
     sha256_digest,
 )
+from adaos.domain.capability_binding_state import BindingDelivery
+from adaos.services.artifact_pipeline.cbs_authoring import (
+    CBS_PROVIDER_COMPILER_ID,
+    CBSProviderAuthoringError,
+    binding_deliveries_for_package,
+    compile_cbs_provider_files,
+)
 from adaos.services.artifact_pipeline.storage import replace_with_retry
 from adaos.services.conversational_pipeline import compile_conversational_package
 from adaos.services.workflow_artifacts import (
@@ -158,6 +165,7 @@ def _build_policy_digest() -> str:
                 "workspace_host_metadata_files": sorted(_WORKSPACE_HOST_METADATA_FILES),
             },
             "scrub_policy": "adaos.package_scrub.v1",
+            "generators": {"cbs_provider": CBS_PROVIDER_COMPILER_ID},
         }
     )
 
@@ -193,6 +201,7 @@ class BuiltArtifactPackage:
     ref: ArtifactPackageRef
     archive_bytes: bytes
     package_manifest: Mapping[str, Any]
+    binding_deliveries: tuple[BindingDelivery, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +210,7 @@ class VerifiedArtifactPackage:
     package_manifest: Mapping[str, Any]
     file_names: tuple[str, ...]
     uncompressed_bytes: int
+    binding_deliveries: tuple[BindingDelivery, ...] = ()
 
 
 def _normalized_member_name(value: str, *, error_type: type[RuntimeError]) -> str:
@@ -415,7 +425,28 @@ def artifact_source_snapshot(
     root = Path(artifact_dir).expanduser().resolve()
     if not root.is_dir():
         raise PackageBuildError(f"artifact directory does not exist: {root}")
-    files = _collect_package_files(root, limits or PackageLimits())
+    effective_limits = limits or PackageLimits()
+    files = _collect_package_files(root, effective_limits)
+    names = {name for name, _data in files}
+    kind = "skill" if "skill.yaml" in names else "scenario" if "scenario.yaml" in names else None
+    if kind is not None:
+        try:
+            compilation = compile_cbs_provider_files(dict(files), kind=kind)
+        except CBSProviderAuthoringError as exc:
+            raise PackageBuildError(f"invalid compact CBS authoring: {exc}") from exc
+        if compilation is not None:
+            files = sorted(
+                [*files, *compilation.generated_files.items()], key=lambda item: item[0]
+            )
+            if len(files) > effective_limits.max_files:
+                raise PackageBuildError(
+                    f"package exceeds file limit {effective_limits.max_files}"
+                )
+            if sum(len(data) for _name, data in files) > effective_limits.max_uncompressed_bytes:
+                raise PackageBuildError(
+                    "package exceeds uncompressed size limit "
+                    f"{effective_limits.max_uncompressed_bytes}"
+                )
     records = [
         {"path": name, "size": len(data), "digest": sha256_digest(data)}
         for name, data in files
@@ -454,6 +485,21 @@ def build_artifact_package(
         raise PackageBuildError(
             f"required {_MANIFEST_BY_KIND[kind]} was excluded from package"
         )
+
+    try:
+        cbs_compilation = compile_cbs_provider_files(dict(files), kind=kind)
+    except CBSProviderAuthoringError as exc:
+        raise PackageBuildError(f"invalid compact CBS authoring: {exc}") from exc
+    if cbs_compilation is not None:
+        files = sorted(
+            [*files, *cbs_compilation.generated_files.items()], key=lambda item: item[0]
+        )
+        if len(files) > limits.max_files:
+            raise PackageBuildError(f"package exceeds file limit {limits.max_files}")
+        if sum(len(data) for _name, data in files) > limits.max_uncompressed_bytes:
+            raise PackageBuildError(
+                f"package exceeds uncompressed size limit {limits.max_uncompressed_bytes}"
+            )
 
     with tempfile.TemporaryDirectory(prefix="adaos-package-build-") as temp:
         canonical_root = Path(temp).resolve()
@@ -573,6 +619,8 @@ def build_artifact_package(
         package_manifest["workflow_role_policy_digest"] = role_policy_digest
     if conversational_lock is not None:
         package_manifest["conversational_lock"] = conversational_lock.to_dict()
+    if cbs_compilation is not None:
+        package_manifest["cbs"] = dict(cbs_compilation.package_metadata)
     manifest_bytes = canonical_json_bytes(package_manifest)
     manifest_digest = sha256_digest(manifest_bytes)
 
@@ -634,7 +682,13 @@ def build_artifact_package(
     except ArtifactReleaseContractError as exc:
         raise PackageBuildError(str(exc)) from exc
     return BuiltArtifactPackage(
-        ref=ref, archive_bytes=archive_bytes, package_manifest=package_manifest
+        ref=ref,
+        archive_bytes=archive_bytes,
+        package_manifest=package_manifest,
+        binding_deliveries=binding_deliveries_for_package(
+            ref,
+            cbs_compilation.package_metadata if cbs_compilation is not None else None,
+        ),
     )
 
 
@@ -668,6 +722,7 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[dict[str, Any], bytes]:
         "schema_locks",
     }
     optional_fields = {
+        "cbs",
         "conversational_lock",
         "workflow_lock",
         "workflow_validation_lock",
@@ -796,6 +851,33 @@ def _verify_artifact_package(
                     )
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(raw)
+
+        raw_cbs = package_manifest.get("cbs")
+        if raw_cbs is not None and not isinstance(raw_cbs, Mapping):
+            raise PackageVerificationError("package cbs metadata must be an object")
+        try:
+            expected_cbs = compile_cbs_provider_files(
+                verified_file_bytes,
+                kind=str(package_manifest.get("kind") or ""),
+                allow_generated_outputs=True,
+            )
+        except CBSProviderAuthoringError as exc:
+            raise PackageVerificationError(
+                f"invalid packaged compact CBS authoring: {exc}"
+            ) from exc
+        expected_cbs_metadata = (
+            dict(expected_cbs.package_metadata) if expected_cbs is not None else None
+        )
+        if raw_cbs != expected_cbs_metadata:
+            raise PackageVerificationError(
+                "package cbs metadata does not match packaged authoring source"
+            )
+        if expected_cbs is not None:
+            for path, expected_raw in expected_cbs.generated_files.items():
+                if verified_file_bytes.get(path) != expected_raw:
+                    raise PackageVerificationError(
+                        f"generated CBS contract does not match authoring source: {path}"
+                    )
 
         # The digest identifies the historical deterministic build policy; it
         # is part of the immutable package reference, not a runtime-version
@@ -1041,6 +1123,10 @@ def _verify_artifact_package(
             file_names=tuple(sorted(expected_files)),
             uncompressed_bytes=sum(
                 int(item.get("size") or 0) for item in expected_files.values()
+            ),
+            binding_deliveries=binding_deliveries_for_package(
+                ref,
+                expected_cbs.package_metadata if expected_cbs is not None else None,
             ),
         )
 

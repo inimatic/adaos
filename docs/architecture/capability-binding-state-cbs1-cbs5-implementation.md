@@ -260,6 +260,25 @@ compiler-generated requirements. This prevents generated boilerplate from
 being reported as human authoring cost in later CBS9 measurements. Existing
 compiler `1.0.0` records remain readable; new output is `1.1.0`.
 
+Provider packages have a separate compact, package-local authoring seam:
+`contracts/provider.cbs.yaml` with schema
+`adaos.cbs.provider_authoring.v1`. It names semantic operations and references
+the already declared `skill.yaml` tools, so input/output schemas are not copied.
+The deterministic package compiler emits canonical
+`CapabilityContract` and package-neutral `BindingDefinition` files, records
+their digests and authoring provenance in the immutable package manifest, and
+creates the exact `BindingDelivery` only after the package digest exists. A
+verifier recompiles the descriptor and rejects modified generated contracts or
+metadata. Therefore a physical member can move between packages without
+changing the binding-definition digest, while the delivery and package digests
+change as required.
+
+The provider compiler also reports `human_authored`, `builder_inferred`, and
+`compiler_generated` counts independently from Application-requirement
+authoring. Generated canonical JSON is included in source snapshots used by
+Forge checkpoints but remains compiler-owned: authors may not supply or
+override those output paths.
+
 The first retained use is Gmail Mail Client Prototype revision `007`, whose
 accepted intent requires `capability:mail.messages.manage` at `^1.0.0` while
 keeping Gmail as a later local binding choice. Wide and compact visual and

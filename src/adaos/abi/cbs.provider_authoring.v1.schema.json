@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/cbs.provider_authoring.v1.schema.json",
+  "title": "AdaOS compact CBS provider authoring v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "authorship", "capability", "binding"],
+  "properties": {
+    "schema": {"const": "adaos.cbs.provider_authoring.v1"},
+    "authorship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "properties": {
+        "origin": {"enum": ["human_authored", "builder_inferred"]}
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "version", "title", "operations"],
+      "properties": {
+        "ref": {"type": "string", "pattern": "^capability:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
+        "version": {"$ref": "#/$defs/version"},
+        "title": {"type": "string", "minLength": 1},
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["operation_id", "tool", "errors"],
+            "properties": {
+              "operation_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+              "tool": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+              "errors": {"$ref": "#/$defs/textSet"}
+            }
+          }
+        },
+        "invariants": {"$ref": "#/$defs/textSet"},
+        "effects": {"$ref": "#/$defs/textSet"},
+        "authority_requirements": {"$ref": "#/$defs/textSet"},
+        "dependencies": {"type": "array", "items": {"type": "object"}},
+        "state_ports": {"type": "array", "items": {"type": "object"}},
+        "conformance_refs": {"$ref": "#/$defs/textSet"},
+        "compatibility": {"type": "object"}
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "version", "entry_protocol", "logical_entrypoint", "physical_member", "modes"],
+      "properties": {
+        "ref": {"type": "string", "pattern": "^binding-definition:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
+        "version": {"$ref": "#/$defs/version"},
+        "entry_protocol": {"type": "string", "minLength": 1},
+        "logical_entrypoint": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*(?::[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*)?$"},
+        "physical_member": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"},
+        "state_support": {"type": "array", "items": {"type": "object"}},
+        "modes": {"type": "array", "minItems": 1, "items": {"enum": ["semantic", "simulation", "sandbox", "production"]}, "uniqueItems": true},
+        "profile_classes": {"$ref": "#/$defs/textSet"},
+        "provider_features": {"$ref": "#/$defs/textSet"},
+        "authority_requirements": {"$ref": "#/$defs/textSet"},
+        "conformance_obligations": {"$ref": "#/$defs/textSet"}
+      }
+    }
+  },
+  "$defs": {
+    "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"},
+    "textSet": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+  }
+}

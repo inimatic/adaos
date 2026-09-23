@@ -17,11 +17,13 @@ work.
 
 Post-checkpoint provider debt: the stage-one Gmail proof now has a bounded
 Core-owned OAuth/REST adapter, a typed skill SDK, conditional Builder authoring
-guidance, and release-derived connected-account setup. It deliberately does
-not yet change the roadmap's registry/reuse status: the portable mail contract,
-local registry reference, independently delivered reusable binding, resolver
-selection, and explicit second-consumer account attachment remain open before
-the reuse proof.
+guidance, release-derived connected-account setup, and a strict compact native
+provider compiler. The compiler can emit a package-neutral contract and binding
+definition plus an exact package delivery without duplicating tool schemas. It
+deliberately does not by itself change the roadmap's registry/reuse status: a
+curated portable mail contract, local registry reference, independently
+delivered reusable binding, resolver selection, and explicit second-consumer
+account attachment remain open before the reuse proof.
 
 ## Outcome
 
