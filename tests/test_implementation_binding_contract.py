@@ -86,6 +86,20 @@ def test_attachment_contract_is_loaded_only_for_relevant_automation_context():
     assert "metadata only" in extended["binding_rules"]["attachments"]
 
 
+def test_google_gmail_contract_is_loaded_only_for_relevant_automation_context():
+    compact = implementation_binding_contract()
+    extended = implementation_binding_contract(include_google_gmail=True)
+    assert "google_gmail" not in compact["contracts"]
+    assert "google_gmail" not in compact["binding_rules"]
+    contract = extended["contracts"]["google_gmail"]
+    assert contract["provider_id"] == "google.gmail"
+    assert contract["semantic_capability"] == "mail.messages.manage"
+    assert contract["project_permission_profile"]["external_provider"]["scopes"] == [
+        "https://www.googleapis.com/auth/gmail.modify"
+    ]
+    assert "adaos.sdk.providers" in contract["sdk"]["import"]
+
+
 def test_creation_contract_matches_state_hydration_instead_of_dynamic_defaults():
     guide = implementation_binding_contract()
     rule = guide["binding_rules"]["creation"]

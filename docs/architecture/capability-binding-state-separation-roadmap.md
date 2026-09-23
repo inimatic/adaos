@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Capability, Binding, and State Separation](capability-binding-state-separation.md).
 
-Last reviewed: 2026-09-23.
+Last reviewed: 2026-09-24.
 
 Implementation checkpoint: every non-deferred item through `CBS5` and every
 `must`/`should` item in `CBS6` through `CBS9` has validated-local evidence as
@@ -14,6 +14,14 @@ skill-migration, and legacy-removal status is recorded in
 The checklist below continues to distinguish that bounded proof from later
 provider generalization and the remaining `should`, `could`, and `deferred`
 work.
+
+Post-checkpoint provider debt: the stage-one Gmail proof now has a bounded
+Core-owned OAuth/REST adapter, a typed skill SDK, conditional Builder authoring
+guidance, and release-derived connected-account setup. It deliberately does
+not yet change the roadmap's registry/reuse status: the portable mail contract,
+local registry reference, independently delivered reusable binding, resolver
+selection, and explicit second-consumer account attachment remain open before
+the reuse proof.
 
 ## Outcome
 

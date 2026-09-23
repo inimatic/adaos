@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+import yaml
 
 from adaos.domain.application import Application, utc_now
 from adaos.sdk.core._ctx import require_ctx
@@ -12,6 +15,7 @@ from adaos.services.applications import (
     ApplicationAccessManagementService,
     ApplicationDevelopmentCoordinator,
     StableSourceProjectionService,
+    compile_setup_contract,
     get_application_distribution_service,
     get_application_service,
     get_stable_source_publisher,
@@ -492,9 +496,55 @@ def _sync_local_trial_home(application_id: str, *, webspace_id: str) -> dict[str
     )
 
 
+def _with_release_setup_contract(envelope, runtime):
+    """Compile setup from immutable release manifests and access declarations."""
+
+    component_manifests: dict[str, Mapping[str, Any]] = {}
+    for package in runtime.packages:
+        source = runtime.verified_source(package)
+        value: Any = None
+        if package.kind == "skill":
+            path = source / "skill.yaml"
+            if path.is_file():
+                value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+        elif package.kind == "scenario":
+            path = source / "scenario.json"
+            if path.is_file():
+                value = json.loads(path.read_text(encoding="utf-8-sig"))
+        if isinstance(value, Mapping):
+            component_manifests[f"{package.kind}:{package.artifact_id}"] = dict(value)
+
+    connected_accounts = []
+    for provider in envelope.permission_profile.external_providers:
+        provider_id = str(provider.get("id") or "").strip().lower()
+        if not provider_id:
+            continue
+        account_id = str(provider.get("account_id") or provider_id).strip().lower()
+        connected_accounts.append(
+            {
+                "id": account_id,
+                "title": str(provider.get("title") or provider_id),
+                "purpose": str(
+                    provider.get("purpose")
+                    or f"Connect the declared {provider_id} account"
+                ),
+                "required": bool(provider.get("required", True)),
+                "scopes": list(provider.get("scopes") or ()),
+            }
+        )
+    contract = compile_setup_contract(
+        application_id=envelope.application_id,
+        release_digest=envelope.release_digest,
+        component_manifests=component_manifests,
+        permission_profile=envelope.permission_profile.to_dict(),
+        connected_accounts=connected_accounts,
+        placement_required=True,
+    )
+    return replace(envelope, setup_contract=contract)
+
+
 def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) -> dict[str, Any]:
     """Admit local Builder Beta, migrating Stable data without a second UI approval."""
-    import json
 
     from adaos.domain.application import ApplicationRelease
     from adaos.domain.artifact_release import ProjectRelease
@@ -526,6 +576,7 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
                                   accepted_candidate_id=candidate_id,
                                   acceptance_evidence=tuple(candidate["validation_evidence"]),
                                   provenance_refs=(release.release_digest,), lifecycle="trial")
+    envelope = _with_release_setup_contract(envelope, runtime)
     from adaos.services.applications.access_management import (
         ApplicationAccessManagementService,
     )

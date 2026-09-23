@@ -28,6 +28,8 @@ The AdaOS SDK is the Python-facing layer used by skills and higher-level runtime
   to the selected Application runtime, with revision and capability checks
 - [Application Data Lifecycle](application-data-lifecycle.md): owned SQLite stores,
   forward migrations, local Beta cutover and preservation on Stable acceptance
+- [Google Gmail Provider](google-gmail-provider.md): bounded Core-owned OAuth and
+  Gmail operations with redacted Application setup/account projections
 
 - [Relational Storage](relational-storage.md): capability-gated, per-skill
   logical databases with redacted bindings and SQLite/PostgreSQL providers

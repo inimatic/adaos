@@ -716,8 +716,18 @@ def ping():
         "schema": {
           "id": "demo_modal",
           "layout": {
-            "type": "single",
-            "areas": [{ "id": "main" }]
+            "version": 2,
+            "pattern": "document",
+            "density": "comfortable",
+            "contentWidth": "fluid",
+            "scroll": "page",
+            "regions": [
+              {
+                "id": "main",
+                "role": "main",
+                "presentation": { "wide": "pane", "compact": "stack" }
+              }
+            ]
           },
           "interface": {
             "schema": "adaos.ui.modal.interface.v1",
@@ -818,8 +828,18 @@ def ping():
         "schema": {
           "id": "demo_modal",
           "layout": {
-            "type": "single",
-            "areas": [{ "id": "main" }]
+            "version": 2,
+            "pattern": "document",
+            "density": "comfortable",
+            "contentWidth": "fluid",
+            "scroll": "page",
+            "regions": [
+              {
+                "id": "main",
+                "role": "main",
+                "presentation": { "wide": "pane", "compact": "stack" }
+              }
+            ]
           },
           "interface": {
             "schema": "adaos.ui.modal.interface.v1",

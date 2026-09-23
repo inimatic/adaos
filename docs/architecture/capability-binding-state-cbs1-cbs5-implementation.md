@@ -264,9 +264,24 @@ The first retained use is Gmail Mail Client Prototype revision `007`, whose
 accepted intent requires `capability:mail.messages.manage` at `^1.0.0` while
 keeping Gmail as a later local binding choice. Wide and compact visual and
 interaction evidence is stored under `e2e/artifacts/`. This proves the compact
-authoring-to-acceptance boundary, not provider reuse: native Gmail delivery,
-contract curation, registry references, binding selection, and shared secret
-ownership remain subsequent work.
+authoring-to-acceptance boundary, not provider reuse.
+
+### Bounded Gmail provider boundary
+
+Core now exposes one typed `google.gmail` provider used by the first Gmail
+Application proof. OAuth state, PKCE, tokens, refresh and the fixed Google API
+destination remain below `adaos.sdk.providers.gmail`; the Application skill
+receives only bounded results. Trial placement derives its connected-account
+setup requirement from the immutable release declaration, and Builder receives
+the exact provider authoring contract only for Gmail-related Automation.
+
+The vault key is provider/user/account scoped rather than Application scoped,
+so a credential can later be attached to a second admitted consumer without
+being copied into either package. That attachment/consent operation, the
+package-independent mail `CapabilityContract`, contract curation, registry
+reference, and resolver selection remain subsequent work. The present adapter
+must not be counted as a native reusable CBS provider in the installed-skill
+inventory or the CBS9 reuse metric.
 
 ## Skill Adoption
 

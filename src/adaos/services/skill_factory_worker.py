@@ -7675,10 +7675,20 @@ class LocalSkillFactoryWorker:
                     "загруз",
                 )
             )
+            include_google_gmail = any(
+                token in binding_request
+                for token in (
+                    "google.gmail",
+                    "gmail",
+                    "capability:mail.messages.manage",
+                    "mail.messages.manage",
+                )
+            )
             _write_json(
                 input_dir / "implementation-bindings.json",
                 implementation_binding_contract(
-                    include_attachments=include_attachments
+                    include_attachments=include_attachments,
+                    include_google_gmail=include_google_gmail,
                 ),
             )
             packet["implementation_bindings_ref"] = (

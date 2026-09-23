@@ -94,6 +94,21 @@ contains `account_id` and `revision`, so account updates can bind identity and
 binding declares revision `0` for create and the selected record's `revision`
 for update.
 
+Trial placement now compiles this setup contract automatically from immutable
+component manifests and release permission declarations. A release that
+declares `google.gmail`, for example, enters Trial with an exact required
+connected-account row; the Application package does not copy setup metadata
+and the projection never contains an OAuth token.
+
+For Gmail Automation, Builder receives a conditional implementation contract
+only when the accepted task mentions Gmail, `google.gmail`, or
+`mail.messages.manage`. The contract requires the typed
+`adaos.sdk.providers.gmail` facade, the exact `gmail.modify` scope, fixed Core
+provider operations, explicit Application permission review, Application-owned
+send deduplication, and secret-free tests. Generic external HTTP and package
+credential slots are rejected for this path. See
+[Google Gmail Provider](../sdk/google-gmail-provider.md).
+
 The same access read also publishes exact grant, role and permission
 declarations. Grant rows carry `grant_id` and `revision` for CAS updates; role
 and permission choices bind canonical `id` values and safe titles. Consumers
@@ -200,3 +215,10 @@ beta exists.
 Skills that construct or inspect Builder handoffs should be updated to preserve
 `cbs_compilation` and `cbs_compilation_digest`; skills that only invoke stable
 Builder SDK operations remain compatible.
+
+The Gmail provider work does not yet close reusable capability authoring. The
+first beta intentionally binds one Application to one exact Core provider. A
+subsequent reuse proof must extract a package-independent mail contract, admit
+it into a local registry, let Builder select it by contract reference, and add
+an explicit second-Application attachment/consent operation for the existing
+provider-owned account credential.

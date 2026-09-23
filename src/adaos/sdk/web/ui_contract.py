@@ -245,7 +245,7 @@ def diagnostic_catalog() -> dict[str, dict[str, str]]:
 
 
 def implementation_binding_contract(
-    *, include_attachments: bool = False
+    *, include_attachments: bool = False, include_google_gmail: bool = False
 ) -> dict[str, Any]:
     """Return the bounded Automation UI/owned-tool binding guide and ABI receipts.
 
@@ -272,6 +272,13 @@ def implementation_binding_contract(
         rules = guide.get("binding_rules")
         if isinstance(rules, dict):
             rules.pop("attachments", None)
+    if not include_google_gmail:
+        contracts = guide.get("contracts")
+        if isinstance(contracts, dict):
+            contracts.pop("google_gmail", None)
+        rules = guide.get("binding_rules")
+        if isinstance(rules, dict):
+            rules.pop("google_gmail", None)
     guide["sources"] = sources
     guide["schema_refs"] = {
         "read_collection": "webui.v1.schema.json#/$defs/dataSource",

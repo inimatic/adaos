@@ -17,10 +17,83 @@
     "failure": "A thrown handler error, failed transport, or returned {ok:false,error:<code>,message:<human reason>} rejects the command. Form commands await completion even if background=true. A denied/skipped command or pending approval is not form success. inputs.closeOnSuccess with explicit buttons closes only after success; leave resetOnSuccess false to retain a failed draft. Server enforces rights, invariants and revision conflicts independently of UI enabledIf/readOnlyIf. Do not return ok:true for an unsuccessful mutation.",
     "authorization": "Call adaos.sdk.access.require('workspace.read') or require('workspace.write') inside each tool BEFORE touching data. Use adaos.sdk.access.caller() only for verified caller attribution. An absent caller is not owner. Personal DEV preview uses the same /api/tools/call ingress: the Client supplies its existing node-owner credential, Core verifies it and propagates the owner identity into the selected DEV skill handler. The app does not configure this transport, create grants, inject identity or require installation to use this owner path. Owner-issued scoped session credentials admit only their named installed skill; they are deliberately rejected in personal DEV. DEV-owner acceptance therefore cannot prove delegated reader/writer access. Application unit tests may isolate the SDK access boundary and assert denials; independent Core/HTTP tests qualify real ingress. No custom authentication or role registry belongs in the app.",
     "persistence": "Use adaos.sdk.data.skill_env.skill_data_root() for owned durable data, outside source/package files. Standard-library sqlite3 is allowed for atomic relationships, optimistic revisions and app-owned business rules. New installation starts empty; keep representative Prototype records only in tests. Add versioned compatible schema initialization/migration and persistence tests. The SDK resources facade does not register arbitrary transaction handlers.",
+    "google_gmail": "For Google Gmail use only adaos.sdk.providers.gmail. The Core adapter owns OAuth state, PKCE, access/refresh tokens, refresh and the fixed gmail.googleapis.com destination. Skills must not use requests/httpx, adaos.sdk.net.external_api, secrets slots or arbitrary URLs for Gmail. Declare the exact provider and skill capability from contracts.google_gmail; expose application-owned mail tools that wrap the typed SDK methods and preserve accepted UI states.",
     "attachments": "Prototype and production attachment storage are different contracts. fileStorage=prototype uploads only to disposable Preview resource storage. For durable app-owned bytes, declare storage.blob in the skill and Project permission profile, use fileStorage=skill, and set qualified uploadTarget and readTarget from the same owned skill. The upload tool is a mutating tool with narrow permissions [storage.blob, workspace.write], application_access permission workspace.write, and it calls adaos.sdk.data.blob.put_upload(<logical-store>) exactly once; bytes never appear in arguments. It returns that blob receipt directly or under blob. The read tool is read-only with narrow permissions [storage.blob, workspace.read], application_access permission workspace.read, accepts ref plus optional field_id/webspace_id, and returns {ok:true,ref:<the exact requested sha256 ref>} after applying app rules; Core then serves the verified content-addressed object. Form fields should set maxBytes <= 10485760 and an image accept filter when appropriate. Persist the returned /api/tools/... attachment reference in owned relational data and render it through normal media/attachment fields. Without fileStorage, forms collect metadata only. Missing upload/read tools, storage.blob, exact permission declarations, byte persistence tests, denied-writer tests, or authenticated read evidence is a blocking capability gap; never present metadata as an uploaded file or weaken the accepted requirement silently.",
     "discovery": "The supplied owned skill manifest and handlers define the local tool declaration pattern. Add tools to its exports and declarations with accurate read/write side effects; never infer caller rights from those effects. Consult targeted public SDK descriptors only for contracts still missing after this capsule. Preserve the accepted workflows, not Prototype storage or sample records. Larger new UX choices need review, not extra speculative hard acceptance requirements."
   },
   "contracts": {
+    "google_gmail": {
+      "contract": "adaos.provider.google.gmail.v1",
+      "semantic_capability": "mail.messages.manage",
+      "provider_id": "google.gmail",
+      "sdk_capability": "providers.google.gmail",
+      "oauth_scope": "https://www.googleapis.com/auth/gmail.modify",
+      "destination": "gmail.googleapis.com",
+      "project_permission_profile": {
+        "required_permission": {
+          "id": "providers.google.gmail",
+          "purpose": "Use the connected Gmail account.",
+          "approval_policy": "explicit",
+          "sensitive": true
+        },
+        "external_provider": {
+          "id": "google.gmail",
+          "account_id": "google.gmail",
+          "title": "Gmail account",
+          "purpose": "Read, organize, trash and send mail requested by the user.",
+          "required": true,
+          "destination": "gmail.googleapis.com",
+          "account_modes": ["delegated_user"],
+          "scopes": ["https://www.googleapis.com/auth/gmail.modify"]
+        }
+      },
+      "skill_manifest": {
+        "capabilities": ["providers.google.gmail"],
+        "provider_contract": {
+          "contract": "adaos.mail.messages.manage.v1",
+          "capability": "mail.messages.manage",
+          "operations": "List the candidate's exported mail tools that implement the accepted read/mutation surface. Every listed operation must be an exported tool."
+        },
+        "tool_rules": "Each public tool declares narrow permissions, accurate side_effects and application_access.permission=providers.google.gmail. Read tools use read_only/none; label, archive, trash and send tools use external_write. Require workspace.read/write first when the tool also reads or mutates app-owned state."
+      },
+      "sdk": {
+        "import": "from adaos.sdk.providers import gmail",
+        "operations": {
+          "begin_connection": "gmail.begin_connection(account_id='google.gmail') -> {ok,provider_id,account_id,authorization_url,expires_at}",
+          "connection_status": "gmail.connection_status(account_id='google.gmail')",
+          "list_messages": "gmail.list_messages(query='', label_ids=(), page_token='', max_results=50, account_id='google.gmail')",
+          "get_message": "gmail.get_message(message_id, format='full', account_id='google.gmail')",
+          "list_labels": "gmail.list_labels(account_id='google.gmail')",
+          "modify_message": "gmail.modify_message(message_id, add_label_ids=(), remove_label_ids=(), account_id='google.gmail')",
+          "trash_message": "gmail.trash_message(message_id, account_id='google.gmail')",
+          "send_message": "gmail.send_message(raw_base64url, idempotency_key=<stable app-owned key>, account_id='google.gmail')"
+        },
+        "archive": "Call modify_message(remove_label_ids=['INBOX']).",
+        "read_state": "Call modify_message(add_label_ids=['UNREAD']) or remove_label_ids=['UNREAD'].",
+        "star_state": "Call modify_message(add_label_ids=['STARRED']) or remove_label_ids=['STARRED'].",
+        "send_semantics": "Create an RFC 2822 message and URL-safe base64 encode it without persisting body text. Deduplicate the user command in app-owned storage before the single SDK call. Core never automatically retries a send."
+      },
+      "webui_connection": {
+        "steps": [
+          "call the owned begin_connection tool with resultStateKey=gmailConnection and invalidates:[]",
+          "on the same button command, openUrl with url=$state.gmailConnection.authorization_url, target=_blank and withAuth=false",
+          "refresh connection_status after the user returns; expose disconnected, connected, denied, expired and provider-unavailable states"
+        ]
+      },
+      "failure_contract": {
+        "reconnect": ["gmail_account_not_connected", "gmail_reconnect_required"],
+        "permission": ["gmail_permission_denied", "gmail_required_scope_missing"],
+        "retryable": ["gmail_provider_unavailable"],
+        "rule": "Return {ok:false,error,message} from the owned tool or raise a bounded error. Never return a successful mutation after provider failure and never include response bodies, tokens or OAuth codes in logs/errors."
+      },
+      "tests": [
+        "mock the typed SDK facade; package tests perform no external network calls",
+        "prove missing Application context and missing/denied provider capability fail closed",
+        "prove search/list/get/labels and every accepted mutation map to the exact SDK method",
+        "prove send idempotency suppresses a duplicate before a second SDK call",
+        "prove tokens, OAuth codes and message bodies are absent from logs, persisted UI state and fixtures"
+      ]
+    },
     "production_attachment": {
       "purpose": "Persist app-owned immutable bytes behind normal Application authorization without placing bytes or base64 in JSON tool calls.",
       "limits": {
