@@ -1983,9 +1983,14 @@ async def _authorize_application_tool_call(
             "application_id": application_id,
             "application_title": application_id,
             "runtime_source": "dev",
+            "release_digest": authority.get("manifest_digest"),
             "project_ref": project_ref,
             "project_manifest_digest": authority.get("manifest_digest"),
             "permission_profile_digest": authority.get("profile_digest"),
+            "permission_profile": dict(_mapping(authority.get("profile"))),
+            "external_provider_declarations": list(
+                _mapping(authority.get("profile")).get("external_providers") or ()
+            ),
             "subject_ref": actor.ref(),
             "holder_ref": actor.ref(),
             "permission_id": permission_id,

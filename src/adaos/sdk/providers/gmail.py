@@ -34,6 +34,15 @@ def _invocation() -> tuple[GoogleGmailProvider, dict[str, Any], str]:
     return GoogleGmailProvider.from_context(ctx), application, subject_ref
 
 
+def _permission_profile(application: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return only the Core-verified DEV profile, never tool arguments."""
+
+    if str(application.get("runtime_source") or "") != "dev":
+        return None
+    profile = application.get("permission_profile")
+    return dict(profile) if isinstance(profile, Mapping) else None
+
+
 def _execute(
     operation: str,
     *,
@@ -48,6 +57,7 @@ def _execute(
         subject_ref=subject_ref,
         account_id=account_id,
         arguments=arguments,
+        candidate_permission_profile=_permission_profile(application),
     )
 
 
@@ -60,6 +70,7 @@ def begin_connection(
         release_digest=str(application["release_digest"]),
         subject_ref=subject_ref,
         account_id=account_id,
+        candidate_permission_profile=_permission_profile(application),
     )
 
 

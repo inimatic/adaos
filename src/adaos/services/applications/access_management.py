@@ -14,6 +14,7 @@ from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.domain.application_access import (
     ApplicationAccessGrant,
+    ApplicationPermissionProfile,
     ApplicationVerificationReport,
     VerificationCheck,
     build_application_verification_report,
@@ -549,13 +550,26 @@ class ApplicationAccessManagementService:
         value: Mapping[str, Any],
         *,
         expected_revision: int,
+        candidate_permission_profile: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         release_digest = str(value.get("release_digest") or "").strip()
-        release = self.store.get_release(application_id, release_digest)
+        if candidate_permission_profile is None:
+            permission_profile = self.store.get_release(
+                application_id, release_digest
+            ).permission_profile
+        else:
+            try:
+                permission_profile = ApplicationPermissionProfile.from_mapping(
+                    candidate_permission_profile
+                )
+            except Exception as exc:
+                raise ApplicationAccessError(
+                    "candidate connected-account permission profile is invalid"
+                ) from exc
         provider_id = str(value.get("provider_id") or "").strip().lower()
         declared = {
             str(item.get("id") or "").strip().lower(): item
-            for item in release.permission_profile.external_providers
+            for item in permission_profile.external_providers
         }
         if provider_id not in declared:
             raise ApplicationAccessError("connected account provider is not declared")
@@ -638,7 +652,7 @@ class ApplicationAccessManagementService:
                 "schema": "adaos.application.connected_account.v1",
                 "application_id": application_id,
                 "release_digest": release_digest,
-                "permission_profile_digest": release.permission_profile.digest,
+                "permission_profile_digest": permission_profile.digest,
                 "account_id": account_id,
                 "provider_id": provider_id,
                 "subject_ref": subject_ref,
@@ -666,7 +680,7 @@ class ApplicationAccessManagementService:
                 "scopes": scopes,
                 "previous_scopes": previous_scopes,
                 "scope_changed": bool(previous and previous_scopes != scopes),
-                "reviewed_permission_profile_digest": release.permission_profile.digest,
+                "reviewed_permission_profile_digest": permission_profile.digest,
             }
         )
         return _redacted_account(record)

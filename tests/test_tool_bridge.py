@@ -1249,6 +1249,14 @@ permission_profile:
     - id: providers.google.gmail
       purpose: Use the connected Gmail account.
   optional: []
+  external_providers:
+    - id: google.gmail
+      account_id: google.gmail
+      purpose: Read mail requested by the user.
+      required: true
+      destination: gmail.googleapis.com
+      account_modes: [delegated_user]
+      scopes: [https://www.googleapis.com/auth/gmail.modify]
 """.lstrip(),
         encoding="utf-8",
     )
@@ -1304,6 +1312,18 @@ capabilities:
         assert verified["application_id"] == "mail_client"
         assert verified["runtime_source"] == "dev"
         assert verified["subject_ref"] == "user:owner"
+        assert verified["release_digest"].startswith("sha256:")
+        assert verified["external_provider_declarations"] == [
+            {
+                "id": "google.gmail",
+                "account_id": "google.gmail",
+                "purpose": "Read mail requested by the user.",
+                "required": True,
+                "destination": "gmail.googleapis.com",
+                "account_modes": ["delegated_user"],
+                "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
+            }
+        ]
         assert "decision" not in access
         assert updated.context["_verified_application_access"] == verified
     finally:

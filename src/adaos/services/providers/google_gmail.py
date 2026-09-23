@@ -229,16 +229,40 @@ class GoogleGmailProvider:
         self,
         application_id: str,
         release_digest: str,
+        *,
+        candidate_permission_profile: Mapping[str, Any] | None = None,
     ) -> tuple[Any, dict[str, Any]]:
-        try:
-            release = self.applications.store.get_release(application_id, release_digest)
-        except Exception as exc:
-            raise GoogleGmailProviderError("application_release_unavailable") from exc
-        declarations = {
-            _text(item.get("id")).lower(): dict(item)
-            for item in release.permission_profile.external_providers
-            if isinstance(item, Mapping)
-        }
+        release = None
+        if candidate_permission_profile is None:
+            try:
+                release = self.applications.store.get_release(
+                    application_id, release_digest
+                )
+            except Exception as exc:
+                raise GoogleGmailProviderError(
+                    "application_release_unavailable"
+                ) from exc
+            declarations = {
+                _text(item.get("id")).lower(): dict(item)
+                for item in release.permission_profile.external_providers
+                if isinstance(item, Mapping)
+            }
+        else:
+            try:
+                from adaos.domain.application_access import ApplicationPermissionProfile
+
+                profile = ApplicationPermissionProfile.from_mapping(
+                    candidate_permission_profile
+                )
+            except Exception as exc:
+                raise GoogleGmailProviderError(
+                    "gmail_permission_profile_invalid"
+                ) from exc
+            declarations = {
+                _text(item.get("id")).lower(): dict(item)
+                for item in profile.external_providers
+                if isinstance(item, Mapping)
+            }
         declaration = declarations.get(GOOGLE_GMAIL_PROVIDER_ID)
         if declaration is None:
             raise GoogleGmailProviderError("gmail_provider_not_declared")
@@ -276,11 +300,14 @@ class GoogleGmailProvider:
         release_digest: str,
         subject_ref: str,
         account_id: str = GOOGLE_GMAIL_PROVIDER_ID,
+        candidate_permission_profile: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not self.client_id or not self.redirect_uri:
             raise GoogleGmailProviderError("google_oauth_not_configured")
         _release, declaration = self._provider_declaration(
-            application_id, release_digest
+            application_id,
+            release_digest,
+            candidate_permission_profile=candidate_permission_profile,
         )
         declared_account_id = self._declared_account_id(declaration)
         if _text(account_id) != declared_account_id:
@@ -320,6 +347,10 @@ class GoogleGmailProvider:
             "issued_at": issued_at,
             "expires_at": issued_at + _OAUTH_STATE_TTL_S,
         }
+        if candidate_permission_profile is not None:
+            pending["candidate_permission_profile"] = dict(
+                candidate_permission_profile
+            )
         self._vault_put_json(self._state_key(state), pending)
         authorization_url = GOOGLE_AUTHORIZATION_ENDPOINT + "?" + urlencode(
             {
@@ -390,7 +421,13 @@ class GoogleGmailProvider:
         if float(pending.get("expires_at") or 0.0) <= float(self.clock()):
             raise GoogleGmailProviderError("oauth_state_expired")
         self._provider_declaration(
-            str(pending["application_id"]), str(pending["release_digest"])
+            str(pending["application_id"]),
+            str(pending["release_digest"]),
+            candidate_permission_profile=(
+                pending.get("candidate_permission_profile")
+                if isinstance(pending.get("candidate_permission_profile"), Mapping)
+                else None
+            ),
         )
         if _text(error):
             self._mark_denied(pending)
@@ -475,6 +512,13 @@ class GoogleGmailProvider:
                     "token_expires_at": _utc_iso(expires_at),
                 },
                 expected_revision=int(pending["expected_revision"]),
+                candidate_permission_profile=(
+                    pending.get("candidate_permission_profile")
+                    if isinstance(
+                        pending.get("candidate_permission_profile"), Mapping
+                    )
+                    else None
+                ),
             )
         except Exception as exc:
             if previous_token is None:
@@ -532,9 +576,12 @@ class GoogleGmailProvider:
         release_digest: str,
         subject_ref: str,
         account_id: str,
+        candidate_permission_profile: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         _release, declaration = self._provider_declaration(
-            application_id, release_digest
+            application_id,
+            release_digest,
+            candidate_permission_profile=candidate_permission_profile,
         )
         declared_account_id = self._declared_account_id(declaration)
         if account_id != declared_account_id:
@@ -582,6 +629,7 @@ class GoogleGmailProvider:
                     "token_expires_at": _utc_iso(float(credential["expires_at"])),
                 },
                 expected_revision=int(account["revision"]),
+                candidate_permission_profile=candidate_permission_profile,
             )
         return credential, account
 
@@ -608,6 +656,7 @@ class GoogleGmailProvider:
         subject_ref: str,
         account_id: str = GOOGLE_GMAIL_PROVIDER_ID,
         arguments: Mapping[str, Any] | None = None,
+        candidate_permission_profile: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         op = _text(operation).lower()
         if op not in _OPERATIONS:
@@ -618,6 +667,7 @@ class GoogleGmailProvider:
             release_digest=release_digest,
             subject_ref=subject_ref,
             account_id=_text(account_id),
+            candidate_permission_profile=candidate_permission_profile,
         )
         method = "GET"
         url = ""

@@ -268,6 +268,76 @@ def test_oauth_connection_uses_state_pkce_and_keeps_tokens_out_of_application_st
     assert not any("oauth-state" in key for key in vault.values)
 
 
+def test_dev_preview_uses_pinned_verified_provider_declaration_without_release(
+    tmp_path: Path,
+) -> None:
+    applications = ApplicationService(ApplicationStore(tmp_path / "applications"))
+    applications.register(_application())
+    vault = FakeVault()
+    transport = FakeTransport(
+        [
+            FakeResponse(
+                200,
+                {
+                    "access_token": "access-secret",
+                    "refresh_token": "refresh-secret",
+                    "token_type": "Bearer",
+                    "scope": GMAIL_MODIFY_SCOPE,
+                    "expires_in": 3600,
+                },
+            ),
+            FakeResponse(200, {"emailAddress": "owner@example.test"}),
+        ]
+    )
+    provider = GoogleGmailProvider(
+        vault=vault,
+        applications=applications,
+        transport=transport,
+        client_id="google-client-id",
+        client_secret="google-client-secret",
+        redirect_uri="http://127.0.0.1:8777/api/providers/google/gmail/oauth/callback",
+        clock=lambda: 2_000_000_000.0,
+    )
+    profile = {
+        "schema": "adaos.application.permission_profile.v1",
+        "required": [
+            {
+                "id": "providers.google.gmail",
+                "purpose": "Use Gmail.",
+            }
+        ],
+        "optional": [],
+        "external_providers": [
+            {
+                "id": "google.gmail",
+                "account_id": "google.gmail",
+                "purpose": "Read mail requested by the user.",
+                "required": True,
+                "destination": "gmail.googleapis.com",
+                "account_modes": ["delegated_user"],
+                "scopes": [GMAIL_MODIFY_SCOPE],
+            }
+        ],
+    }
+
+    start = provider.begin_authorization(
+        application_id="gmail_mail_client",
+        release_digest=DIGEST_A,
+        subject_ref="user:owner",
+        candidate_permission_profile=profile,
+    )
+    state = parse_qs(urlparse(start["authorization_url"]).query)["state"][0]
+    pending = json.loads(vault.values[provider._state_key(state)])
+    assert pending["candidate_permission_profile"] == profile
+
+    result = provider.complete_authorization(state=state, code="authorization-code")
+
+    assert result["status"] == "connected"
+    account = provider.access.connected_accounts("gmail_mail_client")[0]
+    assert account["status"] == "connected"
+    assert account["provider_id"] == "google.gmail"
+
+
 def test_oauth_state_is_one_use_and_denial_never_creates_a_credential(
     tmp_path: Path,
 ) -> None:
