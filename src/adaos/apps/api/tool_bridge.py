@@ -1899,7 +1899,112 @@ async def _authorize_application_tool_call(
     """Resolve and enforce trusted Application context before action approval."""
 
     if body.dev:
-        return body, None
+        if not application_contract:
+            return body, None
+        from adaos.services.applications.access_management import (
+            ApplicationAccessManagementService,
+        )
+        from adaos.services.builder.application_permissions import (
+            application_permissions_context,
+        )
+        from adaos.services.policy.application import bind_application
+
+        actor = current_caller()
+        if actor is None:
+            raise HTTPException(status_code=403, detail={"error": "application_actor_missing"})
+        paths = getattr(ctx, "paths", None)
+        projects_dir = getattr(paths, "dev_projects_dir", None)
+        skills_dir = getattr(paths, "dev_skills_dir", None)
+        if not callable(projects_dir) or not callable(skills_dir):
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "dev_application_authority_unavailable"},
+            )
+        authority = await asyncio.to_thread(
+            application_permissions_context,
+            component_ref=f"skill:{skill_name}",
+            requested_project_ref=None,
+            dev_projects_root=Path(projects_dir()),
+            dev_skills_root=Path(skills_dir()),
+        )
+        if (
+            authority.get("status") != "present"
+            or authority.get("authority_status") != "valid"
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "dev_application_context_invalid",
+                    "reason": "project_ownership_or_permission_profile_invalid",
+                    "technical_detail": {
+                        "tool": body.tool,
+                        "diagnostics": list(authority.get("diagnostics") or ())[:8],
+                    },
+                },
+            )
+        permission_id, app_capability = ApplicationAccessManagementService.runtime_permission(
+            side_effects=declared_side_effects,
+            application_access=application_contract,
+            component_capabilities=component_capabilities,
+        )
+        declared_permissions = {
+            str(item).strip().lower()
+            for item in authority.get("declared") or ()
+            if str(item).strip()
+        }
+        required_permissions = {
+            str(item).strip().lower()
+            for item in component_capabilities
+            if str(item).strip()
+        }
+        if not permission_id or not required_permissions.issubset(declared_permissions):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "dev_application_permission_not_declared",
+                    "permission_id": permission_id or None,
+                    "technical_detail": {
+                        "tool": body.tool,
+                        "undeclared_permissions": sorted(
+                            required_permissions - declared_permissions
+                        ),
+                    },
+                },
+            )
+        project_ref = str(authority.get("project_ref") or "")
+        application_id = project_ref.partition(":")[2]
+        if not application_id:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "dev_application_context_invalid"},
+            )
+        request_context = _mapping(body.context)
+        verified = {
+            "application_id": application_id,
+            "application_title": application_id,
+            "runtime_source": "dev",
+            "project_ref": project_ref,
+            "project_manifest_digest": authority.get("manifest_digest"),
+            "permission_profile_digest": authority.get("profile_digest"),
+            "subject_ref": actor.ref(),
+            "holder_ref": actor.ref(),
+            "permission_id": permission_id,
+            "app_capability": app_capability,
+            "component_ref": f"skill:{skill_name}",
+            "tool_ref": f"tool:{skill_name}:{public_tool}",
+            "webspace_id": _resolve_tool_webspace_id(
+                body.arguments or {}, context=body.context
+            ),
+        }
+        bind_application(verified)
+        updated_context = {**request_context, "_verified_application_access": verified}
+        # This context establishes identity and a declaration ceiling only. DEV
+        # never synthesizes an Application grant, so the normal method-level
+        # action gate remains authoritative for mutating operations.
+        return body.model_copy(update={"context": updated_context}), {
+            "context": verified,
+            "component_capabilities": list(component_capabilities),
+        }
     from adaos.services.applications.access_management import ApplicationAccessManagementService
     from adaos.services.applications.runtime import get_application_service
     from adaos.services.personalization_runtime import personalization_access_service
@@ -2786,6 +2891,16 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
             )
     except CallerAccessDenied as exc:
         raise HTTPException(status_code=403, detail={"error": "caller_access_denied", "reason": str(exc)}) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "tool_permission_denied",
+                "tool": body.tool,
+                "reason": str(exc) or "permission_denied",
+                "retryable": False,
+            },
+        ) from exc
     except RuntimeChannelConflict as exc:
         raise HTTPException(status_code=409, detail={"error": "application_runtime_inactive",
             "message": str(exc), "retryable": False}) from exc

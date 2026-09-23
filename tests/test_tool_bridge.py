@@ -398,6 +398,44 @@ def test_caller_denial_is_403_and_idempotent_replay_stays_403(monkeypatch):
     assert calls == [True]
 
 
+def test_tool_permission_error_is_bounded_403(monkeypatch) -> None:
+    class Manager:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run_tool(self, *_args, **_kwargs):
+            raise PermissionError("application_context_missing")
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", Manager)
+    monkeypatch.setattr(
+        tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "attach_http_trace_headers",
+        lambda *_args: "trace-denied",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            tool_bridge_module.call_tool(
+                tool_bridge_module.ToolCall(tool="sample:get_records", arguments={}),
+                SimpleNamespace(headers={}),
+                Response(),
+                ctx=_fake_ctx(),
+            )
+        )
+
+    assert error.value.status_code == 403
+    assert error.value.detail == {
+        "error": "tool_permission_denied",
+        "tool": "sample:get_records",
+        "reason": "application_context_missing",
+        "retryable": False,
+    }
+
+
 def test_call_tool_rejects_read_intent_for_trusted_mutating_tool(monkeypatch) -> None:
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
@@ -1183,6 +1221,161 @@ def test_call_tool_syncs_dev_runtime_before_read_contract_preflight(monkeypatch,
     assert calls.count("update:research_orchestrator_skill:dev:False") == 1
     assert calls.count("run:research_orchestrator_skill:list_directions") == 2
     assert worker_thread_ids and all(thread_id != owner_thread_id for thread_id in worker_thread_ids)
+
+
+def test_dev_application_context_is_derived_from_unique_project_ownership(
+    tmp_path,
+) -> None:
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.policy.application import clear_application
+    from adaos.services.policy.caller import verified_caller
+
+    projects = tmp_path / "projects"
+    skills = tmp_path / "skills"
+    (projects / "mail_client").mkdir(parents=True)
+    (skills / "mail_provider").mkdir(parents=True)
+    (projects / "mail_client" / "project.yaml").write_text(
+        """
+id: mail_client
+components:
+  owned:
+    - ref: scenario:mail_client
+    - ref: skill:mail_provider
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: workspace.read
+      purpose: Read application records.
+    - id: providers.google.gmail
+      purpose: Use the connected Gmail account.
+  optional: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (skills / "mail_provider" / "skill.yaml").write_text(
+        """
+name: mail_provider
+version: 0.1.0
+capabilities:
+  - workspace.read
+  - providers.google.gmail
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    class _Paths:
+        def dev_projects_dir(self):
+            return projects
+
+        def dev_skills_dir(self):
+            return skills
+
+    body = tool_bridge_module.ToolCall(
+        tool="mail_provider:list_messages",
+        arguments={"webspace_id": "desktop-dev"},
+        dev=True,
+    )
+    ctx = SimpleNamespace(paths=_Paths())
+    actor = SubjectRef("user", "owner")
+    clear_application()
+    try:
+        with verified_caller(actor):
+            updated, access = asyncio.run(
+                tool_bridge_module._authorize_application_tool_call(
+                    body=body,
+                    request=SimpleNamespace(headers={}),
+                    ctx=ctx,
+                    skill_name="mail_provider",
+                    public_tool="list_messages",
+                    manager=object(),
+                    declared_side_effects="none",
+                    component_capabilities=(
+                        "workspace.read",
+                        "providers.google.gmail",
+                    ),
+                    application_contract={
+                        "permission": "providers.google.gmail",
+                        "capability": "providers.google.gmail",
+                    },
+                )
+            )
+        assert access is not None
+        verified = access["context"]
+        assert verified["application_id"] == "mail_client"
+        assert verified["runtime_source"] == "dev"
+        assert verified["subject_ref"] == "user:owner"
+        assert "decision" not in access
+        assert updated.context["_verified_application_access"] == verified
+    finally:
+        clear_application()
+
+
+def test_dev_application_context_rejects_undeclared_tool_permission(
+    tmp_path,
+) -> None:
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.policy.caller import verified_caller
+
+    projects = tmp_path / "projects"
+    skills = tmp_path / "skills"
+    (projects / "mail_client").mkdir(parents=True)
+    (skills / "mail_provider").mkdir(parents=True)
+    (projects / "mail_client" / "project.yaml").write_text(
+        """
+id: mail_client
+components:
+  owned:
+    - ref: skill:mail_provider
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: workspace.read
+      purpose: Read application records.
+  optional: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (skills / "mail_provider" / "skill.yaml").write_text(
+        "name: mail_provider\nversion: 0.1.0\ncapabilities: [workspace.read]\n",
+        encoding="utf-8",
+    )
+
+    class _Paths:
+        def dev_projects_dir(self):
+            return projects
+
+        def dev_skills_dir(self):
+            return skills
+
+    with verified_caller(SubjectRef("user", "owner")):
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(
+                tool_bridge_module._authorize_application_tool_call(
+                    body=tool_bridge_module.ToolCall(
+                        tool="mail_provider:list_messages", dev=True
+                    ),
+                    request=SimpleNamespace(headers={}),
+                    ctx=SimpleNamespace(paths=_Paths()),
+                    skill_name="mail_provider",
+                    public_tool="list_messages",
+                    manager=object(),
+                    declared_side_effects="none",
+                    component_capabilities=(
+                        "workspace.read",
+                        "providers.google.gmail",
+                    ),
+                    application_contract={
+                        "permission": "providers.google.gmail",
+                        "capability": "providers.google.gmail",
+                    },
+                )
+            )
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail["error"] == "dev_application_permission_not_declared"
+    assert excinfo.value.detail["technical_detail"]["undeclared_permissions"] == [
+        "providers.google.gmail"
+    ]
 
 
 def test_dev_runtime_sync_skips_source_older_than_active_marker(tmp_path) -> None:

@@ -24,6 +24,11 @@ def test_browser_feedback_scopes_primary_selection_and_layout_diagnostics() -> N
     assert 'ada-layout-region[data-region-role="collection"]' in script
     assert "region.closest('.desktop-grid') === grid" in script
     assert "const diagnosticRoot = activeModal || document" in script
+    assert "boundedToolFailureDiagnostic" in script
+    assert "target.pathname === '/api/tools/call'" in script
+    assert "request.postData()" in script
+    assert "response.text()" in script
+    assert "Promise.allSettled(responseDiagnosticTasks)" in script
 
 
 def test_browser_feedback_binds_runtime_source_and_evidence(

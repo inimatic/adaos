@@ -65,6 +65,52 @@ const pendingDataStates = new Set(['idle', 'loading', 'refreshing'])
 const nonAuthoritativeDataStates = new Set(['stale', 'unavailable', 'error'])
 const runtimeDataKinds = new Set(['skill', 'api', 'mcp', 'resourceQuery'])
 
+function boundedToolFailureDiagnostic(request, response, bodyText) {
+  let tool = null
+  try {
+    const payload = JSON.parse(request.postData() || '{}')
+    tool = typeof payload?.tool === 'string' ? payload.tool.slice(0, 256) : null
+  } catch {}
+  let body = null
+  try {
+    body = JSON.parse(bodyText)
+  } catch {
+    body = bodyText
+  }
+  const detail = body && typeof body === 'object' && 'detail' in body ? body.detail : body
+  const diagnostic = { tool }
+  if (typeof detail === 'string') {
+    diagnostic.detail = detail.slice(0, 2048)
+  } else if (detail && typeof detail === 'object') {
+    for (const key of ['error', 'reason', 'message', 'permission_id', 'application_id', 'retryable']) {
+      if (['string', 'boolean', 'number'].includes(typeof detail[key])) {
+        diagnostic[key] = typeof detail[key] === 'string'
+          ? detail[key].slice(0, 2048)
+          : detail[key]
+      }
+    }
+    if (typeof detail.detail === 'string') diagnostic.detail = detail.detail.slice(0, 2048)
+    if (typeof detail.technical_detail?.tool === 'string') {
+      diagnostic.technical_tool = detail.technical_detail.tool.slice(0, 256)
+    }
+  }
+  const headers = response.headers()
+  const trace = String(headers['x-adaos-trace'] || '').trim()
+  if (trace) diagnostic.trace_id = trace.slice(0, 256)
+  return diagnostic
+}
+
+function formatToolFailureDiagnostic(diagnostic) {
+  if (!diagnostic || typeof diagnostic !== 'object') return ''
+  const parts = []
+  for (const key of ['tool', 'error', 'reason', 'message', 'detail', 'trace_id']) {
+    if (diagnostic[key] !== null && diagnostic[key] !== undefined && diagnostic[key] !== '') {
+      parts.push(`${key}=${String(diagnostic[key])}`)
+    }
+  }
+  return parts.length ? ` [${parts.join(' ')}]` : ''
+}
+
 async function waitForAuthoritativeData(page, sample, checkpoint) {
   const settleTimeoutMs = Math.min(timeoutMs, checkpoint === 'initial' ? 30_000 : 12_000)
   try {
@@ -166,6 +212,7 @@ try {
       warnings: [],
     }
     report.samples.push(sample)
+    const responseDiagnosticTasks = []
     page.on('pageerror', error => sample.page_errors.push(String(error.message || error)))
     page.on('console', message => {
       if (message.type() === 'error') sample.console_errors.push(message.text())
@@ -173,11 +220,22 @@ try {
     page.on('response', response => {
       const request = response.request()
       if (response.status() < 400 || !['document', 'fetch', 'xhr'].includes(request.resourceType())) return
-      sample.request_failures.push({
+      const failure = {
         method: request.method(),
         status: response.status(),
         url: response.url(),
-      })
+      }
+      sample.request_failures.push(failure)
+      const target = new URL(response.url())
+      if (target.pathname === '/api/tools/call') {
+        responseDiagnosticTasks.push(
+          response.text()
+            .then(bodyText => {
+              failure.diagnostic = boundedToolFailureDiagnostic(request, response, bodyText)
+            })
+            .catch(() => {}),
+        )
+      }
     })
     page.on('requestfailed', request => {
       sample.request_failures.push({
@@ -577,6 +635,7 @@ try {
         await page.screenshot({ path: path.join(output, `${layout}-failure.png`), fullPage: true })
       } catch {}
     } finally {
+      await Promise.allSettled(responseDiagnosticTasks)
       await context.close()
     }
   }
@@ -624,7 +683,7 @@ for (const sample of report.samples) {
     } else {
       sample.hard_failures.push(
         failure.status
-          ? `HTTP ${failure.status} ${failure.method} ${failure.url}`
+          ? `HTTP ${failure.status} ${failure.method} ${failure.url}${formatToolFailureDiagnostic(failure.diagnostic)}`
           : `Request failed ${failure.method} ${failure.url}: ${failure.error || 'unknown error'}`,
       )
     }
