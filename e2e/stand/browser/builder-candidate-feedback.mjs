@@ -584,11 +584,29 @@ try {
   await browser.close()
 }
 
+function isOptionalLoopbackDiscoveryProbe(failure) {
+  if (failure.status !== 0) return false
+  const target = new URL(failure.url)
+  if (!['127.0.0.1', 'localhost'].includes(target.hostname)) return false
+  if (target.pathname === '/api/ping') return true
+  return target.pathname === '/api/node/status'
+    && target.searchParams.get('profile') === 'probe'
+    && ['8777', '8778'].includes(target.port)
+}
+
 for (const sample of report.samples) {
   for (const error of sample.page_errors) sample.hard_failures.push(`Page error: ${error}`)
+  let expectedRefusedConsoleErrors = sample.request_failures.filter(failure => (
+    isOptionalLoopbackDiscoveryProbe(failure)
+    && failure.error === 'net::ERR_CONNECTION_REFUSED'
+  )).length
   for (const error of sample.console_errors) {
     if (/^Failed to load resource: the server responded with a status of (401|404)/i.test(error)) {
       sample.warnings.push(`Browser bootstrap resource warning: ${error}`)
+    } else if (/^Failed to load resource: net::ERR_CONNECTION_REFUSED/i.test(error)
+      && expectedRefusedConsoleErrors > 0) {
+      expectedRefusedConsoleErrors -= 1
+      sample.warnings.push(`Expected local bootstrap probe: ${error}`)
     } else {
       sample.hard_failures.push(`Console error: ${error}`)
     }
@@ -600,9 +618,7 @@ for (const sample of report.samples) {
       && target.pathname === '/api/node/status'
       && target.searchParams.get('profile') === 'probe'
     const browserCancelledRequest = failure.status === 0 && failure.error === 'net::ERR_ABORTED'
-    const optionalLoopbackDiscoveryProbe = failure.status === 0
-      && target.pathname === '/api/ping'
-      && ['127.0.0.1', 'localhost'].includes(target.hostname)
+    const optionalLoopbackDiscoveryProbe = isOptionalLoopbackDiscoveryProbe(failure)
     if (expectedDevBootstrapMiss || expectedAuthProbe || browserCancelledRequest || optionalLoopbackDiscoveryProbe) {
       sample.warnings.push(`Expected local bootstrap probe: HTTP ${failure.status} ${failure.method} ${failure.url}`)
     } else {
