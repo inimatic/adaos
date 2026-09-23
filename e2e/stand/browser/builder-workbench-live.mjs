@@ -47,10 +47,9 @@ try {
       await page.waitForFunction(id => {
         const element = document.querySelector('[data-webui-widget-id="design-current-work"] ada-details-widget')
         const snapshot = element && window.ng?.getComponent(element)?.state?.getSnapshot()
-        return snapshot?.workbench?.object_id === id && snapshot.current?.phase
-          && snapshot.applicationTitle === snapshot.workbench.title
+        return snapshot?.selectedProjectId === id && snapshot.workflowActivePhase
+          && snapshot.applicationTitle === snapshot.selectedProjectTitle
       }, id, { timeout: 60000 })
-      await widget('design-current-work').getByText(/Этап|Stage/).first().waitFor()
     }
     const loaded = async (name, widgetId) => {
       await page.waitForFunction(({ id }) => {
@@ -83,10 +82,13 @@ try {
       await modal.waitFor({ state: 'hidden' })
     }
     try {
-      const initialResponse = page.waitForResponse(response => response.request().postData()?.includes(':get_workbench') && response.status() === 200, { timeout: 60000 })
       await page.goto('http://127.0.0.1:8100/?intent=webspace.open&zone=lo&subnet_id=sn_6acf0c01&webspace_id=desktop-dev&space_kind=development&expected_scenario_id=builder&try_local_hub=1', { waitUntil: 'domcontentloaded', timeout: 60000 })
       await widget('design-current-work').waitFor({ timeout: 60000 })
-      if ((await (await initialResponse).json()).ok !== true) throw new Error('Initial workbench read failed')
+      await page.waitForFunction(() => {
+        const element = document.querySelector('[data-webui-widget-id="design-current-work"] ada-details-widget')
+        const snapshot = element && window.ng?.getComponent(element)?.state?.getSnapshot()
+        return snapshot?.selectedProjectId && snapshot.workflowActivePhase
+      }, undefined, { timeout: 60000 })
       const selectedReceipt = process.env.ADAOS_E2E_SELECT_CREATED || process.env.ADAOS_E2E_CREATED_TEST
       if (selectedReceipt) {
         const selected = JSON.parse(selectedReceipt)
@@ -96,7 +98,10 @@ try {
         await waitForProjection(selected.id)
         await widget('design-workbench-header').getByText(selected.title, { exact: true }).first().waitFor()
       } else {
-        await waitForProjection('builder')
+        const selectedProject = await widget('design-current-work').locator('ada-details-widget')
+          .evaluate(element => window.ng?.getComponent(element)?.state?.getSnapshot()?.selectedProjectId)
+        await waitForProjection(selectedProject)
+        report.checks.push({ profile, check: 'selected_project_projection', passed: true, project: selectedProject })
       }
       report.captures.push({ profile, name: 'chat-source-diagnostic', value: await page.evaluate(() => {
         const container = document.querySelector('[data-webui-widget-id="design-conversation-side-task"]')

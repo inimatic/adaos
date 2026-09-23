@@ -1881,3 +1881,35 @@ turns, not a higher cache-hit percentage:
 This plan preserves the existing authority boundary: admission remains
 deterministic, browser/consumer evidence remains independent, and Development
 Tickets close only after exact Automation and Trial evidence.
+
+### 2026-09-23: Builder CBS Completion Beta
+
+The final Builder audit was performed as direct maintenance, not as an
+experiment in Builder-driven Core migration. It found that the current Builder
+scenario called `builder_skill.set_ui_revision_current` and addressed the
+Builder agent but did not declare `builder_skill` in either `depends` or
+`runtime.skills.required`. Both canonical scenario manifests now declare that
+runtime dependency. The full scenario, SDK-control-skill and Builder-skill
+test suites pass after the repair.
+
+The governed lifecycle then checkpointed the three owned components under
+`builder-beta-cbs-completion-20260923`. A preliminary `builder@0.2.178` release
+had already been made before the component checkpoint; immutable version
+ownership correctly rejected replacing it with the new closure. The exact
+post-checkpoint closure was therefore issued as `builder@0.2.179`, digest
+`sha256:828dfe3968f9b5477535ac51c94877103baa57b6c19ec839304073d85508e8a4`.
+Candidate `builder-0-2-179-73d85508e8a4` reached a healthy isolated Trial and
+was accepted as beta. Stable remains `0.2.167`.
+
+The first live review exposed stale assumptions in the E2E harness rather than
+a Builder product failure. The harness still used API port `8778`, waited for
+obsolete nested `workbench.object_id/current.phase` fields, assumed the selected
+project was always Builder, and required a desktop-only stage label in compact
+layout. It now uses port `8777`, current top-level selection/phase state, and
+reviews the actual selected project without mutating user state. The final
+1440x1000 and 390x844 run passed six checks with no page errors or failing HTTP
+responses. Its DEV source revision exactly matches the accepted Candidate's
+`sha256:950528a09ee1eccf20081da7b923ad9eb15b48fbb73c15560ffdc4b5cfa8a6ea`;
+the evidence is explicitly source-equivalent browser proof, not a claim that
+the isolated Trial was attached to the desktop. Client boundary/inventory
+checks and the development build also pass.

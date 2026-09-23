@@ -138,6 +138,41 @@ Webspace `desktop`, Application `adaos_drive`, runtime root `workspace`, and
 the selected revision. The wide and compact stable browser checks rendered 19
 widgets with no page or request failures.
 
+## Builder 0.2.179 beta qualification
+
+The 2026-09-23 completion audit found one real defect in the current Builder
+source: the scenario invoked `builder_skill.set_ui_revision_current` and used
+the `agent:builder_skill:builder` receiver without declaring `builder_skill` in
+both its package dependencies and required runtime skills. The maintained
+source was updated directly; teaching Builder to perform this Core-version
+adaptation remains outside this beta.
+
+The complete scenario, SDK-control-skill, and Builder-skill test suites pass
+with that dependency declared. Checkpoint
+`builder-beta-cbs-completion-20260923` produced scenario `0.2.96`,
+`builder_sdk_control_skill` `0.1.122`, and `builder_skill` `0.3.178`. The exact
+post-checkpoint ProjectRelease is `builder@0.2.179`, release digest
+`sha256:828dfe3968f9b5477535ac51c94877103baa57b6c19ec839304073d85508e8a4`,
+and source revision
+`sha256:950528a09ee1eccf20081da7b923ad9eb15b48fbb73c15560ffdc4b5cfa8a6ea`.
+An earlier pre-checkpoint `0.2.178` release was not overwritten or reused.
+
+Candidate `builder-0-2-179-73d85508e8a4` completed an isolated, healthy Trial
+with rollback available and was accepted as the exact beta Candidate. Builder
+Stable remains `0.2.167`; no Stable promotion was implied by beta acceptance.
+The live DEV browser review used the same source revision as the Candidate and
+passed three checks in each of the 1440x1000 and 390x844 profiles with no page
+errors or failing HTTP responses. This proves source-equivalent Builder UI
+behavior, not live Trial execution: the isolated Trial is intentionally not
+attached to the running desktop. Client boundaries cover 21 sources, the
+44-widget capability inventory is current, and the development client build
+passes.
+
+The Builder review harness now uses the canonical local API port `8777` and
+waits on current `selectedProjectId` and `workflowActivePhase` state instead of
+obsolete nested projection fields. Read-only review preserves the user's
+selected project rather than opening a picker and introducing a state race.
+
 ## Current migration boundary
 
 The beta does not teach Builder to migrate an Application across Core versions.

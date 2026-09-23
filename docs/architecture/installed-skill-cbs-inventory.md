@@ -17,7 +17,10 @@ upgrade overlay. It never mutates a skill.
 - Legacy leaf/UI components: **5**.
 - Installed skills with a newer development overlay: **18**.
 - Inventory digest:
-  `sha256:5c59d15543b638596d7c6f4eac65d0a282fc7335f87c2797be3cfbf76e167621`.
+  `sha256:edce1244f4eee4c0efa049686ee2625d086ab8409fe9f59875df3532ab82e1f0`.
+
+The digest was refreshed after the accepted Builder `0.2.179` beta checkpoint;
+the classification counts did not change.
 
 The digest describes this machine's snapshot, not a portable architecture
 artifact. Re-running the inventory after a skill installation or promotion is

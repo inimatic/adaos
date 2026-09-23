@@ -52,7 +52,7 @@ def main():
     load_dotenv()
     if os.getenv("ENV_TYPE") != "dev":
         parser.error("Requires ENV_TYPE=dev")
-    hub = "http://127.0.0.1:8778"
+    hub = "http://127.0.0.1:8777"
     env = {**os.environ, "ADAOS_E2E_HUB_URL": hub,
            "ADAOS_E2E_HUB_TOKEN": resolve_control_token(base_url=hub),
            "ADAOS_E2E_OUTPUT": str(args.output.resolve())}

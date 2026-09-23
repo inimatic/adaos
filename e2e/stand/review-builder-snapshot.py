@@ -129,7 +129,7 @@ def main():
         raise ValueError("Pinned snapshot materialization failed")
     receipt["preview_webspace_id"] = selected["preview_webspace_id"]
     _write_json(output / "pin.json", receipt)
-    hub = "http://127.0.0.1:8778"
+    hub = "http://127.0.0.1:8777"
     env = {**os.environ, "ADAOS_E2E_SCENARIO_ID": args.scenario,
            "ADAOS_E2E_WEBSPACE_ID": selected["preview_webspace_id"],
            "ADAOS_E2E_SUBNET_ID": args.subnet, "ADAOS_E2E_LOCALE": args.locale,
