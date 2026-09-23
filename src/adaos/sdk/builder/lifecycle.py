@@ -458,6 +458,34 @@ def decide_trial(
             candidate_id,
             str(decided_candidate.get("release_digest") or "").strip(),
         )
+    # Candidate decision is authoritative and can commit before its Builder
+    # projection.  A later Publication failure moves the Change to
+    # reconciliation_required while retaining that accepted decision.  Do not
+    # try to replay accept_trial from that state: resume the explicit
+    # reconciliation/publication path instead.
+    projected = workflow.get_state(object_type, object_id)
+    projected_delivery = _mapping(projected.get("delivery"))
+    projected_publication = _mapping(projected.get("publication"))
+    decision_already_projected = (
+        accepted
+        and _candidate_identity(projected) == (candidate_id, candidate_digest)
+        and (
+            str(projected_delivery.get("status") or "").strip()
+            in {"accepted", "published"}
+            or (
+                str(projected_delivery.get("status") or "").strip() == "unknown"
+                and str(projected_publication.get("status") or "").strip()
+                in {"unknown", "ready", "publishing", "published"}
+            )
+        )
+    )
+    if decision_already_projected:
+        return {
+            **dict(decided),
+            "workflow": projected,
+            "local_compensation": local_compensation,
+            "duplicate": True,
+        }
     transitioned = workflow.transition(
         object_type,
         object_id,
@@ -517,6 +545,12 @@ def publish_candidate(
         and str(delivery_state.get("status") or "").strip() == "unknown"
         and str(delivery_state.get("candidate_id") or "").strip() == candidate_id
     ):
+        # Reconciliation is repeatable after each distinct unknown
+        # Publication attempt.  Scope its idempotency key to the current
+        # workflow generation so an older successful reconciliation cannot be
+        # replayed after a later attempt has returned to
+        # reconciliation_required.
+        reconciliation_generation = int(state.get("generation") or 0)
         reconciled = workflow.transition(
             object_type,
             object_id,
@@ -525,7 +559,9 @@ def publish_candidate(
             metadata={
                 "evidence_refs": [f"candidate:{candidate_id}:idempotent-promotion-resume"],
                 "run_id": f"candidate:{candidate_id}:reconcile-publication",
-                "idempotency_key": f"{idempotency_key}:reconcile",
+                "idempotency_key": (
+                    f"{idempotency_key}:reconcile:{reconciliation_generation}"
+                ),
             },
         )
         reconciled_workflow = _mapping(reconciled.get("workflow"))

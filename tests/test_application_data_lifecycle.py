@@ -1,4 +1,5 @@
 from contextlib import closing
+import json
 import sqlite3
 
 import pytest
@@ -32,6 +33,32 @@ def manifest(number):
 
 def blob_manifest(number):
     return {**manifest(number), "capabilities": ["storage.relational", "storage.blob"]}
+
+
+def skill_memory_manifest():
+    return {
+        "events": {"subscribe": ["sample.changed"]},
+        "lifecycle": {"drain": "drain_runtime", "rehydrate": "rehydrate"},
+        "tools": [
+            {"name": "drain_runtime", "entry": "handlers.main:drain_runtime"},
+            {"name": "rehydrate", "entry": "handlers.main:rehydrate"},
+        ],
+        "memory_budget": {
+            "caches": [
+                {
+                    "name": "sample.state",
+                    "storage": "skill_memory",
+                    "max_items": 8,
+                    "cleanup_hook": "reset_state",
+                }
+            ]
+        },
+        "data_lifecycle": {
+            "schema": "adaos.skill.data_lifecycle.v1",
+            "execution": "native_tools",
+            "databases": [],
+        },
+    }
 
 
 def blob(path, payload):
@@ -237,6 +264,69 @@ def test_stateless_event_subscriber_with_declared_drain_is_admitted(tmp_path):
 
     assert result["completed"] is True
     assert result["runtime_selection"]["source"] == "local_trial"
+
+
+def test_declared_core_skill_memory_is_preserved_across_beta_acceptance(tmp_path):
+    state = tmp_path / "state"
+    stable = tmp_path / "workspace/data"
+    beta = tmp_path / "beta/data"
+    memory = stable / "db/skill_env.json"
+    memory.parent.mkdir(parents=True)
+    memory.write_text(json.dumps({"sample.state": {"revision": 1}}), encoding="utf-8")
+    channel = ApplicationRuntimeChannel(state, "sample")
+    channel.select(
+        RuntimeSelection(
+            webspace_id="desktop",
+            application_id="sample",
+            source="stable_installation",
+            release_digest=DIGEST,
+            runtime_root_ref="workspace",
+            revision=1,
+        ),
+        expected_revision=0,
+    )
+    declaration = skill_memory_manifest()
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=state,
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate-memory",
+        release_digest="sha256:" + "1" * 64,
+        stable_digest=DIGEST,
+        components=(
+            OwnedDataComponent(
+                "skill:worker",
+                stable,
+                beta,
+                stable,
+                declaration,
+                declaration,
+            ),
+        ),
+    )
+
+    prepared = lifecycle.prepare_beta(
+        webspace_id="desktop",
+        activate=lambda _key: {"ok": True},
+    )
+    assert prepared["completed"] is True
+    assert json.loads((beta / "db/skill_env.json").read_text(encoding="utf-8")) == {
+        "sample.state": {"revision": 1}
+    }
+    (beta / "db/skill_env.json").write_text(
+        json.dumps({"sample.state": {"revision": 2, "selected": "beta"}}),
+        encoding="utf-8",
+    )
+
+    accepted = lifecycle.accept_beta(
+        webspace_id="desktop",
+        publish=lambda _key: {"ok": True},
+    )
+
+    assert accepted["completed"] is True
+    assert json.loads(memory.read_text(encoding="utf-8")) == {
+        "sample.state": {"revision": 2, "selected": "beta"}
+    }
 
 
 @pytest.mark.parametrize(

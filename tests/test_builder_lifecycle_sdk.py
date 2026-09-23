@@ -533,6 +533,50 @@ def test_publish_candidate_resumes_external_promotion_without_restarting(monkeyp
     assert result["workflow"]["governed"]["state"] == "publish"
 
 
+def test_decide_trial_does_not_replay_accept_after_unknown_publication(monkeypatch) -> None:
+    digest = "sha256:" + "d" * 64
+    state = {
+        "delivery": {
+            "status": "unknown",
+            "candidate_id": "candidate-1",
+            "package_digest": digest,
+        },
+        "publication": {"status": "unknown", "error": "activation interrupted"},
+        "governed": {"state": "reconciliation_required"},
+    }
+    transitions: list[str] = []
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: state)
+    monkeypatch.setattr(
+        lifecycle.workflow,
+        "transition",
+        lambda *_args, **_kwargs: transitions.append("unexpected"),
+    )
+    monkeypatch.setattr(
+        lifecycle.projects,
+        "decide_candidate",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "candidate": {
+                "candidate_id": "candidate-1",
+                "status": "accepted",
+                "package_digest": digest,
+            },
+        },
+    )
+
+    result = lifecycle.decide_trial(
+        "scenario",
+        "recipes",
+        accepted=True,
+        actor="user:test",
+        idempotency_key="accept-1",
+    )
+
+    assert result["duplicate"] is True
+    assert result["workflow"] is state
+    assert transitions == []
+
+
 def test_publish_candidate_reconciles_unknown_promotion_before_resuming(monkeypatch) -> None:
     state = {
         "generation": 11,
@@ -576,7 +620,7 @@ def test_publish_candidate_reconciles_unknown_promotion_before_resuming(monkeypa
         "publication_started",
         "publish",
     ]
-    assert transitions[0][1]["idempotency_key"] == "publish-1:reconcile"
+    assert transitions[0][1]["idempotency_key"] == "publish-1:reconcile:11"
     assert transitions[0][1]["evidence_refs"] == [
         "candidate:candidate-1:idempotent-promotion-resume"
     ]

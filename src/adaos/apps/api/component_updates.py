@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
+from adaos.services.applications.runtime_channel import RuntimeChannelConflict
 from adaos.services.component_updates import ComponentUpdateService
 
 
@@ -105,5 +106,5 @@ def accept_component_trial(notice_id: str, body: ComponentTrialAcceptRequest,
         return service.accept_local_trial(notice_id, candidate_id=body.candidate_id,
             candidate_digest=body.candidate_digest, webspace_id=body.webspace_id,
             actor="user:" + current_user_id())
-    except (ValueError, FileNotFoundError) as exc:
+    except (ValueError, FileNotFoundError, RuntimeChannelConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

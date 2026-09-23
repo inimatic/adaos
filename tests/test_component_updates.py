@@ -274,6 +274,38 @@ def test_local_trial_api_requires_explicit_confirmation(monkeypatch):
     assert calls[0][1]["actor"] == "user:owner"
 
 
+def test_local_trial_api_reports_runtime_conflict_without_server_error(monkeypatch):
+    from types import SimpleNamespace
+
+    from adaos.services.applications.runtime_channel import RuntimeChannelConflict
+    from adaos.services import personalization_runtime
+
+    service = SimpleNamespace(
+        accept_local_trial=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeChannelConflict("runtime remains fenced")
+        )
+    )
+    monkeypatch.setattr(personalization_runtime, "current_user_id", lambda: "owner")
+    app = FastAPI()
+    app.include_router(updates_api.router, prefix="/api/component-updates")
+    app.dependency_overrides[updates_api._get_service] = lambda: service
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/component-updates/test/accept-trial",
+        json={
+            "candidate_id": "candidate",
+            "candidate_digest": "digest",
+            "webspace_id": "desktop",
+            "confirmed": True,
+        },
+        headers={"X-AdaOS-Token": "dev-local-token"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "runtime remains fenced"}
+
+
 def test_local_trial_acceptance_uses_pinned_runtime_selection(tmp_path, monkeypatch):
     from adaos.sdk.builder import applications
     from adaos.services.applications import store as stores

@@ -19,7 +19,7 @@ import sqlite3
 
 from adaos.domain.application import RuntimeSelection
 from adaos.domain.relational_storage import RelationalMigration
-from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json, mutation_lock
 from .configuration import ApplicationConfigurationStore, ConfigurationConflict, _digest
 from .blob_data_transition import BlobDataTransition
 from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
@@ -35,6 +35,91 @@ class OwnedDataComponent:
     target_root: Path
     stable_manifest: Mapping[str, Any]
     target_manifest: Mapping[str, Any]
+
+
+_SKILL_MEMORY_PATH = "db/skill_env.json"
+_SKILL_MEMORY_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _uses_skill_memory(manifest: Mapping[str, Any]) -> bool:
+    budget = manifest.get("memory_budget")
+    caches = budget.get("caches") if isinstance(budget, Mapping) else None
+    return bool(
+        isinstance(caches, list)
+        and any(
+            isinstance(item, Mapping)
+            and str(item.get("storage") or "").strip() == "skill_memory"
+            for item in caches
+        )
+    )
+
+
+def _bounded_json_bytes(path: Path) -> tuple[bytes, str]:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > _SKILL_MEMORY_MAX_BYTES:
+        raise ValueError("Core skill memory must be one bounded regular JSON file")
+    payload = path.read_bytes()
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Core skill memory must contain valid UTF-8 JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError("Core skill memory must contain a JSON object")
+    return payload, "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+class _SkillMemoryTransition:
+    """Checksum-pinned transfer for Core's bounded skill-memory envelope."""
+
+    def __init__(self, private_root: Path):
+        self.root = private_root.resolve()
+
+    def _path(self, path: Path) -> Path:
+        absolute = path.absolute()
+        resolved = path.resolve()
+        if absolute != resolved or not resolved.is_relative_to(self.root) or resolved == self.root:
+            raise ValueError("Skill memory path escaped its private owner root or used a link")
+        return resolved
+
+    def snapshot(self, source: Path, destination: Path, *, operation_key: str) -> dict[str, Any]:
+        source, destination = self._path(source), self._path(destination)
+        if source == destination or not operation_key or len(operation_key) > 256:
+            raise ValueError("Skill memory snapshot requires distinct paths and a bounded operation key")
+        identity = {
+            "kind": "core_skill_memory_snapshot",
+            "operation_key": operation_key,
+            "source": str(source.relative_to(self.root)),
+        }
+        receipt_path = destination.with_suffix(destination.suffix + ".receipt.json")
+        with mutation_lock(receipt_path.with_suffix(".lock")):
+            if receipt_path.is_file():
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                _payload, digest = _bounded_json_bytes(destination)
+                if receipt.get("identity") != identity or receipt.get("digest") != digest:
+                    raise ValueError("Retained skill-memory staging evidence changed")
+                return receipt
+            if destination.exists():
+                raise ValueError("Unrecognized skill-memory staging file requires explicit recovery")
+            payload, digest = _bounded_json_bytes(source)
+            atomic_write_bytes(destination, payload)
+            receipt = {
+                "ok": True,
+                "identity": identity,
+                "digest": digest,
+                "bytes": len(payload),
+            }
+            atomic_write_json(receipt_path, receipt)
+            return receipt
+
+    def install(self, staged: Path, target: Path, *, staged_digest: str) -> dict[str, Any]:
+        staged, target = self._path(staged), self._path(target)
+        payload, digest = _bounded_json_bytes(staged)
+        if staged == target or digest != staged_digest:
+            raise ValueError("Staged skill-memory identity mismatch")
+        atomic_write_bytes(target, payload)
+        _installed, installed_digest = _bounded_json_bytes(target)
+        if installed_digest != digest:
+            raise ValueError("Installed skill-memory identity mismatch")
+        return {"ok": True, "staged_digest": digest}
 
 
 def automation_data_contract() -> dict[str, Any]:
@@ -161,6 +246,7 @@ def require_native_tools(manifest: Mapping[str, Any]) -> None:
         return
 
     drain_tool = str(lifecycle.get("drain") or manifest.get("drain") or "").strip()
+    rehydrate_tool = str(lifecycle.get("rehydrate") or "").strip()
     declaration = manifest.get("data_lifecycle")
     declared_databases_value = (
         declaration.get("databases") if isinstance(declaration, Mapping) else None
@@ -188,17 +274,27 @@ def require_native_tools(manifest: Mapping[str, Any]) -> None:
         and "storage.blob" not in capabilities
         and drain_tool
         and drain_tool in _declared_tool_names(manifest)
+        and rehydrate_tool
+        and rehydrate_tool in _declared_tool_names(manifest)
     )
     if not stateless_native_subscriber:
         raise ValueError("Background/lifecycle execution requires a verified owner drain adapter before data cutover")
 
 
-def inventory(root: Path | None, declared: Mapping[str, Any], *, blobs: BlobDataTransition | None = None) -> None:
+def inventory(
+    root: Path | None,
+    declared: Mapping[str, Any],
+    *,
+    blobs: BlobDataTransition | None = None,
+    skill_memory: bool = False,
+) -> None:
     if root is None or not root.exists():
         return
     if root.absolute() != root.resolve():
         raise ValueError("Linked runtime data requires an explicit storage adapter")
     permitted = set(declared)
+    if skill_memory:
+        permitted.add(_SKILL_MEMORY_PATH)
     for name in declared:
         permitted.update(name + suffix for suffix in ("-wal", "-shm", "-journal"))
     for path in root.rglob("*"):
@@ -207,6 +303,8 @@ def inventory(root: Path | None, declared: Mapping[str, Any], *, blobs: BlobData
         relative = path.relative_to(root).as_posix()
         if path.is_file() and relative not in permitted and not (blobs is not None and relative.startswith("files/")):
             raise ValueError("Undeclared runtime data requires a data/configuration/credential adapter")
+        if path.is_file() and relative == _SKILL_MEMORY_PATH:
+            _bounded_json_bytes(path)
     if blobs is not None:
         blobs.inventory(root / "files")
 
@@ -231,12 +329,14 @@ class LocalApplicationDataLifecycle:
         self.components = components
         self.channel = ApplicationRuntimeChannel(self.state, application_id)
         self.data = SQLiteDataTransition(self.private)
+        self.skill_memory = _SkillMemoryTransition(self.private)
         self.blobs = BlobDataTransition(self.private)
         key = hashlib.sha256(json.dumps([application_id, candidate_id, release_digest]).encode()).hexdigest()
         self.recovery = self.private / "recovery/applications" / key
         self.contracts = {}
         self.blob_contracts = {}
         self.stable_blob_contracts = {}
+        self.skill_memory_contracts = {}
         owned_roots = []
         for component in components:
             if not component.component_ref.startswith("skill:") or component.component_ref in self.contracts:
@@ -267,6 +367,11 @@ class LocalApplicationDataLifecycle:
                 raise ValueError("Removing storage.blob requires an explicit blob migration contract")
             self.stable_blob_contracts[component.component_ref] = stable_blobs
             self.blob_contracts[component.component_ref] = target_blobs
+            stable_memory = _uses_skill_memory(component.stable_manifest)
+            target_memory = _uses_skill_memory(component.target_manifest)
+            if stable_memory and not target_memory:
+                raise ValueError("Removing Core skill memory requires an explicit state migration contract")
+            self.skill_memory_contracts[component.component_ref] = target_memory
 
     def _root(self, component, name):
         key = hashlib.sha256(component.component_ref.encode()).hexdigest()
@@ -301,6 +406,20 @@ class LocalApplicationDataLifecycle:
                 raise RuntimeChannelConflict("Target blob data already exists without recovery provenance; refusing to overwrite")
             atomic_write_json(marker, intent)
         self.blobs.install(staged, target, staged_digest=digest)
+
+    def _install_skill_memory_new(self, component, mode, staged, digest, target):
+        marker = self._root(component, mode + "_skill_memory_install") / "skill_env.json"
+        intent = {"digest": digest, "target": str(target)}
+        if marker.exists():
+            if json.loads(marker.read_text(encoding="utf-8")) != intent:
+                raise RuntimeChannelConflict("Retained skill-memory installation intent changed")
+        else:
+            if target.exists():
+                raise RuntimeChannelConflict(
+                    "Target skill memory already exists without recovery provenance; refusing to overwrite"
+                )
+            atomic_write_json(marker, intent)
+        self.skill_memory.install(staged, target, staged_digest=digest)
 
     def _run(self, mode: str, webspace_id: str, steps, *, allow_beta_data_reset=False):
         path = self.recovery / f"{mode}.intent.json"
@@ -342,8 +461,9 @@ class LocalApplicationDataLifecycle:
             for component in self.components:
                 databases = self.contracts[component.component_ref]
                 blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
-                inventory(component.stable_root, databases, blobs=blob_adapter)
-                inventory(component.beta_root, databases, blobs=blob_adapter)
+                memory_adapter = self.skill_memory_contracts[component.component_ref]
+                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter)
+                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter)
                 for name, migrations in databases.items():
                     source = component.stable_root / name if component.stable_root else None
                     base = self._root(component, "stable") / name
@@ -363,6 +483,20 @@ class LocalApplicationDataLifecycle:
                     staged = self._root(component, "stable_blobs") / "files"
                     snapshot = self.blobs.snapshot(source, staged, operation_key=key + ":base:files")
                     self._install_blobs_new(component, "beta", staged, snapshot["digest"], component.beta_root / "files")
+                if memory_adapter:
+                    source = component.stable_root / _SKILL_MEMORY_PATH if component.stable_root else None
+                    if source is not None and source.is_file():
+                        staged = self._root(component, "stable_skill_memory") / "skill_env.json"
+                        snapshot = self.skill_memory.snapshot(
+                            source, staged, operation_key=key + ":base:skill_memory"
+                        )
+                        self._install_skill_memory_new(
+                            component,
+                            "beta",
+                            staged,
+                            snapshot["digest"],
+                            component.beta_root / _SKILL_MEMORY_PATH,
+                        )
             return {"ok": True, "mode": "stable_snapshot_forward", "contract_digest": self._contract()}
 
         def configure(_key):
@@ -396,9 +530,10 @@ class LocalApplicationDataLifecycle:
             for component in self.components:
                 databases = self.contracts[component.component_ref]
                 blob_adapter = self.blobs if self.blob_contracts[component.component_ref] else None
-                inventory(component.beta_root, databases, blobs=blob_adapter)
-                inventory(component.stable_root, databases, blobs=blob_adapter)
-                inventory(component.target_root, databases, blobs=blob_adapter)
+                memory_adapter = self.skill_memory_contracts[component.component_ref]
+                inventory(component.beta_root, databases, blobs=blob_adapter, skill_memory=memory_adapter)
+                inventory(component.stable_root, databases, blobs=blob_adapter, skill_memory=memory_adapter)
+                inventory(component.target_root, databases, blobs=blob_adapter, skill_memory=memory_adapter)
                 for name in databases:
                     base = self._root(component, "stable") / name
                     if component.stable_root and (component.stable_root / name).exists():
@@ -439,6 +574,40 @@ class LocalApplicationDataLifecycle:
                         self.blobs.install(accepted, target, staged_digest=snapshot["digest"])
                     else:
                         self._install_blobs_new(component, "stable", accepted, snapshot["digest"], target)
+                if memory_adapter:
+                    source = component.beta_root / _SKILL_MEMORY_PATH
+                    stable_source = (
+                        component.stable_root / _SKILL_MEMORY_PATH
+                        if component.stable_root is not None
+                        else None
+                    )
+                    base = self._root(component, "stable_skill_memory") / "skill_env.json"
+                    base_receipt = base.with_suffix(base.suffix + ".receipt.json")
+                    if stable_source is not None and stable_source.is_file():
+                        if not base_receipt.is_file():
+                            raise RuntimeChannelConflict("Stable skill-memory snapshot evidence is missing")
+                        _value, current_digest = _bounded_json_bytes(stable_source)
+                        expected_digest = json.loads(base_receipt.read_text(encoding="utf-8"))["digest"]
+                        if current_digest != expected_digest:
+                            raise RuntimeChannelConflict(
+                                "Stable skill memory changed while Beta was selected; explicit reconciliation required"
+                            )
+                    if source.is_file():
+                        accepted = self._root(component, "accepted_skill_memory") / "skill_env.json"
+                        snapshot = self.skill_memory.snapshot(
+                            source, accepted, operation_key=key + ":accepted:skill_memory"
+                        )
+                        target = component.target_root / _SKILL_MEMORY_PATH
+                        if component.target_root == component.stable_root:
+                            self.skill_memory.install(accepted, target, staged_digest=snapshot["digest"])
+                        else:
+                            self._install_skill_memory_new(
+                                component, "stable", accepted, snapshot["digest"], target
+                            )
+                    elif stable_source is not None and stable_source.is_file():
+                        raise RuntimeChannelConflict(
+                            "Beta removed Core skill memory without an explicit state migration contract"
+                        )
             return {"ok": True, "keep_data": True}
 
         def configure(_key):

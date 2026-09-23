@@ -16,6 +16,44 @@ from .runtime_channel import ApplicationRuntimeChannel
 from .store import ApplicationStore
 
 
+def _invoke_trial_lifecycle(runtime, lifecycle, hook: str, *, reason: str) -> dict:
+    """Invoke one exact immutable Trial lifecycle hook without exposing state."""
+
+    receipts = []
+    for component in lifecycle.components:
+        hooks = component.target_manifest.get("lifecycle")
+        hooks = hooks if isinstance(hooks, dict) else {}
+        tool = str(hooks.get(hook) or "").strip()
+        if not tool:
+            continue
+        skill = component.component_ref.split(":", 1)[1]
+        manager = runtime.ready_manager(skill)
+        result = manager.invoke_active_runtime_lifecycle_hook(
+            skill,
+            hook_key=hook,
+            reason=reason,
+            event_type="application.runtime_transition",
+            state=f"application_{hook}",
+        )
+        hook_result = result.get("hook_result") if isinstance(result, dict) else None
+        if (
+            not isinstance(result, dict)
+            or result.get("ok") is not True
+            or result.get("skipped") is True
+            or not isinstance(hook_result, dict)
+            or hook_result.get("ok") is not True
+        ):
+            raise ValueError(f"Trial {hook} hook did not return a verified receipt")
+        receipts.append(
+            {
+                "component_ref": component.component_ref,
+                "tool": tool,
+                "ok": True,
+            }
+        )
+    return {"ok": True, "hook": hook, "components": receipts}
+
+
 def bind_local_data_lifecycle(owner, runtime, release):
     """Caller must admit the local publisher before preparing this exact Candidate.
 
@@ -271,6 +309,24 @@ def promote_with_local_data(owner, candidate_id, promote):
         atomic_write_json(result_path, result)
         return {"ok": True, "release_digest": runtime.release_digest, "installation_revision": installation.revision}
 
-    transition = lifecycle.accept_beta(webspace_id=activation["target"]["webspace_id"], publish=publish)
+    drained = _invoke_trial_lifecycle(
+        runtime,
+        lifecycle,
+        "drain",
+        reason="application_stable_cutover",
+    )
+    try:
+        transition = lifecycle.accept_beta(
+            webspace_id=activation["target"]["webspace_id"],
+            publish=publish,
+        )
+    except BaseException:
+        _invoke_trial_lifecycle(
+            runtime,
+            lifecycle,
+            "rehydrate",
+            reason="application_stable_cutover_failed",
+        )
+        raise
     result = json.loads(result_path.read_text(encoding="utf-8"))
-    return {**result, "data_transition": transition}
+    return {**result, "data_transition": transition, "drain": drained}

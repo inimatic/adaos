@@ -4889,6 +4889,34 @@ class SkillManager:
         entry["skipped"] = bool(hook_result.get("skipped", False))
         return entry
 
+    def invoke_active_runtime_lifecycle_hook(
+        self,
+        name: str,
+        *,
+        hook_key: str,
+        reason: str,
+        event_type: str,
+        state: str,
+    ) -> dict[str, Any]:
+        """Run an owner lifecycle hook even while normal Application work is fenced."""
+
+        if hook_key not in {
+            "drain",
+            "dispose",
+            "before_deactivate",
+            "persist_before_switch",
+            "rehydrate",
+            "after_activate",
+        }:
+            raise ValueError("Unsupported active runtime lifecycle hook")
+        return self._invoke_active_runtime_lifecycle_hook(
+            name,
+            hook_key=hook_key,
+            reason=reason,
+            event_type=event_type,
+            state=state,
+        )
+
     def dispose_runtime_process_resources(
         self,
         name: str,
