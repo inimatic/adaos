@@ -15,7 +15,12 @@ from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.ui_capabilities import evaluate_ui_request
 
 from .workflow import BuilderWorkflowError
-from .prototype_stage import prototype_automation_requirements, prototype_builder_metadata
+from .cbs_intent import validate_cbs_intent
+from .prototype_stage import (
+    prototype_automation_requirements,
+    prototype_builder_metadata,
+    prototype_cbs_intent,
+)
 
 
 PROTOTYPE_ACCEPTANCE_SCHEMA = "adaos.builder.prototype_acceptance.v1"
@@ -156,6 +161,9 @@ def build_prototype_acceptance(
         )
     checks = _checks(behavior_checks, required=_required_behavior_ids(evaluation))
     visuals = _visual_checks(visual_checks)
+    cbs_intent = prototype_cbs_intent(webui)
+    if cbs_intent is not None:
+        cbs_intent = validate_cbs_intent(cbs_intent)
     timestamp = str(accepted_at or datetime.now(timezone.utc).isoformat()).strip()
     payload: dict[str, Any] = {
         "schema": PROTOTYPE_ACCEPTANCE_SCHEMA,
@@ -177,6 +185,8 @@ def build_prototype_acceptance(
         "visual_checks": visuals,
         "accepted_at": timestamp,
     }
+    if cbs_intent is not None:
+        payload["cbs_intent"] = cbs_intent
     payload["digest"] = canonical_payload_digest(payload)
     _validate(
         "builder.prototype_acceptance.v1.schema.json",
@@ -195,6 +205,7 @@ def admit_prototype_acceptance(
     expected_webui_digest: str,
     expected_prototype_resources: Sequence[Mapping[str, Any]] | None = None,
     expected_automation_requirements: Sequence[Mapping[str, Any]] | None = None,
+    expected_cbs_intent: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify immutable acceptance identity before crossing the Automation gate."""
 
@@ -233,6 +244,12 @@ def admit_prototype_acceptance(
         acceptance.get("automation_requirements") or []
     ) != canonical_payload_digest(list(expected_automation_requirements)):
         raise BuilderWorkflowError("prototype acceptance lost or changed automation requirements")
+    if expected_cbs_intent is not None:
+        actual_intent = acceptance.get("cbs_intent")
+        if not isinstance(actual_intent, Mapping) or canonical_payload_digest(
+            validate_cbs_intent(actual_intent)
+        ) != canonical_payload_digest(validate_cbs_intent(expected_cbs_intent)):
+            raise BuilderWorkflowError("prototype acceptance lost or changed CBS intent")
     return acceptance
 
 

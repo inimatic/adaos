@@ -2,7 +2,7 @@
 
 Status: cross-roadmap delivery sequence.
 
-Last reviewed: 2026-09-22.
+Last reviewed: 2026-09-23.
 
 This roadmap coordinates the existing Application, Builder, capability,
 package, access, state, and activation architectures into one linear product
@@ -231,7 +231,7 @@ Current integration assessment:
 | --- | --- | --- |
 | `ASC0` | partial | broader compatibility inventory and semantic lint |
 | `ASC1` | specified | portable schemas, registry and package delivery metadata |
-| `ASC2` | partial | requirement ABI, semantic discovery and compiler lowering |
+| `ASC2` | partial | compact explicit requirement lowering is proven; discovery, state ports and replay remain |
 | `ASC3` | specified | local identities, resolver, admitted resolution and read projection |
 | `ASC4` | specified | resolution plan, lock/access/placement integration and fault proof |
 | `ASC5` | not started | uncontaminated full semantic Application creation proof |
@@ -369,6 +369,17 @@ direct engineering mutation after the reviewed task starts.
 **Exit proof:** one evidence bundle links messages, requirements, semantic
 revision, contracts, Prototype acceptance, code, packages, resolution, plan,
 Trial, browser evidence, and final Workspace lock.
+
+Current proof checkpoint (2026-09-23): Gmail Mail Client revision `007` was
+created from the original Builder prompt, validated in wide and compact
+layouts, exercised for search, filters, selection, row actions, compose/cancel,
+connection transition and credential non-disclosure, and accepted as the
+stable Prototype. Its acceptance pins compact package-neutral CBS intent for
+`capability:mail.messages.manage@^1.0.0`; compiler `1.1.0` expands that intent
+into canonical requirements and attributes human versus generated material in
+telemetry. Automation, provider delivery, Trial, permissions/setup review,
+Beta/workspace activation and Stable promotion are still open, so `ASC5`
+remains incomplete.
 
 ### ASC6. Installed Application Evolution
 

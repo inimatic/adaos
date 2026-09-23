@@ -130,6 +130,51 @@ def test_compiler_preserves_semantic_identity_and_separates_simulation_state() -
     serialized = str(first)
     assert "package" not in serialized
     assert "binding-definition:" not in serialized
+    assert first["authoring_telemetry"] == {
+        "human_authored_requirements": 0,
+        "builder_inferred_requirements": 0,
+        "compiler_generated_requirements": 2,
+    }
+
+
+def test_compiler_expands_compact_package_neutral_cbs_intent() -> None:
+    acceptance = _acceptance(application_ref="scenario:gmail_mail_client")
+    acceptance["cbs_intent"] = {
+        "schema": "adaos.builder.cbs_intent.v1",
+        "requirements": [
+            {
+                "id": "mail",
+                "capability_ref": "capability:mail.messages.manage",
+                "contract_range": "^1.0.0",
+                "origin": "human_explicit",
+                "required_authorities": ["mail.messages.read", "mail.messages.modify"],
+            }
+        ],
+    }
+    acceptance["digest"] = canonical_payload_digest(
+        {key: value for key, value in acceptance.items() if key != "digest"}
+    )
+
+    compilation = compile_prototype_cbs(acceptance)
+
+    mail = next(
+        item
+        for item in compilation["requirements"]
+        if item["capability_ref"] == "capability:mail.messages.manage"
+    )
+    assert mail["requirement_ref"] == "requirement:scenario.gmail_mail_client.mail"
+    assert mail["contract_range"] == "^1.0.0"
+    assert mail["policy_constraints"]["required_authorities"] == [
+        "mail.messages.read",
+        "mail.messages.modify",
+    ]
+    assert compilation["authoring_telemetry"] == {
+        "human_authored_requirements": 1,
+        "builder_inferred_requirements": 0,
+        "compiler_generated_requirements": 2,
+    }
+    assert "googleapis" not in str(mail).lower()
+    assert "package" not in str(mail).lower()
 
 
 def test_compiler_rejects_tampered_acceptance() -> None:

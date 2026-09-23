@@ -244,6 +244,30 @@ viability, Trial, and exact-activation gates.
 Builder must not persist package names, skill IDs, physical entry points,
 storage locators, endpoints, or credentials into the semantic Application.
 
+### Compact CBS authoring and compilation
+
+Builder now has a bounded authoring envelope for explicit semantic capability
+requirements. `adaos.builder.cbs_intent.v1` is stored under
+`pageSchema.meta.builder.cbs_intent`, pinned into Prototype acceptance, and
+expanded by compiler `1.1.0` into canonical `ApplicationRequirement` records.
+The compact record contains only a stable requirement id, `capability:` ref,
+contract range, authoring origin, and optional semantic policy/evidence
+constraints. It cannot name a package, skill, entry point, endpoint, account,
+or credential.
+
+The compiler records separate counts for human-authored, Builder-inferred, and
+compiler-generated requirements. This prevents generated boilerplate from
+being reported as human authoring cost in later CBS9 measurements. Existing
+compiler `1.0.0` records remain readable; new output is `1.1.0`.
+
+The first retained use is Gmail Mail Client Prototype revision `007`, whose
+accepted intent requires `capability:mail.messages.manage` at `^1.0.0` while
+keeping Gmail as a later local binding choice. Wide and compact visual and
+interaction evidence is stored under `e2e/artifacts/`. This proves the compact
+authoring-to-acceptance boundary, not provider reuse: native Gmail delivery,
+contract curation, registry references, binding selection, and shared secret
+ownership remain subsequent work.
+
 ## Skill Adoption
 
 Existing skills need no bulk rewrite. Native adoption should proceed per skill:

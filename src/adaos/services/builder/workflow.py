@@ -2752,6 +2752,7 @@ class BuilderWorkflowService:
         )
         from adaos.services.builder.prototype_stage import (
             prototype_automation_requirements,
+            prototype_cbs_intent,
         )
 
         change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
@@ -2788,6 +2789,7 @@ class BuilderWorkflowService:
             expected_webui_digest=webui_digest,
             expected_prototype_resources=self._prototype_resource_evidence(snapshots),
             expected_automation_requirements=prototype_automation_requirements(webui),
+            expected_cbs_intent=prototype_cbs_intent(webui),
         )
 
     def accept_prototype(

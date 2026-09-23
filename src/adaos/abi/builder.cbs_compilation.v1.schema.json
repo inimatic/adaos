@@ -19,7 +19,7 @@
   ],
   "properties": {
     "schema": { "const": "adaos.builder.cbs_compilation.v1" },
-    "compiler_version": { "const": "1.0.0" },
+    "compiler_version": { "enum": ["1.0.0", "1.1.0"] },
     "application_ref": {
       "type": "string",
       "pattern": "^(project|scenario|skill):[A-Za-z0-9_.-]+$"
@@ -102,6 +102,20 @@
           "statement_digest": { "$ref": "#/$defs/digest" },
           "status": { "const": "unresolved" }
         }
+      }
+    },
+    "authoring_telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "human_authored_requirements",
+        "builder_inferred_requirements",
+        "compiler_generated_requirements"
+      ],
+      "properties": {
+        "human_authored_requirements": { "type": "integer", "minimum": 0 },
+        "builder_inferred_requirements": { "type": "integer", "minimum": 0 },
+        "compiler_generated_requirements": { "type": "integer", "minimum": 0 }
       }
     },
     "viability": {

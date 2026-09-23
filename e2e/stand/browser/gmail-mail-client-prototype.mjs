@@ -89,6 +89,7 @@ try {
 
     const checks = []
     let failure = null
+    let debugState = null
     try {
       await page.goto(target.href, { waitUntil: 'domcontentloaded' })
       await page.waitForFunction(([expectedScenario, revision]) => {
@@ -167,8 +168,9 @@ try {
       await page.screenshot({ path: path.join(output, `${layout}.png`), fullPage: true })
     } catch (error) {
       failure = String(error?.stack || error)
+      debugState = await page.evaluate(() => window.__ADAOS_DEBUG_STATE__?.() || null).catch(() => null)
     }
-    samples.push({ layout, viewport, checks, errors, failedResponses, externalRequests, failure })
+    samples.push({ layout, viewport, checks, errors, failedResponses, externalRequests, failure, debugState })
     await context.close()
   }
 } finally {

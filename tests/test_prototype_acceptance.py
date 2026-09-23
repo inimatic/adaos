@@ -346,6 +346,49 @@ def test_acceptance_keeps_pending_rules_for_automation_and_does_not_mark_them_do
         )
 
 
+def test_acceptance_pins_compact_cbs_intent() -> None:
+    webui = _webui()
+    intent = {
+        "schema": "adaos.builder.cbs_intent.v1",
+        "requirements": [
+            {
+                "id": "mail",
+                "capability_ref": "capability:mail.messages.manage",
+                "contract_range": "^1.0.0",
+                "origin": "human_explicit",
+            }
+        ],
+    }
+    webui["ui"]["application"]["desktop"]["pageSchema"]["meta"] = {
+        "builder": {"cbs_intent": intent}
+    }
+
+    acceptance = _acceptance(webui)
+
+    assert acceptance["cbs_intent"] == intent
+    admitted = admit_prototype_acceptance(
+        acceptance,
+        expected_project_ref="project:kanban",
+        expected_change_id="change-kanban",
+        expected_revision="003",
+        expected_webui_digest=acceptance["webui_digest"],
+        expected_cbs_intent=intent,
+    )
+    assert admitted["cbs_intent"] == intent
+    with pytest.raises(BuilderWorkflowError, match="CBS intent"):
+        admit_prototype_acceptance(
+            acceptance,
+            expected_project_ref="project:kanban",
+            expected_change_id="change-kanban",
+            expected_revision="003",
+            expected_webui_digest=acceptance["webui_digest"],
+            expected_cbs_intent={
+                **intent,
+                "requirements": [{**intent["requirements"][0], "contract_range": "^2.0.0"}],
+            },
+        )
+
+
 def test_acceptance_does_not_excuse_a_true_platform_gap() -> None:
     webui = _webui()
     webui["ui"]["application"]["desktop"]["pageSchema"]["meta"] = {

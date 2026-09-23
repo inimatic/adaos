@@ -51,6 +51,14 @@ def prototype_automation_requirements(webui: Mapping[str, Any]) -> list[dict[str
     return copy.deepcopy(builder.get("automation_requirements") or [])
 
 
+def prototype_cbs_intent(webui: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Read the package-neutral CBS authoring intent pinned to this Prototype."""
+
+    builder = prototype_builder_metadata(webui)
+    value = builder.get("cbs_intent")
+    return copy.deepcopy(dict(value)) if isinstance(value, Mapping) else None
+
+
 def prototype_record_evidence(acceptance: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Exclude locale evidence from provider scaffolding and data promotion."""
     return [copy.deepcopy(dict(item)) for item in acceptance.get("prototype_resources") or []
