@@ -1843,3 +1843,41 @@ and the development build succeeds. The Client now serves an empty default
 removes the previously tolerated background `404` and `401`. This increment does
 not qualify broad section-generation context, large-project orchestration or a
 sealed held-out cohort; those remain BIP-14, BIP-D01 and BIP-04 respectively.
+
+### 2026-09-23: Applications Automation Iteration-Cost Baseline
+
+The Applications Beta automation campaign exposed a long-cycle failure mode that
+prompt caching alone does not solve. Before the ninth repair was submitted, nine
+completed model turns reported 11,113,912 input tokens, of which 10,349,824
+(93.1%) were cached. They still consumed 764,088 fresh input tokens and 73,869
+output tokens. These are operational receipts from one evolving campaign, not a
+matched CBS9 result and not evidence of model-quality improvement.
+
+The repeated turns were fail-closed for valid reasons, but successive exact Root
+contracts were discovered and supplied one boundary at a time. A substantial
+partial candidate and its passing focused tests could be inspected by the next
+turn, yet reuse depended on prose guidance rather than an orchestration-owned
+candidate checkpoint. The target optimization is therefore fewer full model
+turns, not a higher cache-hit percentage:
+
+1. Before model execution, emit one digest-addressed admission report covering
+   every referenced MCP tool, input key, published result path, state binding,
+   identity/revision path, CAS requirement, Prototype fallback and governed
+   Trial-navigation dependency. Report all findings together.
+2. Preserve an immutable partial-candidate receipt when a model deliberately
+   reports blocking development feedback. Reuse is allowed only when accepted
+   Prototype identity, source snapshot, changed paths and candidate digest still
+   match; fail-closed status and ticket state remain unchanged.
+3. Record each test/admission check with dependency digests. A follow-up runs the
+   invalidated subset and periodically replays the full suite; it does not infer
+   safety from filenames alone.
+4. Route contract-only repairs through a bounded delta context containing the
+   candidate, aggregate findings and exact changed provider contracts. Semantic
+   changes continue to use the full governed context.
+5. Measure wall time, full versus delta turns, fresh/cached tokens, reused checks,
+   invalidated checks and accepted outcome. Do not declare a speedup from token
+   reduction without equal or better independent acceptance.
+
+This plan preserves the existing authority boundary: admission remains
+deterministic, browser/consumer evidence remains independent, and Development
+Tickets close only after exact Automation and Trial evidence.
