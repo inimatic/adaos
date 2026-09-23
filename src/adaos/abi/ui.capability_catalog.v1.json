@@ -975,7 +975,7 @@
       },
       "manifest": {
         "widget_type": "navigation.tabs",
-        "selection": "Use selectedStateKey on buttons and click:<buttonId> actions to update the active section."
+        "selection": "Set inputs.selectedStateKey to the page-state key that stores the active button id. Button ids must equal the values written to that state key. Prefer one on=click updateState action with <selectedStateKey>=$event.id. Do not put selectedStateKey on individual tab buttons and do not prefix the key with $state."
       },
       "data_shape": { "kind": "none" },
       "events": ["click:<buttonId>"],

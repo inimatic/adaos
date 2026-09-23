@@ -1304,6 +1304,81 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                         ),
                     }
                 )
+            if widget_type == "navigation.tabs":
+                selected_state_key = str(inputs.get("selectedStateKey") or "").strip()
+                buttons = (
+                    inputs.get("buttons")
+                    if isinstance(inputs.get("buttons"), list)
+                    else []
+                )
+                button_ids = {
+                    str(button.get("id") or "").strip()
+                    for button in buttons
+                    if isinstance(button, Mapping)
+                    and str(button.get("id") or "").strip()
+                }
+                misplaced_button_keys = [
+                    button_index
+                    for button_index, button in enumerate(buttons)
+                    if isinstance(button, Mapping) and "selectedStateKey" in button
+                ]
+                if not selected_state_key:
+                    findings.append(
+                        {
+                            "code": "ui.tabs.selection_key_missing",
+                            "severity": "error",
+                            "path": f"{widget_path}.inputs.selectedStateKey",
+                            "message": (
+                                "navigation.tabs requires inputs.selectedStateKey so the "
+                                "active tab is bound to page state."
+                            ),
+                        }
+                    )
+                elif selected_state_key.startswith("$state."):
+                    findings.append(
+                        {
+                            "code": "ui.tabs.selection_key_invalid",
+                            "severity": "error",
+                            "path": f"{widget_path}.inputs.selectedStateKey",
+                            "message": (
+                                "navigation.tabs selectedStateKey is a state path, not an "
+                                "expression; remove the '$state.' prefix."
+                            ),
+                        }
+                    )
+                if misplaced_button_keys:
+                    findings.append(
+                        {
+                            "code": "ui.tabs.button_selection_key_misplaced",
+                            "severity": "error",
+                            "path": f"{widget_path}.inputs.buttons",
+                            "message": (
+                                "navigation.tabs selectedStateKey belongs on inputs, not on "
+                                "individual buttons."
+                            ),
+                            "button_indexes": misplaced_button_keys,
+                        }
+                    )
+                selected_value = (
+                    _read_path(initial_state, selected_state_key)
+                    if selected_state_key and not selected_state_key.startswith("$state.")
+                    else None
+                )
+                if selected_value not in {None, ""} and str(selected_value) not in button_ids:
+                    findings.append(
+                        {
+                            "code": "ui.tabs.initial_selection_unresolvable",
+                            "severity": "error",
+                            "path": f"{widget_path}.inputs.buttons",
+                            "message": (
+                                f"navigation.tabs selectedStateKey {selected_state_key!r} "
+                                f"initially resolves to {selected_value!r}, but no button has "
+                                "that id. Button ids must equal the state values."
+                            ),
+                            "selected_value": str(selected_value),
+                            "button_ids": sorted(button_ids),
+                        }
+                    )
             if widget_type == "desktop.widgets" and not (
                 str(data_source.get("kind") or "") == "y"
                 and str(data_source.get("transform") or "") == "desktop.widgets"

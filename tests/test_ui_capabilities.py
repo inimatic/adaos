@@ -283,7 +283,7 @@ def test_capability_validation_rejects_unreachable_layout_variant_state() -> Non
             "id": "navigation",
             "type": "navigation.tabs",
             "inputs": {
-                "selectedStateKey": "$state.activeTab",
+                "selectedStateKey": "activeTab",
                 "buttons": [
                     {"id": "home", "label": "Home"},
                     {"id": "dev", "label": "Development"},
@@ -327,6 +327,75 @@ def test_capability_validation_rejects_unreachable_layout_variant_state() -> Non
         "ui.component.visible_state_unreachable",
     } & {item["code"] for item in fixed["findings"]}
 
+
+def test_capability_validation_rejects_misbound_navigation_tabs() -> None:
+    from adaos.services.ui_capabilities import (
+        validate_webui_capabilities as validate_generic_capabilities,
+    )
+
+    webui = _board_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page.setdefault("initialState", {})["activeTab"] = "inbox"
+    page["widgets"].insert(
+        0,
+        {
+            "id": "mail-tabs",
+            "type": "navigation.tabs",
+            "inputs": {
+                "buttons": [
+                    {
+                        "id": "tab-inbox",
+                        "label": "Inbox",
+                        "selectedStateKey": "activeTab",
+                    }
+                ]
+            },
+        },
+    )
+
+    result = validate_generic_capabilities(webui)
+    codes = {item["code"] for item in result["findings"]}
+
+    assert "ui.tabs.selection_key_missing" in codes
+    assert "ui.tabs.button_selection_key_misplaced" in codes
+
+
+def test_capability_validation_rejects_navigation_tab_expression_and_unknown_initial_id() -> None:
+    from adaos.services.ui_capabilities import (
+        validate_webui_capabilities as validate_generic_capabilities,
+    )
+
+    webui = _board_webui()
+    page = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page.setdefault("initialState", {})["activeTab"] = "inbox"
+    page["widgets"].insert(
+        0,
+        {
+            "id": "mail-tabs",
+            "type": "navigation.tabs",
+            "inputs": {
+                "selectedStateKey": "$state.activeTab",
+                "buttons": [{"id": "inbox", "label": "Inbox"}],
+            },
+        },
+    )
+
+    result = validate_generic_capabilities(webui)
+    assert any(
+        item["code"] == "ui.tabs.selection_key_invalid"
+        for item in result["findings"]
+    )
+
+    page["widgets"][0]["inputs"]["selectedStateKey"] = "activeTab"
+    page["widgets"][0]["inputs"]["buttons"][0]["id"] = "tab-inbox"
+    result = validate_generic_capabilities(webui)
+    finding = next(
+        item
+        for item in result["findings"]
+        if item["code"] == "ui.tabs.initial_selection_unresolvable"
+    )
+    assert finding["selected_value"] == "inbox"
+    assert finding["button_ids"] == ["tab-inbox"]
 
 def test_multilingual_search_selects_kanban_recipe() -> None:
     result = search_ui_capabilities("Покажи задачи канбан-доской в трех колонках")
