@@ -6137,6 +6137,20 @@ def _supervisor_public_base_candidates() -> list[str]:
 def _supervisor_browser_safe_surface(*, payload: dict[str, Any] | None) -> dict[str, Any]:
     data = payload if isinstance(payload, dict) else {}
     available = bool(data.get("available"))
+    disabled = str(data.get("source") or "").strip().lower() == "supervisor.disabled"
+    if disabled:
+        return {
+            "state": "not_applicable",
+            "ready": True,
+            "carried_by_reliability": False,
+            "transition_state": None,
+            "transition_phase": None,
+            "transition_mode_visible": False,
+            "candidate_runtime_visible": False,
+            "warm_switch_visible": False,
+            "served_by": "runtime",
+            "blockers": [],
+        }
     status = data.get("status") if isinstance(data.get("status"), dict) else {}
     runtime = data.get("runtime") if isinstance(data.get("runtime"), dict) else {}
     blockers: list[str] = []
@@ -6195,6 +6209,21 @@ def _supervisor_required_upstream_link(*, payload: dict[str, Any] | None) -> dic
     if embedded:
         return dict(embedded)
     role = str(runtime.get("transition_role") or "").strip().lower() or None
+    if str(data.get("source") or "").strip().lower() == "supervisor.disabled":
+        return {
+            "kind": "member_hub" if role == "member" else "hub_root",
+            "role": role,
+            "owner": "runtime",
+            "state": "not_applicable",
+            "reason": "production supervisor is disabled for this runtime launch mode",
+            "ready": True,
+            "visible": True,
+            "reconnect_total": 0,
+            "cooldown_sec": 0.0,
+            "verify_timeout_sec": 0.0,
+            "served_by": "runtime",
+            "blockers": [],
+        }
     hub_root = runtime.get("hub_root_watchdog") if isinstance(runtime.get("hub_root_watchdog"), dict) else {}
     member_hub = runtime.get("member_hub_watchdog") if isinstance(runtime.get("member_hub_watchdog"), dict) else {}
 
@@ -6643,7 +6672,13 @@ def _connectivity_snapshot(
         supervisor
     ) or _sidecar_runtime_browser_route_ready(sidecar_runtime)
     fallback_link = _required_upstream_link_fallback_from_channel_overview(overview)
-    if _map_connectivity_transport_state(required_link.get("state")) == "unknown":
+    supervisor_disabled = (
+        str(supervisor.get("source") or "").strip().lower()
+        == "supervisor.disabled"
+    )
+    if supervisor_disabled and fallback_link:
+        required_link = fallback_link
+    elif _map_connectivity_transport_state(required_link.get("state")) == "unknown":
         if fallback_link:
             required_link = fallback_link
     if (

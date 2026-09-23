@@ -133,6 +133,13 @@ Runtime knobs:
 - `ADAOS_SUPERVISOR_SNAPSHOT_CACHE_TTL_SEC`
 - `ADAOS_SUPERVISOR_SNAPSHOT_STALE_MAX_SEC`
 
+`adaos api serve` is an explicit development launch mode and does not require
+the production supervisor. When the runtime reports `supervisor.disabled`, the
+browser-safe supervisor surface and its watchdog projection are
+`not_applicable`, not degraded. Actual Hub/Root and browser-route readiness is
+still derived from the runtime channel overview and runtime-managed sidecar;
+disabling the supervisor must not hide a real transport failure.
+
 ### Core Update Status Fanout
 
 `core.update.status` and `hub.core_update.status` are state reports, so queued

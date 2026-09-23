@@ -722,6 +722,80 @@ def test_connectivity_snapshot_recovers_runtime_managed_sidecar_route_without_su
     assert route["blockers"] == []
 
 
+def test_disabled_dev_supervisor_is_not_a_runtime_readiness_blocker() -> None:
+    reliability = importlib.import_module("adaos.services.reliability")
+    disabled = {
+        "available": False,
+        "source": "supervisor.disabled",
+        "status": {},
+        "runtime": {},
+    }
+
+    surface = reliability._supervisor_browser_safe_surface(payload=disabled)
+    upstream = reliability._supervisor_required_upstream_link(payload=disabled)
+    connectivity = _connectivity_snapshot(
+        node_id="node-1",
+        channel_overview={
+            "hub_root": {
+                "effective_status": "ready",
+                "effective_state": "stable",
+            },
+            "hub_root_browser": {
+                "effective_status": "ready",
+                "effective_state": "stable",
+            },
+        },
+        supervisor_runtime={**disabled, "required_upstream_link": upstream},
+    )
+
+    assert surface == {
+        "state": "not_applicable",
+        "ready": True,
+        "carried_by_reliability": False,
+        "transition_state": None,
+        "transition_phase": None,
+        "transition_mode_visible": False,
+        "candidate_runtime_visible": False,
+        "warm_switch_visible": False,
+        "served_by": "runtime",
+        "blockers": [],
+    }
+    assert upstream["state"] == "not_applicable"
+    assert upstream["ready"] is True
+    assert upstream["blockers"] == []
+    assert connectivity["required_upstream_link"]["transport_state"] == "ready"
+    assert connectivity["required_upstream_link"]["served_by"] == "runtime_channel_overview"
+
+    checkpoint = _event_model_phase0_communication_checkpoint(
+        sync_runtime={"channel_contract": {"completed_for_scope": True}},
+        sidecar_runtime={
+            "enabled": True,
+            "continuity_contract": {
+                "required": False,
+                "current_support": "not_applicable",
+            },
+            "route_tunnel_contract": {
+                "ws": {"current_owner": "sidecar", "handoff_ready": True},
+                "yws": {"current_owner": "sidecar", "handoff_ready": True},
+            },
+        },
+        hub_root_protocol={
+            "hardening_coverage": {
+                "state": "complete",
+                "covered_flows": 6,
+                "total_flows": 6,
+            }
+        },
+        supervisor_runtime={**disabled, "browser_safe_surface": surface},
+    )
+    supervisor_evidence = checkpoint["tasks"]["phase0.runtime_comm_ready"][
+        "evidence"
+    ]["browser_safe_supervisor_continuity"]
+    assert checkpoint["ready"] is True
+    assert supervisor_evidence["state"] == "not_applicable"
+    assert supervisor_evidence["blockers"] == []
+
+
 def test_connectivity_snapshot_uses_channel_overview_when_supervisor_link_temporarily_missing() -> None:
     snapshot = _connectivity_snapshot(
         node_id="node-1",
