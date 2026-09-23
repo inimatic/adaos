@@ -57,6 +57,32 @@ def test_strict_json_validation_rejects_duplicate_manifest_keys() -> None:
         _loads_strict_json('{"area":"top","area":"bottom"}')
 
 
+def test_preservable_feedback_unwraps_latest_structured_outcome(tmp_path: Path) -> None:
+    run_root = tmp_path / "run"
+    (run_root / "output").mkdir(parents=True)
+    report = (
+        "```adaos-development-feedback\n"
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"conflicting_contract","summary":"External contract drift",'
+        '"blocking":true,"target_refs":["tool:applications.access.show"]}]}\n'
+        "```"
+    )
+    (run_root / "output" / "last_message.md").write_text(
+        json.dumps({"status": "blocked", "report": report, "questions": []}),
+        encoding="utf-8",
+    )
+
+    retained = worker_module.preservable_blocking_feedback_message(
+        run_root,
+        {
+            "stage": "development_feedback",
+            "message": "Automation blocked by reported development feedback",
+        },
+    )
+
+    assert retained == report
+
+
 def test_validation_repair_leads_with_failures_and_keeps_full_reference():
     original = (
         "Original accepted task and resolved decisions.\nKeep the full reference."

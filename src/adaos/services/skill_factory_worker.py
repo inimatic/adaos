@@ -4009,6 +4009,23 @@ def _retained_codex_final_message(run_root: Path) -> str:
     raise FileNotFoundError("retained Codex final message is unavailable")
 
 
+def _retained_codex_report(run_root: Path) -> str:
+    """Return the report inside a typed outcome, or a legacy plain response."""
+
+    message = _retained_codex_final_message(run_root)
+    try:
+        value = json.loads(message)
+    except (json.JSONDecodeError, TypeError):
+        return message
+    if not isinstance(value, Mapping) or not {
+        "status",
+        "report",
+        "questions",
+    }.issubset(value):
+        return message
+    return outcome_message(message)
+
+
 def requalified_feedback_message(
     run_root: Path, failure: Mapping[str, Any]
 ) -> str | None:
@@ -4020,7 +4037,7 @@ def requalified_feedback_message(
     ):
         return None
     try:
-        message = _retained_codex_final_message(run_root)
+        message = _retained_codex_report(run_root)
         items = parse_development_feedback(message)
         if (
             not items
@@ -4046,7 +4063,7 @@ def preservable_blocking_feedback_message(
     if failure.get("stage") != "development_feedback":
         return None
     try:
-        message = _retained_codex_final_message(run_root)
+        message = _retained_codex_report(run_root)
         items = parse_development_feedback(message)
         if (
             not items
