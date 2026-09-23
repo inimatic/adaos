@@ -370,6 +370,8 @@ identity still match. It then refreshes the SDK/MCP descriptor working set and
 runs a delta model turn under the current continuation contract. Contract drift
 therefore causes repair, not validation-only admission; a retry that made no
 edits searches its same-session history for the newest guarded candidate. The
+large-manifest guard may requalify that exact checkpoint once, but the allowance
+remains bound to its source task, changed paths, and continuation contracts. The
 historical task and its tickets remain failed/open until ordinary deterministic,
 browser, and Trial gates accept the new result.
 

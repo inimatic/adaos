@@ -1252,9 +1252,14 @@ def _continuation_allows_large_manifest_rewrite(
 
     return bool(
         isinstance(checkpoint, Mapping)
-        and checkpoint.get("mode") == "validate_preserved_candidate"
+        and checkpoint.get("mode")
+        in {"validate_preserved_candidate", "resume_preserved_candidate"}
         and (
-            checkpoint.get("reason") == "manifest_scope_requalified_after_guard"
+            (
+                checkpoint.get("mode") == "validate_preserved_candidate"
+                and checkpoint.get("reason")
+                == "manifest_scope_requalified_after_guard"
+            )
             or checkpoint.get("allow_large_manifest_rewrite") is True
         )
         and str(checkpoint.get("source_task_id") or "").strip()
@@ -4720,6 +4725,23 @@ class BuilderAutomationService:
                     else {}
                 )
                 continuation_contract = _continuation_contract()
+                if (
+                    prior_checkpoint.get("mode") == "resume_preserved_candidate"
+                    and prior_checkpoint.get("reason")
+                    == "blocking_development_feedback"
+                    and prior_checkpoint.get("continuation_contract")
+                    == continuation_contract
+                ):
+                    return {
+                        **prior_checkpoint,
+                        "trigger_failure_id": str(
+                            failure.get("failure_id") or ""
+                        ).strip()
+                        or None,
+                        "guard_retry_reason": retry_reason,
+                        "allow_large_manifest_rewrite": True,
+                        "created_at": _now_iso(),
+                    }
                 if not prior_checkpoint and (
                     failed_artifacts.get("continuation_contract")
                     == continuation_contract

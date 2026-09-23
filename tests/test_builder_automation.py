@@ -2663,6 +2663,86 @@ def test_manifest_scope_requalification_admits_only_the_preserved_candidate(
         {**checkpoint, "source_task_id": ""}
     )
     assert not automation_module._continuation_allows_large_manifest_rewrite(None)
+    assert automation_module._continuation_allows_large_manifest_rewrite(
+        {
+            **checkpoint,
+            "mode": "resume_preserved_candidate",
+            "reason": "blocking_development_feedback",
+            "allow_large_manifest_rewrite": True,
+        }
+    )
+    assert not automation_module._continuation_allows_large_manifest_rewrite(
+        {
+            **checkpoint,
+            "mode": "resume_preserved_candidate",
+            "reason": "blocking_development_feedback",
+            "allow_large_manifest_rewrite": False,
+        }
+    )
+
+
+def test_manifest_guard_retries_the_same_resumable_candidate(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.resume-manifest-guard"
+    run_root = service.runs_root / task_id
+    (run_root / "input").mkdir(parents=True)
+    continuation_contract = automation_module._continuation_contract()
+    source_contract = {
+        "schema": "adaos.builder.continuation_contract.v1",
+        "sdk_contract_digest": "sha256:source",
+    }
+    prior_checkpoint = {
+        "schema": "adaos.builder.automation_continuation_checkpoint.v1",
+        "mode": "resume_preserved_candidate",
+        "source_task_id": "task.source-candidate",
+        "failure_id": "failure.source-candidate",
+        "trigger_failure_id": "failure.empty-retry",
+        "reason": "blocking_development_feedback",
+        "source_changed_paths": ["scenarios/applications/webui.json"],
+        "source_continuation_contract": source_contract,
+        "continuation_contract": continuation_contract,
+    }
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_contract": continuation_contract,
+                        "continuation_checkpoint": prior_checkpoint,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.manifest-guard",
+                    "message": "ValueError: large declarative manifest rewrite is not admitted",
+                }
+            ],
+        }
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": task_id}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == "task.source-candidate"
+    assert checkpoint["failure_id"] == "failure.source-candidate"
+    assert checkpoint["trigger_failure_id"] == "failure.manifest-guard"
+    assert checkpoint["guard_retry_reason"] == (
+        "manifest_scope_requalified_after_guard"
+    )
+    assert checkpoint["allow_large_manifest_rewrite"] is True
 
 
 def test_initial_manifest_guard_failure_preserves_its_own_candidate(
