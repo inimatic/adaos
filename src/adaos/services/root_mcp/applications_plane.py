@@ -622,6 +622,82 @@ def contracts() -> list[RootMcpToolContract]:
         ],
         additional_properties=False,
     )
+    connected_account = schema_object(
+        properties={
+            "account_id": {"type": "string", "minLength": 1},
+            "provider_id": {"type": "string", "minLength": 1},
+            "subject_ref": {"type": "string", "minLength": 1},
+            "mode": {"enum": ["delegated_user", "app_service"]},
+            "scopes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            },
+            "status": {
+                "enum": ["missing", "connected", "expired", "revoked", "denied"]
+            },
+            "token_expires_at": {"type": ["string", "number", "null"]},
+            "scope_changed_at": {"type": ["string", "null"]},
+            "revision": {"type": "integer", "minimum": 1},
+            "created_at": {"type": "string"},
+            "updated_at": {"type": "string"},
+        },
+        required=[
+            "account_id",
+            "provider_id",
+            "subject_ref",
+            "mode",
+            "scopes",
+            "status",
+            "revision",
+        ],
+        additional_properties=False,
+    )
+    access_surface = schema_object(
+        properties={
+            "schema": {"const": "adaos.application.access_surface.v1"},
+            "application": {"type": "object"},
+            "release": {"type": "object"},
+            "installation": {"type": ["object", "null"]},
+            "sections": schema_object(
+                properties={
+                    "permissions": {"type": "object"},
+                    "access": {"type": "array", "items": {"type": "object"}},
+                    "roles": {"type": "array", "items": {"type": "object"}},
+                    "connected_accounts": {
+                        "type": "array",
+                        "items": connected_account,
+                        "maxItems": 1000,
+                    },
+                    "release_readiness": {"type": ["object", "null"]},
+                    "activity": {"type": "array", "items": {"type": "object"}},
+                    "activity_page": schema_object(
+                        properties={
+                            "limit": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 200,
+                            },
+                            "has_more": {"type": "boolean"},
+                        },
+                        required=["limit", "has_more"],
+                    ),
+                },
+                required=[
+                    "permissions",
+                    "access",
+                    "roles",
+                    "connected_accounts",
+                    "release_readiness",
+                    "activity",
+                    "activity_page",
+                ],
+                additional_properties=False,
+            ),
+        },
+        required=["schema", "application", "release", "installation", "sections"],
+        additional_properties=False,
+    )
     string_list = {
         "oneOf": [
             {
@@ -1075,9 +1151,43 @@ def contracts() -> list[RootMcpToolContract]:
                 },
                 required=["application_id"],
             ),
-            output_schema=response(),
+            output_schema=result_response(
+                schema_object(
+                    properties={"access": access_surface},
+                    required=["access"],
+                )
+            ),
             required_capability="applications.read",
-            metadata={**published, "handler": "applications_access_show"},
+            metadata={
+                **published,
+                "handler": "applications_access_show",
+                "webui_data_binding": {
+                    "schema": "adaos.root_mcp.webui_data_binding.v1",
+                    "transport_envelope": "node_root_mcp_bridge.v1",
+                    "result_paths": {
+                        "connected_accounts": (
+                            "response.result.access.sections.connected_accounts"
+                        )
+                    },
+                    "connected_account_record": {
+                        "identity_path": "account_id",
+                        "revision_path": "revision",
+                        "create_expected_revision": 0,
+                        "update_expected_revision_path": "revision",
+                    },
+                    "examples": {
+                        "connected_account": {
+                            "account_id": "calendar-owner",
+                            "provider_id": "calendar",
+                            "subject_ref": "user:owner",
+                            "mode": "delegated_user",
+                            "scopes": ["calendar.read"],
+                            "status": "connected",
+                            "revision": 3,
+                        }
+                    },
+                },
+            },
         ),
         RootMcpToolContract(
             id="applications.access.users",

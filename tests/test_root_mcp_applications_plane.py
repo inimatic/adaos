@@ -184,7 +184,24 @@ class _StubSdk:
 
     def get_application_access_surface(self, *args, **kwargs):
         self.calls.append(("get_application_access_surface", args, kwargs))
-        return {"sections": {"permissions": {}, "access": []}}
+        return {
+            "schema": "adaos.application.access_surface.v1",
+            "application": {"application_id": args[0]},
+            "release": {"release_digest": kwargs.get("release_digest")},
+            "installation": None,
+            "sections": {
+                "permissions": {},
+                "access": [],
+                "roles": [],
+                "connected_accounts": [],
+                "release_readiness": None,
+                "activity": [],
+                "activity_page": {
+                    "limit": kwargs.get("activity_limit", 50),
+                    "has_more": False,
+                },
+            },
+        }
 
     def get_users_access_surface(self, *args, **kwargs):
         self.calls.append(("get_users_access_surface", args, kwargs))
@@ -712,6 +729,7 @@ def test_application_access_contracts_are_secret_free_and_reads_share_sdk_projec
     monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
     contracts = {item.id: item for item in applications_plane.contracts()}
     connected = contracts["applications.access.connected_account"]
+    access_show = contracts["applications.access.show"]
     users = contracts["applications.access.users"]
 
     assert {"secret", "token", "credential", "value"}.isdisjoint(
@@ -719,6 +737,29 @@ def test_application_access_contracts_are_secret_free_and_reads_share_sdk_projec
     )
     assert "expected_revision" in connected.input_schema["required"]
     assert connected.input_schema["properties"]["expected_revision"]["minimum"] == 0
+    accounts = access_show.output_schema["properties"]["result"]["properties"][
+        "access"
+    ]["properties"]["sections"]["properties"]["connected_accounts"]
+    assert accounts["items"]["required"] == [
+        "account_id",
+        "provider_id",
+        "subject_ref",
+        "mode",
+        "scopes",
+        "status",
+        "revision",
+    ]
+    assert access_show.metadata["webui_data_binding"][
+        "connected_account_record"
+    ] == {
+        "identity_path": "account_id",
+        "revision_path": "revision",
+        "create_expected_revision": 0,
+        "update_expected_revision_path": "revision",
+    }
+    assert access_show.metadata["webui_data_binding"]["examples"][
+        "connected_account"
+    ]["revision"] == 3
     users_surface = users.output_schema["properties"]["result"]["properties"][
         "users_access"
     ]

@@ -85,6 +85,12 @@ file transports, or mutation targets.
 `subject_ref`, a safe `display_label`, `kind`, and
 `eligible_for_application_access`; Applications binds those fields instead of
 accepting a free-text identity or copying the Users & Access directory.
+`applications.access.show` publishes connected accounts at
+`response.result.access.sections.connected_accounts`; every redacted record
+contains `account_id` and `revision`, so account updates can bind identity and
+`expected_revision` without exposing credentials or inventing CAS state. The
+binding declares revision `0` for create and the selected record's `revision`
+for update.
 
 ## Compatibility and migration
 
