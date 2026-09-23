@@ -97,6 +97,13 @@ def test_google_gmail_contract_is_loaded_only_for_relevant_automation_context():
     assert contract["project_permission_profile"]["external_provider"]["scopes"] == [
         "https://www.googleapis.com/auth/gmail.modify"
     ]
+    native = contract["skill_manifest"]["native_cbs"]
+    assert native["path"] == "contracts/provider.cbs.yaml"
+    assert native["capability_ref"] == "capability:mail.messages.manage"
+    assert native["compiler_owned_outputs"] == [
+        "contracts/capability.contract.json",
+        "contracts/binding.definition.json",
+    ]
     assert "adaos.sdk.providers" in contract["sdk"]["import"]
     assert "gmail.GmailProviderError" in contract["sdk"]["error"]
     assert "result:<decoded Gmail REST object>" in contract["sdk"][
