@@ -7,7 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, TypeVar
+from typing import Any, Iterable, Mapping, TypeVar
 
 from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.domain.capability_binding_state import (
@@ -120,6 +120,56 @@ class LocalIdentityStore:
                 return record
         raise KeyError(f"{stable_ref}@{digest}")
 
+    def revisions(self, stable_ref: str, model: type[RecordT]) -> tuple[RecordT, ...]:
+        """Return the exact immutable history for one local identity."""
+
+        kind = "binding-instances" if model is BindingInstance else "state-spaces"
+        directory = Path(self.root) / kind / _ref_key(stable_ref)
+        records: list[RecordT] = []
+        for path in self._revision_paths(directory):
+            record = model.from_mapping(json.loads(path.read_text(encoding="utf-8")))
+            if record.stable_ref != stable_ref:
+                raise LocalIdentityConflict(
+                    "local identity directory does not match stored stable ref"
+                )
+            records.append(record)
+        return tuple(records)
+
+    def observations(
+        self,
+        *,
+        subject_ref: str | None = None,
+        subject_revision_digest: str | None = None,
+    ) -> tuple[LocalRevisionObservation, ...]:
+        """Read immutable operational observations without changing identity state."""
+
+        directory = Path(self.root) / "observations"
+        result: list[LocalRevisionObservation] = []
+        if not directory.is_dir():
+            return ()
+        for path in sorted(directory.glob("*.json")):
+            record = LocalRevisionObservation.from_mapping(
+                json.loads(path.read_text(encoding="utf-8"))
+            )
+            value = record.to_dict()
+            if subject_ref is not None and value["subject_ref"] != subject_ref:
+                continue
+            if (
+                subject_revision_digest is not None
+                and value["subject_revision_digest"] != subject_revision_digest
+            ):
+                continue
+            result.append(record)
+        return tuple(
+            sorted(
+                result,
+                key=lambda item: (
+                    item.to_dict()["observed_at"],
+                    item.digest,
+                ),
+            )
+        )
+
     def put_fact(
         self,
         record: StateAccessRelation | StateLifecycleOperation | LocalRevisionObservation,
@@ -209,6 +259,7 @@ def calculate_effective_guarantees(
     binding_instance: BindingInstance,
     state_space: StateSpace,
     environment_profile: EnvironmentProfile,
+    observations: Iterable[LocalRevisionObservation] = (),
 ) -> dict[str, tuple[str, ...]]:
     state = state_contract.to_dict()
     definition = binding_definition.to_dict()
@@ -242,6 +293,32 @@ def calculate_effective_guarantees(
             & set(profile["guarantees"][dimension])
         )
         result[dimension] = tuple(sorted(values))
+    operational: set[str] = set()
+    matching_observations = sorted(
+        (
+            item.to_dict()
+            for item in observations
+            if item.to_dict()["subject_kind"] == "state_space"
+            and item.to_dict()["subject_ref"] == state_space.stable_ref
+            and item.to_dict()["subject_revision_digest"] == state_space.digest
+            and item.to_dict()["observation_kind"] in {"backup", "capacity"}
+        ),
+        key=lambda item: (item["observed_at"], item["observation_digest"]),
+    )
+    latest: dict[str, Mapping[str, Any]] = {}
+    for item in matching_observations:
+        latest[str(item["observation_kind"])] = item
+    for kind, item in latest.items():
+        operational.add(f"{kind}:{item['status']}")
+        details = item.get("details") if isinstance(item.get("details"), Mapping) else {}
+        if kind == "backup" and details.get("restore_tested") is True:
+            operational.add("backup:restore_tested")
+        if kind == "capacity" and (
+            "available_bytes" in details or "used_bytes" in details
+        ):
+            operational.add("capacity:observed")
+    if operational:
+        result["operational"] = tuple(sorted(operational))
     return result
 
 
@@ -562,7 +639,10 @@ class PrototypeCrudProjector:
         binding_definition: BindingDefinition,
         delivery: BindingDelivery,
         environment_profile: EnvironmentProfile,
+        mode: str = "simulation",
     ) -> LegacyCrudProjection:
+        if mode not in {"simulation", "sandbox"}:
+            raise LocalIdentityConflict("prototype projection mode must be simulation or sandbox")
         snapshot = self.service.snapshot(resource_type)
         if snapshot is None:
             raise KeyError(resource_type)
@@ -595,8 +675,9 @@ class PrototypeCrudProjector:
 
         workspace_slug = _slug(workspace_ref)
         resource_slug = _slug(resource_type)
-        binding_ref = f"binding-instance:{workspace_slug}/preview/{resource_slug}"
-        state_ref = f"state-space:{workspace_slug}/preview/{resource_slug}"
+        identity_segment = "preview" if mode == "simulation" else "sandbox"
+        binding_ref = f"binding-instance:{workspace_slug}/{identity_segment}/{resource_slug}"
+        state_ref = f"state-space:{workspace_slug}/{identity_segment}/{resource_slug}"
         previous_binding = self.store.latest(binding_ref, BindingInstance)
         binding = LegacyCrudProjector._binding_revision(
             binding_ref,
@@ -609,7 +690,7 @@ class PrototypeCrudProjector:
                 "delivery_digest": delivery.digest,
                 "environment_profile_ref": environment_profile.profile_ref,
                 "environment_profile_digest": environment_profile.digest,
-                "mode": "simulation",
+                "mode": mode,
                 "local_binding_ref": (
                     f"prototype-resource:{_slug(str(authority.get('binding') or 'preview'))}"
                 ),
@@ -648,7 +729,7 @@ class PrototypeCrudProjector:
                 continue
             relation = StateAccessRelation.create(
                 relation_ref=(
-                    f"state-access:{workspace_slug}/preview/{resource_slug}/{_slug(port['port_id'])}"
+                    f"state-access:{workspace_slug}/{identity_segment}/{resource_slug}/{_slug(port['port_id'])}"
                 ),
                 binding_instance_ref=binding.stable_ref,
                 binding_instance_revision_digest=binding.digest,

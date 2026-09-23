@@ -10,11 +10,17 @@ from fastapi.testclient import TestClient
 from adaos.apps.api import application_cbs
 from adaos.apps.api.auth import require_token
 from adaos.domain.artifact_release import canonical_payload_digest
-from adaos.domain.capability_binding_state import CapabilityContract
+from adaos.domain.capability_binding_state import (
+    BindingInstance,
+    CapabilityContract,
+    LocalRevisionObservation,
+    StateSpace,
+)
 from adaos.services.agent_context import get_ctx
 from adaos.services.applications.cbs import ApplicationCBSConflict, ApplicationCBSService
 from adaos.services.builder.cbs import compile_prototype_cbs
 from adaos.services.builder.workflow import BuilderWorkflowError
+from adaos.services.capability_binding_state import LocalIdentityStore
 
 
 DIGEST_A = "sha256:" + "a" * 64
@@ -194,3 +200,66 @@ def test_application_api_compiles_and_assesses_without_activation(tmp_path) -> N
     assert viability.status_code == 200, viability.text
     assert viability.json()["viable"] is True
     assert viability.json()["activation_performed"] is False
+    assert viability.json()["evidence_obligations"]
+    assert viability.json()["capability_gaps"] == []
+
+    identities = LocalIdentityStore(
+        tmp_path / "capability-binding-state" / "identities"
+    )
+    binding = BindingInstance.create(
+        binding_instance_ref="binding-instance:applications/local",
+        revision=1,
+        predecessor_digest=None,
+        workspace_ref="workspace:applications",
+        tenant_ref="tenant:test",
+        binding_definition_ref="binding-definition:resource.records.local-json",
+        binding_definition_digest=DIGEST_A,
+        delivery_digest=DIGEST_B,
+        environment_profile_ref="profile:local/default",
+        environment_profile_digest=DIGEST_C,
+        mode="production",
+        local_binding_ref="local-crud:applications",
+        authority_epoch=1,
+    )
+    identities.append(binding)
+    state_space = StateSpace.create(
+        state_space_ref="state-space:applications/records",
+        revision=1,
+        predecessor_digest=None,
+        state_contract_ref="state-contract:applications.records",
+        state_contract_version="1.0.0",
+        state_contract_digest=DIGEST_A,
+        workspace_ref="workspace:applications",
+        tenant_ref="tenant:test",
+        logical_owner_ref="application:applications",
+        lifecycle_authority_ref="application:applications",
+        custodian_binding_instance_ref=binding.stable_ref,
+        mutation_authority_ref="workspace:applications",
+        locator_ref="local-resource-registry:applications",
+        generation=4,
+        authority_epoch=1,
+        portability_class="portable",
+        schema_locks=(),
+    )
+    identities.append(state_space)
+    identities.put_fact(
+        LocalRevisionObservation.create(
+            observation_ref="observation:applications/backup",
+            subject_kind="state_space",
+            subject_ref=state_space.stable_ref,
+            subject_revision_digest=state_space.digest,
+            observation_kind="backup",
+            status="ready",
+            observed_at="2026-09-23T12:00:00+00:00",
+            details={"backup_ref": "backup:applications/latest", "restore_tested": True},
+        )
+    )
+    inspected_state = client.get(
+        "/api/v1/cbs/state-spaces/inspect",
+        params={"state_space_ref": state_space.stable_ref},
+    )
+    assert inspected_state.status_code == 200, inspected_state.text
+    state_payload = inspected_state.json()["inspection"]
+    assert state_payload["state_space_ref"] == state_space.stable_ref
+    assert state_payload["observations"]["backup"]["details"]["restore_tested"] is True
+    assert inspected_state.json()["activation_performed"] is False

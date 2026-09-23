@@ -212,6 +212,7 @@ class FlowboardContracts:
     state: StateContract
     production_binding: BindingDefinition
     simulation_binding: BindingDefinition
+    sandbox_binding: BindingDefinition
     profile: EnvironmentProfile
     requirement: ApplicationRequirement
 
@@ -330,11 +331,22 @@ def flowboard_contracts() -> FlowboardContracts:
         modes=("simulation",),
         features=("sqlite_transaction",),
     )
+    sandbox = binding(
+        ref="binding-definition:resource.records.sandbox-sqlite",
+        entrypoint="resource.records.sandbox",
+        modes=("sandbox",),
+        features=("sqlite_transaction", "restricted_effects"),
+    )
     profile = EnvironmentProfile.create(
         profile_ref="profile:local/default",
         profile_class="local",
-        modes=("simulation", "production"),
-        provider_features=("atomic_replace", "mutation_lock", "sqlite_transaction"),
+        modes=("simulation", "sandbox", "production"),
+        provider_features=(
+            "atomic_replace",
+            "mutation_lock",
+            "sqlite_transaction",
+            "restricted_effects",
+        ),
         guarantees={
             "consistency": ["snapshot", "serializable"],
             "durability": ["persistent"],
@@ -348,7 +360,7 @@ def flowboard_contracts() -> FlowboardContracts:
         contract_range="^1.0.0",
         environment_target={
             "profile_ref": profile.profile_ref,
-            "allowed_modes": ["simulation", "production"],
+            "allowed_modes": ["simulation", "sandbox", "production"],
         },
         policy_constraints={
             "locality": "local",
@@ -360,7 +372,15 @@ def flowboard_contracts() -> FlowboardContracts:
             "allow_stale": False,
         },
     )
-    return FlowboardContracts(capability, state, production, simulation, profile, requirement)
+    return FlowboardContracts(
+        capability,
+        state,
+        production,
+        simulation,
+        sandbox,
+        profile,
+        requirement,
+    )
 
 
 def binding_delivery(

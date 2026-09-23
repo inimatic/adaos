@@ -154,10 +154,26 @@ class ApplicationCBSService:
             ApplicationRequirement.from_mapping(item)
             for item in compilation["requirements"]
         ]
-        assessments = [
-            resolver.semantic_viability(requirement, contracts)
-            for requirement in requirements
-        ]
+        assessments = []
+        evidence_obligations: list[dict[str, Any]] = []
+        for requirement in requirements:
+            assessment = resolver.semantic_viability(requirement, contracts)
+            required_claim_kinds = list(
+                requirement.to_dict()["evidence_threshold"]["required_claim_kinds"]
+            )
+            assessment["evidence_obligations"] = [
+                {"claim_kind": kind, "status": "unassessed"}
+                for kind in required_claim_kinds
+            ]
+            assessments.append(assessment)
+            evidence_obligations.extend(
+                {
+                    "requirement_ref": requirement.requirement_ref,
+                    "claim_kind": kind,
+                    "status": "unassessed",
+                }
+                for kind in required_claim_kinds
+            )
         unresolved = [
             requirement.requirement_ref
             for requirement, assessment in zip(requirements, assessments, strict=True)
@@ -172,6 +188,17 @@ class ApplicationCBSService:
             "viable": not unresolved,
             "requirements": assessments,
             "unresolved_requirement_refs": unresolved,
+            "capability_gaps": [
+                {
+                    "requirement_ref": requirement.requirement_ref,
+                    "capability_ref": requirement.capability_ref,
+                    "contract_range": requirement.to_dict()["contract_range"],
+                    "code": "unmet_requirement",
+                }
+                for requirement in requirements
+                if requirement.requirement_ref in unresolved
+            ],
+            "evidence_obligations": evidence_obligations,
             "activation_performed": False,
         }
 

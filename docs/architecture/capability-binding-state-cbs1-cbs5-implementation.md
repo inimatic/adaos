@@ -2,12 +2,13 @@
 
 Status: executable CRUD-first implementation and compatibility guide.
 
-Last verified: 2026-09-22.
+Last verified: 2026-09-23.
 
-This document records the implemented minimum of `CBS1` through `CBS5`. It is
-not a claim that every `should`, `could`, or deferred generalization in the
-[roadmap](capability-binding-state-separation-roadmap.md) is complete. The
-implemented boundary is deliberately the Flowboard typed-CRUD proof.
+This document records the implemented CRUD-first scope of `CBS1` through
+`CBS5`. All non-deferred items through `CBS4`, and all `CBS5` items except the
+compact Applications UI view (`CBS5-16`), have validated-local evidence. The
+implemented boundary remains deliberately bounded to the Flowboard typed-CRUD
+proof; deferred generalizations are not implied.
 
 ## Result
 
@@ -61,8 +62,16 @@ metadata owns the physical package member, so moving an implementation changes
 the package and delivery digests without changing binding semantics.
 
 The first evidence vocabulary is intentionally limited to capability
-conformance and state compatibility. Trust federation and generalized claim
-kinds remain later work.
+conformance and state compatibility. Portable bundles reuse the existing
+Ed25519 package-attestation trust store and issuer allow-list: the package is
+the signed subject and the exact sorted CBS bundle is the predicate digest.
+This is local trust-domain admission, not a federated registry.
+
+An explicit-compatibility edge helper covers semantic cases that cannot be
+inferred from SemVer. Deterministic reference and field-diff projections are
+generated directly from canonical records. The persistent-document terminology
+review is available as `scripts/check_cbs_terminology.py` and rejects ambiguous
+new `capabilities` declarations and persistent WebUI-style `state_ref` keys.
 
 ### CBS2: local binding and state identity
 
@@ -87,6 +96,14 @@ Two compatibility projectors exist:
 Projection adopts existing records in place. It does not copy data, transfer
 ownership, or grant destruction authority.
 
+The read-only state inspector exposes identity, owner, contract, custodian,
+generation, portability, locator, and latest revision-bound operational
+observations through `GET /api/v1/cbs/state-spaces/inspect`. Backup/restore and
+capacity observations can extend the effective operational guarantee
+projection without mutating the `StateSpace`. The local JSON CRUD provider and
+the SQLite-backed Prototype provider are both projected, providing a second
+legacy shape for compatibility measurement.
+
 ### CBS3: two-stage resolution
 
 The bounded resolver first enumerates semantic candidates, then delegates exact
@@ -103,6 +120,12 @@ The immutable result pins:
 - exact package closure;
 - binding-instance and state-space revisions;
 - admitted evidence and prior rejection explanations.
+
+Before exact package/evidence admission, the resolver can emit a deterministic
+read-only candidate report. It contains the ranking policy, selected-candidate
+reason, typed rejections, effective guarantees, and a bounded set of
+non-duplicate Pareto alternatives. Builder/Application semantic viability now
+reports both capability gaps and still-unassessed evidence obligations.
 
 ### CBS4: plan and authority commit
 
@@ -122,10 +145,16 @@ activation cannot silently downgrade it. Single-writer local CRUD operations
 validate the active authority epoch, so an old writer is rejected immediately
 after a successful rebinding.
 
+Read-only planning tooling adds a structured/human-readable diff, bounded
+fresh/expiring/expired re-planning suggestions, and a content-addressed cache
+keyed by every planning input. Cached plans remain dry-run records: activation
+still rechecks the exact immutable plan and never silently rebases it.
+
 ### CBS5: executable CRUD proof
 
 The Flowboard fixture defines one `resource.records.manage` capability, one
-record-state contract, a prototype binding, and a local-production binding.
+record-state contract, simulation and restricted sandbox SQLite bindings, and
+a local-production binding.
 The same create/update/delete contract scenario runs against the existing
 prototype and local CRUD providers.
 
@@ -144,6 +173,19 @@ The proof emits `adaos.cbs.benchmark_telemetry.v1` and
 contract, package, delivery, resolution, plan, lock, local-revision, state,
 claim, assessment, telemetry, trace, and test-result facts. Both stores are
 content addressed and reject digest collisions.
+
+The same CRUD scenario is exercised against materially different
+SQLite-backed Prototype and local JSON providers. Sandbox viability is tested
+as a third materialization with its own `BindingInstance` and `StateSpace`,
+separate from both Preview simulation and production.
+
+The 2026-09-23 regression gate covered CBS contracts/resolution/activation,
+Resource Workbench and both CRUD providers, package storage and workspace
+activation, Application runtime/access/data lifecycle, relational storage,
+and migration behavior. It exposed and fixed a first-open SQLite race:
+`ResourceStorage` schema/WAL initialization is now serialized across threads
+and processes through the dependency-neutral mutation lock. The original race
+test then passed twenty consecutive runs before the complete gate passed.
 
 ## Compatibility And Migration Policy
 

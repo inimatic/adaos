@@ -603,3 +603,105 @@ def test_cbs_crud_executable_proof_preserves_all_five_invariants(tmp_path: Path)
     assert proof_path.is_file()
     assert proof_store.load(proof.digest) == proof
     assert monotonic_ns() >= started
+
+
+def test_sandbox_is_a_separate_viable_materialization_from_simulation(tmp_path: Path) -> None:
+    contracts = flowboard_contracts()
+    semantic_revision_digest = canonical_payload_digest(
+        {
+            "application_ref": "application:flowboard",
+            "requirements": [contracts.requirement.to_dict()],
+        }
+    )
+    built_sim = _package(
+        tmp_path / "packages",
+        artifact_id="flowboard_preview_provider",
+        version="0.1.0",
+        physical_member="preview/provider.py",
+        binding_definition=contracts.simulation_binding.to_dict(),
+    )
+    built_sandbox = _package(
+        tmp_path / "packages",
+        artifact_id="flowboard_sandbox_provider",
+        version="0.1.0",
+        physical_member="sandbox/provider.py",
+        binding_definition=contracts.sandbox_binding.to_dict(),
+    )
+    delivery_sim = binding_delivery(
+        contracts.simulation_binding,
+        built_sim.ref,
+        physical_member="preview/provider.py",
+    )
+    delivery_sandbox = binding_delivery(
+        contracts.sandbox_binding,
+        built_sandbox.ref,
+        physical_member="sandbox/provider.py",
+    )
+    simulation_service = PrototypeResourceService(tmp_path / "simulation-state")
+    sandbox_service = PrototypeResourceService(tmp_path / "sandbox-state")
+    simulation_service.materialize(flowboard_prototype_bundle())
+    sandbox_service.materialize(flowboard_prototype_bundle())
+    _run_contract_scenario(simulation_service, FLOWBOARD_PROTOTYPE_RESOURCE_TYPE)
+    _run_contract_scenario(sandbox_service, FLOWBOARD_PROTOTYPE_RESOURCE_TYPE)
+    identities = LocalIdentityStore(tmp_path / "identities")
+    simulation = PrototypeCrudProjector(simulation_service, identities).project(
+        FLOWBOARD_PROTOTYPE_RESOURCE_TYPE,
+        workspace_ref="workspace:flowboard",
+        tenant_ref="tenant:cbs-proof",
+        capability_contract=contracts.capability,
+        state_contract=contracts.state,
+        binding_definition=contracts.simulation_binding,
+        delivery=delivery_sim,
+        environment_profile=contracts.profile,
+        mode="simulation",
+    )
+    sandbox = PrototypeCrudProjector(sandbox_service, identities).project(
+        FLOWBOARD_PROTOTYPE_RESOURCE_TYPE,
+        workspace_ref="workspace:flowboard",
+        tenant_ref="tenant:cbs-proof",
+        capability_contract=contracts.capability,
+        state_contract=contracts.state,
+        binding_definition=contracts.sandbox_binding,
+        delivery=delivery_sandbox,
+        environment_profile=contracts.profile,
+        mode="sandbox",
+    )
+    resolver = SemanticResolver(now=lambda: FIXED_NOW)
+    simulation_resolution = _resolve(
+        resolver,
+        contracts=contracts,
+        semantic_revision_digest=semantic_revision_digest,
+        mode="simulation",
+        definition=contracts.simulation_binding,
+        delivery=delivery_sim,
+        projection=simulation,
+        evidence=conformance_evidence(
+            contracts, contracts.simulation_binding, suffix="cbs5-simulation-separate"
+        ),
+        release_plan=_release(built_sim, version="0.1.0"),
+    )
+    sandbox_resolution = _resolve(
+        resolver,
+        contracts=contracts,
+        semantic_revision_digest=semantic_revision_digest,
+        mode="sandbox",
+        definition=contracts.sandbox_binding,
+        delivery=delivery_sandbox,
+        projection=sandbox,
+        evidence=conformance_evidence(
+            contracts, contracts.sandbox_binding, suffix="cbs5-sandbox"
+        ),
+        release_plan=_release(built_sandbox, version="0.1.0"),
+    )
+    assert simulation.state_space.stable_ref != sandbox.state_space.stable_ref
+    assert simulation.binding_instance.to_dict()["mode"] == "simulation"
+    assert sandbox.binding_instance.to_dict()["mode"] == "sandbox"
+    assert simulation_resolution.to_dict()["semantic_revision_digest"] == (
+        sandbox_resolution.to_dict()["semantic_revision_digest"]
+    )
+    assert sandbox_resolution.to_dict()["state_attachments"][0]["state_space_ref"] == (
+        sandbox.state_space.stable_ref
+    )
+    assert contracts.sandbox_binding.to_dict()["environment_constraints"][
+        "provider_features"
+    ] == ["sqlite_transaction", "restricted_effects"]

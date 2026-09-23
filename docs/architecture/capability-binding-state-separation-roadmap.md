@@ -3,10 +3,11 @@
 Status: implementation roadmap for
 [Capability, Binding, and State Separation](capability-binding-state-separation.md).
 
-Last reviewed: 2026-09-22.
+Last reviewed: 2026-09-23.
 
-Implementation checkpoint: the bounded CRUD-first `must` scope of `CBS1`
-through `CBS5` is executable as of 2026-09-22. Exact implementation,
+Implementation checkpoint: every non-deferred item through `CBS4` and every
+`CBS5` item except the compact Applications UI view (`CBS5-16`) has
+validated-local evidence as of 2026-09-23. Exact implementation,
 compatibility, evidence, Builder-adaptation, skill-migration, and legacy-removal
 status is recorded in
 [CBS1-CBS5 Implementation](capability-binding-state-cbs1-cbs5-implementation.md).
@@ -128,6 +129,10 @@ skeleton with these hard bounds:
 | planning | only steps exercised by simulation activation, local production activation, package relocation, production rebinding, and injected recovery |
 | UI | the existing fixed semantic/Web UI and Resource Workbench surfaces |
 
+The validated-local extension adds a distinct restricted sandbox
+materialization to the same local profile. This does not widen the resolver to
+new profile classes or distributed providers.
+
 Target schemas may reserve versioned extension points, but the runtime rejects
 unsupported environment, evidence, portability, provider, and writer modes. A
 pre-CBS5 task is not expanded merely because the target architecture names a
@@ -203,10 +208,10 @@ without modifying runtime state.
 - [x] `[must]` `CBS0-07` Select one existing real CRUD resource with fixture
   data, access rules, optimistic revision behavior, and an explicit migration
   boundary for the vertical proof.
-- [ ] `[should]` `CBS0-08` Publish a terminology lint or schema-review check that
+- [x] `[should]` `CBS0-08` Publish a terminology lint or schema-review check that
   flags persistent `state_ref` and ambiguous new manifest `capabilities`
   declarations.
-- [ ] `[could]` `CBS0-09` Add a developer-facing identity map that explains the
+- [x] `[could]` `CBS0-09` Add a developer-facing identity map that explains the
   current package, semantic, binding, and state refs for one installation.
 - [ ] `[deferred]` `CBS0-10` Rename all legacy skill, Project, provider, and
   permission identifiers to the new vocabulary.
@@ -231,48 +236,48 @@ facts can be published and validated independently of an installation.
 ref and digest for one capability, both validate against the same contracts,
 and no portable record contains installation secrets or local paths.
 
-- [ ] `[must]` `CBS1-01` Add a fail-closed `adaos.capability.contract.v1` JSON
+- [x] `[must]` `CBS1-01` Add a fail-closed `adaos.capability.contract.v1` JSON
   Schema and immutable typed model with stable ref, version, I/O/errors,
   invariants, effects, authority requirements, dependencies, state ports,
   conformance refs, and compatibility metadata.
-- [ ] `[must]` `CBS1-02` Add a fail-closed `adaos.state.contract.v1` schema and
+- [x] `[must]` `CBS1-02` Add a fail-closed `adaos.state.contract.v1` schema and
   model with schema locks, invariant refs, guarantee envelope, lifecycle,
   ownership constraints, portability class, and migration compatibility.
-- [ ] `[must]` `CBS1-03` Add `StatePort` validation for contract range, access
+- [x] `[must]` `CBS1-03` Add `StatePort` validation for contract range, access
   mode, consumer consistency/durability/isolation requirements, and mutation
   authority requirements.
-- [ ] `[must]` `CBS1-04` Add a fail-closed
+- [x] `[must]` `CBS1-04` Add a fail-closed
   `adaos.binding.definition.v1` schema and model for implemented contract,
   entry protocol, state support, modes, environment constraints, authority,
   logical implementation entry point, and conformance obligations; reject
   physical package paths or members in canonical definition content.
-- [ ] `[must]` `CBS1-05` Add package delivery metadata that maps an exact
+- [x] `[must]` `CBS1-05` Add package delivery metadata that maps an exact
   binding-definition digest and logical entry point to a physical member in
   existing immutable `ArtifactPackageRef` and `ProjectRelease` facts. Prove a
   package relocation changes delivery/package digests without changing the
   binding-definition digest.
-- [ ] `[must]` `CBS1-06` Add an immutable `adaos.evidence.claim.v1` model with
+- [x] `[must]` `CBS1-06` Add an immutable `adaos.evidence.claim.v1` model with
   typed claim kind, exact subjects, environment digest, dependency
   observations, suite/evidence digest, provenance, issue time, freshness
   policy, result, redaction, and portability scope.
-- [ ] `[must]` `CBS1-07` Define the first conformance scenario records only for
+- [x] `[must]` `CBS1-07` Define the first conformance scenario records only for
   `capability_conformance` and `state_compatibility`. Add migration-correctness
   and installation-health claim kinds only when a later proof exercises them.
-- [ ] `[must]` `CBS1-08` Add semantic validation that a state contract references
+- [x] `[must]` `CBS1-08` Add semantic validation that a state contract references
   current schema/migration/data-lifecycle locks without copying or contradicting
   their contents.
-- [ ] `[must]` `CBS1-09` Keep requested SDK permissions and provided semantic
+- [x] `[must]` `CBS1-09` Keep requested SDK permissions and provided semantic
   capabilities in different manifest keys/files, models, and validation error
   messages.
-- [ ] `[must]` `CBS1-10` Add canonical serialization and digest round-trip,
+- [x] `[must]` `CBS1-10` Add canonical serialization and digest round-trip,
   mutation rejection, unknown-version, unknown-field, duplicate-ref, and
   malicious locator/secret fixture tests.
-- [ ] `[should]` `CBS1-11` Define explicit compatibility edges in addition to
+- [x] `[should]` `CBS1-11` Define explicit compatibility edges in addition to
   version ranges for contracts whose semantic compatibility cannot be inferred
   from SemVer alone.
-- [ ] `[should]` `CBS1-12` Add signature/trust-domain admission for portable
+- [x] `[should]` `CBS1-12` Add signature/trust-domain admission for portable
   contracts and claims by reusing package attestation policy.
-- [ ] `[could]` `CBS1-13` Generate human-readable contract reference pages and
+- [x] `[could]` `CBS1-13` Generate human-readable contract reference pages and
   diffs from canonical records.
 - [ ] `[deferred]` `CBS1-14` Publish a federated public capability registry or
   solve cross-registry naming governance.
@@ -287,40 +292,40 @@ explicit, and independent of package topology.
 be reloaded deterministically, and preserves existing records and access
 behavior.
 
-- [ ] `[must]` `CBS2-01` Add fail-closed
+- [x] `[must]` `CBS2-01` Add fail-closed
   `adaos.binding.instance.v1` and `adaos.state.space.v1` schemas and immutable
   typed revision models with stable refs, monotonic revision numbers,
   predecessor digests, workspace/tenant scope, and opaque local references.
-- [ ] `[must]` `CBS2-02` Separate logical owner, lifecycle authority, custodian
+- [x] `[must]` `CBS2-02` Separate logical owner, lifecycle authority, custodian
   binding, mutation authority, and physical locator in the state-space model.
-- [ ] `[must]` `CBS2-03` Define append-only binding-instance and state-space
+- [x] `[must]` `CBS2-03` Define append-only binding-instance and state-space
   revision semantics. State generation, storage attachment, and writer
   authority epoch changes create a new revision; health/readiness observations
   bind to a revision without mutating it; stale writer epochs are rejected.
-- [ ] `[must]` `CBS2-04` Define relation records for binding-instance
+- [x] `[must]` `CBS2-04` Define relation records for binding-instance
   `reads`, `writes`, `appends`, and `caches` access without embedding a single
   state owner into the binding identity.
-- [ ] `[must]` `CBS2-05` Implement effective guarantee calculation from state
+- [x] `[must]` `CBS2-05` Implement effective guarantee calculation from state
   contract, provider capabilities, state space, binding definition/instance,
   and environment profile.
-- [ ] `[must]` `CBS2-06` Reject a state-port attachment unless every consumer
+- [x] `[must]` `CBS2-06` Reject a state-port attachment unless every consumer
   requirement is included in the effective guarantee set.
-- [ ] `[must]` `CBS2-07` Build a deterministic read-only compatibility projector
+- [x] `[must]` `CBS2-07` Build a deterministic read-only compatibility projector
   for the selected skill-owned CRUD data and record its source package,
   owner, path/locator, schema, lifecycle, and generation provenance.
-- [ ] `[must]` `CBS2-08` Preserve current relational opaque-locator, secret-ref,
+- [x] `[must]` `CBS2-08` Preserve current relational opaque-locator, secret-ref,
   private-owner, migration-owner, and provider-negotiation invariants.
-- [ ] `[must]` `CBS2-09` Define allocate, attach, adopt, import, fork,
+- [x] `[must]` `CBS2-09` Define allocate, attach, adopt, import, fork,
   reconstruct, detach, archive, and destroy as distinct lifecycle operations;
   installation alone must not imply ownership or deletion authority.
-- [ ] `[must]` `CBS2-10` Add redaction tests proving portable output and graph
+- [x] `[must]` `CBS2-10` Add redaction tests proving portable output and graph
   inputs cannot expose DSNs, secrets, local absolute paths, or protected account
   identities.
-- [ ] `[should]` `CBS2-11` Add an operator/API inspector for state identity,
+- [x] `[should]` `CBS2-11` Add an operator/API inspector for state identity,
   owner, contract, custodian, generation, portability, and health.
-- [ ] `[should]` `CBS2-12` Add backup/restore provenance and storage-capacity
+- [x] `[should]` `CBS2-12` Add backup/restore provenance and storage-capacity
   observations to effective guarantees where existing providers expose them.
-- [ ] `[could]` `CBS2-13` Project additional existing stores to measure legacy
+- [x] `[could]` `CBS2-13` Project additional existing stores to measure legacy
   shape diversity before native adoption.
 - [ ] `[deferred]` `CBS2-14` Automatically migrate every legacy skill database
   or remove legacy owner/path conventions.
@@ -335,39 +340,39 @@ semantic, simulation, and local-production targets; rejected alternatives are
 explainable; exact package closure precedes evidence admission; and resolution
 performs no writes to bindings, state, or lock.
 
-- [ ] `[must]` `CBS3-01` Define the Application requirement ABI with capability
+- [x] `[must]` `CBS3-01` Define the Application requirement ABI with capability
   ref/range, environment target, policy constraints, and evidence threshold;
   reject implementation and provider fields.
-- [ ] `[must]` `CBS3-02` Implement a bounded deterministic semantic resolver
+- [x] `[must]` `CBS3-02` Implement a bounded deterministic semantic resolver
   over the selected CRUD contracts, binding definitions, the local environment
   profile, and effective guarantees. Its output is an ephemeral
   `SemanticCandidate` with package constraints and evidence obligations, not an
   `ApplicationResolution`.
-- [ ] `[must]` `CBS3-03` Pass each semantic candidate to the existing exact
+- [x] `[must]` `CBS3-03` Pass each semantic candidate to the existing exact
   package/dependency resolver, preserve package-level conflict authority, and
   obtain an exact package closure and delivery mapping before evidence
   admission.
-- [ ] `[must]` `CBS3-04` Add immutable
+- [x] `[must]` `CBS3-04` Add immutable
   `adaos.application.resolution.v1`, created only after exact-package evidence
   and policy admission, with semantic revision, environment and policy digests,
   selected contracts/definitions, exact package closure/delivery mappings,
   local instances or provisioning obligations, state attachments, evidence,
   and rejection explanations.
-- [ ] `[must]` `CBS3-05` Distinguish ephemeral semantic and package-resolved
+- [x] `[must]` `CBS3-05` Distinguish ephemeral semantic and package-resolved
   candidates from the selected, admitted, immutable resolution; prove no
   resolution record exists when package resolution or evidence admission fails.
-- [ ] `[must]` `CBS3-06` Produce typed unmet requirement, incompatible state,
+- [x] `[must]` `CBS3-06` Produce typed unmet requirement, incompatible state,
   insufficient guarantee, missing authority, unavailable instance, stale
   evidence, and package-conflict results.
-- [ ] `[must]` `CBS3-07` Derive semantic, simulation, sandbox, and production
+- [x] `[must]` `CBS3-07` Derive semantic, simulation, sandbox, and production
   viability without creating separate Application identities.
-- [ ] `[must]` `CBS3-08` Prove resolver purity with tests that snapshot all local
+- [x] `[must]` `CBS3-08` Prove resolver purity with tests that snapshot all local
   stores and `WorkspaceLock` before and after success, ambiguity, and failure.
-- [ ] `[should]` `CBS3-09` Add deterministic ranking policy and an explanation
+- [x] `[should]` `CBS3-09` Add deterministic ranking policy and an explanation
   trace for why the selected binding outranked eligible alternatives.
-- [ ] `[should]` `CBS3-10` Surface capability gaps and evidence obligations in
+- [x] `[should]` `CBS3-10` Surface capability gaps and evidence obligations in
   the Builder final verification report.
-- [ ] `[could]` `CBS3-11` Return several Pareto candidates for interactive cost,
+- [x] `[could]` `CBS3-11` Return several Pareto candidates for interactive cost,
   locality, privacy, or provider selection.
 - [ ] `[deferred]` `CBS3-12` Add a general-purpose global optimizer or
   unbounded SAT/constraint solver before the bounded resolver is measured.
@@ -381,49 +386,49 @@ that extends the existing activation pipeline.
 generations, authority epochs, or evidence reject before commit; injected
 pre-commit failures preserve the old lock, active state generation, and writer.
 
-- [ ] `[must]` `CBS4-01` Add immutable `adaos.resolution.plan.v1` with desired
+- [x] `[must]` `CBS4-01` Add immutable `adaos.resolution.plan.v1` with desired
   resolution, base lock, desired bindings and state attachments, provisioning,
   migrations, evidence, steps, expected generations, compensation/recovery,
   expiry, and canonical digest.
-- [ ] `[must]` `CBS4-02` Classify each plan step as read-only, idempotent,
+- [x] `[must]` `CBS4-02` Classify each plan step as read-only, idempotent,
   compensatable, reconcile-only, or irreversible and define retry rules.
-- [ ] `[must]` `CBS4-03` Extend the existing activation operation/journal to pin
+- [x] `[must]` `CBS4-03` Extend the existing activation operation/journal to pin
   `application_resolution_digest` and `resolution_plan_digest` through every
   phase and recovery path.
-- [ ] `[must]` `CBS4-04` Validate base `WorkspaceLock` digest/revision, binding
+- [x] `[must]` `CBS4-04` Validate base `WorkspaceLock` digest/revision, binding
   instance revision digests, state-space revision digests, state generations,
   authority epochs, package digests, and evidence freshness immediately before
   the commit boundary.
-- [ ] `[must]` `CBS4-05` Extend or digest-link `ProjectCompositionLock` and
+- [x] `[must]` `CBS4-05` Extend or digest-link `ProjectCompositionLock` and
   `WorkspaceLock` with active resolution, binding-instance and state-space refs
   plus exact revision digests, state attachments, generation/epoch, and
   evidence-set facts without creating another active lock.
-- [ ] `[must]` `CBS4-06` Implement state staging so a migrated/provisioned
+- [x] `[must]` `CBS4-06` Implement state staging so a migrated/provisioned
   generation cannot receive active writes before the authority switch.
-- [ ] `[must]` `CBS4-07` Implement fencing-token/authority-epoch validation for
+- [x] `[must]` `CBS4-07` Implement fencing-token/authority-epoch validation for
   the selected single-writer state class and prove an old writer is rejected
   after commit.
-- [ ] `[must]` `CBS4-08` Define the exact authority commit point and atomically
+- [x] `[must]` `CBS4-08` Define the exact authority commit point and atomically
   persist the new `WorkspaceLock`, new immutable state-space revision, active
   state generation, and writer epoch within the supported local transaction
   boundary.
-- [ ] `[must]` `CBS4-09` Prove every injected failure before commit satisfies
+- [x] `[must]` `CBS4-09` Prove every injected failure before commit satisfies
   `WorkspaceLock_after == WorkspaceLock_before` and leaves the previous active
   state generation and writer usable.
-- [ ] `[must]` `CBS4-10` Prove crash recovery before, during, and after lock
+- [x] `[must]` `CBS4-10` Prove crash recovery before, during, and after lock
   switching can distinguish uncommitted staging from committed intent and
   never admits two active writers.
-- [ ] `[must]` `CBS4-11` Preserve staged artifacts, evidence, backups, and
+- [x] `[must]` `CBS4-11` Preserve staged artifacts, evidence, backups, and
   journals for bounded diagnosis and idempotent cleanup without presenting them
   as active.
-- [ ] `[must]` `CBS4-12` Reject unattended plans containing unproven
+- [x] `[must]` `CBS4-12` Reject unattended plans containing unproven
   irreversible external actions; require explicit approval, idempotency,
   compensation, or reconcile-only recovery.
-- [ ] `[should]` `CBS4-13` Add a human-readable plan diff covering semantic,
+- [x] `[should]` `CBS4-13` Add a human-readable plan diff covering semantic,
   package, binding, state, migration, authority, evidence, and rollback changes.
-- [ ] `[should]` `CBS4-14` Add bounded plan expiry and background re-planning
+- [x] `[should]` `CBS4-14` Add bounded plan expiry and background re-planning
   suggestions while preserving the rule that activation never silently rebases.
-- [ ] `[could]` `CBS4-15` Cache still-valid plans by full input digest for dry-run
+- [x] `[could]` `CBS4-15` Cache still-valid plans by full input digest for dry-run
   inspection.
 - [ ] `[deferred]` `CBS4-16` Implement atomic transactions across arbitrary
   external SaaS systems or generic unattended destructive migration.
@@ -437,59 +442,77 @@ Resource Workbench, packages, and activation.
 semantic revision through final `WorkspaceLock`, including data digests and
 failure injection.
 
-- [ ] `[must]` `CBS5-01` Define the bounded `resource.records.manage` capability
+- [x] `[must]` `CBS5-01` Define the bounded `resource.records.manage` capability
   contract and one record state contract over the selected real CRUD resource.
-- [ ] `[must]` `CBS5-02` Preserve Core ownership of persistence, transactions,
+- [x] `[must]` `CBS5-02` Preserve Core ownership of persistence, transactions,
   schema validation, optimistic revision conflict, access decisions, events,
   and tracing.
-- [ ] `[must]` `CBS5-03` Implement a deterministic simulation
+- [x] `[must]` `CBS5-03` Implement a deterministic simulation
   `BindingDefinition` with its own disposable state space and explicit
   non-production effects.
-- [ ] `[must]` `CBS5-04` Implement a local-production `BindingDefinition` and
+- [x] `[must]` `CBS5-04` Implement a local-production `BindingDefinition` and
   Binding A instance over the existing CRUD/storage machinery and allocate one
   stable production state space.
-- [ ] `[must]` `CBS5-05` Run the same contract scenarios against simulation and
+- [x] `[must]` `CBS5-05` Run the same contract scenarios against simulation and
   local production and emit immutable conformance claims for exact subjects.
-- [ ] `[must]` `CBS5-06` Prove materialization independence: activate simulation
+- [x] `[must]` `CBS5-06` Prove materialization independence: activate simulation
   then production with an unchanged semantic Application revision digest while
   explicitly allowing and expecting different simulation and production
   `state_space_ref` values.
-- [ ] `[must]` `CBS5-07` Prove package-topology independence: move the production
+- [x] `[must]` `CBS5-07` Prove package-topology independence: move the production
   implementation to a different package/release topology without changing the
   requirement, capability-contract identity, binding-definition ref, or
   binding-definition digest.
-- [ ] `[must]` `CBS5-08` Prove state continuity in a separate production Binding
+- [x] `[must]` `CBS5-08` Prove state continuity in a separate production Binding
   A to production Binding B transition: retain the production
   `state_space_ref`, record count, canonical record digests, schema lineage, and
   access semantics through state-safe rebinding. Simulation state does not
   participate in this invariant.
-- [ ] `[must]` `CBS5-09` Prove Application independence by schema assertion and
+- [x] `[must]` `CBS5-09` Prove Application independence by schema assertion and
   review that no semantic field contains selected package, binding, provider,
   storage, endpoint, or credential identities.
-- [ ] `[must]` `CBS5-10` Prove atomic rebinding with failure injection at every
+- [x] `[must]` `CBS5-10` Prove atomic rebinding with failure injection at every
   plan phase, stale generation conflicts, writer overlap attempts, process
   termination at the commit boundary, restart recovery, and health-check
   failure.
-- [ ] `[must]` `CBS5-11` Re-run current Resource Workbench, Application,
+- [x] `[must]` `CBS5-11` Re-run current Resource Workbench, Application,
   package/activation, relational storage, access, and migration regression
   suites.
-- [ ] `[must]` `CBS5-12` Emit versioned benchmark-compatible telemetry from the
+- [x] `[must]` `CBS5-12` Emit versioned benchmark-compatible telemetry from the
   first CRUD run: requirement totals/resolution, candidate and binding-selection
   cost, resolution/activation duration, context/tokens, residual
   implementation, package/contract reuse, manual interventions, and E2E
   result.
-- [ ] `[must]` `CBS5-13` Preserve an exact evidence bundle containing source and
+- [x] `[must]` `CBS5-13` Preserve an exact evidence bundle containing source and
   package digests, semantic revision, contracts, resolution, plan, before/after
   locks, local revision digests, state digests, claim/assessment records,
   telemetry, trace IDs, and test output.
-- [ ] `[should]` `CBS5-14` Repeat the proof with SQLite and PostgreSQL or another
+- [x] `[should]` `CBS5-14` Repeat the proof with SQLite and PostgreSQL or another
   materially different provider profile.
-- [ ] `[should]` `CBS5-15` Exercise sandbox viability separately from simulation
+- [x] `[should]` `CBS5-15` Exercise sandbox viability separately from simulation
   and local production.
 - [ ] `[could]` `CBS5-16` Add a compact UI view that animates requirement,
   resolution, plan, activation, and lock without making that view authoritative.
 - [ ] `[deferred]` `CBS5-17` Generalize the proof to every Resource Workbench
   resource before the domain-capability result is known.
+
+Validated-local checkpoint, 2026-09-23:
+
+- portable contract trust admission, explicit compatibility edges, generated
+  references/diffs, terminology lint, and installation identity mapping are
+  covered by the contract suite;
+- local revision history, state inspection, backup/capacity observations,
+  legacy JSON and Prototype/SQLite projection, resolver ranking/Pareto reports,
+  Builder gaps/evidence obligations, plan diff/replanning/cache, and sandbox
+  viability have focused executable tests;
+- the broad `CBS5-11` regression gate passes across Resource Workbench,
+  Application runtime/access/data lifecycle, package storage/activation,
+  relational storage, and migrations;
+- a concurrent first-open SQLite/WAL initialization defect found by that gate
+  was fixed, followed by twenty consecutive race reproductions and a clean
+  complete regression run;
+- `CBS5-16` remains intentionally open until the compact view is integrated in
+  the Applications UI; no deferred item has been reclassified or implemented.
 
 ### CRUD acceptance matrix
 

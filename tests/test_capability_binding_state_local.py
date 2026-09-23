@@ -6,6 +6,7 @@ import pytest
 
 from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.domain.capability_binding_state import (
+    ApplicationRequirement,
     BindingDefinition,
     BindingDelivery,
     BindingInstance,
@@ -21,6 +22,9 @@ from adaos.services.capability_binding_state import (
     LocalIdentityConflict,
     LocalIdentityStore,
     StateAttachmentError,
+    build_identity_map,
+    calculate_effective_guarantees,
+    inspect_state_identity,
     redacted_graph_record,
     validate_state_attachment,
 )
@@ -362,3 +366,96 @@ def test_observations_lifecycle_operations_and_graph_projection_are_separate(tmp
     assert "details" not in observation_graph
     assert operation.to_dict()["operation"] == "adopt"
     assert projected.state_space.to_dict().get("lifecycle_operation") is None
+
+
+def test_operator_inspector_reports_backup_capacity_and_identity_history(tmp_path: Path) -> None:
+    _resource, store, _projector, projected, capability, state, definition, profile = _projection(
+        tmp_path
+    )
+    capacity = LocalRevisionObservation.create(
+        observation_ref="observation:flowboard/state/capacity",
+        subject_kind="state_space",
+        subject_ref=projected.state_space.stable_ref,
+        subject_revision_digest=projected.state_space.digest,
+        observation_kind="capacity",
+        status="healthy",
+        observed_at="2026-09-23T10:00:00+00:00",
+        details={"used_bytes": 4096, "available_bytes": 8192},
+    )
+    backup = LocalRevisionObservation.create(
+        observation_ref="observation:flowboard/state/backup",
+        subject_kind="state_space",
+        subject_ref=projected.state_space.stable_ref,
+        subject_revision_digest=projected.state_space.digest,
+        observation_kind="backup",
+        status="ready",
+        observed_at="2026-09-23T10:01:00+00:00",
+        details={
+            "backup_ref": "backup:flowboard/2026-09-23",
+            "backup_digest": DIGEST_B,
+            "restore_tested": True,
+        },
+    )
+    store.put_fact(capacity)
+    store.put_fact(backup)
+    observations = store.observations(
+        subject_ref=projected.state_space.stable_ref,
+        subject_revision_digest=projected.state_space.digest,
+    )
+    inspection = inspect_state_identity(
+        projected.state_space,
+        binding_instance=projected.binding_instance,
+        state_contract=state,
+        observations=observations,
+    )
+    assert inspection["logical_owner_ref"] == "skill:flowboard_skill"
+    assert inspection["observations"]["backup"]["details"]["restore_tested"] is True
+    assert inspection["observations"]["capacity"]["details"]["used_bytes"] == 4096
+    guarantees = calculate_effective_guarantees(
+        state_contract=state,
+        binding_definition=definition,
+        binding_instance=projected.binding_instance,
+        state_space=projected.state_space,
+        environment_profile=profile,
+        observations=observations,
+    )
+    assert guarantees["operational"] == (
+        "backup:ready",
+        "backup:restore_tested",
+        "capacity:healthy",
+        "capacity:observed",
+    )
+    assert store.revisions(projected.state_space.stable_ref, StateSpace) == (
+        projected.state_space,
+    )
+
+    requirement = ApplicationRequirement.create(
+        requirement_ref="requirement:flowboard/manage-work-items",
+        capability_ref=capability.capability_ref,
+        contract_range="^1.0.0",
+        environment_target={
+            "profile_ref": profile.profile_ref,
+            "allowed_modes": ["production"],
+        },
+        policy_constraints={
+            "locality": "local",
+            "privacy": "workspace",
+            "required_authorities": ["resource.records.write"],
+        },
+        evidence_threshold={
+            "required_claim_kinds": ["capability_conformance", "state_compatibility"],
+            "allow_stale": False,
+        },
+    )
+    identity_map = build_identity_map(
+        requirement=requirement,
+        capability_contract=capability,
+        state_contracts=(state,),
+        binding_definition=definition,
+        delivery=_delivery(definition),
+        binding_instances=(projected.binding_instance,),
+        state_spaces=(projected.state_space,),
+    )
+    assert identity_map["binding_instances"][0]["ref"] == projected.binding_instance.stable_ref
+    assert identity_map["state_spaces"][0]["ref"] == projected.state_space.stable_ref
+    assert identity_map["map_digest"].startswith("sha256:")

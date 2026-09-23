@@ -25,10 +25,13 @@ from adaos.services.capability_binding_state import (
     FencedLocalCrudWriter,
     LegacyCrudProjector,
     LocalIdentityStore,
+    ResolutionPlanCache,
     ResolutionPlanError,
     ResolutionPlanner,
     SemanticResolver,
     StaleWriterError,
+    resolution_plan_diff,
+    resolution_plan_replanning_status,
 )
 from adaos.services.capability_binding_state.reference_crud import (
     FLOWBOARD_RESOURCE_TYPE,
@@ -382,3 +385,37 @@ def test_fenced_writer_rejects_missing_and_stale_epochs(tmp_path: Path) -> None:
     )
     assert result["record"]["status"] == "done"
     assert fixture["manager"].load_lock().to_dict()["schema"] != WORKSPACE_LOCK_SCHEMA
+
+
+def test_plan_diff_expiry_suggestion_and_full_input_cache_are_read_only(tmp_path: Path) -> None:
+    fixture = _setup(tmp_path)
+    ttl = timedelta(minutes=10)
+    input_digest = fixture["planner"].input_digest(
+        fixture["resolution"], current_lock=None, ttl=ttl
+    )
+    plan = fixture["planner"].build(
+        fixture["resolution"], current_lock=None, ttl=ttl
+    )
+    cache = ResolutionPlanCache(tmp_path / "plan-cache")
+    cache.put(input_digest, plan)
+    assert cache.get(input_digest, now=FIXED_NOW) == plan
+    assert cache.get(input_digest, now=FIXED_NOW + timedelta(minutes=11)) is None
+
+    diff = resolution_plan_diff(plan, current_lock=None)
+    assert diff["summary"]["binding_changes"] == 1
+    assert diff["summary"]["state_changes"] == 1
+    assert "Bindings changed: 1" in diff["text"]
+    assert diff["activation_performed"] is False
+
+    assert resolution_plan_replanning_status(
+        plan, now=FIXED_NOW + timedelta(minutes=1)
+    )["status"] == "fresh"
+    expiring = resolution_plan_replanning_status(
+        plan, now=FIXED_NOW + timedelta(minutes=9)
+    )
+    assert expiring["status"] == "expiring"
+    assert expiring["automatic_rebase"] is False
+    assert resolution_plan_replanning_status(
+        plan, now=FIXED_NOW + timedelta(minutes=10)
+    )["status"] == "expired"
+    assert fixture["manager"].load_lock() is None

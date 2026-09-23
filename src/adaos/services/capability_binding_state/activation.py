@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from adaos.domain.artifact_release import WorkspaceLock, canonical_payload_digest
@@ -19,6 +21,7 @@ from adaos.services.artifact_pipeline.activation import (
     WorkspaceActivationManager,
 )
 from adaos.services.artifact_pipeline.releases import ReleasePlan
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.capability_binding_state.local_state import LocalIdentityStore
 from adaos.services.resources.local import LocalCrudResourceService
 
@@ -49,6 +52,36 @@ def _parse_time(value: Any) -> datetime:
 @dataclass(slots=True)
 class ResolutionPlanner:
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+
+    @staticmethod
+    def input_digest(
+        resolution: ApplicationResolution,
+        *,
+        current_lock: WorkspaceLock | None,
+        ttl: timedelta = timedelta(minutes=15),
+        provisioning: Iterable[Mapping[str, Any]] = (),
+        migrations: Iterable[Mapping[str, Any]] = (),
+    ) -> str:
+        """Address a dry-run plan by every caller-controlled planning input."""
+
+        lock = current_lock.to_dict() if current_lock is not None else None
+        return canonical_payload_digest(
+            {
+                "schema": "adaos.resolution_plan.input.v1",
+                "application_resolution_digest": resolution.digest,
+                "base_lock": (
+                    {
+                        "revision": lock["lock_revision"],
+                        "digest": lock["lock_digest"],
+                    }
+                    if lock is not None
+                    else {"revision": 0}
+                ),
+                "ttl_seconds": int(ttl.total_seconds()),
+                "provisioning": [dict(item) for item in provisioning],
+                "migrations": [dict(item) for item in migrations],
+            }
+        )
 
     def build(
         self,
@@ -146,6 +179,179 @@ class ResolutionPlanner:
             created_at=created.isoformat(),
             expires_at=expires.isoformat(),
         )
+
+
+def resolution_plan_diff(
+    plan: ResolutionPlan,
+    *,
+    current_lock: WorkspaceLock | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Explain a plan without making it executable or changing authority."""
+
+    value = plan.to_dict()
+    lock = (
+        current_lock.to_dict()
+        if isinstance(current_lock, WorkspaceLock)
+        else dict(current_lock)
+        if isinstance(current_lock, Mapping)
+        else {}
+    )
+    current_cbs = lock.get("cbs") if isinstance(lock.get("cbs"), Mapping) else {}
+    current_bindings = {
+        str(item.get("ref") or item.get("binding_instance_ref")): dict(item)
+        for item in current_cbs.get("binding_instances") or []
+        if isinstance(item, Mapping)
+    }
+    desired_bindings = {
+        str(item["ref"]): dict(item) for item in value["desired_bindings"]
+    }
+    current_states = {
+        str(item.get("state_space_ref")): dict(item)
+        for item in (current_cbs.get("state_spaces") or current_cbs.get("state_attachments") or [])
+        if isinstance(item, Mapping)
+    }
+    desired_states = {
+        str(item["state_space_ref"]): dict(item)
+        for item in value["desired_state_attachments"]
+    }
+
+    def changes(before: Mapping[str, Mapping[str, Any]], after: Mapping[str, Mapping[str, Any]]):
+        rows: list[dict[str, Any]] = []
+        for ref in sorted(set(before) | set(after)):
+            left = before.get(ref)
+            right = after.get(ref)
+            action = "add" if left is None else "remove" if right is None else "retain" if left == right else "change"
+            rows.append({"ref": ref, "action": action, "before": left, "after": right})
+        return rows
+
+    binding_changes = changes(current_bindings, desired_bindings)
+    state_changes = changes(current_states, desired_states)
+    evidence_before = str(current_cbs.get("evidence_set_digest") or "")
+    evidence_after = canonical_payload_digest(value["evidence"])
+    semantic_before = str(current_cbs.get("application_resolution_digest") or "")
+    semantic_after = str(value["application_resolution_digest"])
+    package_before = sorted(
+        str(item.get("digest") or "")
+        for item in lock.get("components") or []
+        if isinstance(item, Mapping)
+    )
+    summary = {
+        "semantic_resolution_changed": semantic_before != semantic_after,
+        "binding_changes": sum(item["action"] != "retain" for item in binding_changes),
+        "state_changes": sum(item["action"] != "retain" for item in state_changes),
+        "migration_total": len(value["migrations"]),
+        "provisioning_total": len(value["provisioning"]),
+        "evidence_changed": evidence_before != evidence_after,
+    }
+    lines = [
+        f"Resolution: {semantic_before or '<none>'} -> {semantic_after}",
+        f"Bindings changed: {summary['binding_changes']}",
+        f"State attachments changed: {summary['state_changes']}",
+        f"Migrations: {summary['migration_total']}; provisioning: {summary['provisioning_total']}",
+        f"Evidence changed: {str(summary['evidence_changed']).lower()}",
+    ]
+    return {
+        "schema": "adaos.resolution_plan.diff.v1",
+        "plan_ref": plan.plan_ref,
+        "plan_digest": plan.digest,
+        "base_lock": value["base_lock"],
+        "summary": summary,
+        "semantic": {"before": semantic_before or None, "after": semantic_after},
+        "packages": {"before": package_before, "after": "pinned-by-application-resolution"},
+        "bindings": binding_changes,
+        "state_attachments": state_changes,
+        "migrations": value["migrations"],
+        "provisioning": value["provisioning"],
+        "evidence": {"before": evidence_before or None, "after": evidence_after},
+        "text": "\n".join(lines),
+        "activation_performed": False,
+    }
+
+
+def resolution_plan_replanning_status(
+    plan: ResolutionPlan,
+    *,
+    now: datetime | None = None,
+    refresh_before: timedelta = timedelta(minutes=2),
+) -> dict[str, Any]:
+    """Return a bounded background suggestion; never mutate or rebase a plan."""
+
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    expires = _parse_time(plan.to_dict()["expires_at"])
+    remaining = int((expires - current).total_seconds())
+    if remaining <= 0:
+        status = "expired"
+        recommendation = "build_new_plan"
+    elif remaining <= int(refresh_before.total_seconds()):
+        status = "expiring"
+        recommendation = "prepare_replacement_plan"
+    else:
+        status = "fresh"
+        recommendation = "none"
+    return {
+        "schema": "adaos.resolution_plan.replanning_status.v1",
+        "plan_ref": plan.plan_ref,
+        "plan_digest": plan.digest,
+        "status": status,
+        "recommendation": recommendation,
+        "remaining_seconds": max(0, remaining),
+        "automatic_activation": False,
+        "automatic_rebase": False,
+    }
+
+
+@dataclass(slots=True)
+class ResolutionPlanCache:
+    """Content-addressed dry-run cache; cached plans never grant authority."""
+
+    root: Path
+
+    @property
+    def lock_path(self) -> Path:
+        return Path(self.root) / ".plan-cache.lock"
+
+    def put(self, input_digest: str, plan: ResolutionPlan) -> Path:
+        if not input_digest.startswith("sha256:") or len(input_digest) != 71:
+            raise ResolutionPlanError("plan cache input digest is invalid")
+        path = Path(self.root) / f"{input_digest.removeprefix('sha256:')}.json"
+        payload = {
+            "schema": "adaos.resolution_plan.cache_entry.v1",
+            "input_digest": input_digest,
+            "plan": plan.to_dict(),
+            "dry_run_only": True,
+        }
+        with mutation_lock(self.lock_path):
+            if path.is_file():
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if existing != payload:
+                    raise ResolutionPlanError("plan cache input already maps to another plan")
+            else:
+                atomic_write_json(path, payload)
+        return path
+
+    def get(
+        self,
+        input_digest: str,
+        *,
+        now: datetime | None = None,
+    ) -> ResolutionPlan | None:
+        path = Path(self.root) / f"{input_digest.removeprefix('sha256:')}.json"
+        if not path.is_file():
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(value, Mapping)
+            or value.get("schema") != "adaos.resolution_plan.cache_entry.v1"
+            or value.get("input_digest") != input_digest
+            or value.get("dry_run_only") is not True
+            or not isinstance(value.get("plan"), Mapping)
+        ):
+            raise ResolutionPlanError("invalid plan cache entry")
+        plan = ResolutionPlan.from_mapping(value["plan"])
+        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        if _parse_time(plan.to_dict()["expires_at"]) <= current:
+            return None
+        return plan
 
 
 @dataclass(frozen=True, slots=True)

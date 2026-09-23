@@ -106,6 +106,119 @@ class SemanticResolver:
             "requirement_digest": requirement.digest,
         }
 
+    def explain_candidates(
+        self,
+        requirement: ApplicationRequirement,
+        *,
+        target_mode: str,
+        capability_contracts: Iterable[CapabilityContract],
+        state_contracts: Iterable[StateContract],
+        binding_definitions: Iterable[BindingDefinition],
+        deliveries: Iterable[BindingDelivery],
+        environment_profile: EnvironmentProfile,
+        binding_instances: Iterable[BindingInstance],
+        state_spaces: Iterable[StateSpace],
+        relations: Iterable[StateAccessRelation],
+    ) -> dict[str, object]:
+        """Return a deterministic, read-only semantic ranking trace.
+
+        This stops before exact package resolution and evidence admission.  It
+        is therefore suitable for Builder diagnostics, but is never an
+        ``ApplicationResolution`` and cannot authorize activation.
+        """
+
+        rejections: list[ResolutionRejection] = []
+        candidates = self._semantic_candidates(
+            requirement,
+            target_mode=target_mode,
+            capability_contracts=tuple(capability_contracts),
+            state_contracts=tuple(state_contracts),
+            binding_definitions=tuple(binding_definitions),
+            deliveries=tuple(deliveries),
+            environment_profile=environment_profile,
+            binding_instances=tuple(binding_instances),
+            state_spaces=tuple(state_spaces),
+            relations=tuple(relations),
+            rejections=rejections,
+        )
+        ranked = sorted(candidates, key=lambda item: item.sort_key, reverse=True)
+        rows: list[dict[str, object]] = []
+        frontier_keys: set[tuple[str, str]] = set()
+        frontier_ids: list[str] = []
+        for rank, candidate in enumerate(ranked, start=1):
+            candidate_id = canonical_payload_digest(
+                {
+                    "capability_contract_digest": candidate.capability_contract.digest,
+                    "binding_definition_digest": candidate.binding_definition.digest,
+                    "delivery_digest": candidate.delivery.digest,
+                    "binding_instance_digest": candidate.binding_instance.digest,
+                    "state_space_digests": [item.digest for item in candidate.state_spaces],
+                }
+            )
+            frontier_key = (
+                candidate.capability_contract.digest,
+                candidate.binding_definition.digest,
+            )
+            pareto = frontier_key not in frontier_keys
+            if pareto:
+                frontier_keys.add(frontier_key)
+                frontier_ids.append(candidate_id)
+            rows.append(
+                {
+                    "candidate_id": candidate_id,
+                    "rank": rank,
+                    "selected_by_semantic_policy": rank == 1,
+                    "pareto_candidate": pareto,
+                    "capability_contract": {
+                        "ref": candidate.capability_contract.capability_ref,
+                        "version": candidate.capability_contract.version,
+                        "digest": candidate.capability_contract.digest,
+                    },
+                    "binding_definition": {
+                        "ref": candidate.binding_definition.binding_definition_ref,
+                        "digest": candidate.binding_definition.digest,
+                    },
+                    "delivery_digest": candidate.delivery.digest,
+                    "binding_instance": {
+                        "ref": candidate.binding_instance.stable_ref,
+                        "revision": candidate.binding_instance.revision,
+                        "digest": candidate.binding_instance.digest,
+                    },
+                    "state_spaces": [
+                        {"ref": item.stable_ref, "revision": item.revision, "digest": item.digest}
+                        for item in candidate.state_spaces
+                    ],
+                    "effective_guarantees": [
+                        {key: list(value) for key, value in sorted(guarantees.items())}
+                        for guarantees in candidate.effective_guarantees
+                    ],
+                    "explanation": (
+                        "highest deterministic semantic rank; package and evidence admission pending"
+                        if rank == 1
+                        else "eligible semantic alternative; package and evidence admission pending"
+                    ),
+                }
+            )
+        return {
+            "schema": "adaos.cbs.semantic_candidate_report.v1",
+            "requirement_ref": requirement.requirement_ref,
+            "requirement_digest": requirement.digest,
+            "environment_profile_digest": environment_profile.digest,
+            "target_mode": target_mode,
+            "rank_policy": [
+                "capability_version_desc",
+                "binding_definition_ref_desc",
+                "binding_definition_digest_desc",
+                "delivery_digest_desc",
+            ],
+            "candidate_total": len(rows),
+            "selected_candidate_id": rows[0]["candidate_id"] if rows else None,
+            "pareto_candidate_ids": frontier_ids,
+            "candidates": rows,
+            "rejections": [item.to_dict() for item in rejections],
+            "activation_performed": False,
+        }
+
     def resolve(
         self,
         requirement: ApplicationRequirement,

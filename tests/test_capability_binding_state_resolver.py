@@ -9,6 +9,8 @@ import pytest
 from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
 from adaos.domain.capability_binding_state import (
     ApplicationRequirement,
+    BindingDefinition,
+    BindingDelivery,
     BindingInstance,
     EvidenceAssessment,
     StateAccessRelation,
@@ -341,3 +343,101 @@ def test_resolution_pins_exact_package_delivery_state_and_evidence(tmp_path: Pat
     assert payload["state_attachments"][0]["revision_digest"] == fixture["spaces"][0].digest
     assert {item["status"] for item in payload["evidence"]} == {"admissible"}
     assert json.loads(json.dumps(payload))["resolution_digest"] == resolution.digest
+
+
+def test_candidate_report_is_deterministic_explainable_and_returns_pareto_alternatives(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    contracts = fixture["contracts"]
+    original = contracts.production_binding.to_dict()
+    alternative = BindingDefinition.create(
+        binding_definition_ref="binding-definition:resource.records.zz-alternative",
+        version=original["version"],
+        capability_ref=original["capability_ref"],
+        capability_version=original["capability_version"],
+        entry_protocol=original["entry_protocol"],
+        implementation_entrypoint="resource.records.alternative",
+        state_support=original["state_support"],
+        modes=original["modes"],
+        environment_constraints=original["environment_constraints"],
+        authority_requirements=original["authority_requirements"],
+        conformance_obligations=original["conformance_obligations"],
+    )
+    primary_delivery = fixture["deliveries"][0].to_dict()
+    alternative_delivery = BindingDelivery.create(
+        binding_definition_ref=alternative.binding_definition_ref,
+        binding_definition_digest=alternative.digest,
+        logical_entrypoint="resource.records.alternative",
+        package=primary_delivery["package"],
+        physical_member="handlers/alternative.py",
+    )
+    primary_instance = fixture["instances"][0]
+    instance_value = primary_instance.to_dict()
+    alternative_instance = BindingInstance.create(
+        binding_instance_ref="binding-instance:workspace-local/flowboard-alternative",
+        revision=1,
+        predecessor_digest=None,
+        workspace_ref=instance_value["workspace_ref"],
+        tenant_ref=instance_value.get("tenant_ref"),
+        binding_definition_ref=alternative.binding_definition_ref,
+        binding_definition_digest=alternative.digest,
+        delivery_digest=alternative_delivery.digest,
+        environment_profile_ref=instance_value["environment_profile_ref"],
+        environment_profile_digest=instance_value["environment_profile_digest"],
+        mode="production",
+        local_binding_ref="local-crud:flowboard_alternative",
+        authority_epoch=1,
+    )
+    primary_space = fixture["spaces"][0]
+    space_value = primary_space.to_dict()
+    alternative_space = StateSpace.create(
+        state_space_ref="state-space:workspace-local/flowboard-alternative",
+        revision=1,
+        predecessor_digest=None,
+        state_contract_ref=space_value["state_contract_ref"],
+        state_contract_version=space_value["state_contract_version"],
+        state_contract_digest=space_value["state_contract_digest"],
+        workspace_ref=space_value["workspace_ref"],
+        tenant_ref=space_value.get("tenant_ref"),
+        logical_owner_ref=space_value["logical_owner_ref"],
+        lifecycle_authority_ref=space_value["lifecycle_authority_ref"],
+        custodian_binding_instance_ref=alternative_instance.stable_ref,
+        mutation_authority_ref=space_value["mutation_authority_ref"],
+        locator_ref="local-resource-registry:flowboard-alternative",
+        generation=space_value["generation"],
+        authority_epoch=1,
+        portability_class=space_value["portability_class"],
+        schema_locks=space_value["schema_locks"],
+    )
+    alternative_relation = StateAccessRelation.create(
+        relation_ref="state-access:workspace-local/flowboard-alternative/records",
+        binding_instance_ref=alternative_instance.stable_ref,
+        binding_instance_revision_digest=alternative_instance.digest,
+        state_space_ref=alternative_space.stable_ref,
+        state_space_revision_digest=alternative_space.digest,
+        port_id="records",
+        access="writes",
+    )
+    resolver = SemanticResolver()
+    args = {
+        "target_mode": "production",
+        "capability_contracts": (contracts.capability,),
+        "state_contracts": (contracts.state,),
+        "binding_definitions": (contracts.production_binding, alternative),
+        "deliveries": (fixture["deliveries"][0], alternative_delivery),
+        "environment_profile": contracts.profile,
+        "binding_instances": (primary_instance, alternative_instance),
+        "state_spaces": (primary_space, alternative_space),
+        "relations": (fixture["relations"][0], alternative_relation),
+    }
+    report = resolver.explain_candidates(contracts.requirement, **args)
+    repeated = resolver.explain_candidates(contracts.requirement, **args)
+    assert report == repeated
+    assert report["candidate_total"] == 2
+    assert len(report["pareto_candidate_ids"]) == 2
+    assert report["candidates"][0]["selected_by_semantic_policy"] is True
+    assert report["candidates"][0]["binding_definition"]["ref"] == (
+        alternative.binding_definition_ref
+    )
+    assert report["activation_performed"] is False

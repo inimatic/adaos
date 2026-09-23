@@ -5,10 +5,13 @@ from .activation import (
     CBSActivationCoordinator,
     CBSActivationResult,
     FencedLocalCrudWriter,
+    ResolutionPlanCache,
     ResolutionPlanError,
     ResolutionPlanExpired,
     ResolutionPlanner,
     StaleWriterError,
+    resolution_plan_diff,
+    resolution_plan_replanning_status,
 )
 from .local_state import (
     LegacyCrudProjection,
@@ -85,6 +88,18 @@ from .benchmark import (
     load_cbs_telemetry,
     observation_from_cbs_telemetry,
 )
+from .tooling import (
+    PORTABLE_BUNDLE_PREDICATE,
+    TerminologyIssue,
+    admit_portable_bundle,
+    build_identity_map,
+    contract_diff,
+    contract_reference,
+    explicit_compatibility_edge,
+    inspect_state_identity,
+    lint_persistent_terminology,
+    portable_bundle_digest,
+)
 
 __all__ = [
     "CBSActivationCoordinator",
@@ -122,6 +137,7 @@ __all__ = [
     "ResolutionFailure",
     "ResolutionPlanError",
     "ResolutionPlanExpired",
+    "ResolutionPlanCache",
     "ResolutionPlanner",
     "ResolutionRejection",
     "SemanticCandidate",
@@ -138,6 +154,8 @@ __all__ = [
     "redacted_graph_record",
     "stage_authority_transition",
     "validate_state_attachment",
+    "resolution_plan_diff",
+    "resolution_plan_replanning_status",
     "discover_dev_skills_root",
     "inventory_installed_skills",
     "render_skill_inventory_markdown",
@@ -155,4 +173,14 @@ __all__ = [
     "freeze_benchmark_case",
     "load_cbs_telemetry",
     "observation_from_cbs_telemetry",
+    "PORTABLE_BUNDLE_PREDICATE",
+    "TerminologyIssue",
+    "admit_portable_bundle",
+    "build_identity_map",
+    "contract_diff",
+    "contract_reference",
+    "explicit_compatibility_edge",
+    "inspect_state_identity",
+    "lint_persistent_terminology",
+    "portable_bundle_digest",
 ]

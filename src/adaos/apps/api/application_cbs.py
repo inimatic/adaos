@@ -9,9 +9,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
+from adaos.domain.capability_binding_state import BindingInstance, StateSpace
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.applications.cbs import ApplicationCBSConflict, ApplicationCBSService
 from adaos.services.builder.workflow import BuilderWorkflowError
+from adaos.services.capability_binding_state import (
+    LocalIdentityConflict,
+    LocalIdentityStore,
+    inspect_state_identity,
+)
 
 
 router = APIRouter(tags=["application-cbs"], dependencies=[Depends(require_token)])
@@ -33,6 +39,12 @@ class CBSSemanticViabilityRequest(BaseModel):
 
 def _service(ctx: AgentContext) -> ApplicationCBSService:
     return ApplicationCBSService(Path(ctx.paths.state_dir()).resolve())
+
+
+def _identity_store(ctx: AgentContext) -> LocalIdentityStore:
+    return LocalIdentityStore(
+        Path(ctx.paths.state_dir()).resolve() / "capability-binding-state" / "identities"
+    )
 
 
 @router.post("/v1/applications/{application_ref}/cbs/compilations")
@@ -85,6 +97,38 @@ def assess_application_cbs(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CBS compilation not found") from exc
     except (ApplicationCBSConflict, BuilderWorkflowError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.get("/v1/cbs/state-spaces/inspect")
+def inspect_cbs_state_space(
+    state_space_ref: str,
+    ctx: AgentContext = Depends(get_ctx),
+) -> dict[str, Any]:
+    """Inspect local state identity; this endpoint has no mutation authority."""
+
+    store = _identity_store(ctx)
+    try:
+        state_space = store.latest(state_space_ref, StateSpace)
+        if state_space is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="StateSpace not found",
+            )
+        custodian_ref = str(state_space.to_dict()["custodian_binding_instance_ref"])
+        binding = store.latest(custodian_ref, BindingInstance)
+        inspection = inspect_state_identity(
+            state_space,
+            binding_instance=binding,
+            observations=store.observations(
+                subject_ref=state_space.stable_ref,
+                subject_revision_digest=state_space.digest,
+            ),
+        )
+    except HTTPException:
+        raise
+    except (LocalIdentityConflict, OSError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return {"ok": True, "inspection": inspection, "activation_performed": False}
 
 
 __all__ = ["router"]

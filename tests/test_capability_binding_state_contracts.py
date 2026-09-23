@@ -18,10 +18,22 @@ from adaos.domain.capability_binding_state import (
     StateContract,
     validate_state_contract_locks,
 )
-from adaos.services.artifact_pipeline import build_artifact_package
+from adaos.services.artifact_pipeline import (
+    ArtifactAttestationVerificationError,
+    ArtifactTrustStore,
+    Ed25519ArtifactSigner,
+    build_artifact_package,
+)
 from adaos.services.capability_binding_state import (
+    PORTABLE_BUNDLE_PREDICATE,
     PortableContractCatalog,
     PortableContractConflict,
+    admit_portable_bundle,
+    contract_diff,
+    contract_reference,
+    explicit_compatibility_edge,
+    lint_persistent_terminology,
+    portable_bundle_digest,
 )
 
 
@@ -271,6 +283,114 @@ def test_evidence_requirement_and_assessment_keep_distinct_semantics() -> None:
     assert assessment.to_dict()["status"] == "admissible"
     assert "package" not in requirement.to_dict()
     assert "provider" not in requirement.to_dict()
+
+
+def test_terminology_lint_compatibility_and_generated_contract_reference() -> None:
+    issues = lint_persistent_terminology(
+        {
+            "state_ref": "webui-state-is-not-persistent-here",
+            "manifest": {"capabilities": ["ambiguous"]},
+            "state_space_ref": "state-space:allowed",
+        }
+    )
+    assert [item.code for item in issues] == [
+        "persistent_state_ref",
+        "ambiguous_capabilities",
+    ]
+    assert lint_persistent_terminology(
+        {"state_space_ref": "state-space:allowed", "provided_capabilities": []}
+    ) == ()
+
+    older = _capability()
+    newer = CapabilityContract.create(
+        capability_ref=older.capability_ref,
+        version="1.1.0",
+        title="Manage typed resource records",
+        operations=older.to_dict()["operations"],
+        invariants=older.to_dict()["invariants"],
+        effects=older.to_dict()["effects"],
+        authority_requirements=older.to_dict()["authority_requirements"],
+        dependencies=older.to_dict()["dependencies"],
+        state_ports=older.to_dict()["state_ports"],
+        conformance_refs=older.to_dict()["conformance_refs"],
+        compatibility={"backward_compatible_with": ["1.0.0"]},
+    )
+    edge = explicit_compatibility_edge(newer, older)
+    assert edge["compatible"] is True
+    assert edge["basis"] == "backward_compatible_with"
+    reference = contract_reference(newer)
+    assert reference["ref"] == newer.capability_ref
+    assert reference["operations"] == ["create", "update"]
+    diff = contract_diff(older, newer)
+    assert diff["changed"] is True
+    assert {item["field"] for item in diff["changes"]} == {"compatibility", "version"}
+
+
+def test_portable_bundle_reuses_package_attestation_trust_policy(tmp_path: Path) -> None:
+    capability = _capability()
+    state = _state_contract()
+    definition = _definition()
+    profile = _profile()
+    claim = EvidenceClaim.create(
+        claim_ref="evidence-claim:portable-bundle",
+        claim_kind="capability_conformance",
+        subjects=(
+            {
+                "kind": "capability_contract",
+                "ref": capability.capability_ref,
+                "digest": capability.digest,
+            },
+            {
+                "kind": "binding_definition",
+                "ref": definition.binding_definition_ref,
+                "digest": definition.digest,
+            },
+        ),
+        environment={"profile_ref": profile.profile_ref, "profile_digest": profile.digest},
+        dependencies=(),
+        suite_digest=DIGEST_A,
+        evidence_digest=DIGEST_B,
+        provenance={"issuer": "trust.example", "runner": "pytest", "run_id": "portable"},
+        issued_at="2026-09-23T00:00:00+00:00",
+        freshness={"max_age_seconds": 3600, "invalidated_by": ["dependency_change"]},
+        result="verified",
+        redaction={"portable": True, "omitted_fields": ["credentials"]},
+        portability_scope="portable",
+    )
+    records = (capability, state, definition, claim)
+    bundle_digest = portable_bundle_digest(records)
+    signer = Ed25519ArtifactSigner.generate(issuer="trust.example")
+    trust = ArtifactTrustStore(tmp_path / "trust.json")
+    trust.add(signer.trusted_key(purposes=("package",)))
+    package_digest = "sha256:" + "d" * 64
+    attestation = signer.sign(
+        subject_kind="package",
+        subject_digest=package_digest,
+        project_id="flowboard_portable",
+        predicate_type=PORTABLE_BUNDLE_PREDICATE,
+        predicate_digest=bundle_digest,
+        issued_at="2026-09-23T00:00:00+00:00",
+    )
+    admitted = admit_portable_bundle(
+        records,
+        delivering_package_digest=package_digest,
+        project_id="flowboard_portable",
+        trust_domain="trust.example",
+        attestation=attestation,
+        trust_store=trust,
+    )
+    assert admitted["admitted"] is True
+    assert admitted["bundle_digest"] == bundle_digest
+
+    with pytest.raises(ArtifactAttestationVerificationError, match="issuer"):
+        admit_portable_bundle(
+            records,
+            delivering_package_digest=package_digest,
+            project_id="flowboard_portable",
+            trust_domain="another.example",
+            attestation=attestation,
+            trust_store=trust,
+        )
 
 
 def _source() -> ArtifactSourceRef:

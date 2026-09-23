@@ -8,6 +8,8 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Iterator, Mapping
 
+from adaos.services.mutation_lock import mutation_lock
+
 
 def _encode(value: Mapping[str, Any]) -> str:
     return json.dumps(dict(value), ensure_ascii=False, separators=(",", ":"))
@@ -18,11 +20,20 @@ class ResourceStorage:
         self.root = root
         self.path = root / "resources.sqlite3"
 
-    @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        self.root.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.path, timeout=30.0)) as connection:
-            if not connection.execute("SELECT 1 FROM sqlite_master WHERE name='resource_imports'").fetchone():
+    @property
+    def schema_lock_path(self) -> Path:
+        return self.root / ".resources-schema.lock"
+
+    def _initialize(self) -> None:
+        """Serialize the one-time WAL/schema transition across threads/processes."""
+
+        with mutation_lock(self.schema_lock_path, timeout_s=30.0):
+            with closing(sqlite3.connect(self.path, timeout=30.0)) as connection:
+                connection.execute("PRAGMA busy_timeout=30000")
+                if connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='resource_imports'"
+                ).fetchone():
+                    return
                 connection.execute("PRAGMA journal_mode=WAL")
                 with connection:
                     connection.execute("CREATE TABLE IF NOT EXISTS resource_states (resource_type TEXT PRIMARY KEY, project_ref TEXT, ui_revision TEXT, body TEXT NOT NULL)")
@@ -30,6 +41,23 @@ class ResourceStorage:
                     connection.execute("CREATE TABLE IF NOT EXISTS resource_journal (sequence INTEGER PRIMARY KEY AUTOINCREMENT, stream TEXT NOT NULL, body TEXT NOT NULL)")
                     connection.execute("CREATE INDEX IF NOT EXISTS resource_journal_stream ON resource_journal(stream, sequence)")
                     connection.execute("CREATE TABLE IF NOT EXISTS resource_imports (name TEXT PRIMARY KEY)")
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        self.root.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.path, timeout=30.0)) as connection:
+            connection.execute("PRAGMA busy_timeout=30000")
+            initialized = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='resource_imports'"
+            ).fetchone()
+            if initialized:
+                yield connection
+                return
+        # Do not keep the pre-WAL read connection open while another process
+        # performs the exclusive journal-mode transition.
+        self._initialize()
+        with closing(sqlite3.connect(self.path, timeout=30.0)) as connection:
+            connection.execute("PRAGMA busy_timeout=30000")
             yield connection
 
     def import_json(self, path: Path, *, stream: str | None = None) -> None:
