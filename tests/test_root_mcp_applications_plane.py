@@ -362,6 +362,53 @@ def test_root_mcp_response_preserves_empty_application_collections() -> None:
     assert response.to_dict()["result"] == {"applications": [], "page": {}}
 
 
+def test_application_catalog_contracts_publish_exact_records_and_cas_paths() -> None:
+    contracts = {item.id: item for item in applications_plane.contracts()}
+    listed = contracts["applications.list"]
+    shown = contracts["applications.show"]
+
+    list_result = listed.output_schema["properties"]["result"]
+    record = list_result["properties"]["applications"]["items"]
+    assert list_result["required"] == ["applications"]
+    assert {
+        "application",
+        "installed",
+        "available",
+        "installation",
+        "subscription",
+        "effective_release",
+        "attention",
+    }.issubset(record["properties"])
+    assert record["properties"]["application"]["required"] == ["application_id"]
+    installation = record["properties"]["installation"]["oneOf"][1]
+    assert installation["required"] == ["revision"]
+
+    shown_record = shown.output_schema["properties"]["result"]["properties"][
+        "application"
+    ]
+    assert shown_record == record
+    assert listed.metadata["webui_data_binding"]["result_paths"] == {
+        "records": "response.result.applications"
+    }
+    assert shown.metadata["webui_data_binding"]["result_paths"] == {
+        "record": "response.result.application"
+    }
+    assert shown.metadata["webui_data_binding"]["record"] == {
+        "identity_path": "application.application_id",
+        "application_revision_path": "application.revision",
+        "installation_revision_path": "installation.revision",
+        "subscription_revision_path": "subscription.revision",
+        "effective_release_digest_path": "effective_release.release_digest",
+    }
+    assert "effective_release" in shown.metadata["webui_data_binding"][
+        "unavailable_state"
+    ]["nullable_paths"]
+    assert shown.metadata["webui_data_binding"]["not_found"] == {
+        "transport_status": "error",
+        "error_type": "FileNotFoundError",
+    }
+
+
 def test_applications_plane_forwards_mcp_actor_and_subnet_to_sdk(monkeypatch) -> None:
     stub = _StubSdk()
     monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)

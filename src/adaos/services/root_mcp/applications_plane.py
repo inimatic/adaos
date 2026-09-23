@@ -363,6 +363,149 @@ def contracts() -> list[RootMcpToolContract]:
         "published_by": "plane:applications",
         "adapter": "adaos.sdk.applications",
     }
+    application_identity = schema_object(
+        properties={
+            "application_id": {"type": "string", "minLength": 1},
+            "revision": {"type": "integer", "minimum": 0},
+            "display": {"type": "object"},
+            "publisher": {"type": "object"},
+            "protection": {"type": "object"},
+            "visibility": {"type": "string"},
+            "lifecycle": {"type": "string"},
+            "aggregate_backed": {"type": "boolean"},
+        },
+        required=["application_id"],
+        additional_properties=True,
+    )
+    revisioned_application_state = {
+        "oneOf": [
+            {"type": "null"},
+            schema_object(
+                properties={
+                    "application_id": {"type": "string", "minLength": 1},
+                    "revision": {"type": "integer", "minimum": 0},
+                    "status": {"type": "string"},
+                    "update_track": {"type": "string"},
+                    "update_policy": {"type": "string"},
+                    "installed_release_digest": {"type": ["string", "null"]},
+                    "updated_at": {"type": ["string", "null"]},
+                },
+                required=["revision"],
+                additional_properties=True,
+            ),
+        ]
+    }
+    release_identity = {
+        "oneOf": [
+            {"type": "null"},
+            schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "version": {"type": ["string", "null"]},
+                    "release_digest": {"type": ["string", "null"]},
+                    "lifecycle": {"type": "string"},
+                    "published_at": {"type": ["string", "null"]},
+                },
+                additional_properties=True,
+            ),
+        ]
+    }
+    effective_release = {
+        "oneOf": [
+            {"type": "null"},
+            schema_object(
+                properties={
+                    "application_id": {"type": "string"},
+                    "version": {"type": ["string", "null"]},
+                    "release_digest": {"type": ["string", "null"]},
+                    "update_track": {"type": ["string", "null"]},
+                    "reason": {"type": "string"},
+                    "release": release_identity,
+                },
+                additional_properties=True,
+            ),
+        ]
+    }
+    application_record = schema_object(
+        properties={
+            "application": application_identity,
+            "installed": {"type": "boolean"},
+            "available": {"type": "boolean"},
+            "update_available": {"type": "boolean"},
+            "installation": revisioned_application_state,
+            "subscription": revisioned_application_state,
+            "installed_release": release_identity,
+            "active_release": release_identity,
+            "marketplace_release": release_identity,
+            "prerelease_release": release_identity,
+            "effective_release": effective_release,
+            "channels": {"type": "object"},
+            "local_development": {"type": ["object", "null"]},
+            "installation_summary": {"type": "object"},
+            "attention": schema_object(
+                properties={
+                    "status": {
+                        "enum": [
+                            "degraded",
+                            "action_required",
+                            "progressing",
+                            "suspended",
+                            "update_available",
+                            "current",
+                            "available",
+                            "unknown",
+                        ]
+                    },
+                    "reason": {"type": "string"},
+                    "message": {"type": "string"},
+                    "requires_action": {"type": "boolean"},
+                },
+                required=["status", "reason", "message", "requires_action"],
+                additional_properties=True,
+            ),
+        },
+        required=[
+            "application",
+            "installed",
+            "available",
+            "update_available",
+            "installation",
+            "subscription",
+            "effective_release",
+            "channels",
+            "local_development",
+            "installation_summary",
+            "attention",
+        ],
+        additional_properties=True,
+    )
+    application_read_binding = {
+        "schema": "adaos.root_mcp.webui_data_binding.v1",
+        "transport_envelope": "node_root_mcp_bridge.v1",
+        "record": {
+            "identity_path": "application.application_id",
+            "application_revision_path": "application.revision",
+            "installation_revision_path": "installation.revision",
+            "subscription_revision_path": "subscription.revision",
+            "effective_release_digest_path": "effective_release.release_digest",
+        },
+        "unavailable_state": {
+            "availability_path": "available",
+            "attention_status_path": "attention.status",
+            "reason_path": "attention.reason",
+            "message_path": "attention.message",
+            "nullable_paths": [
+                "installation",
+                "subscription",
+                "installed_release",
+                "active_release",
+                "marketplace_release",
+                "prerelease_release",
+                "effective_release",
+                "local_development",
+            ],
+        },
+    }
     identity = {
         "application_id": {"type": "string"},
         "expected_revision": {"type": "integer", "minimum": 0},
@@ -753,9 +896,29 @@ def contracts() -> list[RootMcpToolContract]:
                     "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
                 }
             ),
-            output_schema=response(),
+            output_schema=result_response(
+                schema_object(
+                    properties={
+                        "applications": {
+                            "type": "array",
+                            "items": application_record,
+                            "maxItems": 5000,
+                        }
+                    },
+                    required=["applications"],
+                )
+            ),
             required_capability="applications.read",
-            metadata={**published, "handler": "applications_list"},
+            metadata={
+                **published,
+                "handler": "applications_list",
+                "webui_data_binding": {
+                    **application_read_binding,
+                    "result_paths": {
+                        "records": "response.result.applications",
+                    },
+                },
+            },
         ),
         RootMcpToolContract(
             id="applications.show",
@@ -769,9 +932,27 @@ def contracts() -> list[RootMcpToolContract]:
                 },
                 required=["application_id"],
             ),
-            output_schema=response(),
+            output_schema=result_response(
+                schema_object(
+                    properties={"application": application_record},
+                    required=["application"],
+                )
+            ),
             required_capability="applications.read",
-            metadata={**published, "handler": "applications_show"},
+            metadata={
+                **published,
+                "handler": "applications_show",
+                "webui_data_binding": {
+                    **application_read_binding,
+                    "result_paths": {
+                        "record": "response.result.application",
+                    },
+                    "not_found": {
+                        "transport_status": "error",
+                        "error_type": "FileNotFoundError",
+                    },
+                },
+            },
         ),
         RootMcpToolContract(
             id="applications.assess_updates",

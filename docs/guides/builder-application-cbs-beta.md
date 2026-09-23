@@ -92,6 +92,17 @@ contains `account_id` and `revision`, so account updates can bind identity and
 binding declares revision `0` for create and the selected record's `revision`
 for update.
 
+`applications.list` and `applications.show` publish the same exact Application
+record schema. The list collection is `response.result.applications`; the
+selected record is `response.result.application`. Both contracts identify a
+record by `application.application_id` and declare the Application,
+installation and subscription revision paths plus the effective release
+digest. Missing local installation, subscription, release and development
+state is represented by documented nullable fields. Catalog unavailability is
+represented by `available=false` together with the machine-readable
+`attention` reason and message. A missing Application is a transport error,
+not an invented empty record.
+
 ## Compatibility and migration
 
 The beta keeps the pre-CBS direct Automation path operational. A legacy
