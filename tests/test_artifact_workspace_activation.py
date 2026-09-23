@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import copy
 import io
+import shutil
 import threading
 import time
 import zipfile
@@ -36,11 +37,17 @@ def _source() -> ArtifactSourceRef:
     )
 
 
-def _built_scenario(root: Path, *, version: str, marker: str):
+def _built_scenario(
+    root: Path,
+    *,
+    version: str,
+    marker: str,
+    scenario_id: str = "recipes",
+):
     scenario = root / f"source-{marker}"
     scenario.mkdir(parents=True)
     (scenario / "scenario.yaml").write_text(
-        f"id: recipes\nversion: {version}\ntitle: Recipes\n",
+        f"id: {scenario_id}\nversion: {version}\ntitle: Recipes\n",
         encoding="utf-8",
     )
     (scenario / "webui.json").write_text(
@@ -411,9 +418,63 @@ def test_delayed_verification_records_tamper_without_automatic_rollback(
 
     assert observation["status"] == "failed"
     assert "materialized package file" in observation["error"]
+    assert observation["receipt"]["status"] == "failed"
+    assert observation["receipt"]["checked_component_count"] == 0
+    assert observation["receipt"]["failed_component_count"] == 1
+    assert observation["receipt"]["total_component_count"] == 1
+    assert observation["receipt"]["failures"][0]["package"] == "scenario:recipes"
     assert manager.load_lock() == result.workspace_lock
     assert json.loads(target.read_text(encoding="utf-8")) == {"marker": "changed"}
     assert not list(manager.pending_observations_root.glob("*.json"))
+
+
+def test_delayed_verification_reports_every_component_failure(
+    tmp_path: Path,
+) -> None:
+    first = _built_scenario(
+        tmp_path / "first",
+        scenario_id="recipes",
+        version="1.0.0",
+        marker="first",
+    )
+    second = _built_scenario(
+        tmp_path / "second",
+        scenario_id="shopping",
+        version="1.0.0",
+        marker="second",
+    )
+    store, manager = _manager(tmp_path, delayed_verification_seconds=0)
+    store.put(first.archive_bytes)
+    store.put(second.archive_bytes)
+    plan = build_project_release(
+        project_id="kitchen",
+        version="1.0.0",
+        source_ref=_source(),
+        components=(first.ref, second.ref),
+        catalog=PackageCatalog(),
+    )
+    result = _activate(
+        manager,
+        plan,
+        idempotency_key="delayed-multiple-tamper",
+    )
+    shutil.rmtree(tmp_path / "workspace" / "scenarios" / "recipes")
+    (tmp_path / "workspace" / "scenarios" / "shopping" / "webui.json").write_text(
+        '{"marker":"changed"}\n',
+        encoding="utf-8",
+    )
+
+    observation = manager.run_delayed_verification(result.operation_id, force=True)
+
+    assert observation["status"] == "failed"
+    receipt = observation["receipt"]
+    assert receipt["checked_component_count"] == 0
+    assert receipt["failed_component_count"] == 2
+    assert receipt["total_component_count"] == 2
+    assert [failure["package"] for failure in receipt["failures"]] == [
+        "scenario:recipes",
+        "scenario:shopping",
+    ]
 
 
 def test_delayed_verification_ignores_legacy_packaged_workspace_host_metadata(

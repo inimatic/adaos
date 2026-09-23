@@ -704,6 +704,13 @@ def test_failed_artifact_activation_observation_creates_deduplicated_core_ticket
             "ActivationError: materialized package file size changed: "
             "scenario:builder:scenario.json"
         ),
+        "receipt": {
+            "status": "failed",
+            "failures": [
+                {"package": "scenario:builder", "error": "first"},
+                {"package": "skill:builder_skill", "error": "second"},
+            ],
+        },
     }
 
     result = service.report_artifact_activation_observation(observation)
@@ -716,7 +723,16 @@ def test_failed_artifact_activation_observation_creates_deduplicated_core_ticket
     assert result["ticket"]["component_ref"] == "core:artifact-pipeline.workspace-lock"
     assert result["ticket"]["source"] == "artifact_activation_guard"
     assert result["ticket"]["metadata"]["affected_component_ref"] == "scenario:builder"
+    assert result["ticket"]["metadata"]["affected_component_refs"] == [
+        "scenario:builder",
+        "skill:builder_skill",
+    ]
+    assert result["ticket"]["metadata"]["failed_component_count"] == 2
     assert result["ticket"]["evidence_refs"][0]["affected_component_ref"] == "scenario:builder"
+    assert result["ticket"]["evidence_refs"][0]["affected_component_refs"] == [
+        "scenario:builder",
+        "skill:builder_skill",
+    ]
     assert duplicate["ticket_duplicate"] is True
     assert duplicate["ticket"]["ticket_id"] == result["ticket"]["ticket_id"]
     assert duplicate["ticket"]["occurrence_count"] == 2

@@ -4132,6 +4132,19 @@ class DevelopmentTicketService:
             flags=re.IGNORECASE,
         )
         affected_component_ref = component_match.group(1) if component_match else ""
+        receipt = observation.get("receipt")
+        raw_failures = receipt.get("failures") if isinstance(receipt, Mapping) else None
+        affected_component_refs = sorted(
+            {
+                _text(item.get("package"))
+                for item in raw_failures or ()
+                if isinstance(item, Mapping) and _text(item.get("package"))
+            }
+        )
+        if affected_component_ref and affected_component_ref not in affected_component_refs:
+            affected_component_refs.insert(0, affected_component_ref)
+        if not affected_component_ref and affected_component_refs:
+            affected_component_ref = affected_component_refs[0]
         observation_id = _text(observation.get("observation_id"))
         evidence = {
             "type": "runtime_guard",
@@ -4140,6 +4153,8 @@ class DevelopmentTicketService:
             "expected_lock_digest": _text(observation.get("expected_lock_digest")) or None,
             "observed_lock_digest": _text(observation.get("observed_lock_digest")) or None,
             "affected_component_ref": affected_component_ref or None,
+            "affected_component_refs": affected_component_refs,
+            "failed_component_count": len(affected_component_refs),
             "error": error,
         }
         result = self.create_core_capability_request(
@@ -4161,6 +4176,8 @@ class DevelopmentTicketService:
                 "producer": "artifact_activation_observation",
                 "observation_id": observation_id or None,
                 "affected_component_ref": affected_component_ref or None,
+                "affected_component_refs": affected_component_refs,
+                "failed_component_count": len(affected_component_refs),
                 "expected_lock_digest": _text(observation.get("expected_lock_digest")) or None,
                 "observed_lock_digest": _text(observation.get("observed_lock_digest")) or None,
             },

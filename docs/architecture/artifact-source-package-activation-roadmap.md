@@ -548,7 +548,13 @@ revision, then a bounded background worker rechecks package-store integrity and
 the hashes of materialized package files after the configured delay. A newer
 WorkspaceLock marks the old observation `superseded`; corruption records a
 terminal `failed` receipt and event without silently rolling back or replaying
-the activation. Pending work is held in a separate bounded marker directory so
+the completed activation. Verification no longer stops at the first divergent
+component: one bounded pass records every successful component and every
+package-specific failure, while retaining the first legacy error for existing
+ticket classifiers. Development-ticket evidence carries the complete affected
+component set, avoiding serial repair iterations hidden behind one deduplicated
+Workspace-integrity ticket.
+Pending work is held in a separate bounded marker directory so
 the worker does not rescan terminal operation history on every poll. Interrupted
 read-only checks may be repeated safely; state-changing activation and migration
 rules are unchanged.

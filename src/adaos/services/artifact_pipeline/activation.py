@@ -435,23 +435,45 @@ class WorkspaceActivationManager:
                             raise ActivationError(
                                 "WorkspaceLock revision differs from delayed verification"
                             )
-                        components = [
-                            self._verify_materialized_component(package)
-                            for package in current.components
-                        ]
+                        components: list[dict[str, Any]] = []
+                        failures: list[dict[str, Any]] = []
+                        for package in current.components:
+                            try:
+                                components.append(
+                                    self._verify_materialized_component(package)
+                                )
+                            except (ActivationError, PackageVerificationError) as exc:
+                                failures.append(
+                                    {
+                                        "package": package.key,
+                                        "package_digest": package.digest,
+                                        "materialization_path": package.materialization_path,
+                                        "error": f"{type(exc).__name__}: {exc}",
+                                    }
+                                )
+                        receipt = {
+                            "status": "failed" if failures else "passed",
+                            "lock_digest": observed_digest,
+                            "lock_revision": current.lock_revision,
+                            "components": components,
+                            "failures": failures,
+                            "checked_component_count": len(components),
+                            "failed_component_count": len(failures),
+                            "total_component_count": len(current.components),
+                        }
                         observation.update(
                             {
-                                "status": "passed",
+                                "status": "failed" if failures else "passed",
                                 "observed_at": observed_at.replace(microsecond=0).isoformat(),
                                 "observed_lock_digest": observed_digest,
-                                "receipt": {
-                                    "status": "passed",
-                                    "lock_digest": observed_digest,
-                                    "lock_revision": current.lock_revision,
-                                    "components": components,
-                                },
+                                "receipt": receipt,
                             }
                         )
+                        if failures:
+                            # Preserve the first legacy error verbatim so existing
+                            # ticket classification remains compatible. The receipt
+                            # carries every failure found in this bounded pass.
+                            observation["error"] = failures[0]["error"]
                     operation["delayed_verification"] = observation
                     self._write_operation(operation)
                     self._complete_pending_observation(
