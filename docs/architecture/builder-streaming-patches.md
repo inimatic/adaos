@@ -5,9 +5,9 @@ implemented compatibility slice. Readiness belongs to the Builder roadmap;
 dated results belong only in the engineering journal.
 
 This page owns transport, journaling, and atomic application of streamed
-renderer-artifact patches. It no longer owns the target product-understanding
+Builder output operations. It does not own the target product-understanding
 or UI-generation representation. The target path compiles a typed Prototype
-Brief and semantic UI document as defined by
+Brief and semantic graph/UI document as defined by
 [Builder Intent-to-Prototype Architecture](builder-intent-to-prototype.md).
 Direct model output of RFC 6902 against `webui.json` remains a measured
 compatibility profile during migration.
@@ -47,6 +47,17 @@ bounded Root journal and terminal job snapshot.
 For new managed generation, the target is the typed semantic contract in
 [Intent-to-Prototype](builder-intent-to-prototype.md), with source authority
 and migration tracked in [BIP-11](builder-intent-to-prototype-roadmap.md#bip-11).
+The streaming form of that contract is a semantic graph operation log. Each
+operation targets stable semantic refs and is reduced before any renderer
+artifact is compiled:
+
+```jsonl
+{"schema":"adaos.builder.semantic_graph.patch_stream.v1","type":"meta","base_hash":"sha256:...","graph_schema":"adaos.webui.semantic.v2"}
+{"type":"op","seq":1,"transaction_id":"tx-...","op":{"kind":"resource.upsert","ref":"resource:records","value":{"id":"records","item_semantics":"records the user manages"}}}
+{"type":"op","seq":2,"transaction_id":"tx-...","op":{"kind":"view.upsert","ref":"view:records.list","value":{"id":"records_list","resource_ref":"records","role":"collection"}}}
+{"type":"complete","comment":"Semantic graph draft is ready for compiler validation.","unable_reason":""}
+```
+
 The following renderer JSONL contract applies **only to the explicit
 compatibility profile**. It is not the preferred target model output.
 Each physical line is a complete object using the RFC 6902 vocabulary:
@@ -74,21 +85,27 @@ JSON line.
 
 ## Validation And Commit
 
-The target transaction is:
+The target graph-first transaction is:
 
-1. Read the selected revision and calculate `base_hash`.
-2. Create a private shadow document.
-3. Apply each complete patch in strict sequence to the shadow document.
-4. Run bounded per-patch structural checks for path, operation, size, and base
-   identity.
-5. Reconstruct the complete candidate `adaos.webui.v1` document.
-6. Run full ABI, component, action, modal, text-integrity, and runtime
+1. Read the selected semantic revision and calculate `base_hash`.
+2. Create a private semantic graph draft.
+3. Apply each complete semantic operation in strict sequence to the graph
+   draft.
+4. Run bounded per-operation checks for shape, target ref, size, base identity,
+   and stable transaction metadata.
+5. Compile/project the complete semantic graph candidate to `adaos.webui.v1`
+   and any required locale/runtime artifacts.
+6. Run full semantic, ABI, component, action, modal, text-integrity, and runtime
    validation.
-7. Persist request, provider response, patch journal, before/after documents,
-   model/cache/timing telemetry, and validation evidence in the next immutable
-   `ui_revisions/NNN.json`.
-8. Atomically promote the candidate to `webui.json`, then refresh the paired
-   dev webspace.
+7. Persist request, provider response, operation journal, before/after semantic
+   documents, compiled artifacts, source maps, model/cache/timing telemetry,
+   and validation evidence in the next immutable revision.
+8. Atomically promote the semantic candidate and compiled `webui.json`, then
+   refresh the paired dev webspace.
+
+The compatibility renderer-patch transaction follows the same private-shadow
+and terminal-validation discipline, but its private copy is the renderer
+artifact and its result is migration evidence rather than semantic authority.
 
 On cancellation, timeout, invalid sequence, base mismatch, parser failure, or
 validation failure, Builder discards the shadow state. The current revision
@@ -96,11 +113,12 @@ does not change.
 
 ## Live Prototype Projection
 
-The current Root progress stream exposes phase and patch metadata; it does not
-carry an authenticated renderer value stream and therefore cannot drive a
-truthful visual Live Prototype. A future live projection must apply complete
-typed values to the same private shadow transaction described above and publish
-only validated shadow snapshots to an explicitly marked draft surface.
+The current compatibility Root progress stream exposes phase and patch metadata;
+it does not carry an authenticated semantic graph value stream and therefore
+cannot drive a truthful visual Live Prototype. A future live projection must
+apply complete typed semantic operations to the same private graph transaction
+described above, then publish only deterministic projection snapshots to an
+explicitly marked draft surface.
 
 That surface has a separate identity from the canonical Preview, cannot execute
 stateful or external-effect commands, and disappears on failure or cancellation.

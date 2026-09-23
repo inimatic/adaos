@@ -298,10 +298,18 @@ Owned by `BIP-09`, `BIP-11`, and the Executable Prototype architecture.
 - [ ] Preserve message-to-task-to-requirement-to-view/activity traceability.
 - [ ] Surface typed gaps and material clarification instead of inventing a
   direct implementation dependency.
+- [x] Document the graph-first streaming direction: semantic graph operations
+  are the incremental source, while `pageSchema` is a deterministic preview or
+  compatibility projection.
+- [ ] Add semantic operation replay fixtures that produce the same semantic
+  Application digest and projected Prototype artifact as the terminal
+  materialization path.
 
 **Exit proof:** one ordinary prompt produces a working CRUD Prototype whose
 semantic digest remains unchanged when its fixture binding is replaced by a
-different simulation binding.
+different simulation binding, and replaying its semantic operation log produces
+the same graph digest plus projected Prototype artifact as terminal
+materialization.
 
 ### ASC3. Semantic Resolution And Applications Read Model
 

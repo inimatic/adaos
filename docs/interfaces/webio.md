@@ -280,11 +280,41 @@ stream_publish(
 The client applies `upsert`, `replace`, and `remove` to the selected local
 collection. A later full snapshot can still replace the whole receiver value.
 
-## Builder Prototype Patch Stream
+## Builder Semantic Graph And Prototype Patch Streams
 
-Builder prototype generation uses a dedicated opt-in stream reducer instead of
-reusing generic collection patches for page schema mutation. The target receiver
-is:
+Builder live generation uses opt-in stream reducers instead of reusing generic
+collection patches for authoring. The target stream is semantic graph-first:
+the model emits typed semantic operations, Builder reduces them into an
+ephemeral graph draft, and a deterministic projector derives preview-only
+`pageSchema` from that draft.
+
+The target receiver is:
+
+```json
+{
+  "webio": {
+    "receivers": {
+      "builder.semantic_graph.patch_stream": {
+        "mode": "replace",
+        "transport": "hub",
+        "scope": "shared",
+        "reducer": "builder.semantic_graph.patch_stream",
+        "maxItems": 500,
+        "initialState": {
+          "schema": "adaos.builder.semantic_graph.patch_stream.state.v1",
+          "status": "idle",
+          "draft": {
+            "graph": null,
+            "pageSchema": null
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+The currently implemented compatibility/debug receiver is:
 
 ```json
 {
@@ -309,7 +339,22 @@ is:
 ```
 
 Root LLM jobs opt in with `stream=true`, `stream_protocol="jsonl"`, and a
-`patch_stream` target:
+`patch_stream` target. New graph-first Builder work should target the semantic
+graph receiver:
+
+```json
+{
+  "stream": true,
+  "stream_protocol": "jsonl",
+  "patch_stream": {
+    "receiver": "builder.semantic_graph.patch_stream",
+    "webspace_id": "preview-webspace-id",
+    "owner": "builder"
+  }
+}
+```
+
+Compatibility/debug jobs may still target the derived pageSchema receiver:
 
 ```json
 {
@@ -323,7 +368,16 @@ Root LLM jobs opt in with `stream=true`, `stream_protocol="jsonl"`, and a
 }
 ```
 
-The model output remains newline-delimited semantic events:
+The target model output remains newline-delimited semantic graph events:
+
+```jsonl
+{"type":"meta","schema":"adaos.builder.semantic_graph.patch_stream.v1","base_hash":"sha256:...","graph_schema":"adaos.webui.semantic.v2","draft":{"graph":{"document_id":"draft","resources":[],"relationships":[],"views":[],"commands":[]}}}
+{"type":"op","seq":1,"transaction_id":"tx-debug","op":{"kind":"resource.upsert","ref":"resource:notes","value":{"id":"notes","item_semantics":"notes drafted during streaming"}}}
+{"type":"op","seq":2,"transaction_id":"tx-debug","op":{"kind":"view.upsert","ref":"view:notes.list","value":{"id":"notes_list","resource_ref":"notes","role":"collection","region_role":"primary"}}}
+{"type":"complete","comment":"semantic graph ready for projection"}
+```
+
+The compatibility receiver accepts derived pageSchema patch events:
 
 ```jsonl
 {"type":"meta","schema":"adaos.builder.prototype.patch_stream.v1","base_hash":"sha256:...","draft":{"pageSchema":{"id":"draft","areas":[{"id":"main","role":"main"}],"widgets":[]}}}
@@ -333,14 +387,14 @@ The model output remains newline-delimited semantic events:
 
 The Root job keeps progress summaries for polling clients, but forwards full
 patch values to `io.out.stream.publish` as
-`adaos.builder.prototype.patch_stream.v1`. The router still performs the normal
-WebIO stream admission, budget, and fan-out checks before browsers see the
-event.
+`adaos.builder.semantic_graph.patch_stream.v1` or the compatibility
+`adaos.builder.prototype.patch_stream.v1`. The router still performs the
+normal WebIO stream admission, budget, and fan-out checks before browsers see
+the event.
 
-On the browser, the reducer maintains an ephemeral
-`adaos.builder.prototype.patch_stream.state.v1` value with `status`, `draft`,
-`seq`, `patch_count`, and bounded `events`. This draft is not written back into
-Yjs. The authoritative Builder commit remains the existing full semantic
+On the browser, reducers maintain ephemeral draft state with `status`, `draft`,
+`seq`, operation counts, and bounded `events`. These drafts are not written
+back into Yjs. The authoritative Builder commit remains the full semantic
 prototype compile, validation, revision snapshot, and materialization path.
 
 For node-aware member delivery, the browser and router may also use

@@ -522,6 +522,10 @@ Owner/dependencies: Core semantic compiler + Client mappings; emits
 
 Implementation boundary: Semantic-v2 multi-resource generation, typed links, structural state proof, source maps and lookup-only resources exist. This is not a total contract for the admitted component set or proof of one-way semantic authority on all managed edits.
 
+- [x] `[must]` Record the graph-first stream target across Builder, WebIO and
+  streaming architecture docs: `SemanticGraph_0 + semantic ops ->
+  SemanticGraph_t -> compiled WebUI`. `/pageSchema` patch streaming is now
+  documented as compatibility/debug projection, not semantic authority.
 - [ ] `[must]` Bind each incremental input to the actual accepted implementation
   and effective compiled UI, not an old semantic metadata marker. Reconcile
   supported Automation edits through semantic source/declared binding overlays;
@@ -540,6 +544,12 @@ Implementation boundary: Semantic-v2 multi-resource generation, typed links, str
 - [ ] `[must]` Preserve one semantic Application revision across fixture,
   simulation, Trial and production materializations; bind each materialization
   to its own resolution/evidence instead of rewriting semantic source.
+- [ ] `[must]` Define the semantic graph operation-log ABI and reducer contract:
+  bounded `meta`/`op`/`complete` events, stable semantic refs, `seq`,
+  `base_hash`, `transaction_id`, and replayable draft errors.
+- [ ] `[must]` Add deterministic replay fixtures proving that semantic ops
+  reduce to the expected graph and compile/project to the expected
+  `pageSchema` without renderer JSON pointer edits.
 
 Exit/remaining work: Complete the supported semantic ABI and
 requirement-to-resolution/runtime mapping; qualify empty-state reachability,
@@ -555,6 +565,13 @@ is `ASC2` through `ASC6` in the Semantic Application Composition roadmap.
 Owner/dependencies: SDK semantic UI + Core compiler.
 
 Implementation boundary: Bounded semantic operations and deterministic review transforms exist, alongside legacy renderer edits.
+
+- [x] `[must]` Document deterministic semantic edits as graph operation inputs
+  over stable refs, with renderer JSON pointer patches retained only for the
+  compatibility/debug path.
+- [ ] `[must]` Provide zero-model semantic op fixtures for rename, move,
+  visibility and option edits, then prove unchanged unrelated behavior through
+  graph replay and compiler output.
 
 Exit/remaining work: Qualify rename/move/visibility/options through ordinary requests with zero model calls, semantic refs, unchanged unrelated behavior and the declared D0 latency target. Do not equate a literal WebUI patch with semantic cutover.
 
@@ -1011,16 +1028,21 @@ Exit/remaining work: This does not establish residual intent understanding or el
 
 Owner/dependencies: Root progress + Builder transaction + Client draft renderer.
 
-Implementation boundary: Root currently exposes bounded phase/patch metadata,
-while canonical Preview changes only after full validation. This is sufficient
-for progress visibility but cannot render actual model changes as they arrive.
+Implementation boundary: Root currently exposes bounded phase/patch metadata
+and the client has a compatibility `/pageSchema` patch reducer. The target
+graph-first stream contract is now documented, while canonical Preview changes
+only after full validation. This is sufficient for progress visibility and
+debug projection checks but cannot render authoritative model changes as they
+arrive.
 
 Exit/remaining work: Compare an authenticated, non-executable private-shadow
-projection with the existing phase UI. Require complete typed patch values,
-per-patch structural checks, explicit draft identity, terminal full validation,
-atomic promotion and rollback. Measure first useful frame, invalid frames, final
-equivalence and transport/token cost. Never stream raw provider deltas into
-canonical Yjs or make this route a prerequisite without measured benefit.
+projection with the existing phase UI after BIP-11/BIP-12 provide semantic op
+replay and graph-to-WebUI projection fixtures. Require complete typed semantic
+operations, per-operation structural checks, explicit draft identity, terminal
+full validation, atomic promotion and rollback. Measure first useful frame,
+invalid frames, final equivalence and transport/token cost. Never stream raw
+provider deltas or compatibility pageSchema patches into canonical Yjs, and do
+not make this route a prerequisite without measured benefit.
 
 ### BIP-33
 

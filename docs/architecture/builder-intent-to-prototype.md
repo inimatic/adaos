@@ -609,6 +609,37 @@ Existing `adaos.builder.semantic_ui_change.v1` remains the bounded edit
 contract. It should target semantic refs first and compile the affected slice,
 rather than forcing the model to author RFC 6902 paths.
 
+#### Incremental Semantic Graph And Op Log
+
+The persisted semantic document is the accepted source. For streaming,
+follow-up, and replayable edits, Builder also owns an operational view of the
+same source: a semantic graph draft plus an ordered operation log.
+
+The target streaming shape is:
+
+```text
+SemanticGraph_0
+  + semantic ops over stable refs
+  -> SemanticGraph_t
+  -> deterministic compiler/projector
+  -> adaos.webui.v1 pageSchema/runtime artifact
+```
+
+Semantic operations must name stable semantic refs such as `resource:*`,
+`field:*`, `relationship:*`, `view:*`, `command:*`, `state:*`, or future
+versioned graph node ids. They must not depend on renderer array indexes,
+component-local JSON paths, provider token boundaries, or screenshots. A stream
+operation that cannot be reduced against the current semantic source is a
+typed draft error or capability gap, not permission to patch `webui.json`
+directly.
+
+The same reducer contract is used for delayed fixture replay, Root LLM
+streaming, and deterministic zero-model edits. This keeps live prototype
+morphing from becoming a second authoring model: the browser may render a
+preview-only projection of `SemanticGraph_t`, but final acceptance and
+materialization compile the semantic source through the ordinary Builder
+contracts.
+
 #### Incremental Baseline Integrity
 
 Before a follow-up, bind the semantic source to the actual accepted implementation,

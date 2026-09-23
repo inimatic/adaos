@@ -560,10 +560,11 @@ runtime uses Root-managed asynchronous LLM jobs:
    accepted the job, forwarding new monotonic progress entries to one grouped
    chat card. Root push delivery may be added later without removing polling as
    the recovery path.
-6. Builder stages complete semantic JSONL patches on a private copy and validates
-   the reconstructed document against the Builder/webui contracts
-   before writing `webui.json`, `ui_revisions/NNN.json`, and
-   dev-webspace refresh events.
+6. Builder stages complete semantic graph JSONL operations on a private graph
+   draft, compiles/projects the reconstructed semantic source through the
+   Builder/WebUI contracts, and only then writes `webui.json`,
+   `ui_revisions/NNN.json`, and dev-webspace refresh events. Direct renderer
+   patches remain a compatibility profile, not the target source authority.
 
 Builder also writes a small atomic terminal marker under the scenario-local
 `llm_jobs/` directory before updating session memory. This journal is the
@@ -603,15 +604,18 @@ as the target product-understanding boundary.
 
 Long-running UI transformations follow the target
 [Builder Streaming Patch Architecture](builder-streaming-patches.md). Provider
-SSE, Root job progress, and semantic UI patches are separate protocols. The
-active `webui.json` remains a complete, atomically promoted
-`adaos.webui.v1` document; partial output is never rendered as canonical UI.
+SSE, Root job progress, semantic graph operations, and derived preview
+projections are separate protocols. The active `webui.json` remains a complete,
+atomically promoted `adaos.webui.v1` document; partial output is never rendered
+as canonical UI.
 
 For rapid UI prototyping, Builder should treat the LLM as an adaptive
-designer-programmer and treat AdaOS as the deterministic guardrail. The model is
-allowed to reshape the declarative `adaos.webui.v1` UI inside the ABI boundary;
-AdaOS owns schema validation, revision storage, review, safe apply, runtime
-refresh, and rollback.
+designer-programmer and treat AdaOS as the deterministic guardrail. The target
+model output is a semantic Application/Prototype graph edit over stable refs.
+AdaOS owns reduction, compilation to `adaos.webui.v1`, schema validation,
+revision storage, review, safe apply, runtime refresh, and rollback. Direct
+model reshaping of `adaos.webui.v1` stays available only as an explicit
+compatibility route.
 
 The complete target boundary is defined by the
 [Executable Prototype Architecture](executable-prototype-architecture.md). A
