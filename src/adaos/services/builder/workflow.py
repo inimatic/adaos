@@ -3314,14 +3314,95 @@ class BuilderWorkflowService:
         active_phase = str(workflow.get("active_phase") or "prototype")
         phase = _mapping(workflow.get(active_phase))
         prototype = _mapping(workflow.get("prototype"))
+        automation = _mapping(workflow.get("automation"))
+        delivery = _mapping(workflow.get("delivery"))
         publication = _mapping(workflow.get("publication"))
+        project = _mapping(workflow.get("project"))
+        candidate_id = str(delivery.get("candidate_id") or "").strip()
+        candidate_digest = str(
+            delivery.get("package_digest") or delivery.get("release_digest") or ""
+        ).strip()
+        delivery_status = str(delivery.get("status") or "idle")
+        trial_accepted = bool(
+            candidate_id and delivery_status in {"accepted", "published"}
+        )
+        trial_target = None
+        if trial_accepted:
+            trial_placement = next(
+                (
+                    _mapping(item)
+                    for item in project.get("placements") or ()
+                    if isinstance(item, Mapping)
+                    and str(item.get("kind") or "") == "trial"
+                    and str(item.get("status") or "") == "active"
+                    and str(_mapping(item.get("result_ref")).get("id") or "")
+                    == candidate_id
+                ),
+                {},
+            )
+            placement_target = _mapping(trial_placement.get("target"))
+            scenario_id = str(trial_placement.get("scenario_id") or "").strip()
+            webspace_id = str(placement_target.get("webspace_id") or "").strip()
+            if kind == "scenario" and scenario_id and webspace_id:
+                trial_target = {
+                    "intent": "webspace.open",
+                    "expected_scenario_id": scenario_id,
+                    "webspace_id": webspace_id,
+                    "space_kind": str(
+                        placement_target.get("space_kind") or "workspace"
+                    ),
+                    "candidate_id": candidate_id,
+                    "candidate_digest": candidate_digest or None,
+                }
+        publication_status = str(publication.get("status") or "not_started")
+        published_version = str(publication.get("current_version") or "").strip()
+        published_at = str(publication.get("published_at") or "").strip()
+        publication_evidence_present = bool(
+            publication_status == "published" and published_version and published_at
+        )
+        acceptance = _mapping(prototype.get("acceptance"))
         return {
             "phase": active_phase,
             "status": str(phase.get("status") or "unknown"),
             "revision": prototype.get("head_revision"),
             "stable": bool(prototype.get("stable")),
-            "accepted": bool(prototype.get("acceptance")),
-            "publication_status": str(publication.get("status") or "not_started"),
+            "accepted": bool(acceptance),
+            "prototype_evidence": {
+                "acceptance_id": acceptance.get("acceptance_id"),
+                "revision": acceptance.get("revision"),
+                "webui_digest": acceptance.get("webui_digest"),
+                "decision": acceptance.get("decision"),
+            }
+            if acceptance
+            else None,
+            "automation_evidence": {
+                "status": str(automation.get("status") or "not_started"),
+                "task_id": automation.get("head_task_id"),
+                "source_digest": automation.get("source_digest"),
+                "commit": automation.get("commit"),
+                "completed_at": automation.get("completed_at"),
+            },
+            "trial": {
+                "status": delivery_status,
+                "candidate_id": candidate_id or None,
+                "candidate_digest": candidate_digest or None,
+                "version": delivery.get("version") or delivery.get("base_release"),
+                "accepted": trial_accepted,
+                "decided_at": delivery.get("decided_at"),
+                "navigation_target": trial_target,
+                "evidence_present": bool(
+                    trial_accepted
+                    and candidate_digest
+                    and delivery.get("decided_at")
+                ),
+            },
+            "publication_status": publication_status,
+            "publication": {
+                "status": publication_status,
+                "version": published_version or None,
+                "published_at": published_at or None,
+                "evidence_present": publication_evidence_present,
+            },
             "updated_at": str(state.get("updated_at") or "").strip() or None,
         }
 

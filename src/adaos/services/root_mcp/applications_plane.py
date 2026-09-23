@@ -426,6 +426,81 @@ def contracts() -> list[RootMcpToolContract]:
             ),
         ]
     }
+    trial_navigation_target = schema_object(
+        properties={
+            "intent": {"const": "webspace.open"},
+            "expected_scenario_id": {"type": "string", "minLength": 1},
+            "webspace_id": {"type": "string", "minLength": 1},
+            "space_kind": {"type": "string", "minLength": 1},
+            "candidate_id": {"type": "string", "minLength": 1},
+            "candidate_digest": {"type": ["string", "null"]},
+        },
+        required=[
+            "intent",
+            "expected_scenario_id",
+            "webspace_id",
+            "space_kind",
+            "candidate_id",
+            "candidate_digest",
+        ],
+        additional_properties=False,
+    )
+    local_development = {
+        "oneOf": [
+            {"type": "null"},
+            schema_object(
+                properties={
+                    "exists": {"type": "boolean"},
+                    "phase": {"type": "string"},
+                    "status": {"type": "string"},
+                    "revision": {"type": ["string", "null"]},
+                    "stable": {"type": "boolean"},
+                    "accepted": {"type": "boolean"},
+                    "publication_status": {"type": "string"},
+                    "builder": {"type": "object"},
+                    "prototype_evidence": {"type": ["object", "null"]},
+                    "automation_evidence": {"type": "object"},
+                    "trial": schema_object(
+                        properties={
+                            "status": {"type": "string"},
+                            "candidate_id": {"type": ["string", "null"]},
+                            "candidate_digest": {"type": ["string", "null"]},
+                            "version": {"type": ["string", "null"]},
+                            "accepted": {"type": "boolean"},
+                            "decided_at": {"type": ["string", "null"]},
+                            "navigation_target": {
+                                "oneOf": [
+                                    {"type": "null"},
+                                    trial_navigation_target,
+                                ]
+                            },
+                            "evidence_present": {"type": "boolean"},
+                        },
+                        required=[
+                            "status",
+                            "candidate_id",
+                            "candidate_digest",
+                            "accepted",
+                            "navigation_target",
+                            "evidence_present",
+                        ],
+                        additional_properties=False,
+                    ),
+                    "publication": schema_object(
+                        properties={
+                            "status": {"type": "string"},
+                            "version": {"type": ["string", "null"]},
+                            "published_at": {"type": ["string", "null"]},
+                            "evidence_present": {"type": "boolean"},
+                        },
+                        required=["status", "evidence_present"],
+                        additional_properties=False,
+                    ),
+                },
+                additional_properties=True,
+            ),
+        ]
+    }
     application_record = schema_object(
         properties={
             "application": application_identity,
@@ -440,7 +515,7 @@ def contracts() -> list[RootMcpToolContract]:
             "prerelease_release": release_identity,
             "effective_release": effective_release,
             "channels": {"type": "object"},
-            "local_development": {"type": ["object", "null"]},
+            "local_development": local_development,
             "installation_summary": {"type": "object"},
             "attention": schema_object(
                 properties={
@@ -488,6 +563,11 @@ def contracts() -> list[RootMcpToolContract]:
             "installation_revision_path": "installation.revision",
             "subscription_revision_path": "subscription.revision",
             "effective_release_digest_path": "effective_release.release_digest",
+            "accepted_trial_path": "local_development.trial",
+            "trial_navigation_target_path": (
+                "local_development.trial.navigation_target"
+            ),
+            "publication_evidence_path": "local_development.publication",
         },
         "unavailable_state": {
             "availability_path": "available",

@@ -382,6 +382,21 @@ def test_application_catalog_contracts_publish_exact_records_and_cas_paths() -> 
     assert record["properties"]["application"]["required"] == ["application_id"]
     installation = record["properties"]["installation"]["oneOf"][1]
     assert installation["required"] == ["revision"]
+    development = record["properties"]["local_development"]["oneOf"][1]
+    trial = development["properties"]["trial"]
+    target = trial["properties"]["navigation_target"]["oneOf"][1]
+    assert target["required"] == [
+        "intent",
+        "expected_scenario_id",
+        "webspace_id",
+        "space_kind",
+        "candidate_id",
+        "candidate_digest",
+    ]
+    assert development["properties"]["publication"]["required"] == [
+        "status",
+        "evidence_present",
+    ]
 
     shown_record = shown.output_schema["properties"]["result"]["properties"][
         "application"
@@ -399,6 +414,11 @@ def test_application_catalog_contracts_publish_exact_records_and_cas_paths() -> 
         "installation_revision_path": "installation.revision",
         "subscription_revision_path": "subscription.revision",
         "effective_release_digest_path": "effective_release.release_digest",
+        "accepted_trial_path": "local_development.trial",
+        "trial_navigation_target_path": (
+            "local_development.trial.navigation_target"
+        ),
+        "publication_evidence_path": "local_development.publication",
     }
     assert "effective_release" in shown.metadata["webui_data_binding"][
         "unavailable_state"

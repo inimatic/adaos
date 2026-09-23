@@ -1089,6 +1089,18 @@ def test_application_reads_project_only_existing_local_developments(
             "stable": False,
             "accepted": False,
             "publication_status": "not_started",
+            "prototype_evidence": None,
+            "automation_evidence": {"status": "working"},
+            "trial": {
+                "status": "idle",
+                "accepted": False,
+                "navigation_target": None,
+                "evidence_present": False,
+            },
+            "publication": {
+                "status": "not_started",
+                "evidence_present": False,
+            },
             "updated_at": None,
         }
         if (object_type, object_id) == ("scenario", "applications")
@@ -1120,6 +1132,18 @@ def test_application_reads_project_only_existing_local_developments(
             "preview_webspace_id": "desktop-dev",
         },
         "publication_status": "not_started",
+        "prototype_evidence": None,
+        "automation_evidence": {"status": "working"},
+        "trial": {
+            "status": "idle",
+            "accepted": False,
+            "navigation_target": None,
+            "evidence_present": False,
+        },
+        "publication": {
+            "status": "not_started",
+            "evidence_present": False,
+        },
     }
     assert [item["application"]["application_id"] for item in catalog] == ["foreign"]
     assert catalog[0]["local_development"] is None

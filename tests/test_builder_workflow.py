@@ -388,10 +388,117 @@ def test_development_summary_is_bounded_and_read_only(
         "revision": "001",
         "stable": False,
         "accepted": False,
+        "prototype_evidence": None,
+        "automation_evidence": {
+            "status": "not_started",
+            "task_id": None,
+            "source_digest": None,
+            "commit": None,
+            "completed_at": None,
+        },
+        "trial": {
+            "status": "idle",
+            "candidate_id": None,
+            "candidate_digest": None,
+            "version": None,
+            "accepted": False,
+            "decided_at": None,
+            "navigation_target": None,
+            "evidence_present": False,
+        },
         "publication_status": "not_started",
+        "publication": {
+            "status": "not_started",
+            "version": None,
+            "published_at": None,
+            "evidence_present": False,
+        },
         "updated_at": "2026-09-07T12:00:00Z",
     }
     assert json.loads(path.read_text(encoding="utf-8")) == state
+
+
+def test_development_summary_exposes_only_matching_accepted_trial_navigation(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    candidate_id = "recipes-0-2-0-candidate"
+    candidate_digest = "sha256:" + "a" * 64
+    (root / "prompt_state.json").write_text(
+        json.dumps(
+            {
+                "updated_at": "2026-09-07T12:00:00Z",
+                "workflow": {
+                    "active_phase": "trial",
+                    "prototype": {
+                        "status": "frozen",
+                        "stable": True,
+                        "acceptance": {
+                            "acceptance_id": "acceptance:recipes:001",
+                            "revision": "001",
+                            "webui_digest": "sha256:" + "b" * 64,
+                            "decision": "accepted",
+                        },
+                    },
+                    "automation": {
+                        "status": "completed",
+                        "head_task_id": "task.recipes",
+                        "source_digest": "sha256:" + "c" * 64,
+                        "commit": "abc123",
+                        "completed_at": "2026-09-07T12:30:00Z",
+                    },
+                    "trial": {"status": "accepted"},
+                    "delivery": {
+                        "status": "accepted",
+                        "candidate_id": candidate_id,
+                        "package_digest": candidate_digest,
+                        "version": "0.2.0-beta.1",
+                        "decided_at": "2026-09-07T13:00:00Z",
+                    },
+                    "project": {
+                        "placements": [
+                            {
+                                "kind": "trial",
+                                "status": "active",
+                                "result_ref": {"id": candidate_id},
+                                "scenario_id": "recipes",
+                                "target": {
+                                    "webspace_id": "recipes-trial",
+                                    "space_kind": "workspace",
+                                },
+                                "runtime_binding": {
+                                    "path": "C:/private/trials/recipes"
+                                },
+                            }
+                        ]
+                    },
+                    "publication": {"status": "not_started"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = service.development_summary("scenario", "recipes")
+
+    assert summary["trial"] == {
+        "status": "accepted",
+        "candidate_id": candidate_id,
+        "candidate_digest": candidate_digest,
+        "version": "0.2.0-beta.1",
+        "accepted": True,
+        "decided_at": "2026-09-07T13:00:00Z",
+        "navigation_target": {
+            "intent": "webspace.open",
+            "expected_scenario_id": "recipes",
+            "webspace_id": "recipes-trial",
+            "space_kind": "workspace",
+            "candidate_id": candidate_id,
+            "candidate_digest": candidate_digest,
+        },
+        "evidence_present": True,
+    }
+    assert "private" not in json.dumps(summary)
 
 
 def test_scenario_without_ui_revision_uses_current_content_not_manifest_version(

@@ -109,6 +109,14 @@ represented by `available=false` together with the machine-readable
 `attention` reason and message. A missing Application is a transport error,
 not an invented empty record.
 
+For locally developed Applications, the same record exposes bounded Builder
+lifecycle evidence. `local_development.trial.navigation_target` is present only
+for an accepted Candidate whose active Trial placement matches that exact
+Candidate; it contains logical Webspace navigation fields and never a private
+filesystem path. Stable UI actions are gated by
+`local_development.publication.evidence_present`, which becomes true only for a
+published version with a recorded publication timestamp.
+
 ## Compatibility and migration
 
 The beta keeps the pre-CBS direct Automation path operational. A legacy

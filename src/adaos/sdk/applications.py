@@ -1161,6 +1161,14 @@ def _enrich_application_models(
                     local["stable"] = workflow["stable"]
                     local["accepted"] = workflow["accepted"]
                     local["publication_status"] = workflow["publication_status"]
+                    local["prototype_evidence"] = deepcopy(
+                        workflow.get("prototype_evidence")
+                    )
+                    local["automation_evidence"] = deepcopy(
+                        workflow.get("automation_evidence")
+                    )
+                    local["trial"] = deepcopy(workflow.get("trial"))
+                    local["publication"] = deepcopy(workflow.get("publication"))
                     local["updated_at"] = workflow["updated_at"] or local["updated_at"]
             project_id = str(application.get("legacy_project_id") or "").strip()
             if project_id:
