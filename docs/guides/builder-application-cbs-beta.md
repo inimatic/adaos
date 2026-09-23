@@ -80,6 +80,12 @@ write-only: the read projection exposes presence and revision but never a
 secret. Provider-projected fields cannot introduce their own data sources,
 file transports, or mutation targets.
 
+`applications.access.users` likewise publishes the exact subject-choice path
+`response.result.users_access.subjects`. Each option carries a canonical
+`subject_ref`, a safe `display_label`, `kind`, and
+`eligible_for_application_access`; Applications binds those fields instead of
+accepting a free-text identity or copying the Users & Access directory.
+
 ## Compatibility and migration
 
 The beta keeps the pre-CBS direct Automation path operational. A legacy

@@ -291,6 +291,7 @@ def _person_projection(value: Mapping[str, Any]) -> dict[str, Any]:
             "membership_count": len(memberships),
             "primary_role": roles[0] if roles else "",
             "application_access_count": len(access),
+            "eligible_for_application_access": True,
         }
     )
     return result

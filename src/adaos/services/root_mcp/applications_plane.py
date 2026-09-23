@@ -544,6 +544,84 @@ def contracts() -> list[RootMcpToolContract]:
             "editors",
         ],
     )
+    access_subject = schema_object(
+        properties={
+            "subject_ref": {"type": "string", "minLength": 1},
+            "kind": {"enum": ["user", "guest", "child"]},
+            "display_label": {"type": "string", "minLength": 1},
+            "display_label_source": {"enum": ["profile", "subject_ref"]},
+            "initials": {"type": "string"},
+            "membership_summary": {"type": "string"},
+            "membership_count": {"type": "integer", "minimum": 0},
+            "primary_role": {"type": "string"},
+            "application_access_count": {"type": "integer", "minimum": 0},
+            "eligible_for_application_access": {"type": "boolean"},
+            "profile": {"type": "object"},
+            "memberships": {"type": "array", "items": {"type": "object"}},
+            "application_access": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
+            "invite": {"type": "object"},
+        },
+        required=[
+            "subject_ref",
+            "kind",
+            "display_label",
+            "eligible_for_application_access",
+        ],
+        additional_properties=True,
+    )
+    users_access_surface = schema_object(
+        properties={
+            "schema": {"const": "adaos.users_access.surface.v1"},
+            **{
+                section: {
+                    "type": "array",
+                    "items": access_subject,
+                    "maxItems": 1000,
+                }
+                for section in ("people", "guests", "children", "subjects")
+            },
+            **{
+                section: {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "maxItems": 1000,
+                }
+                for section in (
+                    "devices",
+                    "sessions",
+                    "application_access",
+                    "permissions",
+                    "activity",
+                )
+            },
+            "activity_page": schema_object(
+                properties={
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "has_more": {"type": "boolean"},
+                },
+                required=["limit", "has_more"],
+            ),
+            "diagnostics": {"type": "object"},
+        },
+        required=[
+            "schema",
+            "people",
+            "guests",
+            "children",
+            "subjects",
+            "devices",
+            "sessions",
+            "application_access",
+            "permissions",
+            "activity",
+            "activity_page",
+            "diagnostics",
+        ],
+        additional_properties=False,
+    )
     string_list = {
         "oneOf": [
             {
@@ -1011,9 +1089,29 @@ def contracts() -> list[RootMcpToolContract]:
                     "activity_limit": {"type": "integer", "minimum": 1, "maximum": 200},
                 }
             ),
-            output_schema=response(),
+            output_schema=result_response(
+                schema_object(
+                    properties={"users_access": users_access_surface},
+                    required=["users_access"],
+                )
+            ),
             required_capability="applications.read",
-            metadata={**published, "handler": "applications_access_users"},
+            metadata={
+                **published,
+                "handler": "applications_access_users",
+                "webui_data_binding": {
+                    "schema": "adaos.root_mcp.webui_data_binding.v1",
+                    "transport_envelope": "node_root_mcp_bridge.v1",
+                    "result_paths": {
+                        "subjects": "response.result.users_access.subjects"
+                    },
+                    "subject_choice": {
+                        "value_path": "subject_ref",
+                        "label_paths": ["display_label"],
+                        "eligibility_path": "eligible_for_application_access",
+                    },
+                },
+            },
         ),
         RootMcpToolContract(
             id="applications.access.reviews",

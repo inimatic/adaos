@@ -188,7 +188,20 @@ class _StubSdk:
 
     def get_users_access_surface(self, *args, **kwargs):
         self.calls.append(("get_users_access_surface", args, kwargs))
-        return {"people": [], "guests": [], "children": []}
+        return {
+            "schema": "adaos.users_access.surface.v1",
+            "people": [],
+            "guests": [],
+            "children": [],
+            "subjects": [],
+            "devices": [],
+            "sessions": [],
+            "application_access": [],
+            "permissions": [],
+            "activity": [],
+            "activity_page": {"limit": kwargs.get("activity_limit", 50), "has_more": False},
+            "diagnostics": {"content_redacted": True},
+        }
 
     def put_application_connected_account(self, *args, **kwargs):
         self.calls.append(("put_application_connected_account", args, kwargs))
@@ -699,12 +712,33 @@ def test_application_access_contracts_are_secret_free_and_reads_share_sdk_projec
     monkeypatch.setattr(applications_plane, "_sdk", lambda: stub)
     contracts = {item.id: item for item in applications_plane.contracts()}
     connected = contracts["applications.access.connected_account"]
+    users = contracts["applications.access.users"]
 
     assert {"secret", "token", "credential", "value"}.isdisjoint(
         connected.input_schema["properties"]
     )
     assert "expected_revision" in connected.input_schema["required"]
     assert connected.input_schema["properties"]["expected_revision"]["minimum"] == 0
+    users_surface = users.output_schema["properties"]["result"]["properties"][
+        "users_access"
+    ]
+    subject = users_surface["properties"]["subjects"]["items"]
+    assert subject["required"] == [
+        "subject_ref",
+        "kind",
+        "display_label",
+        "eligible_for_application_access",
+    ]
+    assert users.metadata["webui_data_binding"]["subject_choice"] == {
+        "value_path": "subject_ref",
+        "label_paths": ["display_label"],
+        "eligibility_path": "eligible_for_application_access",
+    }
+    assert users_surface["properties"]["activity_page"]["properties"]["limit"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+    }
     app_result = applications_plane.handlers()["applications.access.show"](
         {"application_id": "app_recipes", "activity_limit": 25}, dry_run=True
     )

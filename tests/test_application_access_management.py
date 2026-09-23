@@ -1017,6 +1017,7 @@ def test_application_access_v1_end_to_end_evidence_bundle(tmp_path: Path) -> Non
 
     users = management.users_access()
     assert {item["subject_ref"] for item in users["children"]} == {child.subject_ref}
+    assert all(item["eligible_for_application_access"] for item in users["subjects"])
     assert any(
         item["grant_id"] == owner.grant_id for item in users["application_access"]
     )
