@@ -277,6 +277,13 @@ def test_executor_applies_reviewed_component_relocation_and_uninstall(
         "scenario:app": "singleton",
         "skill:app_worker": "disabled",
     }
+    options = executor.placement_options(
+        "app_test",
+        "skill:app_worker",
+        limit=10,
+    )
+    assert options["desired_revision"] == 3
+    assert options["candidates"][0]["node_id"] == "node-local"
 
     component_install = {
         **install_plan,

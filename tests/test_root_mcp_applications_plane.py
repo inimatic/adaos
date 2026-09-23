@@ -37,6 +37,42 @@ class _StubSdk:
             }
         ]
 
+    def get_application_placement_options(self, *args, **kwargs):
+        self.calls.append(("get_application_placement_options", args, kwargs))
+        return {
+            "schema": "adaos.application.placement_options.v1",
+            "application_id": args[0],
+            "deployment_id": "application-deployment:app_recipes",
+            "expected_revision": 4,
+            "component_ref": kwargs.get("component_ref"),
+            "placements": [
+                {
+                    "placement_id": "scenario:recipes@node-home",
+                    "component_ref": "scenario:recipes",
+                    "node_id": "node-home",
+                    "desired": True,
+                    "desired_mode": "selected_nodes",
+                    "runtime_status": "active",
+                    "sync_status": "synced",
+                    "deployment_revision": 4,
+                }
+            ],
+            "eligible_nodes": [
+                {
+                    "node_id": "node-office",
+                    "score": 10,
+                    "already_active": False,
+                    "architecture": "x86_64",
+                    "runtime_version": "1.0.0",
+                    "labels": {},
+                    "headroom": {},
+                    "reasons": ["eligible"],
+                }
+            ],
+            "rejected_nodes": [],
+            "truncated": False,
+        }
+
     def get_application_setup(self, *args, **kwargs):
         self.calls.append(("get_application_setup", args, kwargs))
         return {
@@ -400,6 +436,16 @@ def test_applications_plane_lists_component_inventory(monkeypatch) -> None:
     )
 
     assert result["components"][0]["component_ref"] == "scenario:recipes"
+    assert result["application_id"] == "app_recipes"
+    assert result["deployment_revision"] is None
+    contract = {item.id: item for item in applications_plane.contracts()}[
+        "applications.list_components"
+    ]
+    result_schema = contract.output_schema["properties"]["result"]
+    component_schema = result_schema["properties"]["components"]["items"]
+    assert {"installable", "relocatable", "removable", "deployment_revision"}.issubset(
+        component_schema["properties"]
+    )
     assert stub.calls == [
         (
             "list_application_components",
@@ -416,17 +462,32 @@ def test_applications_plane_lists_desired_and_observed_placements(monkeypatch) -
     result = applications_plane.handlers()["applications.list_placements"](
         {
             "application_id": "app_recipes",
+            "component_ref": "scenario:recipes",
+            "limit": 20,
             "webspace_id": "home",
         },
         dry_run=True,
     )
 
     assert result["placements"][0]["sync_status"] == "synced"
+    assert result["expected_revision"] == 4
+    assert result["eligible_nodes"][0]["node_id"] == "node-office"
+    contract = {item.id: item for item in applications_plane.contracts()}[
+        "applications.list_placements"
+    ]
+    result_schema = contract.output_schema["properties"]["result"]
+    assert {"expected_revision", "eligible_nodes", "placements"}.issubset(
+        result_schema["properties"]
+    )
     assert stub.calls == [
         (
-            "list_application_placements",
+            "get_application_placement_options",
             ("app_recipes",),
-            {"webspace_id": "home"},
+            {
+                "component_ref": "scenario:recipes",
+                "webspace_id": "home",
+                "limit": 20,
+            },
         )
     ]
 

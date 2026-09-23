@@ -838,6 +838,86 @@ def test_application_automation_prefetches_exact_contract_groups(
         "lifecycle",
         "setup_and_placement",
     ]
+    assert (
+        worker_module._descriptor_working_set_persisted_size(result)
+        <= worker_module.DESCRIPTOR_WORKING_SET_MAX_BYTES
+    )
+
+
+def test_descriptor_working_set_rejects_persisted_payload_over_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return self.payload
+
+    def _post(_url: str, **kwargs: Any) -> _Response:
+        request = dict(kwargs["json"])
+        params = dict(request["params"])
+        arguments = dict(params["arguments"])
+        if params["name"] == "search_descriptors":
+            result = {
+                "search": {
+                    "schema": "adaos.descriptor.search.v1",
+                    "query_digest": "sha256:large",
+                    "items": [
+                        {
+                            "descriptor_id": "sdk_metadata",
+                            "item_id": "large",
+                            "summary": "x"
+                            * worker_module.DESCRIPTOR_WORKING_SET_MAX_BYTES,
+                        }
+                    ],
+                }
+            }
+        else:
+            result = {
+                "descriptor_item": {
+                    "schema": "adaos.descriptor.item.v1",
+                    "descriptor_id": arguments["descriptor_id"],
+                    "item_id": arguments["item_id"],
+                    "level": "std",
+                    "item": {"name": "large"},
+                }
+            }
+        return _Response(
+            {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {
+                    "content": [{"type": "text", "text": "compact"}],
+                    "structuredContent": {
+                        "ok": True,
+                        "response": {"ok": True, "result": result},
+                    },
+                },
+            }
+        )
+
+    monkeypatch.setattr(worker_module.httpx, "post", _post)
+
+    with pytest.raises(ValueError, match="persisted-size limit"):
+        _task_mcp_descriptor_working_set(
+            assignment={
+                "task_id": "task.large-descriptor",
+                "realize_request": {
+                    "artifacts": {"implementation_brief": "Inspect large descriptor."}
+                },
+            },
+            root_mcp={
+                "enabled": True,
+                "server_name": "adaos_task_root",
+                "url": "http://127.0.0.1:8777/v1/root/mcp/task/task.large-descriptor",
+                "enabled_tools": ["search_descriptors", "get_descriptor_item"],
+                "_bearer_token_value": "secret-not-evidence",
+            },
+        )
 
 
 def test_persisted_descriptor_working_set_evidence_is_reusable(

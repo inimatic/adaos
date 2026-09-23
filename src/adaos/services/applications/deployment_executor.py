@@ -255,6 +255,23 @@ class ApplicationDeploymentExecutor:
         except FileNotFoundError:
             return None
 
+    def placement_options(
+        self,
+        application_id: str,
+        component_ref: str,
+        *,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        """Rank bounded eligible nodes for one reviewed component placement."""
+
+        deployment_id = f"application-deployment:{str(application_id or '').strip()}"
+        return self.runtime.recommend_nodes(
+            deployment_id,
+            str(component_ref or "").strip(),
+            principal=self._principal("system:applications-read"),
+            limit=max(1, min(int(limit), 100)),
+        )
+
     def _desired(
         self, plan: Mapping[str, Any], *, status: str = "planned"
     ) -> tuple[ProjectDeployment, int, ProjectDeployment | None]:

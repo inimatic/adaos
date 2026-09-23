@@ -354,6 +354,11 @@ def contracts() -> list[RootMcpToolContract]:
     def response() -> dict[str, Any]:
         return deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
 
+    def result_response(result_schema: Mapping[str, Any]) -> dict[str, Any]:
+        envelope = response()
+        envelope["properties"]["result"] = dict(result_schema)
+        return envelope
+
     published = {
         "published_by": "plane:applications",
         "adapter": "adaos.sdk.applications",
@@ -363,6 +368,72 @@ def contracts() -> list[RootMcpToolContract]:
         "expected_revision": {"type": "integer", "minimum": 0},
         "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
     }
+    component_projection = schema_object(
+        properties={
+            "component_ref": {"type": "string"},
+            "kind": {"type": "string"},
+            "component_id": {"type": "string"},
+            "ownership": {"type": "string"},
+            "placement_mode": {"type": ["string", "null"]},
+            "placement_status": {
+                "enum": ["active", "desired", "disabled", "not_placed"]
+            },
+            "installed": {"type": "boolean"},
+            "installable": {"type": "boolean"},
+            "relocatable": {"type": "boolean"},
+            "removable": {"type": "boolean"},
+            "deployment_revision": {"type": ["integer", "null"], "minimum": 0},
+            "desired_node_ids": {"type": "array", "items": {"type": "string"}},
+            "observed_node_ids": {"type": "array", "items": {"type": "string"}},
+            "runtime_status": {"type": "string"},
+        },
+        required=[
+            "component_ref",
+            "placement_status",
+            "installed",
+            "installable",
+            "relocatable",
+            "removable",
+            "deployment_revision",
+        ],
+        additional_properties=True,
+    )
+    placement_projection = schema_object(
+        properties={
+            "placement_id": {"type": "string"},
+            "component_ref": {"type": "string"},
+            "node_id": {"type": ["string", "null"]},
+            "desired": {"type": "boolean"},
+            "desired_mode": {"type": "string"},
+            "runtime_status": {"type": "string"},
+            "sync_status": {"type": "string"},
+            "deployment_revision": {"type": ["integer", "null"], "minimum": 0},
+        },
+        required=[
+            "placement_id",
+            "component_ref",
+            "desired",
+            "desired_mode",
+            "runtime_status",
+            "sync_status",
+            "deployment_revision",
+        ],
+        additional_properties=True,
+    )
+    node_option = schema_object(
+        properties={
+            "node_id": {"type": "string"},
+            "score": {"type": "integer"},
+            "already_active": {"type": "boolean"},
+            "architecture": {"type": "string"},
+            "runtime_version": {"type": "string"},
+            "labels": {"type": "object"},
+            "headroom": {"type": "object"},
+            "reasons": {"type": "array", "items": {"type": "string"}},
+        },
+        required=["node_id", "score", "already_active", "reasons"],
+        additional_properties=False,
+    )
     string_list = {
         "oneOf": [
             {
@@ -547,7 +618,23 @@ def contracts() -> list[RootMcpToolContract]:
                 },
                 required=["application_id"],
             ),
-            output_schema=response(),
+            output_schema=result_response(
+                schema_object(
+                    properties={
+                        "application_id": {"type": "string"},
+                        "deployment_revision": {
+                            "type": ["integer", "null"],
+                            "minimum": 0,
+                        },
+                        "components": {
+                            "type": "array",
+                            "items": component_projection,
+                            "maxItems": 500,
+                        },
+                    },
+                    required=["application_id", "deployment_revision", "components"],
+                )
+            ),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list_components"},
         ),
@@ -562,11 +649,54 @@ def contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(
                 properties={
                     "application_id": {"type": "string"},
+                    "component_ref": {"type": ["string", "null"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                     "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
                 },
                 required=["application_id"],
             ),
-            output_schema=response(),
+            output_schema=result_response(
+                schema_object(
+                    properties={
+                        "schema": {"const": "adaos.application.placement_options.v1"},
+                        "application_id": {"type": "string"},
+                        "deployment_id": {"type": ["string", "null"]},
+                        "expected_revision": {"type": "integer", "minimum": 0},
+                        "component_ref": {"type": ["string", "null"]},
+                        "placements": {
+                            "type": "array",
+                            "items": placement_projection,
+                            "maxItems": 500,
+                        },
+                        "eligible_nodes": {
+                            "type": "array",
+                            "items": node_option,
+                            "maxItems": 100,
+                        },
+                        "rejected_nodes": {
+                            "type": "array",
+                            "items": schema_object(
+                                properties={
+                                    "node_id": {"type": "string"},
+                                    "reason": {"type": "string"},
+                                },
+                                required=["node_id", "reason"],
+                            ),
+                            "maxItems": 100,
+                        },
+                        "truncated": {"type": "boolean"},
+                    },
+                    required=[
+                        "schema",
+                        "application_id",
+                        "expected_revision",
+                        "placements",
+                        "eligible_nodes",
+                        "rejected_nodes",
+                        "truncated",
+                    ],
+                )
+            ),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list_placements"},
         ),
@@ -1935,21 +2065,34 @@ def _handle_apply_updates(
 def _handle_list_components(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
+    application_id = _application_id(arguments)
+    components = _sdk().list_application_components(
+        application_id, webspace_id=_webspace_id(arguments)
+    )
+    deployment_revision = next(
+        (
+            item.get("deployment_revision")
+            for item in components
+            if item.get("deployment_revision") is not None
+        ),
+        None,
+    )
     return {
-        "components": _sdk().list_application_components(
-            _application_id(arguments), webspace_id=_webspace_id(arguments)
-        )
+        "application_id": application_id,
+        "deployment_revision": deployment_revision,
+        "components": components,
     }
 
 
 def _handle_list_placements(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
-    return {
-        "placements": _sdk().list_application_placements(
-            _application_id(arguments), webspace_id=_webspace_id(arguments)
-        )
-    }
+    return _sdk().get_application_placement_options(
+        _application_id(arguments),
+        component_ref=str(arguments.get("component_ref") or "").strip() or None,
+        webspace_id=_webspace_id(arguments),
+        limit=max(1, min(int(arguments.get("limit") or 100), 100)),
+    )
 
 
 def _handle_setup_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:

@@ -1011,6 +1011,7 @@ def _application_component_inventory(model: Mapping[str, Any]) -> list[dict[str,
             component_ref = f"{kind}:{component_id}" if component_id else kind
         actual = observed.get(component_ref, [])
         plan = desired.get(component_ref, {})
+        placement_mode = str(plan.get("mode") or "").strip() or None
         rows.append(
             {
                 "component_ref": component_ref,
@@ -1020,7 +1021,19 @@ def _application_component_inventory(model: Mapping[str, Any]) -> list[dict[str,
                 "version": raw.get("version"),
                 "digest": raw.get("digest") or raw.get("package_digest"),
                 "source": release_source,
-                "placement_mode": plan.get("mode"),
+                "placement_mode": placement_mode,
+                "placement_status": (
+                    "disabled"
+                    if placement_mode == "disabled"
+                    else "active"
+                    if any(str(item.get("status") or "") == "active" for item in actual)
+                    else "desired"
+                    if plan
+                    else "not_placed"
+                ),
+                "installed": placement_mode != "disabled",
+                "installable": placement_mode == "disabled",
+                "relocatable": bool(plan) and placement_mode != "disabled",
                 "desired_node_ids": list(plan.get("selected_node_ids") or ()),
                 "observed_node_ids": sorted(
                     {
@@ -1036,7 +1049,15 @@ def _application_component_inventory(model: Mapping[str, Any]) -> list[dict[str,
                         (actual[0] if actual else {}).get("status") or "not_observed"
                     )
                 ),
+                "deployment_revision": (model.get("execution_placement") or {}).get(
+                    "revision"
+                ),
             }
+        )
+    active_count = sum(1 for item in rows if item["installed"])
+    for item in rows:
+        item["removable"] = bool(
+            item["installed"] and item["relocatable"] and active_count > 1
         )
     return rows
 
@@ -1434,6 +1455,76 @@ def list_application_placements(
         )
     )
     return rows[:500]
+
+
+def get_application_placement_options(
+    application_id: str,
+    *,
+    component_ref: str | None = None,
+    webspace_id: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Return exact placement revision plus bounded eligible node choices."""
+
+    model = get_application(application_id, webspace_id=webspace_id)
+    placement = model.get("execution_placement") or {}
+    selected_component = str(component_ref or "").strip() or None
+    candidates: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    truncated = False
+    if selected_component:
+        components = {
+            str(item.get("component_ref") or ""): dict(item)
+            for item in model.get("component_inventory") or ()
+            if isinstance(item, Mapping)
+        }
+        if selected_component not in components:
+            raise ValueError("component_ref is absent from the installed release")
+        provider = getattr(_service().executor, "placement_options", None)
+        if not callable(provider):
+            raise RuntimeError("Application placement option provider is unavailable")
+        recommendation = provider(
+            application_id,
+            selected_component,
+            limit=max(1, min(int(limit), 100)),
+        )
+        candidates = [
+            {
+                "node_id": str(item.get("node_id") or ""),
+                "score": int(item.get("score") or 0),
+                "already_active": bool(item.get("already_active")),
+                "architecture": str(item.get("architecture") or ""),
+                "runtime_version": str(item.get("runtime_version") or ""),
+                "labels": dict(item.get("labels") or {}),
+                "headroom": dict(item.get("headroom") or {}),
+                "reasons": [str(value) for value in item.get("reasons") or ()],
+            }
+            for item in recommendation.get("candidates") or ()
+            if isinstance(item, Mapping) and str(item.get("node_id") or "").strip()
+        ]
+        rejected = [
+            {
+                "node_id": str(item.get("node_id") or ""),
+                "reason": str(item.get("reason") or "ineligible"),
+            }
+            for item in recommendation.get("rejected") or ()
+            if isinstance(item, Mapping) and str(item.get("node_id") or "").strip()
+        ]
+        truncated = bool(recommendation.get("truncated"))
+    return {
+        "schema": "adaos.application.placement_options.v1",
+        "application_id": str(application_id),
+        "deployment_id": placement.get("deployment_id"),
+        "expected_revision": int(placement.get("revision") or 0),
+        "component_ref": selected_component,
+        "placements": list_application_placements(
+            application_id,
+            webspace_id=webspace_id,
+        ),
+        "eligible_nodes": candidates,
+        "rejected_nodes": rejected,
+        "truncated": truncated,
+    }
 
 
 def _application_setup_target(
@@ -3604,6 +3695,7 @@ __all__ = [
     "get_application_access_surface",
     "get_application_setup",
     "get_application_privacy_report",
+    "get_application_placement_options",
     "get_application_update_review",
     "get_development_report",
     "get_development_report_status",

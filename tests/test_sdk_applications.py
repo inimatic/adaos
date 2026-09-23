@@ -1302,9 +1302,15 @@ def test_application_list_includes_read_only_workspace_project_projection(
             "digest": None,
             "source": "active_release",
             "placement_mode": None,
+            "placement_status": "not_placed",
+            "installed": True,
+            "installable": False,
+            "relocatable": False,
             "desired_node_ids": [],
             "observed_node_ids": [],
             "runtime_status": "not_observed",
+            "deployment_revision": None,
+            "removable": False,
         },
         {
             "component_ref": "skill:notes_store",
@@ -1315,9 +1321,15 @@ def test_application_list_includes_read_only_workspace_project_projection(
             "digest": None,
             "source": "active_release",
             "placement_mode": None,
+            "placement_status": "not_placed",
+            "installed": True,
+            "installable": False,
+            "relocatable": False,
             "desired_node_ids": [],
             "observed_node_ids": [],
             "runtime_status": "not_observed",
+            "deployment_revision": None,
+            "removable": False,
         },
     ]
 
@@ -1400,6 +1412,82 @@ def test_application_placements_surface_unmanaged_observed_instance(
 
     assert rows[0]["sync_status"] == "unmanaged"
     assert rows[0]["desired"] is False
+
+
+def test_application_placement_options_bind_component_nodes_and_revision(
+    monkeypatch,
+) -> None:
+    model = {
+        "application": {"application_id": "reading-list"},
+        "component_inventory": [
+            {
+                "component_ref": "skill:book-store",
+                "placement_status": "disabled",
+                "installed": False,
+                "installable": True,
+            }
+        ],
+        "execution_placement": {
+            "deployment_id": "application-deployment:reading-list",
+            "revision": 8,
+            "desired": [
+                {
+                    "component_ref": "skill:book-store",
+                    "mode": "disabled",
+                    "selected_node_ids": [],
+                }
+            ],
+            "observed": [],
+        },
+    }
+
+    class Executor:
+        def placement_options(self, application_id, component_ref, *, limit):
+            assert (application_id, component_ref, limit) == (
+                "reading-list",
+                "skill:book-store",
+                20,
+            )
+            return {
+                "candidates": [
+                    {
+                        "node_id": "node-office",
+                        "score": 42,
+                        "already_active": False,
+                        "architecture": "x86_64",
+                        "runtime_version": "1.2.0",
+                        "labels": {"room": "office"},
+                        "headroom": {"memory_mb": 512},
+                        "reasons": ["eligible"],
+                    }
+                ],
+                "rejected": [{"node_id": "node-old", "reason": "node_offline"}],
+                "truncated": False,
+            }
+
+    monkeypatch.setattr(
+        applications, "get_application", lambda *_args, **_kwargs: model
+    )
+    monkeypatch.setattr(
+        applications,
+        "_service",
+        lambda: SimpleNamespace(executor=Executor()),
+    )
+
+    result = applications.get_application_placement_options(
+        "reading-list",
+        component_ref="skill:book-store",
+        webspace_id="desktop",
+        limit=20,
+    )
+
+    assert result["expected_revision"] == 8
+    assert result["component_ref"] == "skill:book-store"
+    assert result["placements"][0]["sync_status"] == "disabled"
+    assert result["eligible_nodes"][0]["node_id"] == "node-office"
+    assert result["rejected_nodes"] == [
+        {"node_id": "node-old", "reason": "node_offline"}
+    ]
 
 
 def test_release_list_projects_read_only_workspace_project(monkeypatch) -> None:

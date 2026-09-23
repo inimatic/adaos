@@ -602,6 +602,14 @@ def _required_application_contract_groups(
     return selected[:8]
 
 
+def _descriptor_working_set_persisted_size(payload: Mapping[str, Any]) -> int:
+    """Return the exact UTF-8 size produced by ``_write_json``."""
+
+    return len(
+        (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    )
+
+
 def _task_mcp_descriptor_working_set(
     *,
     assignment: Mapping[str, Any],
@@ -668,13 +676,14 @@ def _task_mcp_descriptor_working_set(
     detail_requests: list[tuple[str, str]] = [
         ("application_contracts", group_id) for group_id in required_groups
     ]
-    detail_requests.extend(
-        (
-            str(header.get("descriptor_id") or "").strip(),
-            str(header.get("item_id") or "").strip(),
+    if not required_groups:
+        detail_requests.extend(
+            (
+                str(header.get("descriptor_id") or "").strip(),
+                str(header.get("item_id") or "").strip(),
+            )
+            for header in headers
         )
-        for header in headers
-    )
     seen_detail_refs: set[tuple[str, str]] = set()
     bounded_detail_requests: list[tuple[str, str]] = []
     for detail_ref in detail_requests:
@@ -754,6 +763,12 @@ def _task_mcp_descriptor_working_set(
     working_set["digest"] = (
         "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
     )
+    persisted_size = _descriptor_working_set_persisted_size(working_set)
+    if persisted_size > DESCRIPTOR_WORKING_SET_MAX_BYTES:
+        raise ValueError(
+            "descriptor working set exceeds persisted-size limit "
+            f"({persisted_size} > {DESCRIPTOR_WORKING_SET_MAX_BYTES} bytes)"
+        )
     return working_set
 
 
