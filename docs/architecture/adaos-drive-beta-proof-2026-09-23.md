@@ -111,3 +111,35 @@ Legacy undeclared Drive data was preserved in the private runtime recovery
 area. It is not an active compatibility dependency and must not be deleted
 until the native state adoption, backup/restore, and retention decision are
 explicitly complete.
+
+## Concurrent directory single-flight update
+
+The stable `adaos_drive@0.1.13` release closes the remaining race in the
+bounded directory cache. Release `0.1.12` reused completed enumerations, but
+two simultaneous cache misses could still enumerate the same slow network
+folder twice. An invalidation that raced an enumeration could also allow that
+older result to repopulate the cache.
+
+The skill now coalesces same-directory misses behind a per-key single flight,
+uses a bounded five-second follower wait, and advances an invalidation epoch.
+The leader may finish for its original caller, but an enumeration from an old
+epoch is never installed into the cache. A stuck filesystem call cannot block
+followers indefinitely.
+
+- Candidate: `adaos_drive-0-1-13-75e8cba467bd`;
+- release digest:
+  `sha256:8dc894ebcb7c786e78df8d57d6622aede96ad339a30c2999693875e8cba467bd`;
+- scenario package: `adaos_drive@0.1.7`, digest
+  `sha256:2d8eb0dc33497247d8bec265441937cdfd4f86fb0b5a23ac5f65b6775c717f1d`;
+- skill package: `adaos_drive@0.1.11`, digest
+  `sha256:2b40a58ea2e6cb326af658f1c743ea62ed91adc5d124352cc71204e945766424`;
+- stable `WorkspaceLock` revision: 68, digest
+  `sha256:4a3263379a773f1c52ce85edb4cea4014c28c682dfcd3e0ecedb17b8eaed4659`.
+
+All 22 Drive tests passed, including deterministic concurrent-miss and
+invalidation-during-flight tests. Strict skill validation and focused Ruff
+validation passed. The exact Application release passed Final Verification,
+Trial placement, live tool smoke, acceptance, Workspace promotion and stable
+data transition. The stable runtime then returned a cold snapshot in 948 ms,
+an immediate warm snapshot in 390 ms, and successfully selected, opened and
+left `Annaarch` through the Application access boundary.
