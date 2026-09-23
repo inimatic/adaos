@@ -117,6 +117,17 @@ filesystem path. Stable UI actions are gated by
 `local_development.publication.evidence_present`, which becomes true only for a
 published version with a recorded publication timestamp.
 
+The Applications detail view also renders `cbs_lifecycle` as a compact derived
+projection of requirement, resolution, plan, activation, and lock stages. It
+is intentionally read-only and may be rebuilt from the canonical CBS records.
+The 2026-09-23 beta proof validated this projection in wide and compact browser
+modes, activated Candidate `applications-0-1-34-2a7d35b40618` in Trial, and
+accepted the exact Candidate through the public component-update endpoint. The
+resulting stable `RuntimeSelection` pins release
+`sha256:671797afb038e28b2453de707022d20ede8d7654ba0f7093d0c32a7d35b40618`;
+the acceptance path therefore no longer depends on inferring a Candidate from
+an ambiguous local-development record.
+
 ## Compatibility and migration
 
 The beta keeps the pre-CBS direct Automation path operational. A legacy

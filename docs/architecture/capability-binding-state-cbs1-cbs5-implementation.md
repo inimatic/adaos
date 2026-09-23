@@ -5,8 +5,7 @@ Status: executable CRUD-first implementation and compatibility guide.
 Last verified: 2026-09-23.
 
 This document records the implemented CRUD-first scope of `CBS1` through
-`CBS5`. All non-deferred items through `CBS4`, and all `CBS5` items except the
-compact Applications UI view (`CBS5-16`), have validated-local evidence. The
+`CBS5`. All non-deferred items through `CBS5` have validated-local evidence. The
 implemented boundary remains deliberately bounded to the Flowboard typed-CRUD
 proof; deferred generalizations are not implied.
 
@@ -186,6 +185,15 @@ and migration behavior. It exposed and fixed a first-open SQLite race:
 `ResourceStorage` schema/WAL initialization is now serialized across threads
 and processes through the dependency-neutral mutation lock. The original race
 test then passed twenty consecutive runs before the complete gate passed.
+
+Applications now projects the exact Application record into a compact,
+read-only CBS lifecycle view covering requirement, resolution, plan,
+activation, and lock stages. Builder task
+`task.01M36WQ12JBWTK96Z1CG4MYAH5` validated the view in wide and compact
+browser modes. Candidate `applications-0-1-34-2a7d35b40618` then completed the
+real Trial and public component-update acceptance path. The stable
+`RuntimeSelection` pins the accepted release and `WorkspaceLock`; the derived
+view did not participate in either authority decision.
 
 ## Compatibility And Migration Policy
 

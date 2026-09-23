@@ -5,8 +5,7 @@ Status: implementation roadmap for
 
 Last reviewed: 2026-09-23.
 
-Implementation checkpoint: every non-deferred item through `CBS4` and every
-`CBS5` item except the compact Applications UI view (`CBS5-16`) has
+Implementation checkpoint: every non-deferred item through `CBS5` has
 validated-local evidence as of 2026-09-23. Exact implementation,
 compatibility, evidence, Builder-adaptation, skill-migration, and legacy-removal
 status is recorded in
@@ -491,7 +490,7 @@ failure injection.
   materially different provider profile.
 - [x] `[should]` `CBS5-15` Exercise sandbox viability separately from simulation
   and local production.
-- [ ] `[could]` `CBS5-16` Add a compact UI view that animates requirement,
+- [x] `[could]` `CBS5-16` Add a compact UI view that animates requirement,
   resolution, plan, activation, and lock without making that view authoritative.
 - [ ] `[deferred]` `CBS5-17` Generalize the proof to every Resource Workbench
   resource before the domain-capability result is known.
@@ -511,8 +510,20 @@ Validated-local checkpoint, 2026-09-23:
 - a concurrent first-open SQLite/WAL initialization defect found by that gate
   was fixed, followed by twenty consecutive race reproductions and a clean
   complete regression run;
-- `CBS5-16` remains intentionally open until the compact view is integrated in
-  the Applications UI; no deferred item has been reclassified or implemented.
+- the Applications package now exposes a compact, derived CBS lifecycle view
+  over the exact Application record. Its requirement, resolution, plan,
+  activation, and lock stages passed both wide and compact browser validation
+  in Builder task `task.01M36WQ12JBWTK96Z1CG4MYAH5` without becoming an
+  authority source;
+- the same package was admitted as Candidate
+  `applications-0-1-34-2a7d35b40618`, activated in Trial, and accepted through
+  the public component-update endpoint. The resulting stable
+  `RuntimeSelection` pins release
+  `sha256:671797afb038e28b2453de707022d20ede8d7654ba0f7093d0c32a7d35b40618`
+  and `WorkspaceLock`
+  `sha256:4352e5abe81617367521c5c31c29b6f396322858a06b47994474ab950f9e1581`;
+- all non-deferred tasks through `CBS5` are therefore closed at
+  `validated-local`; no deferred item has been reclassified or implemented.
 
 ### CRUD acceptance matrix
 
