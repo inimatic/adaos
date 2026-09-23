@@ -3271,6 +3271,88 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
     assert checkpoint["reason"] == reason
 
 
+def test_blocking_feedback_resumes_latest_edited_candidate_after_empty_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    candidate_task_id = "task.blocked-candidate"
+    empty_retry_task_id = "task.empty-retry"
+    source_contract = {
+        "schema": "adaos.builder.continuation_contract.v1",
+        "sdk_contract_digest": "sha256:old",
+    }
+    tasks = {}
+    for task_id in (candidate_task_id, empty_retry_task_id):
+        run_root = service.runs_root / task_id
+        (run_root / "workspace" / ".git").mkdir(parents=True)
+        (run_root / "input").mkdir(parents=True)
+        (run_root / "runtime").mkdir(parents=True)
+        (run_root / "input" / "assignment.json").write_text(
+            json.dumps(
+                {
+                    "realize_request": {
+                        "artifacts": {"continuation_contract": source_contract}
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_root / "runtime" / "codex-final.md").write_text(
+            '```adaos-development-feedback\n'
+            '{"schema":"adaos.development_feedback_output.v1","items":['
+            '{"category":"insufficient_context","summary":"Use retained candidate",'
+            '"blocking":true,"target_refs":["scenario:applications"]}]}\n```',
+            encoding="utf-8",
+        )
+        tasks[task_id] = {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": f"failure.{task_id}",
+                    "stage": "development_feedback",
+                    "message": "Automation blocked by reported development feedback",
+                }
+            ],
+        }
+    service.factory = SimpleNamespace(read_task=lambda task_id: tasks[task_id])
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda run_root: run_root.name == candidate_task_id,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda run_root: (
+            ["scenarios/applications/webui.json"]
+            if run_root.name == candidate_task_id
+            else []
+        ),
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {
+            "current_task_id": empty_retry_task_id,
+            "task_history": [candidate_task_id, empty_retry_task_id],
+        }
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["reason"] == "blocking_development_feedback"
+    assert checkpoint["source_task_id"] == candidate_task_id
+    assert checkpoint["trigger_failure_id"] == f"failure.{empty_retry_task_id}"
+    assert checkpoint["source_continuation_contract"] == source_contract
+    assert checkpoint["continuation_contract"] == (
+        automation_module._continuation_contract()
+    )
+    assert checkpoint["source_changed_paths"] == [
+        "scenarios/applications/webui.json"
+    ]
+
+
 def test_publication_gate_reuses_related_failed_task_candidate_across_sessions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -43,6 +43,7 @@ from adaos.services.skill_factory_sources import capture_source_snapshot
 from adaos.services.skill_factory_worker import (
     LocalSkillFactoryWorker,
     context_packet_prompt_projection,
+    preservable_blocking_feedback_message,
     requalified_feedback_message,
 )
 
@@ -3642,6 +3643,8 @@ class BuilderAutomationService:
         if gate_checkpoint:
             return gate_checkpoint
         checkpoint = self._budget_continuation_checkpoint(session)
+        if checkpoint and checkpoint.get("mode") == "resume_preserved_candidate":
+            return checkpoint
         if checkpoint and checkpoint.get("reason") in {
             "manifest_scope_requalified_after_guard",
             "validation_scope_requalified_after_guard",
@@ -4656,6 +4659,10 @@ class BuilderAutomationService:
                 Path(self.runs_root) / _safe_token(task_id), failure
             ):
                 retry_reason = "development_feedback_requalified"
+            elif preservable_blocking_feedback_message(
+                Path(self.runs_root) / _safe_token(task_id), failure
+            ):
+                retry_reason = "blocking_development_feedback"
             elif "changed paths outside the exact repair files:" in failure_message:
                 retry_reason = "repair_envelope_requalified_after_path_guard"
             elif (
@@ -4732,6 +4739,7 @@ class BuilderAutomationService:
             if retry_reason in {
                 "deterministic_validation_failure",
                 "development_feedback_requalified",
+                "blocking_development_feedback",
             }:
                 reason = retry_reason
             else:
@@ -4861,6 +4869,41 @@ class BuilderAutomationService:
                     else retry_reason
                 )
         run_root = Path(self.runs_root) / _safe_token(source_task_id)
+        if reason == "blocking_development_feedback" and not _preserved_candidate_has_changes(
+            run_root
+        ):
+            for prior_task_id in reversed(
+                [
+                    str(item).strip()
+                    for item in session.get("task_history") or []
+                    if str(item).strip() and str(item).strip() != task_id
+                ]
+            ):
+                try:
+                    prior_task = self.factory.read_task(prior_task_id)
+                except (KeyError, RuntimeError):
+                    continue
+                prior_failures = [
+                    dict(item)
+                    for item in prior_task.get("failure_history") or []
+                    if isinstance(item, Mapping)
+                ]
+                prior_failure = prior_failures[-1] if prior_failures else {}
+                prior_run_root = Path(self.runs_root) / _safe_token(prior_task_id)
+                if (
+                    str(prior_task.get("status") or "").strip() == "failed"
+                    and preservable_blocking_feedback_message(
+                        prior_run_root, prior_failure
+                    )
+                    and _preserved_candidate_has_changes(prior_run_root)
+                ):
+                    source_task_id = prior_task_id
+                    source_failure = prior_failure
+                    trigger_failure_id = (
+                        str(failure.get("failure_id") or "").strip() or None
+                    )
+                    run_root = prior_run_root
+                    break
         if not (run_root / "workspace" / ".git").is_dir():
             return None
         source_assignment_path = run_root / "input" / "assignment.json"
@@ -4884,17 +4927,34 @@ class BuilderAutomationService:
             else {}
         )
         continuation_contract = _continuation_contract()
-        if source_artifacts.get("continuation_contract") != continuation_contract:
+        source_continuation_contract = source_artifacts.get("continuation_contract")
+        if (
+            reason != "blocking_development_feedback"
+            and source_continuation_contract != continuation_contract
+        ):
+            return None
+        if reason == "blocking_development_feedback" and not isinstance(
+            source_continuation_contract, Mapping
+        ):
             return None
         if not _preserved_candidate_has_changes(run_root):
             return None
+        source_changed_paths = _preserved_candidate_changed_paths(run_root)
+        if not source_changed_paths:
+            return None
         return {
             "schema": "adaos.builder.automation_continuation_checkpoint.v1",
-            "mode": "validate_preserved_candidate",
+            "mode": (
+                "resume_preserved_candidate"
+                if reason == "blocking_development_feedback"
+                else "validate_preserved_candidate"
+            ),
             "source_task_id": source_task_id,
             "failure_id": str(source_failure.get("failure_id") or "").strip() or None,
             "trigger_failure_id": trigger_failure_id,
             "reason": reason,
+            "source_changed_paths": source_changed_paths,
+            "source_continuation_contract": source_continuation_contract,
             "allow_large_manifest_rewrite": bool(
                 source_artifacts.get("allow_large_manifest_rewrite") is True
                 or reason == "manifest_scope_requalified_after_guard"

@@ -361,6 +361,18 @@ and path guards still match. Carry the original feedback into the new run and
 repeat validation; never mark the historical failed run successful or discard
 its warning to activate an implementation.
 
+A genuinely blocking feedback report also keeps the candidate fail-closed, but
+does not make its completed edits disposable. Builder records the failed task,
+source snapshot, exact changed-path set, source continuation-contract digest,
+and feedback identity as an immutable `resume_preserved_candidate` checkpoint.
+A later iteration may restore that workspace only when target and source
+identity still match. It then refreshes the SDK/MCP descriptor working set and
+runs a delta model turn under the current continuation contract. Contract drift
+therefore causes repair, not validation-only admission; a retry that made no
+edits searches its same-session history for the newest guarded candidate. The
+historical task and its tickets remain failed/open until ordinary deterministic,
+browser, and Trial gates accept the new result.
+
 `completed` is an executor/activation result, not functional acceptance. Independent
 acceptance exercises complete browser journeys and server rules, persistence,
 failure recovery and access under the actual caller. Unit stubs, visible buttons

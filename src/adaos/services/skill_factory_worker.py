@@ -4017,6 +4017,34 @@ def requalified_feedback_message(
     return message
 
 
+def preservable_blocking_feedback_message(
+    run_root: Path, failure: Mapping[str, Any]
+) -> str | None:
+    """Return a genuine blocking report whose edited candidate may be resumed.
+
+    This does not waive the report or admit the candidate. It only proves that
+    the failed task stopped at a boundary where its workspace can be supplied to
+    a later model turn instead of rebuilding from the pristine Prototype.
+    """
+
+    if failure.get("stage") != "development_feedback":
+        return None
+    try:
+        message = (run_root / "runtime" / "codex-final.md").read_text(
+            encoding="utf-8"
+        )
+        items = parse_development_feedback(message)
+        if (
+            not items
+            or not any(item.get("blocking") for item in items)
+            or parse_development_escalations(message)
+        ):
+            return None
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return None
+    return message
+
+
 class LocalSkillFactoryWorker:
     """One-task local Skill Factory worker used by Prompt IDE automation."""
 
@@ -4702,6 +4730,13 @@ class LocalSkillFactoryWorker:
                 if deterministic_resource_realization
                 else self._restore_continuation_candidate(assignment, workspace)
             )
+            continuation_mode = str((continuation or {}).get("mode") or "").strip()
+            validation_continuation = bool(
+                continuation_mode == "validate_preserved_candidate"
+            )
+            model_continuation = bool(
+                continuation_mode == "resume_preserved_candidate"
+            )
             structured_edits = self._structured_edits_from_assignment(assignment)
             validation_only = self._validation_only_from_assignment(
                 assignment, workspace
@@ -4709,7 +4744,7 @@ class LocalSkillFactoryWorker:
             descriptor_working_set: dict[str, Any] | None = None
             if (
                 root_mcp is not None
-                and not continuation
+                and not validation_continuation
                 and not structured_edits
                 and not validation_only
             ):
@@ -4738,10 +4773,25 @@ class LocalSkillFactoryWorker:
                 accepted_prototype_identity=accepted_prototype_identity,
             )
             prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+            if model_continuation:
+                prior_feedback = str(
+                    continuation.get("blocking_feedback_message") or ""
+                ).strip()
+                prompt += (
+                    "\n\n## Preserved candidate continuation\n\n"
+                    "The editable checkout already contains the immutable partial candidate "
+                    f"from `{continuation['source_task_id']}`. Continue from it; do not rebuild "
+                    "from the Prototype. The earlier candidate remained fail-closed and is not "
+                    "admitted. Resolve the current delta, keep its completed behavior and tests, "
+                    "and rerun validation.\n"
+                )
+                if prior_feedback:
+                    prompt += "\nPrevious blocking report (context only):\n\n" + prior_feedback
+                (input_dir / "task.md").write_text(prompt, encoding="utf-8")
             packet_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
             prompt_budget = _codex_prompt_budget_check(assignment, prompt)
             if (
-                continuation
+                validation_continuation
                 or structured_edits
                 or validation_only
                 or deterministic_resource_realization
@@ -4753,7 +4803,7 @@ class LocalSkillFactoryWorker:
                         "accepted_prototype_resource_handoff_without_model"
                         if deterministic_resource_realization
                         else "validation_only_continuation"
-                        if continuation
+                        if validation_continuation
                         else "qualified_source_validation_without_model"
                         if validation_only
                         else "structured_edits_without_model"
@@ -4801,7 +4851,7 @@ class LocalSkillFactoryWorker:
                         "Resource Workbench runtime without starting a model turn."
                     ),
                 )
-            elif continuation:
+            elif validation_continuation:
                 self._progress(
                     task_id,
                     "in_progress" if structured_edits else "tests_running",
@@ -5223,7 +5273,9 @@ class LocalSkillFactoryWorker:
                     else "validation_only"
                     if validation_only
                     else "preserved_candidate"
-                    if continuation
+                    if validation_continuation
+                    else "codex_continuation"
+                    if model_continuation
                     else "codex"
                 ),
                 "structured_edit_receipt": structured_edit_receipt,
@@ -6271,7 +6323,11 @@ class LocalSkillFactoryWorker:
             if isinstance(artifacts.get("continuation_checkpoint"), Mapping)
             else {}
         )
-        if checkpoint.get("mode") != "validate_preserved_candidate":
+        mode = str(checkpoint.get("mode") or "").strip()
+        if mode not in {
+            "validate_preserved_candidate",
+            "resume_preserved_candidate",
+        }:
             return None
         current_contract = (
             dict(artifacts.get("continuation_contract"))
@@ -6323,11 +6379,19 @@ class LocalSkillFactoryWorker:
             if continuation_reason == "development_feedback_requalified"
             else None
         )
+        blocking_feedback_message = (
+            preservable_blocking_feedback_message(
+                self.runs_root / _safe_token(source_task_id), failure
+            )
+            if continuation_reason == "blocking_development_feedback"
+            else None
+        )
         if (
             not token_boundary
             and not deterministic_validation
             and not manifest_scope_requalified
             and not feedback_message
+            and not blocking_feedback_message
         ):
             raise ValueError(
                 "continuation source task did not stop at an eligible preservation boundary"
@@ -6362,8 +6426,12 @@ class LocalSkillFactoryWorker:
             if isinstance(previous_request.get("artifacts"), Mapping)
             else {}
         )
-        if previous_artifacts.get("continuation_contract") != current_contract:
-            return None
+        previous_contract = previous_artifacts.get("continuation_contract")
+        if mode == "validate_preserved_candidate":
+            if previous_contract != current_contract:
+                return None
+        elif previous_contract != checkpoint.get("source_continuation_contract"):
+            raise ValueError("resumable candidate source contract does not match")
         if dict(previous_assignment.get("target") or {}) != dict(
             assignment.get("target") or {}
         ):
@@ -6475,7 +6543,7 @@ class LocalSkillFactoryWorker:
                     )
         return {
             "schema": "adaos.skill_factory.continuation_restore.v1",
-            "mode": "validate_preserved_candidate",
+            "mode": mode,
             "source_task_id": source_task_id,
             "failure_id": str(failure.get("failure_id") or "").strip() or None,
             "source_snapshot_digest": current_digest,
@@ -6484,6 +6552,11 @@ class LocalSkillFactoryWorker:
             **(
                 {"requalified_feedback_message": feedback_message}
                 if feedback_message
+                else {}
+            ),
+            **(
+                {"blocking_feedback_message": blocking_feedback_message}
+                if blocking_feedback_message
                 else {}
             ),
             "restored_at": _now_iso(),
