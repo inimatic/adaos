@@ -83,6 +83,9 @@ _EXCLUDED_FILES = {
     "prompt_state.json",
     "skill_prompt.md",
 }
+_WORKSPACE_HOST_METADATA_FILES = {
+    ".gitignore",
+}
 _EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 _SENSITIVE_NAMES = {
     ".npmrc",
@@ -152,6 +155,7 @@ def _build_policy_digest() -> str:
                 "prefixes": ["/".join(item) + "/" for item in sorted(_EXCLUDED_PREFIXES)],
                 "files": sorted(_EXCLUDED_FILES),
                 "suffixes": sorted(_EXCLUDED_SUFFIXES),
+                "workspace_host_metadata_files": sorted(_WORKSPACE_HOST_METADATA_FILES),
             },
             "scrub_policy": "adaos.package_scrub.v1",
         }
@@ -302,6 +306,16 @@ def _excluded(relative: PurePosixPath) -> bool:
     return relative.suffix.lower() in _EXCLUDED_SUFFIXES
 
 
+def is_workspace_host_metadata(relative: PurePosixPath) -> bool:
+    """Return whether a path belongs to the materializing host, not the component."""
+
+    return relative.name in _WORKSPACE_HOST_METADATA_FILES
+
+
+def _build_excluded(relative: PurePosixPath) -> bool:
+    return _excluded(relative) or is_workspace_host_metadata(relative)
+
+
 def _zip_info(name: str) -> zipfile.ZipInfo:
     info = zipfile.ZipInfo(filename=name, date_time=_ZIP_TIMESTAMP)
     info.compress_type = zipfile.ZIP_DEFLATED
@@ -343,7 +357,7 @@ def _collect_package_files(
         root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
     ):
         relative = PurePosixPath(path.relative_to(root).as_posix())
-        if _excluded(relative):
+        if _build_excluded(relative):
             continue
         if path.is_symlink():
             raise PackageBuildError(

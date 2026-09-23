@@ -156,6 +156,9 @@ def _add_empty_conversational_package(scenario: Path) -> None:
 
 def test_package_build_is_deterministic_and_excludes_dev_state(tmp_path: Path) -> None:
     scenario = _scenario(tmp_path)
+    (scenario / ".gitignore").write_text(
+        ".skill_env.json\n__pycache__/\n", encoding="utf-8"
+    )
     (scenario / ".skill_state").mkdir()
     (scenario / ".skill_state" / "runtime.json").write_text(
         '{"local": true}\n', encoding="utf-8"
@@ -177,6 +180,7 @@ def test_package_build_is_deterministic_and_excludes_dev_state(tmp_path: Path) -
     assert "builder.draft.json" not in verified.file_names
     assert "prompt_state.json" not in verified.file_names
     assert "builder_memory.md" not in verified.file_names
+    assert ".gitignore" not in verified.file_names
     assert not any(item.startswith("artifacts/") for item in verified.file_names)
     assert not any(item.startswith("ml/weights/") for item in verified.file_names)
     assert not any(item.startswith("tests/") for item in verified.file_names)

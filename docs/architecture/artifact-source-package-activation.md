@@ -718,6 +718,16 @@ perform an implicit rollback. Pending observations have their own marker
 directory, while terminal evidence remains on the activation operation. This
 keeps periodic work proportional to pending checks rather than total history.
 
+Workspace host metadata is outside the component-integrity boundary. In
+particular, `.gitignore` describes the materializing checkout and may be
+rewritten by Git or local developer tooling (including platform line-ending
+normalization) without changing executable component identity. Current package
+builds therefore omit it, while verification of historical immutable archives
+still validates its archived bytes but does not require the installed copy to
+remain byte-identical. Runtime declarations, handlers, UI contracts and other
+component files remain strict: their absence or byte drift fails delayed
+verification.
+
 Artifact retention is a separate explicit maintenance operation. Its default
 mode is a read-only plan. The protected set is rebuilt from the active
 WorkspaceLock, retained lock histories, recent and nonterminal candidate/trial/

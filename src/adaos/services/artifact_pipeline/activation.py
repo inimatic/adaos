@@ -20,6 +20,7 @@ from adaos.domain.artifact_release import (
 from adaos.services.artifact_pipeline.packages import (
     ContentAddressedPackageStore,
     PackageVerificationError,
+    is_workspace_host_metadata,
 )
 from adaos.services.artifact_pipeline.attestations import (
     ArtifactAttestationAdmission,
@@ -315,10 +316,14 @@ class WorkspaceActivationManager:
             raise ActivationError(f"package manifest has no file list: {package.key}")
         checked_files = 0
         checked_bytes = 0
+        skipped_host_metadata = 0
         for item in raw_files:
             if not isinstance(item, Mapping):
                 raise ActivationError(f"package manifest file is invalid: {package.key}")
             relative = PurePosixPath(str(item.get("path") or ""))
+            if is_workspace_host_metadata(relative):
+                skipped_host_metadata += 1
+                continue
             materialized = target.joinpath(*relative.parts).resolve()
             if materialized != target and target not in materialized.parents:
                 raise ActivationError(
@@ -347,6 +352,7 @@ class WorkspaceActivationManager:
             "materialization_path": package.materialization_path,
             "files": checked_files,
             "bytes": checked_bytes,
+            "skipped_host_metadata_files": skipped_host_metadata,
         }
 
     def run_delayed_verification(

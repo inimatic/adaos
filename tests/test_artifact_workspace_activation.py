@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import copy
+import io
 import threading
 import time
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -412,6 +414,51 @@ def test_delayed_verification_records_tamper_without_automatic_rollback(
     assert manager.load_lock() == result.workspace_lock
     assert json.loads(target.read_text(encoding="utf-8")) == {"marker": "changed"}
     assert not list(manager.pending_observations_root.glob("*.json"))
+
+
+def test_delayed_verification_ignores_legacy_packaged_workspace_host_metadata(
+    tmp_path: Path,
+) -> None:
+    scenario = tmp_path / "legacy-host-metadata"
+    scenario.mkdir(parents=True)
+    (scenario / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ntitle: Recipes\n",
+        encoding="utf-8",
+    )
+    (scenario / "webui.json").write_text('{"marker":"host-metadata"}\n', encoding="utf-8")
+    (scenario / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+
+    # Simulate a package built before workspace host metadata was removed from
+    # the canonical build inputs. Verification must continue to admit its
+    # immutable archive, while the installed host-owned file stays outside the
+    # delayed component-integrity boundary.
+    from adaos.services.artifact_pipeline import packages as package_module
+
+    original = package_module._WORKSPACE_HOST_METADATA_FILES
+    package_module._WORKSPACE_HOST_METADATA_FILES = set()
+    try:
+        built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    finally:
+        package_module._WORKSPACE_HOST_METADATA_FILES = original
+    with zipfile.ZipFile(io.BytesIO(built.archive_bytes), mode="r") as archive:
+        assert ".gitignore" in archive.namelist()
+
+    store, manager = _manager(tmp_path, delayed_verification_seconds=0)
+    store.put(built.archive_bytes)
+    result = _activate(
+        manager,
+        _plan(built),
+        idempotency_key="legacy-host-metadata",
+    )
+    installed = tmp_path / "workspace" / "scenarios" / "recipes" / ".gitignore"
+    installed.write_bytes(b"__pycache__/\r\n")
+
+    observation = manager.run_delayed_verification(result.operation_id, force=True)
+
+    assert observation["status"] == "passed"
+    receipt = observation["receipt"]["components"][0]
+    assert receipt["files"] == 2
+    assert receipt["skipped_host_metadata_files"] == 1
 
 
 def test_delayed_verification_marks_moved_lock_as_superseded(tmp_path: Path) -> None:
