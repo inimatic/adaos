@@ -1497,6 +1497,7 @@ def contracts() -> list[RootMcpToolContract]:
                             "remove",
                             "select_track",
                             "relocate_component",
+                            "install_component",
                             "remove_component",
                         ]
                     },
@@ -2835,6 +2836,19 @@ def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
             target_node_id=target_node_id,
             **common,
         )
+    elif kind == "install_component":
+        component_ref = str(arguments.get("component_ref") or "").strip()
+        target_node_id = str(arguments.get("target_node_id") or "").strip()
+        if not component_ref or not target_node_id:
+            raise ValueError(
+                "install_component requires component_ref and target_node_id"
+            )
+        operation = sdk.plan_install_component(
+            application_id,
+            component_ref=component_ref,
+            target_node_id=target_node_id,
+            **common,
+        )
     elif kind == "remove_component":
         component_ref = str(arguments.get("component_ref") or "").strip()
         if not component_ref:
@@ -2847,7 +2861,7 @@ def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     else:
         raise ValueError(
             "kind must be install, update, remove, select_track, "
-            "relocate_component, or remove_component"
+            "relocate_component, install_component, or remove_component"
         )
     return {"operation": operation}
 

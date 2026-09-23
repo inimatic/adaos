@@ -90,6 +90,13 @@ class _StubSdk:
             "plan_digest": "sha256:" + "e" * 64,
         }
 
+    def plan_install_component(self, *args, **kwargs):
+        self.calls.append(("plan_install_component", args, kwargs))
+        return {
+            "operation_id": "appop.install-component",
+            "plan_digest": "sha256:" + "c" * 64,
+        }
+
     def plan_remove_component(self, *args, **kwargs):
         self.calls.append(("plan_remove_component", args, kwargs))
         return {
@@ -672,7 +679,7 @@ def test_applications_plane_plans_reviewed_component_relocation(monkeypatch) -> 
         "applications.plan"
     ]
 
-    assert {"relocate_component", "remove_component"}.issubset(
+    assert {"relocate_component", "install_component", "remove_component"}.issubset(
         set(contract.input_schema["properties"]["kind"]["enum"])
     )
     result = applications_plane.handlers()["applications.plan"](

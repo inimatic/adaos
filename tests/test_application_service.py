@@ -68,6 +68,7 @@ def _release(
     package_digest: str = DIGEST_A,
     lifecycle: str = "trial",
     permissions: tuple[str, ...] = ("workspace.read", "workspace.write"),
+    with_worker: bool = False,
 ) -> ApplicationRelease:
     source = ArtifactSourceRef(
         forge="github",
@@ -83,11 +84,24 @@ def _release(
         manifest_digest=DIGEST_C,
         source_ref=source,
     )
+    components = (package,)
+    if with_worker:
+        components = (
+            package,
+            ArtifactPackageRef(
+                kind="skill",
+                artifact_id="recipes-worker",
+                version=version,
+                digest=DIGEST_B,
+                manifest_digest=DIGEST_C,
+                source_ref=source,
+            ),
+        )
     project_release = ProjectRelease(
         project_id=project_id,
         version=version,
         source_ref=source,
-        components=(package,),
+        components=components,
         permissions=permissions,
         validation_evidence=({"status": "passed"},),
     ).seal()
@@ -227,6 +241,7 @@ def test_component_placement_changes_are_reviewed_and_revision_guarded(
             assert application_id == "app_recipes"
             return {
                 "deployment_id": "application-deployment:app_recipes",
+                "release_digest": self.release_digest,
                 "revision": self.revision,
                 "placements": list(self.placements),
             }
@@ -234,7 +249,7 @@ def test_component_placement_changes_are_reviewed_and_revision_guarded(
         def __call__(self, plan):
             assert plan["expected_revision"] == self.revision
             change = plan["placement_change"]
-            if plan["kind"] == "relocate_component":
+            if plan["kind"] in {"relocate_component", "install_component"}:
                 for placement in self.placements:
                     if placement["component_ref"] == change["component_ref"]:
                         placement.update(
@@ -242,11 +257,9 @@ def test_component_placement_changes_are_reviewed_and_revision_guarded(
                             selected_node_ids=[change["target_node_id"]],
                         )
             else:
-                self.placements = [
-                    item
-                    for item in self.placements
-                    if item["component_ref"] != change["component_ref"]
-                ]
+                for placement in self.placements:
+                    if placement["component_ref"] == change["component_ref"]:
+                        placement.update(mode="disabled", selected_node_ids=[])
             self.revision += 1
             return {
                 "ok": True,
@@ -260,7 +273,8 @@ def test_component_placement_changes_are_reviewed_and_revision_guarded(
         executor=executor,
     )
     application_service.register(_application())
-    release = application_service.register_release(_release())
+    release = application_service.register_release(_release(with_worker=True))
+    executor.release_digest = release.release_digest
     application_service.store.save_installation(
         ApplicationInstallation(
             installation_id="installation:app_recipes",
@@ -343,6 +357,33 @@ def test_component_placement_changes_are_reviewed_and_revision_guarded(
     assert installation.revision == 2
     assert [item["component_ref"] for item in installation.component_refs] == [
         "scenario:recipes"
+    ]
+
+    component_install = application_service.plan_operation(
+        "app_recipes",
+        "install_component",
+        component_ref="skill:recipes-worker",
+        target_node_id="node-office",
+        expected_revision=9,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="component-install-9",
+    )
+    installed = application_service.apply_operation(
+        component_install.operation_id,
+        plan_digest=component_install.plan_digest,
+        idempotency_key=component_install.idempotency_key,
+        actor_ref="user:owner",
+        subnet_ref="subnet:sn_home",
+        capability="applications.apply",
+    )
+    assert installed.status == "succeeded"
+    installation = application_service.store.get_installation("app_recipes")
+    assert installation.revision == 3
+    assert [item["component_ref"] for item in installation.component_refs] == [
+        "scenario:recipes",
+        "skill:recipes-worker",
     ]
 
 

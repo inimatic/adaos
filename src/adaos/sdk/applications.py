@@ -3370,6 +3370,43 @@ def plan_relocate_component(
     )
 
 
+def plan_install_component(
+    application_id: str,
+    *,
+    component_ref: str,
+    target_node_id: str,
+    expected_revision: int,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Plan re-enabling one release component on an exact target node."""
+
+    actor, subnet, granted, key = _mutation_identity(
+        actor_ref,
+        subnet_ref,
+        capability,
+        idempotency_key,
+        required_capability="applications.plan",
+    )
+    return (
+        _service()
+        .plan_operation(
+            application_id,
+            "install_component",
+            component_ref=component_ref,
+            target_node_id=target_node_id,
+            expected_revision=expected_revision,
+            actor_ref=actor,
+            subnet_ref=subnet,
+            capability=granted,
+            idempotency_key=key,
+        )
+        .to_dict()
+    )
+
+
 def plan_remove_component(
     application_id: str,
     *,
@@ -3597,6 +3634,7 @@ __all__ = [
     "list_releases",
     "list_trial_access",
     "plan_install",
+    "plan_install_component",
     "plan_relocate_component",
     "plan_remove",
     "plan_remove_component",

@@ -271,7 +271,11 @@ class ApplicationDeploymentExecutor:
             revision = 1
             created_at = utc_now()
         operation_kind = str(plan.get("kind") or "")
-        if operation_kind in {"relocate_component", "remove_component"}:
+        if operation_kind in {
+            "relocate_component",
+            "install_component",
+            "remove_component",
+        }:
             if previous is None:
                 raise ApplicationDeploymentExecutorError(
                     "Application deployment is missing"
@@ -301,11 +305,25 @@ class ApplicationDeploymentExecutor:
                 raise ApplicationDeploymentExecutorError(
                     "Application component is absent from desired placement"
                 )
-            if operation_kind == "relocate_component":
+            if operation_kind in {"relocate_component", "install_component"}:
                 target_node_id = str(change.get("target_node_id") or "").strip()
                 if not target_node_id:
                     raise ApplicationDeploymentExecutorError(
                         "Application relocation target is required"
+                    )
+                if (
+                    operation_kind == "install_component"
+                    and placements[index].mode != "disabled"
+                ):
+                    raise ApplicationDeploymentExecutorError(
+                        "Application component is already installed"
+                    )
+                if (
+                    operation_kind == "relocate_component"
+                    and placements[index].mode == "disabled"
+                ):
+                    raise ApplicationDeploymentExecutorError(
+                        "Disabled Application component must be installed before relocation"
                     )
                 placements[index] = ComponentPlacementPolicy(
                     component_ref=component_ref,
@@ -424,6 +442,7 @@ class ApplicationDeploymentExecutor:
             "install",
             "update",
             "relocate_component",
+            "install_component",
             "remove_component",
         }:
             raise ApplicationDeploymentExecutorError(

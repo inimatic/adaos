@@ -278,6 +278,28 @@ def test_executor_applies_reviewed_component_relocation_and_uninstall(
         "skill:app_worker": "disabled",
     }
 
+    component_install = {
+        **install_plan,
+        "kind": "install_component",
+        "expected_revision": 3,
+        "idempotency_key": "install-component-3",
+        "placement_change": {
+            "component_ref": "skill:app_worker",
+            "target_node_id": "node-local",
+            "effect": "install",
+        },
+    }
+    assert executor(component_install)["status"] == "active"
+    reinstalled = runtime.store.get_deployment("application-deployment:app_test")
+    worker = next(
+        item
+        for item in reinstalled.placements
+        if item.component_ref == "skill:app_worker"
+    )
+    assert reinstalled.revision == 4
+    assert worker.mode == "selected_nodes"
+    assert worker.selected_node_ids == ("node-local",)
+
 
 def test_failed_update_restores_data_and_previous_desired_release(
     tmp_path: Path,

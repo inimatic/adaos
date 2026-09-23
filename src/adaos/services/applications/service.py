@@ -574,11 +574,12 @@ class ApplicationService:
             "remove",
             "select_track",
             "relocate_component",
+            "install_component",
             "remove_component",
         }:
             raise ApplicationServiceError(
                 "Core operation kind must be install, update, remove, select_track, "
-                "relocate_component, or remove_component"
+                "relocate_component, install_component, or remove_component"
             )
         if data_policy not in {"retain", "delete", "snapshot_then_delete"}:
             raise ApplicationServiceError("data_policy is invalid")
@@ -594,7 +595,11 @@ class ApplicationService:
             observed_revision = (
                 current_subscription.revision if current_subscription is not None else 0
             )
-        elif operation_kind in {"relocate_component", "remove_component"}:
+        elif operation_kind in {
+            "relocate_component",
+            "install_component",
+            "remove_component",
+        }:
             try:
                 current = self.store.get_installation(application_id)
             except FileNotFoundError:
@@ -639,7 +644,11 @@ class ApplicationService:
                 f"Application must be installed before {operation_kind}"
             )
         placement_change = None
-        if operation_kind in {"relocate_component", "remove_component"}:
+        if operation_kind in {
+            "relocate_component",
+            "install_component",
+            "remove_component",
+        }:
             selected_component = str(component_ref or "").strip()
             if not selected_component:
                 raise ApplicationServiceError("component_ref is required")
@@ -660,7 +669,12 @@ class ApplicationService:
                 raise ApplicationServiceError(
                     "component_ref is absent from the current Application deployment"
                 )
-            if str(current_placement.get("mode") or "") == "disabled":
+            placement_disabled = str(current_placement.get("mode") or "") == "disabled"
+            if operation_kind == "install_component" and not placement_disabled:
+                raise ApplicationServiceError(
+                    "component_ref is already installed in the Application deployment"
+                )
+            if operation_kind != "install_component" and placement_disabled:
                 raise ApplicationServiceError(
                     "component_ref is already uninstalled from the Application deployment"
                 )
@@ -672,21 +686,50 @@ class ApplicationService:
                     "The final Application component requires full Application removal"
                 )
             selected_target = str(target_node_id or "").strip()
-            if operation_kind == "relocate_component" and not selected_target:
+            if (
+                operation_kind in {"relocate_component", "install_component"}
+                and not selected_target
+            ):
                 raise ApplicationServiceError(
-                    "target_node_id is required for component relocation"
+                    "target_node_id is required for component placement"
                 )
+            component_descriptor = None
+            if operation_kind == "install_component":
+                release_digest_for_deployment = str(
+                    (deployment_snapshot or {}).get("release_digest") or ""
+                )
+                release_for_deployment = self.store.get_release(
+                    application_id,
+                    release_digest_for_deployment,
+                )
+                component_descriptor = next(
+                    (
+                        item
+                        for item in self._release_components(release_for_deployment)
+                        if item["component_ref"] == selected_component
+                    ),
+                    None,
+                )
+                if component_descriptor is None:
+                    raise ApplicationServiceError(
+                        "component_ref is absent from the installed Application release"
+                    )
             placement_change = {
                 "component_ref": selected_component,
                 "from": current_placement,
                 "target_node_id": (
-                    selected_target if operation_kind == "relocate_component" else None
+                    selected_target
+                    if operation_kind in {"relocate_component", "install_component"}
+                    else None
                 ),
                 "effect": (
                     "relocate"
                     if operation_kind == "relocate_component"
+                    else "install"
+                    if operation_kind == "install_component"
                     else "uninstall"
                 ),
+                "component": component_descriptor,
             }
         if operation_kind == "remove" and not bool(
             application.protection.get("active_installation_removable", True)
@@ -987,6 +1030,60 @@ class ApplicationService:
                 "failed",
                 result=result,
                 recovery_reason=str(result.get("reason") or "executor_rejected"),
+            )
+        if operation.kind == "install_component":
+            try:
+                current_installation = self.store.get_installation(
+                    operation.application_id
+                )
+            except FileNotFoundError:
+                return self._transition_operation(
+                    applying,
+                    "unknown",
+                    result=result,
+                    recovery_reason="installation_missing_after_component_install",
+                )
+            reviewed_installation_revision = int(
+                operation.plan.get("installation_revision") or 0
+            )
+            if current_installation.revision != reviewed_installation_revision:
+                return self._transition_operation(
+                    applying,
+                    "unknown",
+                    result=result,
+                    recovery_reason="installation_revision_changed_after_component_install",
+                )
+            change = operation.plan.get("placement_change")
+            component = change.get("component") if isinstance(change, Mapping) else None
+            component_ref = (
+                str(component.get("component_ref") or "").strip()
+                if isinstance(component, Mapping)
+                else ""
+            )
+            if not component_ref or any(
+                str(item.get("component_ref") or "") == component_ref
+                for item in current_installation.component_refs
+            ):
+                return self._transition_operation(
+                    applying,
+                    "unknown",
+                    result=result,
+                    recovery_reason="installed_component_invalid_or_already_present",
+                )
+            installation = replace(
+                current_installation,
+                component_refs=(*current_installation.component_refs, dict(component)),
+                revision=current_installation.revision + 1,
+                updated_at=utc_now(),
+            )
+            self.store.save_installation(
+                installation,
+                expected_revision=current_installation.revision,
+            )
+            return self._transition_operation(
+                applying,
+                "succeeded",
+                result={**result, "installation": installation.to_dict()},
             )
         if operation.kind == "relocate_component":
             return self._transition_operation(

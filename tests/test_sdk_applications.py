@@ -343,6 +343,16 @@ def test_sdk_component_placement_plans_forward_exact_cas_context(monkeypatch) ->
         capability="applications.plan",
         idempotency_key="relocate-7",
     )
+    applications.plan_install_component(
+        "app_recipes",
+        component_ref="skill:recipes-worker",
+        target_node_id="node-office",
+        expected_revision=8,
+        actor_ref="skill:applications",
+        subnet_ref="subnet:sn_home",
+        capability="applications.plan",
+        idempotency_key="install-component-8",
+    )
     applications.plan_remove_component(
         "app_recipes",
         component_ref="skill:recipes-worker",
@@ -365,6 +375,19 @@ def test_sdk_component_placement_plans_forward_exact_cas_context(monkeypatch) ->
                 "subnet_ref": "subnet:sn_home",
                 "capability": "applications.plan",
                 "idempotency_key": "relocate-7",
+            },
+        ),
+        (
+            "plan_operation",
+            ("app_recipes", "install_component"),
+            {
+                "component_ref": "skill:recipes-worker",
+                "target_node_id": "node-office",
+                "expected_revision": 8,
+                "actor_ref": "skill:applications",
+                "subnet_ref": "subnet:sn_home",
+                "capability": "applications.plan",
+                "idempotency_key": "install-component-8",
             },
         ),
         (

@@ -1265,6 +1265,7 @@ class ApplicationOperation:
             "remove",
             "select_track",
             "relocate_component",
+            "install_component",
             "remove_component",
             "install_trial",
             "publish_trial",
