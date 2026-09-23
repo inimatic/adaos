@@ -5,10 +5,11 @@ Status: implementation roadmap for
 
 Last reviewed: 2026-09-23.
 
-Implementation checkpoint: every non-deferred item through `CBS5` has
-validated-local evidence as of 2026-09-23. Exact implementation,
-compatibility, evidence, Builder-adaptation, skill-migration, and legacy-removal
-status is recorded in
+Implementation checkpoint: every non-deferred item through `CBS5` and every
+`must`/`should` item in `CBS6` through `CBS9` has validated-local evidence as
+of 2026-09-23. Optional `could` work and all explicitly deferred work remain
+open. Exact implementation, compatibility, evidence, Builder-adaptation,
+skill-migration, and legacy-removal status is recorded in
 [CBS1-CBS5 Implementation](capability-binding-state-cbs1-cbs5-implementation.md).
 The checklist below continues to distinguish that bounded proof from later
 provider generalization and the remaining `should`, `could`, and `deferred`
@@ -579,25 +580,29 @@ misclassifying an unchanged package.
 claim assessment stale, blocks or obligates production resolution by policy,
 and a new verification claim produces either admissible or incompatible state.
 
-- [ ] `[must]` `CBS6-01` Implement derived `EvidenceAssessment` with
+- [x] `[must]` `CBS6-01` Implement derived `EvidenceAssessment` with
   `admissible`, `stale`, `superseded`, `incompatible`, and `revoked` states.
-- [ ] `[must]` `CBS6-02` Evaluate maximum age, subject digests, environment
+- [x] `[must]` `CBS6-02` Evaluate maximum age, subject digests, environment
   digest, dependency versions/fingerprints, trust domain, and explicit
   revocation without mutating the source claim.
-- [ ] `[must]` `CBS6-03` Add policy-specific handling so stale evidence may be
+- [x] `[must]` `CBS6-03` Add policy-specific handling so stale evidence may be
   visible for semantic/simulation use but cannot silently satisfy production.
-- [ ] `[should]` `CBS6-04` Add a bounded External Change Monitor adapter that
+- [x] `[should]` `CBS6-04` Add a bounded External Change Monitor adapter that
   writes immutable observations and triggers assessment rebuilds.
-- [ ] `[should]` `CBS6-05` Reverify one changing external API/provider and emit a
+- [x] `[should]` `CBS6-05` Reverify one changing external API/provider and emit a
   new claim whose outcome is independently `verified` or `incompatible`.
-- [ ] `[should]` `CBS6-06` Add dependency/freshness impact queries for affected
+- [x] `[should]` `CBS6-06` Add dependency/freshness impact queries for affected
   definitions, installed resolutions, plans, and Applications.
-- [ ] `[should]` `CBS6-07` Add operator and Builder explanations that distinguish
-  “historically verified but stale” from “newly proven incompatible.”
+- [x] `[should]` `CBS6-07` Add operator and Builder explanations that distinguish
+  "historically verified but stale" from "newly proven incompatible."
 - [ ] `[could]` `CBS6-08` Prioritize revalidation queues by installed exposure,
   state risk, and production viability impact.
 - [ ] `[deferred]` `CBS6-09` Continuously probe every external service or grant a
   universal freshness SLA independent of provider policy.
+
+Validated-local checkpoint: immutable external observations, assessment
+rebuild, bounded Jira-style drift/reverification, dependency impact, activation
+recheck, and distinct Builder/operator explanations pass focused tests.
 
 ## Milestone CBS7: `booking.reserve` Domain Capability Proof
 
@@ -611,27 +616,27 @@ read-only `AvailabilityState`, writable `BookingState`, and append-only
 side effects, composition, provider failure, partial effects,
 compensation/reconciliation, rebinding, and evidence drift.
 
-- [ ] `[should]` `CBS7-01` Freeze the `booking.reserve` fixture, external
+- [x] `[should]` `CBS7-01` Freeze the `booking.reserve` fixture, external
   provider boundary, deterministic clock/concurrency harness, and acceptance
   stories before implementation.
-- [ ] `[should]` `CBS7-02` Define capability and state contracts without exposing
+- [x] `[should]` `CBS7-02` Define capability and state contracts without exposing
   workflow, package, class, or provider topology in the semantic Application;
   model `AvailabilityState` as read, `BookingState` as write, and `AuditState`
   as append.
-- [ ] `[should]` `CBS7-03` Define idempotency keys, temporal bounds, conflict
+- [x] `[should]` `CBS7-03` Define idempotency keys, temporal bounds, conflict
   semantics, effect receipts, and compensation or reconciliation outcomes.
-- [ ] `[should]` `CBS7-04` Compose at least one supporting capability and prove
+- [x] `[should]` `CBS7-04` Compose at least one supporting capability and prove
   that composition edges remain explainable in resolution and evidence.
-- [ ] `[should]` `CBS7-05` Implement simulation and production-capable bindings
+- [x] `[should]` `CBS7-05` Implement simulation and production-capable bindings
   sharing one contract scenario suite.
-- [ ] `[should]` `CBS7-06` Inject provider timeout, partial effect, duplicate
+- [x] `[should]` `CBS7-06` Inject provider timeout, partial effect, duplicate
   request, stale read, concurrent decision, and recovery/reconciliation cases.
-- [ ] `[should]` `CBS7-07` Rebind or repackage the implementation while
+- [x] `[should]` `CBS7-07` Rebind or repackage the implementation while
   preserving every eligible semantic/state identity and explicitly changing
   every ineligible identity.
-- [ ] `[should]` `CBS7-08` Invalidate external evidence and prove resolver and
+- [x] `[should]` `CBS7-08` Invalidate external evidence and prove resolver and
   planner behavior under stale, reverified, and incompatible assessments.
-- [ ] `[should]` `CBS7-09` Compare the domain result with CRUD and revise any
+- [x] `[should]` `CBS7-09` Compare the domain result with CRUD and revise any
   abstraction that required domain behavior to leak into generic package or
   storage identity.
 - [ ] `[could]` `CBS7-10` Add `order.approve` later as an independent workflow-
@@ -639,6 +644,10 @@ compensation/reconciliation, rebinding, and evidence drift.
   compensation behavior.
 - [ ] `[deferred]` `CBS7-11` Claim universal domain coverage from one or two
   proofs.
+
+Validated-local checkpoint: the frozen booking fixture passes shared binding
+scenarios plus concurrency, idempotency, timeout/partial-effect, compensation,
+reconciliation, rebinding, state continuity, and evidence-gated planning.
 
 ## Milestone CBS8: Derived Graphs And Read-Only Evolver
 
@@ -648,23 +657,23 @@ records and can propose changes without gaining mutation authority.
 **Exit proof:** deleting and rebuilding all derived indexes produces the same
 canonical edges and impact results; no activation or identity record is lost.
 
-- [ ] `[should]` `CBS8-01` Define versioned derived-edge provenance with source
+- [x] `[should]` `CBS8-01` Define versioned derived-edge provenance with source
   refs/digests, build policy, `as_of`, and deterministic ordering.
-- [ ] `[should]` `CBS8-02` Materialize the Semantic Graph edges for requirements,
+- [x] `[should]` `CBS8-02` Materialize the Semantic Graph edges for requirements,
   contracts, definitions, packages, instances, state spaces, and evidence.
-- [ ] `[should]` `CBS8-03` Materialize an Impact Graph that starts from changed
+- [x] `[should]` `CBS8-03` Materialize an Impact Graph that starts from changed
   capability/state contracts, definitions, packages, dependencies, or evidence
   and reaches affected resolutions, plans, locks, and Applications.
-- [ ] `[should]` `CBS8-04` Prove complete deletion and deterministic rebuild from
+- [x] `[should]` `CBS8-04` Prove complete deletion and deterministic rebuild from
   portable/local authorities.
-- [ ] `[should]` `CBS8-05` Add read-only Evolver observations for gaps, repeated
+- [x] `[should]` `CBS8-05` Add read-only Evolver observations for gaps, repeated
   schemas/operations, package co-occurrence, overlap, migration failures, and
   stale evidence.
-- [ ] `[should]` `CBS8-06` Add candidate proposal records for capability
+- [x] `[should]` `CBS8-06` Add candidate proposal records for capability
   extraction, composition, deprecation, or migration; require normal review and
   publication paths. The proposal is not a package and grants no source,
   publication, data, or activation authority.
-- [ ] `[should]` `CBS8-07` Define and enforce capability maturity
+- [x] `[should]` `CBS8-07` Define and enforce capability maturity
   `application-local -> candidate -> reusable -> platform`. Advancement to
   `reusable` requires an extracted package, conformance evidence, and an
   independent consumer; execution of that curation path is coordinated by
@@ -676,6 +685,11 @@ canonical edges and impact results; no activation or identity record is lost.
 - [ ] `[deferred]` `CBS8-10` Allow the Evolver to publish contracts, execute
   migrations, rewrite Applications, or activate bindings autonomously.
 
+Validated-local checkpoint: graph provenance, semantic/impact/viability
+projections, deterministic delete/rebuild, maturity gates, advisory proposals,
+and all listed Evolver observations pass focused tests without mutation
+authority.
+
 ## Milestone CBS9: Evolutionary Benchmark
 
 **Outcome:** AdaOS can evaluate whether the capability inventory reduces the
@@ -686,30 +700,35 @@ work in oversized capabilities.
 contain exact inputs, treatments, costs, identities, evidence, and regression
 results.
 
-- [ ] `[should]` `CBS9-01` Freeze representative archetype, capability, and
+- [x] `[should]` `CBS9-01` Freeze representative archetype, capability, and
   lifecycle cases from the existing E2E corpus before treatment-specific
   optimization.
-- [ ] `[should]` `CBS9-02` Define matched baseline and capability-inventory
+- [x] `[should]` `CBS9-02` Define matched baseline and capability-inventory
   treatment with equivalent requirements, model/tool budgets, environment, and
   acceptance gates; consume the versioned raw telemetry accumulated since
   `CBS5` without rewriting historical observations.
-- [ ] `[should]` `CBS9-03` Keep held-out prompts, rubrics, target capability
+- [x] `[should]` `CBS9-03` Keep held-out prompts, rubrics, target capability
   labels, and solution recipes unavailable to the authoring path.
-- [ ] `[should]` `CBS9-04` Measure accepted requirement coverage, independent
+- [x] `[should]` `CBS9-04` Measure accepted requirement coverage, independent
   reuse, composition complexity, residual implementation, semantic overlap,
   substitution cost, migrations, regressions, time, tokens, interventions, and
   nth-Application marginal cost.
-- [ ] `[should]` `CBS9-05` Exclude Application-local capabilities from reuse and
+- [x] `[should]` `CBS9-05` Exclude Application-local capabilities from reuse and
   report maturity distribution explicitly.
-- [ ] `[should]` `CBS9-06` Predefine the primary claim: marginal cost declines as
+- [x] `[should]` `CBS9-06` Predefine the primary claim: marginal cost declines as
   verified reusable inventory grows without increasing semantic or E2E
   regression rate.
-- [ ] `[should]` `CBS9-07` Publish negative and null results, including contracts
+- [x] `[should]` `CBS9-07` Publish negative and null results, including contracts
   that increased resolution or composition cost.
 - [ ] `[could]` `CBS9-08` Add ablations for evidence freshness, impact graph,
   multi-provider choice, and Evolver proposals.
 - [ ] `[deferred]` `CBS9-09` Make ecosystem-wide or state-of-the-art claims from
   an unfrozen, non-independent, or recipe-leaking benchmark.
+
+Validated-local checkpoint: two representative cases and one sealed held-out
+case have matched legacy/CBS arms. The raw CBS5 observation is consumed without
+rewriting but remains unmatched historical context. The predefined primary
+claim is published as `not_supported`; see [CBS9 benchmark](cbs9-benchmark.md).
 
 ## Cross-Cutting Acceptance Gates
 

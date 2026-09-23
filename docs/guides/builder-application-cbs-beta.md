@@ -41,10 +41,12 @@ must pin the current compilation when replacing an existing revision. A
 duplicate request for the same digest is idempotent.
 
 The semantic viability endpoint accepts portable `CapabilityContract`
-records and reports which requirements have a compatible contract. It is a
-read-only preflight: `activation_performed` is always `false`. Exact package
-closure, evidence admission, planning, and activation use the existing CBS
-services after semantic viability succeeds.
+records plus optional exact `EvidenceClaim`/`EvidenceAssessment` records and
+reports compatible requirements and evidence obligations. Stale historical
+verification and newly proven incompatibility have different stable
+explanations. It is a read-only preflight: `activation_performed` is always
+`false`. Exact package closure, evidence admission, planning, and activation
+use the existing CBS services after semantic viability succeeds.
 
 ### Release-driven setup editors
 
@@ -128,23 +130,38 @@ resulting stable `RuntimeSelection` pins release
 the acceptance path therefore no longer depends on inferring a Candidate from
 an ambiguous local-development record.
 
-## Compatibility and migration
+AdaOS Drive then exercised the same exact-selection boundary with Candidate
+`adaos_drive-0-1-10-f404c70ab017`. Trial acceptance and stable Webspace
+activation both pin release
+`sha256:0048ac17db9a350289b0b878a530bbc9bda20c37ca30366c2b7ef404c70ab017`,
+Webspace `desktop`, Application `adaos_drive`, runtime root `workspace`, and
+the selected revision. The wide and compact stable browser checks rendered 19
+widgets with no page or request failures.
 
-The beta keeps the pre-CBS direct Automation path operational. A legacy
-session without a canonical Prototype acceptance receives no CBS compilation;
-it is not given fabricated semantic identity. New governed runs with a current
-acceptance always compile and pin CBS identity.
+## Current migration boundary
 
-This compatibility branch can be removed after all of the following are true:
+The beta does not teach Builder to migrate an Application across Core versions.
+Maintained beta Applications may be updated directly to the current Core and
+client ABI; source-level reverse compatibility is not an acceptance criterion.
+If Builder happens to produce a valid update, it still enters through the same
+governed validation and activation path.
+
+The pre-CBS direct Automation path remains only as a bounded runtime/recovery
+bridge. A legacy session without canonical Prototype acceptance receives no
+fabricated CBS identity. New governed runs with a current acceptance always
+compile and pin CBS identity.
+
+The runtime bridge can be removed after all of the following are true:
 
 1. persisted active Builder sessions have either completed or been migrated;
 2. all Builder entry points require canonical Prototype acceptance;
 3. installed application-building skills emit the current acceptance ABI;
 4. Applications exposes CBS compilation and viability in its normal review UI;
 5. AdaOS Drive and Flowboard beta E2E suites pass only through the governed
-   path for one release window.
+   path for one release window and telemetry shows no legacy write-path use.
 
-No migration is required for package contents solely because this beta exists.
+No automated migration is required for package contents solely because this
+beta exists.
 Skills that construct or inspect Builder handoffs should be updated to preserve
 `cbs_compilation` and `cbs_compilation_digest`; skills that only invoke stable
 Builder SDK operations remain compatible.

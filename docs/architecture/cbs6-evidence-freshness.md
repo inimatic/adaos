@@ -22,6 +22,11 @@ The resulting states are `admissible`, `stale`, `superseded`, `incompatible`,
 and `revoked`. Explanations distinguish a historically verified but stale
 claim from a newly proven incompatible claim.
 
+The Application CBS semantic-viability API accepts the exact claim and
+assessment records and returns this derived explanation with every evidence
+obligation. Builder can therefore render the distinction without reimplementing
+freshness policy or treating the explanation as authority.
+
 Stale evidence may remain visible under an explicit semantic or simulation
 policy. It cannot admit a production resolution, even when a requirement asks
 to see stale evidence. Activation accepts only `admissible` evidence and can

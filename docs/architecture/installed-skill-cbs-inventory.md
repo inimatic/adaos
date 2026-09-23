@@ -17,13 +17,13 @@ upgrade overlay. It never mutates a skill.
 - Legacy leaf/UI components: **5**.
 - Installed skills with a newer development overlay: **18**.
 - Inventory digest:
-  `sha256:01c52cca52e51a5004bb9f1594dd7562a6465e2132e5522786ba6f08c0276afa`.
+  `sha256:5c59d15543b638596d7c6f4eac65d0a282fc7335f87c2797be3cfbf76e167621`.
 
 The digest describes this machine's snapshot, not a portable architecture
 artifact. Re-running the inventory after a skill installation or promotion is
 expected to produce a new digest.
 
-## Compatibility rule
+## Adoption rule
 
 `skill.yaml.capabilities` remains a list of runtime access requested by the
 skill. It is not interpreted as a list of semantic operations supplied by the
@@ -32,8 +32,11 @@ skill. A native provider must ship, at minimum, an explicit
 providers additionally need explicit state contracts and installation-local
 state-space binding.
 
-This distinction makes the inventory reverse compatible: existing manifests
-continue to load unchanged while migration is additive.
+This distinction lets existing manifests continue to run while adoption is
+incremental, but source-level reverse compatibility is not a beta requirement
+for maintained Applications. Flowboard, Applications, and AdaOS Drive may be
+updated directly with the Core API. Builder is not currently responsible for
+discovering and applying those migrations automatically.
 
 ## Migration order
 

@@ -49,7 +49,9 @@ compensated.
 Provider rebinding reuses the same portable BookingState and AuditState
 identities and records. The semantic Application digest remains unchanged.
 External evidence drift is admitted through the CBS6 assessment path; stale
-calendar evidence fails production resolution.
+calendar evidence fails production resolution. A `ResolutionPlan` is emitted
+only for the admissible assessment. Stale and newly incompatible assessments
+both fail before planning and cannot stage or switch authority.
 
 ## Executable evidence
 

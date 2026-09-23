@@ -1,6 +1,6 @@
 # Capability, Binding, and State: CBS1-CBS5 Implementation
 
-Status: executable CRUD-first implementation and compatibility guide.
+Status: executable CRUD-first implementation and adoption guide.
 
 Last verified: 2026-09-23.
 
@@ -195,9 +195,9 @@ real Trial and public component-update acceptance path. The stable
 `RuntimeSelection` pins the accepted release and `WorkspaceLock`; the derived
 view did not participate in either authority decision.
 
-## Compatibility And Migration Policy
+## Adoption And Migration Policy
 
-`CBS1-CBS5` is additive for existing installations:
+`CBS1-CBS5` keeps the current runtime readable and recoverable:
 
 - existing skill manifests, resource declarations, provider contracts, and
   package releases remain authoritative in their current domains;
@@ -210,16 +210,18 @@ view did not participate in either authority decision.
 - no current skill is required to publish native portable contracts merely to
   continue running.
 
-Therefore an eager data or skill migration is not required now. Compatibility
-projection is the safer default until Builder and installation workflows can
-produce and inspect native records. Data migration is required only when a
-selected transition changes schema/provider in a way that cannot preserve the
-existing StateSpace attachment.
+This is not a promise of source-level reverse compatibility for maintained
+beta Applications. Flowboard, Applications, and AdaOS Drive may be updated
+directly when the Core/Application ABI changes. Builder is not currently
+required to discover or apply those migrations. Data migration remains an
+explicit `ResolutionPlan` concern only when a selected transition changes
+schema/provider in a way that cannot preserve the existing StateSpace
+attachment.
 
 ## Builder Adaptation
 
-Builder should adopt CBS incrementally, without changing the current Web UI or
-prototype client ABI:
+Builder has adopted the bounded CBS handoff without becoming a general
+Application migration engine:
 
 1. compile accepted semantic activities and state needs into
    `ApplicationRequirement` and state-port references;
@@ -233,6 +235,11 @@ prototype client ABI:
 6. route Trial and production installation through the CBS-aware activation
    path;
 7. only later offer capability extraction/curation into reusable packages.
+
+Automatic modernization of an older Application to a newer Core ABI is
+deferred to a separate Builder qualification. Until then, maintained beta
+Applications are modernized directly and pass through the same compile,
+viability, Trial, and exact-activation gates.
 
 Builder must not persist package names, skill IDs, physical entry points,
 storage locators, endpoints, or credentials into the semantic Application.
@@ -257,8 +264,10 @@ transitions.
 
 ## When Legacy Code Can Be Removed
 
-The completion of `CBS5` is not permission to remove compatibility code.
-Removal is safe only after all of these gates hold for the affected surface:
+The completion of `CBS5` is not permission to remove runtime recovery and
+legacy data readers. Application source compatibility may be dropped now for
+maintained beta packages, but removal of a legacy runtime surface is safe only
+after all of these gates hold for that surface:
 
 - Builder emits native requirements and can complete Preview, Trial, and
   production activation without a legacy-only path;
@@ -274,23 +283,29 @@ Removal is safe only after all of these gates hold for the affected surface:
   retained evidence.
 
 Even then, remove write paths before readers. Keep v1 lock reading and legacy
-state/package import for a longer compatibility window. Do not remove
+state/package import for a longer recovery window. Do not remove
 `skill.yaml` permission or provider metadata that remains authoritative for
 SDK/runtime policy; only stop using it as an implicit semantic capability.
 
-## Next Delivery Sequence
+## Program Continuation
 
-1. integrate native requirement/resolution/plan inspection into Builder and the
-   Application APIs;
-2. run a migration inventory over installed skills and classify each as
-   projection-only, native-ready, or explicit-migration-required;
-3. implement `CBS6` evidence freshness and external dependency invalidation;
-4. implement `CBS7` with `booking.reserve` to exercise multiple state ports,
-   concurrency, idempotency, partial effects, and compensation;
-5. build derived semantic/impact/viability projections in `CBS8` only from
-   canonical records;
-6. use the telemetry accumulated from this proof in the `CBS9` scientific
-   benchmark.
+The originally planned continuation is now validated locally:
+
+1. Builder/Application APIs expose native compilation, viability, exact
+   evidence explanations, and the read-only lifecycle projection;
+2. 52 installed skills are classified; none is yet a native CBS provider;
+3. `CBS6` freshness and external dependency invalidation are executable;
+4. `CBS7` proves `booking.reserve` concurrency, idempotency, partial effects,
+   compensation, evidence admission, and planning;
+5. `CBS8` rebuilds semantic/impact/viability projections and advisory Evolver
+   observations from canonical records;
+6. `CBS9` consumes the original CBS5 telemetry and publishes a matched bounded
+   benchmark. Its primary cost-reduction claim is not supported by the current
+   Application-local inventory.
+
+The next delivery step is therefore native capability curation with at least
+two independent consumers, followed by the unchanged benchmark. Builder
+automatic migration remains a later, separately qualified program.
 
 ## Verification
 

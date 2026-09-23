@@ -7,7 +7,8 @@ CBS8 materializes four disposable views over portable and local CBS records:
 - Semantic Graph: typed identities and relations with source-digest provenance;
 - Impact Projection: reverse dependency reachability from changed refs/digests;
 - Viability Projection: current resolution blockers, especially evidence status;
-- Evolver Observations: advisory overlap, freshness, and migration signals.
+- Evolver Observations: advisory capability-gap, repeated-schema/operation,
+  package-co-occurrence, freshness, and migration signals.
 
 None of these views owns architecture authority. They contain no credentials,
 physical state locators, or mutation commands. `DerivedGraphStore.delete()` may
