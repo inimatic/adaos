@@ -2705,6 +2705,127 @@ def test_automation_rejects_unpublished_root_mcp_result_path(tmp_path: Path) -> 
     assert checks[0]["ok"] is True
 
 
+def test_automation_aggregates_root_mcp_input_contract_drift(tmp_path: Path) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "workspace"
+    scenario = _scenario(workspace / "scenarios", "applications")
+    webui_path = scenario / "webui.json"
+    document = {
+        "schema": "adaos.webui.v1",
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "widgets": [
+                            {
+                                "id": "application",
+                                "type": "item.details",
+                                "dataSource": {
+                                    "kind": "mcp",
+                                    "toolId": "applications.show",
+                                    "arguments": {
+                                        "unexpected": True,
+                                    },
+                                    "resultPath": "response.result.application",
+                                },
+                            },
+                            {
+                                "id": "apply",
+                                "type": "ui.actions",
+                                "actions": [
+                                    {
+                                        "type": "callMcp",
+                                        "target": "applications.apply",
+                                        "idempotencyKey": "auto",
+                                        "params": {
+                                            "operation_id": "$state.operationId",
+                                            "unexpected": True,
+                                        },
+                                    },
+                                    {
+                                        "type": "callMcp",
+                                        "target": "applications.not_published",
+                                        "params": {},
+                                    },
+                                ],
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    webui_path.write_text(json.dumps(document), encoding="utf-8")
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo,
+        dev_skills_root=workspace / "skills",
+        dev_scenarios_root=workspace / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    checks: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    worker._validate_automation_webui_authority(workspace, checks, errors)
+
+    assert checks[0]["issues"] == [
+        {
+            "code": "webui.automation.mcp_input_required_missing",
+            "pointer": "/ui/application/desktop/pageSchema/widgets/0/dataSource/arguments",
+            "tool_id": "applications.show",
+            "missing": ["application_id"],
+        },
+        {
+            "code": "webui.automation.mcp_input_unknown",
+            "pointer": "/ui/application/desktop/pageSchema/widgets/0/dataSource/arguments",
+            "tool_id": "applications.show",
+            "unknown": ["unexpected"],
+        },
+        {
+            "code": "webui.automation.mcp_input_required_missing",
+            "pointer": "/ui/application/desktop/pageSchema/widgets/1/actions/0/params",
+            "tool_id": "applications.apply",
+            "missing": ["plan_digest"],
+        },
+        {
+            "code": "webui.automation.mcp_input_unknown",
+            "pointer": "/ui/application/desktop/pageSchema/widgets/1/actions/0/params",
+            "tool_id": "applications.apply",
+            "unknown": ["unexpected"],
+        },
+        {
+            "code": "webui.automation.mcp_tool_unknown",
+            "pointer": "/ui/application/desktop/pageSchema/widgets/1/actions/1",
+            "tool_id": "applications.not_published",
+        },
+    ]
+    assert len(errors) == 5
+    assert "requires ['application_id']" in errors[0]
+    assert "rejects undeclared inputs ['unexpected']" in errors[1]
+    assert "not published by the local Root MCP registry" in errors[-1]
+
+    source = document["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0][
+        "dataSource"
+    ]
+    source["arguments"] = {"application_id": "$state.applicationId"}
+    actions = document["ui"]["application"]["desktop"]["pageSchema"]["widgets"][1][
+        "actions"
+    ]
+    actions[0]["params"] = {
+        "operation_id": "$state.operationId",
+        "plan_digest": "$state.planDigest",
+    }
+    actions.pop()
+    webui_path.write_text(json.dumps(document), encoding="utf-8")
+    checks = []
+    errors = []
+
+    worker._validate_automation_webui_authority(workspace, checks, errors)
+
+    assert errors == []
+    assert checks[0]["ok"] is True
+
+
 def test_worker_rejects_webui_capability_drift_before_browser(tmp_path):
     repo = Path(__file__).resolve().parents[1]
     workspace = tmp_path / "workspace"

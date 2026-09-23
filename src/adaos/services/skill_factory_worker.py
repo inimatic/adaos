@@ -8738,6 +8738,79 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
 
             findings: list[dict[str, Any]] = []
 
+            def validate_mcp_input(
+                value: Mapping[str, Any],
+                *,
+                pointer: str,
+                tool_id: str,
+                arguments_key: str,
+            ) -> Any:
+                from adaos.services.root_mcp import get_tool_contract
+
+                contract = get_tool_contract(tool_id) if tool_id else None
+                if contract is None:
+                    findings.append(
+                        {
+                            "code": "webui.automation.mcp_tool_unknown",
+                            "pointer": pointer,
+                            "tool_id": tool_id,
+                        }
+                    )
+                    return None
+
+                input_schema = (
+                    contract.input_schema
+                    if isinstance(contract.input_schema, Mapping)
+                    else {}
+                )
+                supplied = (
+                    value.get(arguments_key)
+                    if isinstance(value.get(arguments_key), Mapping)
+                    else {}
+                )
+                supplied_keys = {str(key) for key in supplied}
+                effective_keys = set(supplied_keys)
+                if (
+                    arguments_key == "params"
+                    and str(value.get("idempotencyKey") or "").strip()
+                ):
+                    effective_keys.add("idempotency_key")
+                required = {
+                    str(item)
+                    for item in input_schema.get("required") or []
+                    if str(item)
+                }
+                missing = sorted(required - effective_keys)
+                if missing:
+                    findings.append(
+                        {
+                            "code": "webui.automation.mcp_input_required_missing",
+                            "pointer": f"{pointer}/{arguments_key}",
+                            "tool_id": tool_id,
+                            "missing": missing,
+                        }
+                    )
+                properties = (
+                    input_schema.get("properties")
+                    if isinstance(input_schema.get("properties"), Mapping)
+                    else {}
+                )
+                unknown = (
+                    sorted(supplied_keys - {str(key) for key in properties})
+                    if input_schema.get("additionalProperties") is False
+                    else []
+                )
+                if unknown:
+                    findings.append(
+                        {
+                            "code": "webui.automation.mcp_input_unknown",
+                            "pointer": f"{pointer}/{arguments_key}",
+                            "tool_id": tool_id,
+                            "unknown": unknown,
+                        }
+                    )
+                return contract
+
             def visit(value: Any, pointer: str) -> None:
                 if isinstance(value, Mapping):
                     if "prototypeFixtures" in value:
@@ -8759,12 +8832,15 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                         segment in {"dataSource", "optionsDataSource"}
                         and str(value.get("kind") or "").strip().lower() == "mcp"
                     ):
-                        from adaos.services.root_mcp import get_tool_contract
-
                         tool_id = str(
                             value.get("toolId") or value.get("name") or ""
                         ).strip()
-                        contract = get_tool_contract(tool_id) if tool_id else None
+                        contract = validate_mcp_input(
+                            value,
+                            pointer=pointer,
+                            tool_id=tool_id,
+                            arguments_key="arguments",
+                        )
                         binding = (
                             contract.metadata.get("webui_data_binding")
                             if contract is not None
@@ -8812,6 +8888,13 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                                     "expected": sorted(expected_paths),
                                 }
                             )
+                    if str(value.get("type") or "").strip() == "callMcp":
+                        validate_mcp_input(
+                            value,
+                            pointer=pointer,
+                            tool_id=str(value.get("target") or "").strip(),
+                            arguments_key="params",
+                        )
                     for key, item in value.items():
                         visit(item, f"{pointer}/{key}")
                     return
@@ -8829,7 +8912,22 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 }
             )
             for finding in findings:
-                if finding["code"] == "webui.automation.mcp_result_path_unknown":
+                if finding["code"] == "webui.automation.mcp_tool_unknown":
+                    errors.append(
+                        f"{relative}: {finding['code']} at {finding['pointer']}: "
+                        f"{finding['tool_id']!r} is not published by the local Root MCP registry"
+                    )
+                elif finding["code"] == "webui.automation.mcp_input_required_missing":
+                    errors.append(
+                        f"{relative}: {finding['code']} at {finding['pointer']}: "
+                        f"{finding['tool_id']} requires {finding['missing']}"
+                    )
+                elif finding["code"] == "webui.automation.mcp_input_unknown":
+                    errors.append(
+                        f"{relative}: {finding['code']} at {finding['pointer']}: "
+                        f"{finding['tool_id']} rejects undeclared inputs {finding['unknown']}"
+                    )
+                elif finding["code"] == "webui.automation.mcp_result_path_unknown":
                     errors.append(
                         f"{relative}: {finding['code']} at {finding['pointer']}: "
                         f"{finding['actual']!r} is not a published result path for "
