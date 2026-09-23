@@ -1224,6 +1224,8 @@ async def _runtime_context(app: FastAPI):
             exc_info=True,
         )
 
+    background_boot = _background_boot_enabled()
+
     # 3.6) стартуем RouterService с локальной шиной
     _mount_browser_assets_static(app)
 
@@ -1321,47 +1323,88 @@ async def _runtime_context(app: FastAPI):
         logging.getLogger("adaos.realtime").warning("failed to start adaos-realtime sidecar", exc_info=True)
     boot_task: asyncio.Task[Any] | None = None
     app.state.runtime_boot_task = None
-    if _background_boot_enabled():
+    app.state.runtime_startup_tail_tasks = []
+    if background_boot:
         boot_task = asyncio.create_task(_run_boot_sequence_logged(app), name="runtime-boot-sequence")
         app.state.runtime_boot_task = boot_task
     else:
         await _run_boot_sequence_logged(app)
+
+    async def _wait_for_runtime_boot_task() -> None:
+        task = getattr(app.state, "runtime_boot_task", None)
+        if task is None:
+            return
+        try:
+            await task
+        except Exception:
+            pass
+
+    def _schedule_startup_tail(coro: Any, *, name: str) -> asyncio.Task[Any]:
+        task = asyncio.create_task(coro, name=name)
+        try:
+            app.state.runtime_startup_tail_tasks.append(task)
+        except Exception:
+            pass
+        return task
+
     # Keep the local capacity projection in sync with optional native deps
     # (vosk/pyttsx3), so other components can see IO availability without importing native libs.
-    try:
-        from adaos.services.capacity import refresh_native_io_capacity
+    async def _refresh_native_io_capacity_logged(*, wait_for_boot: bool = False) -> None:
+        if wait_for_boot:
+            await _wait_for_runtime_boot_task()
+        try:
+            from adaos.services.capacity import refresh_native_io_capacity
 
-        with _StartupTimer("refresh_native_io_capacity"):
-            await asyncio.to_thread(refresh_native_io_capacity)
-    except Exception:
-        pass
+            with _StartupTimer("refresh_native_io_capacity"):
+                await asyncio.to_thread(refresh_native_io_capacity)
+        except Exception:
+            pass
+
+    if background_boot:
+        _schedule_startup_tail(
+            _refresh_native_io_capacity_logged(wait_for_boot=True),
+            name="runtime-refresh-native-io-capacity",
+        )
+    else:
+        await _refresh_native_io_capacity_logged()
     try:
         with _StartupTimer("start_subnet_p2p"):
             await start_subnet_p2p(app)
     except Exception:
         pass
     # hub: seed self node into directory (base_url + capacity)
-    try:
-        with _StartupTimer("seed_subnet_directory"):
-            def _seed_subnet_directory() -> None:
-                conf = get_ctx().config
-                from adaos.services.registry.subnet_directory import get_directory
+    async def _seed_subnet_directory_logged(*, wait_for_boot: bool = False) -> None:
+        if wait_for_boot:
+            await _wait_for_runtime_boot_task()
+        try:
+            with _StartupTimer("seed_subnet_directory"):
+                def _seed_subnet_directory() -> None:
+                    conf = get_ctx().config
+                    from adaos.services.registry.subnet_directory import get_directory
 
-                directory = get_directory()
-                base_url = os.environ.get("ADAOS_SELF_BASE_URL")
-                node_item = {
-                    "node_id": conf.node_id,
-                    "subnet_id": conf.subnet_id,
-                    "hostname": platform.node(),
-                    "roles": [conf.role],
-                    "base_url": base_url,
-                    "capacity": get_local_capacity(),
-                }
-                directory.on_register(node_item)
+                    directory = get_directory()
+                    base_url = os.environ.get("ADAOS_SELF_BASE_URL")
+                    node_item = {
+                        "node_id": conf.node_id,
+                        "subnet_id": conf.subnet_id,
+                        "hostname": platform.node(),
+                        "roles": [conf.role],
+                        "base_url": base_url,
+                        "capacity": get_local_capacity(),
+                    }
+                    directory.on_register(node_item)
 
-            await asyncio.to_thread(_seed_subnet_directory)
-    except Exception:
-        pass
+                await asyncio.to_thread(_seed_subnet_directory)
+        except Exception:
+            pass
+
+    if background_boot:
+        _schedule_startup_tail(
+            _seed_subnet_directory_logged(wait_for_boot=True),
+            name="runtime-seed-subnet-directory",
+        )
+    else:
+        await _seed_subnet_directory_logged()
 
     # 4.5) Hub-only: detect Telegram binding on Root for this subnet and expose IO telegram in capacity.
     tg_enabled = False
@@ -1626,6 +1669,11 @@ async def _runtime_context(app: FastAPI):
             await cancel_background_migration()
         except Exception:
             pass
+        try:
+            for task in list(getattr(app.state, "runtime_startup_tail_tasks", ()) or ()):
+                await _cancel_background_task(task)
+        finally:
+            app.state.runtime_startup_tail_tasks = []
         try:
             await _cancel_background_task(getattr(app.state, "runtime_boot_task", None))
         finally:
