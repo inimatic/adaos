@@ -2,7 +2,7 @@ import { chromium } from 'playwright'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { canonicalWidgetSources } from './widget-source-parity.mjs'
+import { canonicalRenderedWidgetSources, canonicalWidgetSources } from './widget-source-parity.mjs'
 
 const scenario = process.env.ADAOS_E2E_SCENARIO_ID
 const webspace = process.env.ADAOS_E2E_WEBSPACE_ID
@@ -140,7 +140,9 @@ try {
           return widget ? { id: widget.id, type: widget.type, area: widget.area ?? null, dataSource: widget.dataSource ?? null } : null
         }).filter(Boolean))
         await fs.writeFile(path.join(output, `${layout}-source-parity.json`), JSON.stringify({ expected, actual }, null, 2) + '\n', 'utf8')
-        if (!isDeepStrictEqual(canonicalWidgetSources(actual), expected)) throw new Error('Rendered widget sources differ from the pinned WebUI')
+        if (!isDeepStrictEqual(canonicalRenderedWidgetSources(actual, expectedWebui.ui.application.desktop.pageSchema.widgets), expected)) {
+          throw new Error('Rendered widget sources differ from the pinned WebUI')
+        }
       }
       if (reviewStage === 'trial') {
         await page.waitForFunction(expectedIdentity => {
