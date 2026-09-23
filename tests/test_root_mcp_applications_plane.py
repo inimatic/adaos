@@ -886,6 +886,12 @@ def test_application_access_contracts_are_secret_free_and_reads_share_sdk_projec
     assert access_show.metadata["webui_data_binding"]["result_paths"]["roles"] == (
         "response.result.access.sections.roles"
     )
+    assert {
+        "sections": "response.result.access.sections",
+        "permissions": "response.result.access.sections.permissions",
+        "release_readiness": "response.result.access.sections.release_readiness",
+        "activity": "response.result.access.sections.activity",
+    }.items() <= access_show.metadata["webui_data_binding"]["result_paths"].items()
     assert access_show.metadata["webui_data_binding"]["examples"][
         "connected_account"
     ]["revision"] == 3

@@ -1611,6 +1611,10 @@ def contracts() -> list[RootMcpToolContract]:
                     "schema": "adaos.root_mcp.webui_data_binding.v1",
                     "transport_envelope": "node_root_mcp_bridge.v1",
                     "result_paths": {
+                        "sections": "response.result.access.sections",
+                        "permissions": (
+                            "response.result.access.sections.permissions"
+                        ),
                         "grants": "response.result.access.sections.access",
                         "roles": "response.result.access.sections.roles",
                         "required_permissions": (
@@ -1625,7 +1629,11 @@ def contracts() -> list[RootMcpToolContract]:
                         ),
                         "connected_accounts": (
                             "response.result.access.sections.connected_accounts"
-                        )
+                        ),
+                        "release_readiness": (
+                            "response.result.access.sections.release_readiness"
+                        ),
+                        "activity": "response.result.access.sections.activity",
                     },
                     "grant_record": {
                         "identity_path": "grant_id",
