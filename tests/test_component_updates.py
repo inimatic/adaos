@@ -36,6 +36,7 @@ def test_missing_dev_or_stale_selection_does_not_hide_other_trial_notices(tmp_pa
     monkeypatch.setattr(ComponentUpdateService, "record_aprobation", lambda self, **kwargs: recorded.append(kwargs) or {"ok": True})
     assert service.reconcile_local_trials("desktop") == 1
     assert recorded[0]["component_id"] == "active"
+    assert recorded[0]["aprobation"]["runtime_selection"]["application_id"] == "active"
     recorded.clear()
     assert service.reconcile_local_trials("desktop", application_id="missing-dev") == 0
     assert recorded == []
@@ -271,3 +272,137 @@ def test_local_trial_api_requires_explicit_confirmation(monkeypatch):
     assert calls == []
     assert client.post('/api/component-updates/test/accept-trial', json={**body, "confirmed": True}, headers=headers).status_code == 200
     assert calls[0][1]["actor"] == "user:owner"
+
+
+def test_local_trial_acceptance_uses_pinned_runtime_selection(tmp_path, monkeypatch):
+    from adaos.sdk.builder import applications
+    from adaos.services.applications import store as stores
+
+    pinned = SimpleNamespace(
+        webspace_id="desktop",
+        application_id="applications",
+        source="local_trial",
+        release_digest="sha256:release-applications",
+        runtime_root_ref="trial:applications",
+        revision=7,
+        to_dict=lambda: {
+            "schema": "adaos.application.runtime_selection.v1",
+            "webspace_id": "desktop",
+            "application_id": "applications",
+            "source": "local_trial",
+            "release_digest": "sha256:release-applications",
+            "runtime_root_ref": "trial:applications",
+            "revision": 7,
+            "updated_at": "2026-09-23T00:00:00Z",
+        },
+    )
+    # Another Application deliberately has the same accepted Candidate. The
+    # review remains deterministic because it owns an exact selection identity.
+    colliding = SimpleNamespace(
+        webspace_id="desktop",
+        application_id="other",
+        release_digest="sha256:release-other",
+    )
+    store = SimpleNamespace(
+        get_runtime_selection=lambda webspace_id, application_id: pinned,
+        list_runtime_selections=lambda: [pinned, colliding],
+        get_release=lambda application_id, release_digest: SimpleNamespace(
+            accepted_candidate_id="candidate.applications"
+        ),
+    )
+    monkeypatch.setattr(stores, "ApplicationStore", lambda _root: store)
+    calls = []
+    monkeypatch.setattr(
+        applications,
+        "accept_local_trial",
+        lambda application_id, **kwargs: calls.append((application_id, kwargs)) or {"ok": True},
+    )
+    monkeypatch.setattr(ComponentUpdateService, "reconcile_local_trials", lambda self, *_args, **_kwargs: 1)
+    service = ComponentUpdateService(state_dir=tmp_path)
+    notice = service.record_aprobation(
+        component_type="scenario",
+        component_id="applications",
+        aprobation={
+            "source_kind": "builder_local_trial",
+            "trial": {
+                "candidate_id": "candidate.applications",
+                "candidate_digest": "sha256:candidate-applications",
+                "release_digest": pinned.release_digest,
+                "version": "0.1.32",
+                "status": "accepted",
+            },
+            "runtime_selection": pinned.to_dict(),
+        },
+        webspace_id="desktop",
+    )
+
+    result = service.accept_local_trial(
+        notice["notice_id"],
+        candidate_id="candidate.applications",
+        candidate_digest="sha256:candidate-applications",
+        webspace_id="desktop",
+        actor="user:owner",
+    )
+
+    assert result == {"ok": True}
+    assert calls[0][0] == "applications"
+
+
+def test_local_trial_acceptance_rejects_changed_pinned_selection(tmp_path, monkeypatch):
+    from adaos.services.applications import store as stores
+
+    observed = SimpleNamespace(
+        release_digest="sha256:new-release",
+        to_dict=lambda: {
+            "webspace_id": "desktop",
+            "application_id": "applications",
+            "source": "local_trial",
+            "release_digest": "sha256:new-release",
+            "runtime_root_ref": "trial:new",
+            "revision": 8,
+        },
+    )
+    monkeypatch.setattr(
+        stores,
+        "ApplicationStore",
+        lambda _root: SimpleNamespace(
+            get_runtime_selection=lambda _webspace_id, _application_id: observed
+        ),
+    )
+    service = ComponentUpdateService(state_dir=tmp_path)
+    notice = service.record_aprobation(
+        component_type="scenario",
+        component_id="applications",
+        aprobation={
+            "source_kind": "builder_local_trial",
+            "trial": {
+                "candidate_id": "candidate.applications",
+                "candidate_digest": "sha256:candidate-applications",
+                "release_digest": "sha256:old-release",
+                "version": "0.1.32",
+                "status": "accepted",
+            },
+            "runtime_selection": {
+                "webspace_id": "desktop",
+                "application_id": "applications",
+                "source": "local_trial",
+                "release_digest": "sha256:old-release",
+                "runtime_root_ref": "trial:old",
+                "revision": 7,
+            },
+        },
+        webspace_id="desktop",
+    )
+
+    try:
+        service.accept_local_trial(
+            notice["notice_id"],
+            candidate_id="candidate.applications",
+            candidate_digest="sha256:candidate-applications",
+            webspace_id="desktop",
+            actor="user:owner",
+        )
+    except ValueError as exc:
+        assert str(exc) == "The reviewed Candidate RuntimeSelection changed; reopen its changelog"
+    else:
+        raise AssertionError("changed RuntimeSelection was accepted")

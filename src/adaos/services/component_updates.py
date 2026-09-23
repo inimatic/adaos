@@ -42,6 +42,25 @@ def _notice_id(component_type: str, component_id: str, candidate_identity: str) 
     return f"cupdate.{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:26]}"
 
 
+def _runtime_selection_snapshot(selection: Any) -> dict[str, Any]:
+    serializer = getattr(selection, "to_dict", None)
+    if callable(serializer):
+        return dict(serializer())
+    return {
+        key: getattr(selection, key)
+        for key in (
+            "webspace_id",
+            "application_id",
+            "source",
+            "release_digest",
+            "runtime_root_ref",
+            "revision",
+            "updated_at",
+        )
+        if hasattr(selection, key)
+    }
+
+
 @dataclass(slots=True)
 class ComponentUpdateService:
     """Persist user-visible release notices independently from Builder sessions."""
@@ -134,6 +153,11 @@ class ComponentUpdateService:
             for item in changelog.get("changes") or []
             if _text(item)
         ][:20]
+        runtime_selection = (
+            dict(aprobation.get("runtime_selection"))
+            if isinstance(aprobation.get("runtime_selection"), Mapping)
+            else {}
+        )
 
         with mutation_lock(self.lock_path, timeout_s=30.0):
             state = self._read()
@@ -192,6 +216,7 @@ class ComponentUpdateService:
                     "release_digest": _text(trial.get("release_digest")) or None,
                     "workflow_generation": trial.get("workflow_generation"),
                 },
+                "runtime_selection": runtime_selection or None,
                 "transition": transition,
                 "webspace_id": _text(webspace_id) or "desktop",
                 "created_at": created_at,
@@ -353,7 +378,7 @@ class ComponentUpdateService:
                     "candidate_id": delivery["candidate_id"], "candidate_digest": delivery.get("package_digest"),
                     "release_digest": release.release_digest, "version": release.project_release.version,
                     "status": "published" if published else delivery.get("status"),
-                }, "changelog": {"title": application.display["title"],
+                }, "runtime_selection": _runtime_selection_snapshot(selection), "changelog": {"title": application.display["title"],
                     "summary": str((state.get("change") or state.get("change_set") or {}).get("request") or application.display.get("summary") or "")}},
                 webspace_id=webspace_id)
             if notice:
@@ -370,20 +395,56 @@ class ComponentUpdateService:
             raise ValueError("The local Trial notice is unavailable")
         if (notice["candidate"]["id"], notice["candidate"]["digest"]) != (candidate_id, candidate_digest):
             raise ValueError("The reviewed Candidate changed")
+        notice_webspace_id = _text(notice.get("webspace_id"))
+        if notice_webspace_id and notice_webspace_id != webspace_id:
+            raise ValueError("The reviewed Candidate belongs to another Webspace")
         store = ApplicationStore(Path(self.state_dir or current_state_dir()))
-        matches = []
-        for selection in store.list_runtime_selections():
-            if selection.webspace_id != webspace_id:
-                continue
+        pinned = notice.get("runtime_selection")
+        if isinstance(pinned, Mapping) and _text(pinned.get("application_id")):
+            application_id = _text(pinned.get("application_id"))
             try:
-                release = store.get_release(selection.application_id, selection.release_digest)
+                selection = store.get_runtime_selection(webspace_id, application_id)
             except FileNotFoundError:
-                continue
-            if release.accepted_candidate_id == candidate_id:
-                matches.append(selection)
-        if len(matches) != 1:
-            raise ValueError("The reviewed Candidate has no unambiguous RuntimeSelection")
-        result = applications.accept_local_trial(matches[0].application_id, webspace_id=webspace_id,
+                raise ValueError("The reviewed Candidate RuntimeSelection is no longer available") from None
+            expected = {
+                "webspace_id": webspace_id,
+                "application_id": application_id,
+                "release_digest": _text(pinned.get("release_digest")),
+                "source": _text(pinned.get("source")),
+                "runtime_root_ref": _text(pinned.get("runtime_root_ref")),
+                "revision": pinned.get("revision"),
+            }
+            observed = _runtime_selection_snapshot(selection)
+            if any(
+                value not in (None, "") and observed.get(key) != value
+                for key, value in expected.items()
+            ):
+                raise ValueError("The reviewed Candidate RuntimeSelection changed; reopen its changelog")
+            try:
+                release = store.get_release(application_id, selection.release_digest)
+            except FileNotFoundError:
+                raise ValueError("The reviewed Candidate release is no longer available") from None
+            if release.accepted_candidate_id != candidate_id:
+                raise ValueError("The reviewed Candidate RuntimeSelection changed; reopen its changelog")
+        else:
+            # Compatibility for notices written before RuntimeSelection identity
+            # became part of the review record. New and reconciled notices never
+            # rely on this ambient lookup.
+            matches = []
+            for selection in store.list_runtime_selections():
+                if selection.webspace_id != webspace_id:
+                    continue
+                try:
+                    release = store.get_release(selection.application_id, selection.release_digest)
+                except FileNotFoundError:
+                    continue
+                if release.accepted_candidate_id == candidate_id:
+                    matches.append(selection)
+            if len(matches) != 1:
+                raise ValueError("The legacy Candidate notice has no unambiguous RuntimeSelection")
+            selection = matches[0]
+            application_id = selection.application_id
+        result = applications.accept_local_trial(application_id, webspace_id=webspace_id,
             candidate_id=candidate_id, candidate_digest=candidate_digest, actor_ref=actor)
         self.reconcile_local_trials(webspace_id)
         return result
