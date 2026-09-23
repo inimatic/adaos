@@ -1,8 +1,10 @@
 """Release-pinned, private data/configuration effects for local channel cutover.
 
-This initial adapter admits request/response skills and declared SQLite stores.
-Workers, external stores and undeclared mutable files require explicit adapters;
-an empty drain receipt must never authorize their migration.
+This initial adapter admits request/response skills, declared SQLite stores,
+and stateless native event subscribers with an explicit runtime drain hook.
+Workers with owned mutable data, external stores and undeclared mutable files
+require explicit adapters; an empty drain receipt must never authorize their
+migration.
 """
 
 from __future__ import annotations
@@ -115,12 +117,79 @@ def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[Relationa
     return result
 
 
+def _declared_tool_names(manifest: Mapping[str, Any]) -> set[str]:
+    tools = manifest.get("tools")
+    if isinstance(tools, Mapping):
+        return {
+            str(name).strip()
+            for name, value in tools.items()
+            if str(name).strip() and isinstance(value, Mapping)
+        }
+    if isinstance(tools, list):
+        return {
+            str(value.get("name") or "").strip()
+            for value in tools
+            if isinstance(value, Mapping) and str(value.get("name") or "").strip()
+        }
+    return set()
+
+
 def require_native_tools(manifest: Mapping[str, Any]) -> None:
     runtime = manifest.get("runtime") or {}
-    if (manifest.get("service") or manifest.get("services") or manifest.get("lifecycle")
-            or manifest.get("workflow") or manifest.get("conversational")
-            or (manifest.get("events") or {}).get("subscribe")
-            or any(runtime.get(key) for key in ("services", "service", "lifecycle", "after_activate", "rehydrate"))):
+    lifecycle = manifest.get("lifecycle")
+    lifecycle = lifecycle if isinstance(lifecycle, Mapping) else {}
+    subscriptions = (manifest.get("events") or {}).get("subscribe")
+    background = bool(
+        manifest.get("service")
+        or manifest.get("services")
+        or lifecycle
+        or manifest.get("workflow")
+        or manifest.get("conversational")
+        or subscriptions
+        or any(
+            runtime.get(key)
+            for key in (
+                "services",
+                "service",
+                "lifecycle",
+                "after_activate",
+                "rehydrate",
+            )
+        )
+    )
+    if not background:
+        return
+
+    drain_tool = str(lifecycle.get("drain") or manifest.get("drain") or "").strip()
+    declaration = manifest.get("data_lifecycle")
+    declared_databases_value = (
+        declaration.get("databases") if isinstance(declaration, Mapping) else None
+    )
+    capabilities = {
+        str(item).strip()
+        for item in manifest.get("capabilities") or ()
+        if str(item).strip()
+    }
+    stateless_native_subscriber = bool(
+        subscriptions
+        and not manifest.get("service")
+        and not manifest.get("services")
+        and not manifest.get("workflow")
+        and not manifest.get("conversational")
+        and not any(
+            runtime.get(key)
+            for key in ("services", "service", "lifecycle", "after_activate")
+        )
+        and isinstance(declaration, Mapping)
+        and declaration.get("schema") == "adaos.skill.data_lifecycle.v1"
+        and declaration.get("execution") == "native_tools"
+        and declared_databases_value == []
+        and not manifest.get("configuration")
+        and "storage.blob" not in capabilities
+        and drain_tool
+        and drain_tool in _declared_tool_names(manifest)
+    )
+    if not stateless_native_subscriber:
         raise ValueError("Background/lifecycle execution requires a verified owner drain adapter before data cutover")
 
 

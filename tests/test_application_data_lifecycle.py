@@ -198,6 +198,87 @@ def test_background_workers_are_rejected_without_false_drain_receipts(tmp_path, 
         coordinator(tmp_path, 1, extra)
 
 
+def test_stateless_event_subscriber_with_declared_drain_is_admitted(tmp_path):
+    seed(tmp_path)
+    target = {
+        "events": {"subscribe": ["timer.tick"]},
+        "lifecycle": {"drain": "runtime_drain", "rehydrate": "runtime_rehydrate"},
+        "tools": [
+            {"name": "runtime_drain", "entry": "handlers.main:runtime_drain"},
+            {"name": "runtime_rehydrate", "entry": "handlers.main:runtime_rehydrate"},
+        ],
+        "data_lifecycle": {
+            "schema": "adaos.skill.data_lifecycle.v1",
+            "execution": "native_tools",
+            "databases": [],
+        },
+    }
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=tmp_path / "state",
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate1",
+        release_digest="sha256:" + "1" * 64,
+        stable_digest=DIGEST,
+        components=(OwnedDataComponent(
+            "skill:worker",
+            None,
+            tmp_path / "beta1/data",
+            tmp_path / "workspace/data",
+            {},
+            target,
+        ),),
+    )
+
+    result = lifecycle.prepare_beta(
+        webspace_id="desktop",
+        activate=lambda _key: {"ok": True},
+    )
+
+    assert result["completed"] is True
+    assert result["runtime_selection"]["source"] == "local_trial"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"lifecycle": {"drain": "missing_tool"}},
+        {"service": {"run": "worker"}},
+        {"data_lifecycle": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": [{"path": "records.sqlite", "migrations": []}]}},
+    ],
+)
+def test_background_drain_does_not_admit_unverified_or_stateful_workers(tmp_path, change):
+    seed(tmp_path)
+    target = {
+        "events": {"subscribe": ["timer.tick"]},
+        "lifecycle": {"drain": "runtime_drain"},
+        "tools": [{"name": "runtime_drain", "entry": "handlers.main:runtime_drain"}],
+        "data_lifecycle": {
+            "schema": "adaos.skill.data_lifecycle.v1",
+            "execution": "native_tools",
+            "databases": [],
+        },
+        **change,
+    }
+    with pytest.raises(ValueError, match="verified owner drain"):
+        LocalApplicationDataLifecycle(
+            state_root=tmp_path / "state",
+            private_root=tmp_path,
+            application_id="sample",
+            candidate_id="candidate1",
+            release_digest="sha256:" + "1" * 64,
+            stable_digest=DIGEST,
+            components=(OwnedDataComponent(
+                "skill:worker",
+                tmp_path / "workspace/data",
+                tmp_path / "beta1/data",
+                tmp_path / "workspace/data",
+                {},
+                target,
+            ),),
+        )
+
+
 def test_undeclared_data_remains_untouched(tmp_path):
     _state, stable, _channel = seed(tmp_path)
     (stable / "attachment.txt").write_text("private attachment", encoding="utf-8")
