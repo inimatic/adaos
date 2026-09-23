@@ -3993,6 +3993,22 @@ class SubprocessCodexExecutor:
         return environment
 
 
+def _retained_codex_final_message(run_root: Path) -> str:
+    """Read the latest authoritative final message, including a repair turn."""
+
+    for path in (
+        run_root / "output" / "last_message.md",
+        run_root / "runtime" / "codex-final.md",
+    ):
+        try:
+            message = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        if message.strip():
+            return message
+    raise FileNotFoundError("retained Codex final message is unavailable")
+
+
 def requalified_feedback_message(
     run_root: Path, failure: Mapping[str, Any]
 ) -> str | None:
@@ -4004,7 +4020,7 @@ def requalified_feedback_message(
     ):
         return None
     try:
-        message = (run_root / "runtime" / "codex-final.md").read_text(encoding="utf-8")
+        message = _retained_codex_final_message(run_root)
         items = parse_development_feedback(message)
         if (
             not items
@@ -4030,9 +4046,7 @@ def preservable_blocking_feedback_message(
     if failure.get("stage") != "development_feedback":
         return None
     try:
-        message = (run_root / "runtime" / "codex-final.md").read_text(
-            encoding="utf-8"
-        )
+        message = _retained_codex_final_message(run_root)
         items = parse_development_feedback(message)
         if (
             not items

@@ -8142,6 +8142,11 @@ def test_worker_resumes_blocked_candidate_across_contract_delta(
     )
     (source_run / "runtime").mkdir()
     (source_run / "runtime" / "codex-final.md").write_text(
+        "Initial turn completed before deterministic validation.",
+        encoding="utf-8",
+    )
+    (source_run / "output").mkdir()
+    (source_run / "output" / "last_message.md").write_text(
         '```adaos-development-feedback\n'
         '{"schema":"adaos.development_feedback_output.v1","items":['
         '{"category":"insufficient_context","summary":"Contract delta required",'

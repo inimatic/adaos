@@ -372,6 +372,8 @@ therefore causes repair, not validation-only admission; a retry that made no
 edits searches its same-session history for the newest guarded candidate. The
 large-manifest guard may requalify that exact checkpoint once, but the allowance
 remains bound to its source task, changed paths, and continuation contracts. The
+checkpoint reader uses the latest authoritative final message, including an
+in-task validation-repair turn, rather than reviving the initial turn's outcome.
 historical task and its tickets remain failed/open until ordinary deterministic,
 browser, and Trial gates accept the new result.
 
