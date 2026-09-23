@@ -44,6 +44,7 @@ from adaos.services.skill_factory_worker import (
     _codex_prompt_budget_check,
     _context_packet_prompt_projection,
     _deterministic_repair_prompt,
+    _enforce_continuation_model_policy,
     _loads_strict_json,
     _persisted_descriptor_working_set_evidence,
     _root_mcp_profile_from_assignment,
@@ -81,6 +82,18 @@ def test_preservable_feedback_unwraps_latest_structured_outcome(tmp_path: Path) 
     )
 
     assert retained == report
+
+
+def test_explicit_preserved_validation_forbids_model_fallback() -> None:
+    checkpoint = {
+        "mode": "validate_preserved_candidate",
+        "model_policy": "forbid",
+    }
+
+    _enforce_continuation_model_policy(checkpoint, "validate_preserved_candidate")
+
+    with pytest.raises(ValueError, match="model fallback is forbidden"):
+        _enforce_continuation_model_policy(checkpoint, "")
 
 
 def test_validation_repair_leads_with_failures_and_keeps_full_reference():
@@ -8021,6 +8034,10 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
     previous_file.write_text('{"value":"baseline"}', encoding="utf-8")
     worker._init_git_workspace(previous_workspace, "realize/source")
     previous_file.write_text('{"value":"candidate"}', encoding="utf-8")
+    candidate_digest = worker_module.selected_source_paths_digest(
+        previous_workspace,
+        ["skills/demo/webui.json"],
+    )
     continuation_contract = {
         "schema": "adaos.builder.continuation_contract.v1",
         "standard_prompt_version": "test/1",
@@ -8100,6 +8117,7 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
                     "failure_id": failure_id,
                     "reason": continuation_reason,
                     "source_changed_paths": ["skills/demo/webui.json"],
+                    "candidate_digest": candidate_digest,
                     "continuation_contract": continuation_contract,
                 },
             }

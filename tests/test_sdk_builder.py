@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.sdk.builder import artifacts, automation, preview
 from adaos.services.builder.automation import BuilderAutomationService
 
@@ -25,6 +27,14 @@ class _AutomationService:
     def recover_validated_result(self, **kwargs):
         self.calls.append(("recover_validated_result", kwargs))
         return {"ok": True, "recovered": True}
+
+    def preflight_preserved_candidate(self, **kwargs):
+        self.calls.append(("preflight_preserved_candidate", kwargs))
+        return {"ok": True, "preflight": {"eligible": True}}
+
+    def validate_preserved_candidate(self, **kwargs):
+        self.calls.append(("validate_preserved_candidate", kwargs))
+        return {"ok": True, "status": "automation_queued"}
 
     def repackage_checkpoint(self, **kwargs):
         self.calls.append(("repackage_checkpoint", kwargs))
@@ -55,6 +65,43 @@ def test_automation_facade_recovers_validated_result_without_resubmission(monkey
     assert recovered == {"ok": True, "recovered": True}
     assert service.calls == [
         ("recover_validated_result", {"object_type": "scenario", "object_id": "recipes"})
+    ]
+
+
+def test_automation_facade_preflights_and_validates_preserved_candidate(monkeypatch) -> None:
+    service = _AutomationService()
+    monkeypatch.setattr(automation, "_service", lambda: service)
+
+    preflight = automation.preflight_preserved_candidate(
+        object_type="scenario",
+        object_id="recipes",
+        source_task_id="task.source",
+    )
+    queued = automation.validate_preserved_candidate(
+        object_type="scenario",
+        object_id="recipes",
+        source_task_id="task.source",
+    )
+
+    assert preflight["preflight"]["eligible"] is True
+    assert queued["status"] == "automation_queued"
+    assert service.calls == [
+        (
+            "preflight_preserved_candidate",
+            {
+                "object_type": "scenario",
+                "object_id": "recipes",
+                "source_task_id": "task.source",
+            },
+        ),
+        (
+            "validate_preserved_candidate",
+            {
+                "object_type": "scenario",
+                "object_id": "recipes",
+                "source_task_id": "task.source",
+            },
+        ),
     ]
 
 
@@ -575,7 +622,7 @@ def test_preview_target_accepts_current_automation_version_from_process_projecti
     assert materializations[0]["preview_stage"] == "automation"
 
 
-def test_preview_target_materializes_only_current_publication_with_public_prefix(monkeypatch) -> None:
+def test_preview_target_rejects_publication_materialization(monkeypatch) -> None:
     service = _PreviewService()
     materializations: list[dict] = []
     monkeypatch.setattr(preview, "_service", lambda: service)
@@ -601,17 +648,16 @@ def test_preview_target_materializes_only_current_publication_with_public_prefix
         lambda **kwargs: materializations.append(dict(kwargs)) or {"ok": True},
     )
 
-    result = preview.select_target(
-        "scenario",
-        "recipes",
-        stage="publication",
-        revision="0.2.1",
-        source_webspace_id="desktop",
-    )
+    with pytest.raises(ValueError, match="Preview is DEV-only"):
+        preview.select_target(
+            "scenario",
+            "recipes",
+            stage="publication",
+            revision="0.2.1",
+            source_webspace_id="desktop",
+        )
 
-    assert result["target"]["label"] == "public: recipes · 0.2.1"
-    assert result["target"]["revision"] == "0.2.1"
-    assert materializations[0]["preview_stage"] == "publication"
+    assert materializations == []
 
 
 def test_artifact_checkpoint_forwards_public_metadata(monkeypatch) -> None:

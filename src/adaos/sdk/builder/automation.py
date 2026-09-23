@@ -539,6 +539,42 @@ def recover_validated_result(*, object_type: str, object_id: str) -> dict[str, A
     )
 
 
+def preflight_preserved_candidate(
+    *,
+    object_type: str,
+    object_id: str,
+    source_task_id: str | None = None,
+) -> dict[str, Any]:
+    """Inspect a retained blocking-feedback candidate without creating a task."""
+
+    return dict(
+        _service().preflight_preserved_candidate(
+            object_type=object_type,
+            object_id=object_id,
+            source_task_id=source_task_id,
+        )
+        or {}
+    )
+
+
+def validate_preserved_candidate(
+    *,
+    object_type: str,
+    object_id: str,
+    source_task_id: str | None = None,
+) -> dict[str, Any]:
+    """Queue an admitted preserved candidate with model execution forbidden."""
+
+    return dict(
+        _service().validate_preserved_candidate(
+            object_type=object_type,
+            object_id=object_id,
+            source_task_id=source_task_id,
+        )
+        or {}
+    )
+
+
 def release_candidate_runtime(
     *,
     object_type: str,
@@ -563,6 +599,7 @@ __all__ = [
     "answer_clarification",
     "resume_clarification",
     "get_state",
+    "preflight_preserved_candidate",
     "release_candidate_runtime",
     "reconcile_checkpoint",
     "repackage_checkpoint",
@@ -573,4 +610,5 @@ __all__ = [
     "standard_prompt_version",
     "submit",
     "trial_verification_evidence",
+    "validate_preserved_candidate",
 ]

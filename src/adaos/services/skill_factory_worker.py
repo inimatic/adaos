@@ -58,6 +58,7 @@ from adaos.services.skill_factory_mcp import task_scope_enabled_tools
 from adaos.services.skill_factory_sources import (
     SourceSnapshotError,
     materialize_source_snapshot,
+    selected_source_paths_digest,
     source_projection_excluded_dirs,
     source_tree_digest,
     verify_source_snapshot,
@@ -68,7 +69,7 @@ from adaos.services.workflow_artifacts import (
 )
 
 
-RUNNER_VERSION = "adaos-local-codex-worker/0.11.1"
+RUNNER_VERSION = "adaos-local-codex-worker/0.11.2"
 PACKET_SCHEMA = "adaos.skill_factory.codex_packet.v1"
 LOCAL_SESSION_SCHEMA = "adaos.skill_factory.local_run.v1"
 _log = logging.getLogger("adaos.skill_factory.local_worker")
@@ -98,6 +99,18 @@ CODEX_LIVE_PROVIDER_BASELINE_TOKENS = 14_000
 CODEX_LIVE_PROVIDER_TOKENS_PER_TOOL_ROUND = 14_000
 CODEX_LIVE_FRESH_BASELINE_TOKENS = 4_000
 CODEX_LIVE_FRESH_TOKENS_PER_TOOL_ROUND = 2_000
+
+
+def _enforce_continuation_model_policy(
+    checkpoint: Mapping[str, Any], continuation_mode: str
+) -> None:
+    if (
+        checkpoint.get("model_policy") == "forbid"
+        and continuation_mode != "validate_preserved_candidate"
+    ):
+        raise ValueError(
+            "preserved candidate changed after admission; model fallback is forbidden"
+        )
 BOUNDED_REPAIR_COMMAND_OUTPUT_BYTES = 8 * 1024
 BOUNDED_REPAIR_COMMAND_OUTPUT_LINES = 120
 BOUNDED_REPAIR_DISCOVERY_LINES = 400
@@ -4762,6 +4775,20 @@ class LocalSkillFactoryWorker:
                 else self._restore_continuation_candidate(assignment, workspace)
             )
             continuation_mode = str((continuation or {}).get("mode") or "").strip()
+            request_artifacts = dict(
+                dict(assignment.get("realize_request") or {}).get("artifacts") or {}
+            )
+            requested_checkpoint = (
+                dict(request_artifacts.get("continuation_checkpoint") or {})
+                if isinstance(
+                    request_artifacts.get("continuation_checkpoint"), Mapping
+                )
+                else {}
+            )
+            _enforce_continuation_model_policy(
+                requested_checkpoint,
+                continuation_mode,
+            )
             validation_continuation = bool(
                 continuation_mode == "validate_preserved_candidate"
             )
@@ -6477,6 +6504,13 @@ class LocalSkillFactoryWorker:
         current_digest = str(current_snapshot.get("digest") or "").strip()
         if not previous_digest or previous_digest != current_digest:
             raise ValueError("continuation candidate source snapshot is stale")
+        expected_snapshot_digest = str(
+            checkpoint.get("source_snapshot_digest") or ""
+        ).strip()
+        if expected_snapshot_digest and expected_snapshot_digest != previous_digest:
+            raise ValueError(
+                "continuation checkpoint source snapshot identity does not match"
+            )
 
         changed_paths = self._changed_from_baseline(previous_workspace)
         if not changed_paths:
@@ -6494,6 +6528,18 @@ class LocalSkillFactoryWorker:
             raise ValueError(
                 "continuation candidate changed since checkpoint qualification"
             )
+        expected_candidate_digest = str(
+            checkpoint.get("candidate_digest") or ""
+        ).strip()
+        if expected_candidate_digest:
+            actual_candidate_digest = selected_source_paths_digest(
+                previous_workspace,
+                changed_paths,
+            )
+            if actual_candidate_digest != expected_candidate_digest:
+                raise ValueError(
+                    "continuation candidate content changed since checkpoint qualification"
+                )
         try:
             self._validate_changed_paths(
                 assignment,

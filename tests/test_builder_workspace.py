@@ -992,7 +992,8 @@ def test_root_dev_scenario_create_rewrites_the_complete_default_template(tmp_pat
     assert content["id"] == content["name"] == "recipe_book"
     assert content["version"] == manifest["version"]
     assert content["updated_at"] == manifest["updated_at"]
-    assert content["ui"] == webui["ui"]
+    assert content["ui"] == {"manifest": "webui.json"}
+    assert webui["ui"]["application"]["desktop"]["pageSchema"] == page
     assert page["id"] == "recipe_book"
     assert page["title"] == "Recipe Book"
     assert [item["id"] for item in page["widgets"]] == ["builder-empty-canvas"]
@@ -1149,6 +1150,58 @@ def test_builder_api_recovers_validated_result_in_node_context() -> None:
     assert calls == [
         {"object_type": "skill", "object_id": "demo_metrics_skill"}
     ]
+
+
+def test_builder_api_preflights_and_validates_preserved_candidate() -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class _Automation:
+        def preflight_preserved_candidate(self, **kwargs):
+            calls.append(("preflight", dict(kwargs)))
+            return {
+                "ok": True,
+                "model_started": False,
+                "preflight": {"eligible": True},
+            }
+
+        def validate_preserved_candidate(self, **kwargs):
+            calls.append(("validate", dict(kwargs)))
+            return {
+                "ok": True,
+                "status": "automation_queued",
+                "model_policy": "forbid",
+            }
+
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    app.dependency_overrides[builder_api._get_automation_service] = lambda: _Automation()
+    client = TestClient(app)
+    payload = {
+        "object_type": "skill",
+        "object_id": "demo_metrics_skill",
+        "source_task_id": "task.iteration-12",
+    }
+
+    preflight = client.post(
+        "/api/builder/automation/preserved-candidate/preflight",
+        json=payload,
+    )
+    validation = client.post(
+        "/api/builder/automation/preserved-candidate/validate",
+        json=payload,
+    )
+
+    assert preflight.status_code == 200, preflight.text
+    assert preflight.json()["model_started"] is False
+    assert validation.status_code == 200, validation.text
+    assert validation.json()["model_policy"] == "forbid"
+    expected = {
+        "object_type": "skill",
+        "object_id": "demo_metrics_skill",
+        "source_task_id": "task.iteration-12",
+    }
+    assert calls == [("preflight", expected), ("validate", expected)]
 
 
 def test_builder_api_forwards_automation_budget_and_mcp_profile() -> None:

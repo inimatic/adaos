@@ -131,6 +131,42 @@ def source_tree_digest(
     return "sha256:" + digest.hexdigest()
 
 
+def selected_source_paths_digest(root: Path, paths: Iterable[str]) -> str:
+    """Digest an exact file/deletion set without admitting path traversal."""
+
+    source_root = Path(root).resolve()
+    digest = hashlib.sha256()
+    normalized_paths = sorted({_safe_relative(value) for value in paths})
+    if not normalized_paths:
+        raise SourceSnapshotError("selected source paths cannot be empty")
+    for relative in normalized_paths:
+        path = source_root.joinpath(*PurePosixPath(relative).parts)
+        resolved = path.resolve(strict=False)
+        if source_root != resolved and source_root not in resolved.parents:
+            raise SourceSnapshotError(
+                f"selected source path escapes source root: {relative}"
+            )
+        encoded = relative.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+        if path.is_symlink():
+            raise SourceSnapshotError(
+                f"symbolic links are not allowed in selected source paths: {relative}"
+            )
+        if path.is_file():
+            payload = path.read_bytes()
+            digest.update(b"file\0")
+            digest.update(len(payload).to_bytes(8, "big"))
+            digest.update(payload)
+        elif path.exists():
+            raise SourceSnapshotError(
+                f"selected source path is not a file: {relative}"
+            )
+        else:
+            digest.update(b"deleted\0")
+    return "sha256:" + digest.hexdigest()
+
+
 def _copy_source_tree(
     source: Path,
     target: Path,

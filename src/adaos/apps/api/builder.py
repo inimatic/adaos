@@ -156,6 +156,10 @@ class BuilderAutomationRecoveryRequest(BaseModel):
     object_id: str = Field(..., min_length=1)
 
 
+class BuilderAutomationPreservedCandidateRequest(BuilderAutomationRecoveryRequest):
+    source_task_id: str | None = Field(default=None, min_length=1)
+
+
 class BuilderAutomationRepackageRequest(BuilderAutomationRecoveryRequest):
     publication_project_ref: str = Field(..., pattern="^project:[a-z0-9][a-z0-9_.-]{0,127}$")
     actor: str = Field(default="user:owner", min_length=1)
@@ -498,6 +502,40 @@ def recover_validated_automation(
         return service.recover_validated_result(
             object_type=body.object_type,
             object_id=body.object_id,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/automation/preserved-candidate/preflight")
+def preflight_preserved_automation_candidate(
+    body: BuilderAutomationPreservedCandidateRequest,
+    service: BuilderAutomationService = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    """Inspect a retained candidate without creating a task or starting Codex."""
+
+    try:
+        return service.preflight_preserved_candidate(
+            object_type=body.object_type,
+            object_id=body.object_id,
+            source_task_id=body.source_task_id,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/automation/preserved-candidate/validate")
+def validate_preserved_automation_candidate(
+    body: BuilderAutomationPreservedCandidateRequest,
+    service: BuilderAutomationService = Depends(_get_automation_service),
+) -> dict[str, Any]:
+    """Create a successor validation task whose model policy is fail-closed."""
+
+    try:
+        return service.validate_preserved_candidate(
+            object_type=body.object_type,
+            object_id=body.object_id,
+            source_task_id=body.source_task_id,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

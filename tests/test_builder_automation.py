@@ -2623,6 +2623,11 @@ def test_validation_failure_reuses_original_budget_candidate_after_requalificati
         "_preserved_candidate_has_changes",
         lambda _run_root: True,
     )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["skills/demo/skill.yaml"],
+    )
 
     checkpoint = service._budget_continuation_checkpoint(
         {"current_task_id": finalizer_task_id}
@@ -2786,6 +2791,11 @@ def test_initial_manifest_guard_failure_preserves_its_own_candidate(
         "_preserved_candidate_has_changes",
         lambda _run_root: True,
     )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["skills/demo/skill.yaml"],
+    )
 
     checkpoint = service._budget_continuation_checkpoint(
         {"current_task_id": task_id}
@@ -2872,6 +2882,11 @@ def test_manifest_candidate_survives_a_worker_boundary_compatibility_failure(
         "_preserved_candidate_has_changes",
         lambda _run_root: True,
     )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["scenarios/demo/webui.json"],
+    )
 
     checkpoint = service._budget_continuation_checkpoint(
         {
@@ -2950,6 +2965,11 @@ def test_mcp_retry_preserves_underlying_validation_candidate(
         automation_module,
         "_preserved_candidate_has_changes",
         lambda _run_root: True,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["skills/demo/skill.yaml"],
     )
 
     checkpoint = service._budget_continuation_checkpoint(
@@ -3030,6 +3050,11 @@ def test_identity_retry_preserves_underlying_validation_candidate(
         automation_module,
         "_preserved_candidate_has_changes",
         lambda _run_root: True,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["skills/demo/skill.yaml"],
     )
 
     checkpoint = service._budget_continuation_checkpoint(
@@ -3271,6 +3296,11 @@ def test_structured_mcp_retry_recovers_checkpoint_from_task_history(
         "_preserved_candidate_has_changes",
         lambda _run_root: True,
     )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["skills/demo/skill.yaml"],
+    )
 
     checkpoint = service._budget_continuation_checkpoint(
         {
@@ -3341,6 +3371,11 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
         automation_module,
         "_preserved_candidate_has_changes",
         lambda _run_root: True,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["skills/demo/skill.yaml"],
     )
 
     checkpoint = service._budget_continuation_checkpoint({"current_task_id": task_id})
@@ -3447,6 +3482,175 @@ def test_blocking_feedback_resumes_latest_edited_candidate_after_empty_retry(
     assert checkpoint["mode"] == "resume_preserved_candidate"
     assert checkpoint["source_task_id"] == candidate_task_id
     assert checkpoint["trigger_failure_id"] == "failure.transient-model"
+
+
+def test_preserved_candidate_preflight_selects_older_handoff_and_reports_all_checks(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    candidate_task_id = "task.iteration-12"
+    empty_retry_task_id = "task.iteration-14"
+    run_root = service.runs_root / candidate_task_id
+    workspace = run_root / "workspace"
+    source = service.dev_scenarios_root / "recipes"
+    shutil.copytree(source, workspace / "scenarios" / "recipes")
+    LocalSkillFactoryWorker(
+        state_dir=service.state_dir,
+        repo_root=service.repo_root,
+        dev_skills_root=service.dev_skills_root,
+        dev_scenarios_root=service.dev_scenarios_root,
+        runs_root=service.runs_root,
+    )._init_git_workspace(workspace, "realize/iteration-12")
+    candidate_file = workspace / "scenarios" / "recipes" / "webui.json"
+    candidate_file.write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {"candidate": True}}),
+        encoding="utf-8",
+    )
+    current_publication = Path(service.workspace_service.scenarios_root) / "recipes"
+    shutil.copytree(source, current_publication)
+    snapshot = automation_module.capture_source_snapshot(
+        state_dir=service.state_dir,
+        artifacts=[("scenario", "recipes", source)],
+        attachments=[
+            (
+                "current_publication",
+                current_publication,
+                "scenarios/recipes/.builder_current_publication",
+            )
+        ],
+        created_at="2026-09-23T00:00:00+00:00",
+    )
+    (run_root / "input").mkdir(parents=True)
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "task_id": candidate_task_id,
+                "target": {"type": "scenario", "id": "recipes"},
+                "forge": {"source_snapshot": snapshot},
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_contract": automation_module._continuation_contract()
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_root / "output").mkdir()
+    report = (
+        "```adaos-development-feedback\n"
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"insufficient_context","summary":"ABI input is unavailable",'
+        '"blocking":true,"target_refs":["scenario:recipes"]}]}\n```'
+    )
+    (run_root / "output" / "last_message.md").write_text(
+        json.dumps({"status": "blocked", "report": report, "questions": []}),
+        encoding="utf-8",
+    )
+    tasks = {
+        candidate_task_id: {
+            "task_id": candidate_task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.iteration-12",
+                    "stage": "development_feedback",
+                    "message": "Automation blocked by reported development feedback",
+                }
+            ],
+        },
+        empty_retry_task_id: {
+            "task_id": empty_retry_task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.iteration-14",
+                    "stage": "model_execution",
+                    "message": "Codex exited before producing a candidate",
+                }
+            ],
+        },
+    }
+    service.factory = SimpleNamespace(read_task=lambda task_id: tasks[task_id])
+    session = {
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": empty_retry_task_id,
+        "task_history": [candidate_task_id, empty_retry_task_id],
+    }
+
+    admission = service._preserved_candidate_admission(session)
+
+    assert admission["eligible"] is True, admission
+    assert admission["source_task_id"] == candidate_task_id
+    assert admission["blockers"] == []
+    assert admission["checkpoint"]["mode"] == "validate_preserved_candidate"
+    assert admission["checkpoint"]["model_policy"] == "forbid"
+    assert admission["checkpoint"]["candidate_digest"].startswith("sha256:")
+    assert all(check["status"] == "passed" for check in admission["checks"])
+
+    (source / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {"new_base": True}}),
+        encoding="utf-8",
+    )
+    stale = service._preserved_candidate_admission(
+        session,
+        source_task_id=candidate_task_id,
+    )
+
+    assert stale["eligible"] is False
+    assert stale["checkpoint"] is None
+    assert "source_artifact:scenario:recipes" in {
+        blocker["code"] for blocker in stale["blockers"]
+    }
+
+
+def test_preserved_candidate_validation_submits_successor_with_no_model_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    checkpoint = {
+        "mode": "validate_preserved_candidate",
+        "model_policy": "forbid",
+        "source_task_id": "task.iteration-12",
+    }
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "preflight_preserved_candidate",
+        lambda _self, **_kwargs: {
+            "ok": True,
+            "session_id": "automation.scenario.recipes",
+            "iteration": 14,
+            "preflight": {"eligible": True, "checkpoint": checkpoint},
+        },
+    )
+    submitted: list[dict] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "submit_turn",
+        lambda _self, **kwargs: submitted.append(dict(kwargs))
+        or {"ok": True, "status": "automation_queued"},
+    )
+
+    result = service.validate_preserved_candidate(
+        object_type="scenario",
+        object_id="recipes",
+        source_task_id="task.iteration-12",
+    )
+
+    assert result["status"] == "automation_queued"
+    assert result["model_policy"] == "forbid"
+    assert submitted == [
+        {
+            "text": automation_module._PRESERVED_VALIDATION_INSTRUCTION,
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "expected_session_id": "automation.scenario.recipes",
+            "expected_iteration": 14,
+            "_continuation_checkpoint_override": checkpoint,
+        }
+    ]
 
 
 def test_publication_gate_reuses_related_failed_task_candidate_across_sessions(

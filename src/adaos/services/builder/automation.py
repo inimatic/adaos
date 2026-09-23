@@ -39,7 +39,12 @@ from adaos.services.context_control import ContextControlService
 from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
 from adaos.services.skill_factory import SkillFactoryService
-from adaos.services.skill_factory_sources import capture_source_snapshot
+from adaos.services.skill_factory_sources import (
+    SourceSnapshotError,
+    capture_source_snapshot,
+    selected_source_paths_digest,
+    source_tree_digest,
+)
 from adaos.services.skill_factory_worker import (
     LocalSkillFactoryWorker,
     context_packet_prompt_projection,
@@ -107,6 +112,10 @@ _DEFAULT_PROTOTYPE_EXECUTION_BUDGET = {
     "max_wall_seconds": 10_800,
     "token_budget_metric": "fresh_plus_output",
 }
+
+_PRESERVED_VALIDATION_INSTRUCTION = (
+    "Revalidate the explicitly admitted preserved candidate without starting a model turn."
+)
 
 
 def _admitted_execution_budget(
@@ -3790,6 +3799,537 @@ class BuilderAutomationService:
             "created_at": _now_iso(),
         }
 
+    def _preserved_candidate_admission(
+        self,
+        session: Mapping[str, Any],
+        *,
+        source_task_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Qualify one blocking-feedback candidate for an exact no-model replay."""
+
+        checks: list[dict[str, Any]] = []
+        blockers: list[dict[str, str]] = []
+
+        def record(check_id: str, passed: bool, message: str) -> None:
+            checks.append(
+                {
+                    "id": check_id,
+                    "status": "passed" if passed else "blocked",
+                    "message": message,
+                }
+            )
+            if not passed:
+                blockers.append({"code": check_id, "message": message})
+
+        history = [
+            str(item).strip()
+            for item in session.get("task_history") or []
+            if str(item).strip()
+        ]
+        selected_task_id = str(source_task_id or "").strip()
+        if selected_task_id:
+            in_lineage = selected_task_id in history
+            record(
+                "source_task_lineage",
+                in_lineage,
+                (
+                    "source task belongs to the Automation session"
+                    if in_lineage
+                    else "source task is not present in the Automation session lineage"
+                ),
+            )
+            if not in_lineage:
+                return {
+                    "schema": "adaos.builder.preserved_candidate_preflight.v1",
+                    "eligible": False,
+                    "model_policy": "forbid",
+                    "source_task_id": selected_task_id or None,
+                    "checks": checks,
+                    "blockers": blockers,
+                    "checkpoint": None,
+                }
+        else:
+            candidate = self._latest_blocking_candidate_source(
+                session,
+                exclude_task_id="",
+            )
+            if candidate is not None:
+                selected_task_id = candidate[0]
+            record(
+                "source_task_selected",
+                bool(selected_task_id),
+                (
+                    "latest preserved blocking-feedback candidate was selected"
+                    if selected_task_id
+                    else "no preserved blocking-feedback candidate exists in the session lineage"
+                ),
+            )
+            if not selected_task_id:
+                return {
+                    "schema": "adaos.builder.preserved_candidate_preflight.v1",
+                    "eligible": False,
+                    "model_policy": "forbid",
+                    "source_task_id": None,
+                    "checks": checks,
+                    "blockers": blockers,
+                    "checkpoint": None,
+                }
+
+        try:
+            source_task = self.factory.read_task(selected_task_id)
+        except (KeyError, RuntimeError):
+            source_task = {}
+        task_available = bool(source_task)
+        record(
+            "source_task_available",
+            task_available,
+            (
+                "source task is available"
+                if task_available
+                else "source task is unavailable"
+            ),
+        )
+        if not task_available:
+            return {
+                "schema": "adaos.builder.preserved_candidate_preflight.v1",
+                "eligible": False,
+                "model_policy": "forbid",
+                "source_task_id": selected_task_id,
+                "checks": checks,
+                "blockers": blockers,
+                "checkpoint": None,
+            }
+
+        source_failed = str(source_task.get("status") or "").strip() == "failed"
+        record(
+            "source_task_failed",
+            source_failed,
+            (
+                "source task is a failed immutable candidate"
+                if source_failed
+                else "source task is not failed and cannot be replayed as a candidate"
+            ),
+        )
+        failures = [
+            dict(item)
+            for item in source_task.get("failure_history") or []
+            if isinstance(item, Mapping)
+        ]
+        source_failure = failures[-1] if failures else {}
+        failure_id = str(source_failure.get("failure_id") or "").strip()
+        record(
+            "source_failure_identity",
+            bool(failure_id),
+            (
+                "source failure identity is present"
+                if failure_id
+                else "source task has no durable failure identity"
+            ),
+        )
+
+        run_root = Path(self.runs_root) / _safe_token(selected_task_id)
+        blocking_feedback = preservable_blocking_feedback_message(
+            run_root, source_failure
+        )
+        record(
+            "blocking_feedback",
+            bool(blocking_feedback),
+            (
+                "structured blocking development feedback is preserved"
+                if blocking_feedback
+                else "source task has no preserved structured blocking development feedback"
+            ),
+        )
+        workspace = run_root / "workspace"
+        workspace_available = (workspace / ".git").is_dir()
+        record(
+            "candidate_workspace",
+            workspace_available,
+            (
+                "candidate workspace is available"
+                if workspace_available
+                else "candidate workspace is unavailable"
+            ),
+        )
+        changed_paths = (
+            _preserved_candidate_changed_paths(run_root)
+            if workspace_available
+            else []
+        )
+        record(
+            "candidate_changes",
+            bool(changed_paths),
+            (
+                f"candidate contains {len(changed_paths)} changed path(s)"
+                if changed_paths
+                else "candidate contains no preserved changes"
+            ),
+        )
+
+        assignment_path = run_root / "input" / "assignment.json"
+        try:
+            source_assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            source_assignment = {}
+        assignment_available = isinstance(source_assignment, Mapping) and bool(
+            source_assignment
+        )
+        record(
+            "source_assignment",
+            assignment_available,
+            (
+                "source assignment is available"
+                if assignment_available
+                else "source assignment is unavailable or invalid"
+            ),
+        )
+
+        source_request = (
+            dict(source_assignment.get("realize_request") or {})
+            if assignment_available
+            else {}
+        )
+        source_artifacts = (
+            dict(source_request.get("artifacts") or {})
+            if isinstance(source_request.get("artifacts"), Mapping)
+            else {}
+        )
+        current_contract = _continuation_contract()
+        source_contract = source_artifacts.get("continuation_contract")
+        contract_matches = source_contract == current_contract
+        record(
+            "continuation_contract",
+            contract_matches,
+            (
+                "source and current continuation contracts match exactly"
+                if contract_matches
+                else "source continuation contract differs from the current worker contract"
+            ),
+        )
+
+        source_target = (
+            dict(source_assignment.get("target") or {})
+            if assignment_available
+            else {}
+        )
+        expected_type = str(session.get("object_type") or "").strip().lower().rstrip("s")
+        expected_id = str(session.get("object_id") or "").strip()
+        target_matches = (
+            str(source_target.get("type") or "").strip().lower().rstrip("s")
+            == expected_type
+            and str(source_target.get("id") or "").strip() == expected_id
+        )
+        record(
+            "candidate_target",
+            target_matches,
+            (
+                "candidate targets the current Automation object"
+                if target_matches
+                else "candidate targets a different Automation object"
+            ),
+        )
+
+        source_snapshot = (
+            dict((source_assignment.get("forge") or {}).get("source_snapshot") or {})
+            if assignment_available
+            else {}
+        )
+        snapshot_available = bool(str(source_snapshot.get("digest") or "").strip())
+        record(
+            "source_snapshot_identity",
+            snapshot_available,
+            (
+                "source snapshot identity is present"
+                if snapshot_available
+                else "source snapshot identity is missing"
+            ),
+        )
+        attachments = [
+            dict(item)
+            for item in source_snapshot.get("attachments") or []
+            if isinstance(item, Mapping)
+        ]
+        current_attachments: dict[str, tuple[Path, str]] = {}
+        if expected_type == "scenario" and expected_id:
+            automation_snapshot = (
+                self.state_dir
+                / "builder"
+                / "workflow_snapshots"
+                / "scenario"
+                / expected_id
+                / "automation"
+            )
+            if automation_snapshot.is_dir():
+                current_attachments["previous_automation"] = (
+                    automation_snapshot,
+                    f"scenarios/{expected_id}/.builder_previous_automation",
+                )
+            workspace_scenarios_root = (
+                Path(self.workspace_service.scenarios_root)
+                if self.workspace_service is not None
+                and self.workspace_service.scenarios_root is not None
+                else self.repo_root / ".adaos" / "workspace" / "scenarios"
+            )
+            current_publication = workspace_scenarios_root / expected_id
+            if current_publication.is_dir():
+                current_attachments["current_publication"] = (
+                    current_publication,
+                    f"scenarios/{expected_id}/.builder_current_publication",
+                )
+        development_session_id = str(
+            session.get("development_session_id") or ""
+        ).strip()
+        development_attachments_available = True
+        development_attachment_error = ""
+        if development_session_id and expected_type and expected_id:
+            try:
+                _, development_attachments = self._development_context(
+                    development_session_id,
+                    target_ref=f"{expected_type}:{expected_id}",
+                )
+                current_attachments.update(
+                    {
+                        str(name): (Path(path), str(target_path))
+                        for name, path, target_path in development_attachments
+                    }
+                )
+            except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+                development_attachments_available = False
+                development_attachment_error = str(exc)
+        record(
+            "development_snapshot_attachments",
+            development_attachments_available,
+            (
+                "development attachment inputs are available"
+                if development_attachments_available
+                else development_attachment_error
+                or "development attachment inputs are unavailable"
+            ),
+        )
+        source_attachment_names = {
+            str(item.get("name") or "").strip() for item in attachments
+        }
+        attachment_set_matches = source_attachment_names == set(current_attachments)
+        record(
+            "source_snapshot_attachment_set",
+            attachment_set_matches,
+            (
+                "source snapshot attachment set matches current inputs"
+                if attachment_set_matches
+                else "source snapshot attachment set differs from current inputs"
+            ),
+        )
+        for row in attachments:
+            attachment_name = str(row.get("name") or "").strip()
+            current_attachment = current_attachments.get(attachment_name)
+            digest_matches = False
+            digest_error = ""
+            if current_attachment is not None:
+                attachment_root, target_path = current_attachment
+                if target_path == str(row.get("target_path") or "").strip():
+                    try:
+                        digest_matches = source_tree_digest(
+                            attachment_root
+                        ) == str(row.get("digest") or "").strip()
+                    except (OSError, SourceSnapshotError) as exc:
+                        digest_error = str(exc)
+            record(
+                f"source_attachment:{attachment_name or 'unknown'}",
+                digest_matches,
+                (
+                    "current attachment matches the candidate source snapshot"
+                    if digest_matches
+                    else digest_error
+                    or "current attachment differs from the candidate source snapshot"
+                ),
+            )
+        artifact_rows = [
+            dict(item)
+            for item in source_snapshot.get("artifacts") or []
+            if isinstance(item, Mapping)
+        ]
+        record(
+            "source_snapshot_artifacts",
+            bool(artifact_rows),
+            (
+                f"source snapshot declares {len(artifact_rows)} artifact(s)"
+                if artifact_rows
+                else "source snapshot declares no artifacts"
+            ),
+        )
+        for row in artifact_rows:
+            artifact_kind = str(row.get("kind") or "").strip().lower().rstrip("s")
+            artifact_id = str(row.get("id") or "").strip()
+            if artifact_kind == "skill":
+                artifact_root = self.dev_skills_root / artifact_id
+            elif artifact_kind == "scenario":
+                artifact_root = self.dev_scenarios_root / artifact_id
+            elif artifact_kind == "project":
+                artifact_root = self.dev_skills_root.parent / "projects" / artifact_id
+            else:
+                artifact_root = Path()
+            digest_matches = False
+            digest_error = ""
+            if artifact_kind in {"skill", "scenario", "project"} and artifact_id:
+                try:
+                    digest_matches = source_tree_digest(
+                        artifact_root,
+                        excluded_dirs=frozenset({"artifacts"}),
+                    ) == str(row.get("digest") or "").strip()
+                except (OSError, SourceSnapshotError) as exc:
+                    digest_error = str(exc)
+            check_id = f"source_artifact:{artifact_kind or 'unknown'}:{artifact_id or 'unknown'}"
+            record(
+                check_id,
+                digest_matches,
+                (
+                    "current DEV artifact matches the candidate source snapshot"
+                    if digest_matches
+                    else digest_error
+                    or "current DEV artifact differs from the candidate source snapshot"
+                ),
+            )
+
+        candidate_digest = ""
+        if changed_paths and workspace_available:
+            try:
+                candidate_digest = selected_source_paths_digest(workspace, changed_paths)
+            except (OSError, SourceSnapshotError):
+                candidate_digest = ""
+        record(
+            "candidate_digest",
+            bool(candidate_digest),
+            (
+                "candidate content digest was captured"
+                if candidate_digest
+                else "candidate content digest could not be captured"
+            ),
+        )
+
+        checkpoint: dict[str, Any] | None = None
+        if not blockers:
+            checkpoint_seed = {
+                "source_task_id": selected_task_id,
+                "failure_id": failure_id,
+                "candidate_digest": candidate_digest,
+                "source_snapshot_digest": source_snapshot.get("digest"),
+                "continuation_contract": current_contract,
+            }
+            preflight_digest = "sha256:" + hashlib.sha256(
+                json.dumps(
+                    checkpoint_seed,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            checkpoint = {
+                "schema": "adaos.builder.automation_continuation_checkpoint.v1",
+                "mode": "validate_preserved_candidate",
+                "model_policy": "forbid",
+                "source_task_id": selected_task_id,
+                "failure_id": failure_id,
+                "trigger_failure_id": None,
+                "reason": "blocking_development_feedback",
+                "source_changed_paths": changed_paths,
+                "source_continuation_contract": source_contract,
+                "candidate_digest": candidate_digest,
+                "source_snapshot_digest": source_snapshot.get("digest"),
+                "preflight_digest": preflight_digest,
+                "continuation_contract": current_contract,
+                "created_at": _now_iso(),
+            }
+        return {
+            "schema": "adaos.builder.preserved_candidate_preflight.v1",
+            "eligible": not blockers,
+            "model_policy": "forbid",
+            "source_task_id": selected_task_id,
+            "checks": checks,
+            "blockers": blockers,
+            "checkpoint": checkpoint,
+        }
+
+    def preflight_preserved_candidate(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        source_task_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Report every known admission blocker without creating a task."""
+
+        with _LOCK:
+            session = self.get_session(object_type, object_id)
+            if not session:
+                raise ValueError("automation_session_not_found")
+            session = self.refresh_session(session)
+            admission = self._preserved_candidate_admission(
+                session,
+                source_task_id=source_task_id,
+            )
+            busy = str(session.get("status") or "").strip() in _ACTIVE_STATUSES
+            if busy:
+                admission["eligible"] = False
+                admission["checks"].append(
+                    {
+                        "id": "automation_idle",
+                        "status": "blocked",
+                        "message": "Automation already has an active task",
+                    }
+                )
+                admission["blockers"].append(
+                    {
+                        "code": "automation_idle",
+                        "message": "Automation already has an active task",
+                    }
+                )
+                admission["checkpoint"] = None
+            return {
+                "ok": True,
+                "handled": True,
+                "status": (
+                    "preserved_candidate_ready"
+                    if admission["eligible"]
+                    else "preserved_candidate_blocked"
+                ),
+                "model_started": False,
+                "session_id": session.get("session_id"),
+                "iteration": int(session.get("iteration") or 0),
+                "preflight": admission,
+            }
+
+    def validate_preserved_candidate(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        source_task_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue a new evidence-owning validation task without a model turn."""
+
+        with _LOCK:
+            preflight = self.preflight_preserved_candidate(
+                object_type=object_type,
+                object_id=object_id,
+                source_task_id=source_task_id,
+            )
+            admission = dict(preflight.get("preflight") or {})
+            if admission.get("eligible") is not True:
+                return preflight
+            result = self.submit_turn(
+                text=_PRESERVED_VALIDATION_INSTRUCTION,
+                object_type=object_type,
+                object_id=object_id,
+                expected_session_id=str(preflight.get("session_id") or ""),
+                expected_iteration=int(preflight.get("iteration") or 0),
+                _continuation_checkpoint_override=dict(
+                    admission.get("checkpoint") or {}
+                ),
+            )
+            result["preflight"] = admission
+            result["model_policy"] = "forbid"
+            return result
+
     def submit_turn(
         self,
         *,
@@ -3805,6 +4345,7 @@ class BuilderAutomationService:
         expected_iteration: int | None = None,
         agent_profile: Mapping[str, Any] | None = None,
         clarification_response: Mapping[str, Any] | None = None,
+        _continuation_checkpoint_override: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         instruction = str(text or "").strip()
         if not instruction:
@@ -3883,7 +4424,25 @@ class BuilderAutomationService:
             # A newly qualified deterministic repair supersedes a preserved
             # candidate from an earlier model-budget failure. Reusing that
             # candidate would validate stale source and skip the exact edits.
-            continuation_checkpoint = self._qualified_continuation_checkpoint(session)
+            if _continuation_checkpoint_override is not None:
+                continuation_checkpoint = dict(_continuation_checkpoint_override)
+                source_task_id = str(
+                    continuation_checkpoint.get("source_task_id") or ""
+                ).strip()
+                if (
+                    continuation_checkpoint.get("mode")
+                    != "validate_preserved_candidate"
+                    or continuation_checkpoint.get("model_policy") != "forbid"
+                    or not source_task_id
+                    or source_task_id not in session.get("task_history", [])
+                ):
+                    raise ValueError(
+                        "preserved candidate checkpoint failed internal admission"
+                    )
+            else:
+                continuation_checkpoint = self._qualified_continuation_checkpoint(
+                    session
+                )
             if continuation_checkpoint:
                 session["pending_continuation_checkpoint"] = continuation_checkpoint
             else:
