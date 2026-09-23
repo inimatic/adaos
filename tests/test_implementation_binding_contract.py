@@ -16,13 +16,25 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
     for name, receipt in guide["sources"].items():
         raw = (root / name).read_bytes()
         assert receipt == {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
-    for name in ("read_collection", "record_editor", "board_move"):
+    for name in (
+        "read_collection",
+        "record_editor",
+        "dynamic_record_editor",
+        "board_move",
+    ):
         ref = guide["schema_refs"][name].split("#", 1)[1]
-        jsonschema.Draft202012Validator({**schema, "$ref": f"#{ref}"}).validate(guide["examples"][name])
-    assert len(json.dumps(guide, ensure_ascii=False).encode("utf-8")) < 12_000
+        jsonschema.Draft202012Validator({**schema, "$ref": f"#{ref}"}).validate(
+            guide["examples"][name]
+        )
+    assert len(json.dumps(guide, ensure_ascii=False).encode("utf-8")) < 14_000
     assert "workspace.write" in guide["binding_rules"]["authorization"]
-    assert "data_routes[*].tool is the LOCAL" in guide["binding_rules"]["tool_declarations"]
-    assert "callSkill.target are QUALIFIED" in guide["binding_rules"]["tool_declarations"]
+    assert (
+        "data_routes[*].tool is the LOCAL"
+        in guide["binding_rules"]["tool_declarations"]
+    )
+    assert (
+        "callSkill.target are QUALIFIED" in guide["binding_rules"]["tool_declarations"]
+    )
     assert "not an installed-skill contract" in guide["binding_rules"]["package_tests"]
     assert "checkpoint/materializer fields" in guide["binding_rules"]["package_tests"]
     assert "equivalence with webui.json" in guide["binding_rules"]["package_tests"]
@@ -36,8 +48,13 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
     assert "on=click:<command>" in guide["binding_rules"]["selection"]
     assert "SAME id" in guide["binding_rules"]["mutation"]
     assert "on=submit alone does not bind" in guide["binding_rules"]["mutation"]
-    catalog = json.loads((root / "ui.capability_catalog.v1.json").read_text(encoding="utf-8"))
-    details = next(item for item in catalog["components"] if item["id"] == "item.details")
+    assert "actions remain package-owned" in guide["binding_rules"]["dynamic_editor"]
+    catalog = json.loads(
+        (root / "ui.capability_catalog.v1.json").read_text(encoding="utf-8")
+    )
+    details = next(
+        item for item in catalog["components"] if item["id"] == "item.details"
+    )
     assert "false/throw" in details["manifest"]["commands"]
     guide["examples"].clear()
     assert implementation_binding_contract()["examples"]
@@ -78,7 +95,9 @@ def test_creation_contract_matches_state_hydration_instead_of_dynamic_defaults()
     assert "empty selected id ignores" in rule
     assert "related_choices" in rule
     root = Path(__file__).resolve().parents[1] / "src/adaos/abi"
-    catalog = json.loads((root / "ui.capability_catalog.v1.json").read_text(encoding="utf-8"))
+    catalog = json.loads(
+        (root / "ui.capability_catalog.v1.json").read_text(encoding="utf-8")
+    )
     form = next(item for item in catalog["components"] if item["id"] == "ui.form")
     assert "state_initialized_creation" in form["manifest"]
 
@@ -87,9 +106,17 @@ def test_skill_choice_source_is_admitted_but_arbitrary_transports_are_not():
     root = Path(__file__).resolve().parents[1] / "src/adaos/abi"
     schema = json.loads((root / "webui.v1.schema.json").read_text(encoding="utf-8"))
     validator = jsonschema.Draft202012Validator({**schema, "$ref": "#/$defs/formField"})
-    field = {"id": "related", "type": "dropdown", "optionValuePath": "id", "optionLabelPaths": ["name"],
-             "optionsDataSource": {"kind": "skill", "name": "sample_skill.list_records",
-                                   "invalidationTags": ["sample.records"]}}
+    field = {
+        "id": "related",
+        "type": "dropdown",
+        "optionValuePath": "id",
+        "optionLabelPaths": ["name"],
+        "optionsDataSource": {
+            "kind": "skill",
+            "name": "sample_skill.list_records",
+            "invalidationTags": ["sample.records"],
+        },
+    }
     assert not list(validator.iter_errors(field))
     field["optionsDataSource"] = {"kind": "api", "url": "https://example.org"}
     assert list(validator.iter_errors(field))
@@ -98,9 +125,7 @@ def test_skill_choice_source_is_admitted_but_arbitrary_transports_are_not():
 def test_free_form_tag_input_is_a_typed_string_list_contract():
     root = Path(__file__).resolve().parents[1] / "src/adaos/abi"
     schema = json.loads((root / "webui.v1.schema.json").read_text(encoding="utf-8"))
-    validator = jsonschema.Draft202012Validator(
-        {**schema, "$ref": "#/$defs/formField"}
-    )
+    validator = jsonschema.Draft202012Validator({**schema, "$ref": "#/$defs/formField"})
     assert not list(
         validator.iter_errors(
             {

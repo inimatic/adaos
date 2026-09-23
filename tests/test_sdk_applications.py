@@ -1867,8 +1867,67 @@ def test_application_setup_surface_is_release_owned_and_secret_free(
             "credential_presence": [{"slot": "api_token", "present": False}],
         }
     ]
+    assert surface["editors"] == {
+        "settings": [
+            {
+                "id": "skill:weather",
+                "application_id": "app_weather",
+                "release_digest": digest,
+                "component_ref": "skill:weather",
+                "expected_revision": 0,
+                "fields": [
+                    {
+                        "id": "units",
+                        "type": "dropdown",
+                        "label": "units",
+                        "required": True,
+                        "options": [
+                            {"value": "metric", "label": "metric"},
+                            {"value": "imperial", "label": "imperial"},
+                        ],
+                    }
+                ],
+                "values": {"units": "metric"},
+                "supported": True,
+                "unsupported_fields": [],
+            }
+        ],
+        "credentials": [
+            {
+                "id": "skill:weather#api_token",
+                "application_id": "app_weather",
+                "release_digest": digest,
+                "component_ref": "skill:weather",
+                "slot": "api_token",
+                "expected_revision": 0,
+                "present": False,
+                "required": False,
+                "fields": [
+                    {
+                        "id": "value",
+                        "type": "password",
+                        "label": "Weather token",
+                        "helpText": "Read the configured weather provider",
+                        "required": False,
+                    }
+                ],
+                "values": {},
+            }
+        ],
+    }
     assert "credential_reference" not in str(surface)
     assert "top-secret" not in str(surface)
+
+
+def test_application_setup_editor_marks_unsupported_schema_without_guessing() -> None:
+    field, reason = applications._setup_form_field(
+        "nested",
+        {"type": "object", "properties": {"name": {"type": "string"}}},
+        required=True,
+    )
+
+    assert field is None
+    assert reason == "unsupported_type:object"
 
 
 def test_application_setup_configuration_uses_cas(

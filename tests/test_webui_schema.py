@@ -8,7 +8,13 @@ from jsonschema import Draft202012Validator, ValidationError
 
 
 def _load_schema() -> dict:
-    path = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi" / "webui.v1.schema.json"
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "adaos"
+        / "abi"
+        / "webui.v1.schema.json"
+    )
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -56,62 +62,121 @@ def _layout_variant(
 
 
 @pytest.mark.parametrize("definition", ["widgetConfig", "widgetCatalogEntry"])
-@pytest.mark.parametrize("media,valid", [
-    ("/assets/icon.png", True), ({"path": "/media/files/content/icon.png"}, True),
-    (None, True), (True, False), (42, False), ([], False),
-])
+@pytest.mark.parametrize(
+    "media,valid",
+    [
+        ("/assets/icon.png", True),
+        ({"path": "/media/files/content/icon.png"}, True),
+        (None, True),
+        (True, False),
+        (42, False),
+        ([], False),
+    ],
+)
 def test_collection_grid_icon_media_overrides(definition, media, valid):
     schema = _load_schema()
-    validator = Draft202012Validator({"$ref": f"#/$defs/{definition}", "$defs": schema["$defs"]})
-    assert validator.is_valid({"id": "tiles", "type": "collection.grid", "area": "main",
-                               "inputs": {"iconMediaOverrides": {"item": media}}}) is valid
+    validator = Draft202012Validator(
+        {"$ref": f"#/$defs/{definition}", "$defs": schema["$defs"]}
+    )
+    assert (
+        validator.is_valid(
+            {
+                "id": "tiles",
+                "type": "collection.grid",
+                "area": "main",
+                "inputs": {"iconMediaOverrides": {"item": media}},
+            }
+        )
+        is valid
+    )
 
 
-@pytest.mark.parametrize("value,valid", [(True, True), (False, True), ("$state.archived", True),
-                                         ("$state.filters.archived", True), ("false", False), (1, False), ({}, False)])
+@pytest.mark.parametrize(
+    "value,valid",
+    [
+        (True, True),
+        (False, True),
+        ("$state.archived", True),
+        ("$state.filters.archived", True),
+        ("false", False),
+        (1, False),
+        ({}, False),
+    ],
+)
 def test_standalone_toggle_preserves_supported_state_binding(value, valid):
     schema = _load_schema()
-    validator = Draft202012Validator({"$ref": "#/$defs/toggleInputs", "$defs": schema["$defs"]})
+    validator = Draft202012Validator(
+        {"$ref": "#/$defs/toggleInputs", "$defs": schema["$defs"]}
+    )
     assert validator.is_valid({"value": value}) is valid
 
 
 def test_action_button_supports_client_localized_tooltip():
     schema = _load_schema()
-    Draft202012Validator({"$ref": "#/$defs/actionButton", "$defs": schema["$defs"]}).validate(
-        {"id": "create", "title": "New application", "title_i18n": {"key": "application.create"}})
+    Draft202012Validator(
+        {"$ref": "#/$defs/actionButton", "$defs": schema["$defs"]}
+    ).validate(
+        {
+            "id": "create",
+            "title": "New application",
+            "title_i18n": {"key": "application.create"},
+        }
+    )
 
 
-@pytest.mark.parametrize("source", [
-    {"kind": "resourceQuery", "resourceType": "prototype.subjects"},
-    {"kind": "skill", "name": "subjects_skill.list_subjects"},
-    {"kind": "mcp", "toolId": "applications.access.users", "arguments": {}, "dryRun": True,
-     "resultPath": "response.result.users_access.subjects"},
-])
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"kind": "resourceQuery", "resourceType": "prototype.subjects"},
+        {"kind": "skill", "name": "subjects_skill.list_subjects"},
+        {
+            "kind": "mcp",
+            "toolId": "applications.access.users",
+            "arguments": {},
+            "dryRun": True,
+            "resultPath": "response.result.users_access.subjects",
+        },
+    ],
+)
 def test_form_options_accept_authoritative_read_sources(source):
     schema = _load_schema()
-    validator = Draft202012Validator({"$ref": "#/$defs/formField", "$defs": schema["$defs"]})
-    validator.validate({
-        "id": "subject_ref",
-        "type": "dropdown",
-        "optionsDataSource": source,
-        "optionValuePath": "id",
-        "optionLabelPaths": ["name"],
-    })
+    validator = Draft202012Validator(
+        {"$ref": "#/$defs/formField", "$defs": schema["$defs"]}
+    )
+    validator.validate(
+        {
+            "id": "subject_ref",
+            "type": "dropdown",
+            "optionsDataSource": source,
+            "optionValuePath": "id",
+            "optionLabelPaths": ["name"],
+        }
+    )
 
 
-@pytest.mark.parametrize("patch,valid", [
-    ({}, True),
-    ({"rememberSelection": "yes"}, False),
-    ({"selectedStateKey": "draft.mode"}, False),
-    ({"selectedStateKey": "__proto__"}, False),
-    ({"options": []}, False),
-    ({"optionsDataSource": {"kind": "static", "value": []}}, False),
-])
+@pytest.mark.parametrize(
+    "patch,valid",
+    [
+        ({}, True),
+        ({"rememberSelection": "yes"}, False),
+        ({"selectedStateKey": "draft.mode"}, False),
+        ({"selectedStateKey": "__proto__"}, False),
+        ({"options": []}, False),
+        ({"optionsDataSource": {"kind": "static", "value": []}}, False),
+    ],
+)
 def test_remembered_menu_selection_contract(patch, valid):
     schema = _load_schema()
-    validator = Draft202012Validator({"$ref": "#/$defs/actionButton", "$defs": schema["$defs"]})
-    button = {"id": "view", "rememberSelection": True, "selectedStateKey": "view",
-              "options": [{"id": "basic"}, {"id": "detailed"}], **patch}
+    validator = Draft202012Validator(
+        {"$ref": "#/$defs/actionButton", "$defs": schema["$defs"]}
+    )
+    button = {
+        "id": "view",
+        "rememberSelection": True,
+        "selectedStateKey": "view",
+        "options": [{"id": "basic"}, {"id": "detailed"}],
+        **patch,
+    }
     assert validator.is_valid(button) is valid
 
 
@@ -179,14 +244,36 @@ def test_webui_schema_accepts_grouped_filterable_image_cards() -> None:
                                             "titleKey": "attention.message",
                                             "colorKey": "attention.color",
                                         },
-                                        {"key": "duration", "label": "Time", "kind": "badge"},
-                                        {"key": "favorite", "kind": "boolean", "trueLabel": "Favorite"},
+                                        {
+                                            "key": "duration",
+                                            "label": "Time",
+                                            "kind": "badge",
+                                        },
+                                        {
+                                            "key": "favorite",
+                                            "kind": "boolean",
+                                            "trueLabel": "Favorite",
+                                        },
                                     ],
                                     "filters": [
-                                        {"key": "category", "stateKey": "categoryFilter", "operator": "equals"},
-                                        {"key": "duration", "stateKey": "maxDuration", "operator": "lte"},
+                                        {
+                                            "key": "category",
+                                            "stateKey": "categoryFilter",
+                                            "operator": "equals",
+                                        },
+                                        {
+                                            "key": "duration",
+                                            "stateKey": "maxDuration",
+                                            "operator": "lte",
+                                        },
                                     ],
-                                    "buttons": [{"id": "favorite", "label": "Favorite", "icon": "heart-outline"}],
+                                    "buttons": [
+                                        {
+                                            "id": "favorite",
+                                            "label": "Favorite",
+                                            "icon": "heart-outline",
+                                        }
+                                    ],
                                 },
                             }
                         ],
@@ -215,7 +302,13 @@ def test_webui_schema_accepts_safe_state_mutations_and_membership_filter() -> No
                                 "type": "ui.list",
                                 "area": "main",
                                 "inputs": {
-                                    "filters": [{"key": "id", "stateKey": "favorites", "operator": "in"}],
+                                    "filters": [
+                                        {
+                                            "key": "id",
+                                            "stateKey": "favorites",
+                                            "operator": "in",
+                                        }
+                                    ],
                                 },
                                 "actions": [
                                     {
@@ -223,8 +316,17 @@ def test_webui_schema_accepts_safe_state_mutations_and_membership_filter() -> No
                                         "type": "mutateState",
                                         "params": {
                                             "operations": [
-                                                {"op": "toggleArrayItem", "path": "favorites", "value": "$event.id"},
-                                                {"op": "increment", "path": "cart.$event.id", "amount": 1, "min": 0},
+                                                {
+                                                    "op": "toggleArrayItem",
+                                                    "path": "favorites",
+                                                    "value": "$event.id",
+                                                },
+                                                {
+                                                    "op": "increment",
+                                                    "path": "cart.$event.id",
+                                                    "amount": 1,
+                                                    "min": 0,
+                                                },
                                             ]
                                         },
                                     }
@@ -288,7 +390,12 @@ def test_webui_schema_accepts_singleton_widget_actions_and_tags() -> None:
                                 "id": "file-toolbar",
                                 "type": "ui.actions",
                                 "area": "main",
-                                "inputs": {"buttons": {"id": "choose-file", "label": "Choose file"}},
+                                "inputs": {
+                                    "buttons": {
+                                        "id": "choose-file",
+                                        "label": "Choose file",
+                                    }
+                                },
                                 "actions": {
                                     "on": "click:choose-file",
                                     "type": "openModal",
@@ -315,12 +422,19 @@ def test_webui_schema_accepts_singleton_widget_actions_and_tags() -> None:
                                 "id": "preview-actions",
                                 "type": "ui.actions",
                                 "area": "main",
-                                "inputs": {"buttons": {"id": "open-dev-link", "label": "Open preview"}},
+                                "inputs": {
+                                    "buttons": {
+                                        "id": "open-dev-link",
+                                        "label": "Open preview",
+                                    }
+                                },
                                 "actions": {
                                     "on": "click:open-dev-link",
                                     "type": "callSkill",
                                     "target": "builder_sdk_control_skill.get_preview",
-                                    "params": {"_meta": {"current_scenario": "builder"}},
+                                    "params": {
+                                        "_meta": {"current_scenario": "builder"}
+                                    },
                                     "openResultUrl": True,
                                     "resultUrlPath": "preview_url",
                                     "resultPreferCurrentOrigin": True,
@@ -364,7 +478,11 @@ def test_webui_schema_accepts_command_overflow_priority() -> None:
                                     ],
                                 },
                                 "actions": [
-                                    {"on": "click:save", "type": "updateState", "params": {"saved": True}}
+                                    {
+                                        "on": "click:save",
+                                        "type": "updateState",
+                                        "params": {"saved": True},
+                                    }
                                 ],
                             }
                         ],
@@ -392,7 +510,9 @@ def test_webui_schema_requires_call_mcp_target() -> None:
                                 "id": "commands",
                                 "type": "ui.actions",
                                 "area": "main",
-                                "inputs": {"buttons": [{"id": "plan", "label": "Plan"}]},
+                                "inputs": {
+                                    "buttons": [{"id": "plan", "label": "Plan"}]
+                                },
                                 "actions": {
                                     "on": "click:plan",
                                     "type": "callMcp",
@@ -410,7 +530,9 @@ def test_webui_schema_requires_call_mcp_target() -> None:
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
 
-    action = payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["actions"]
+    action = payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0][
+        "actions"
+    ]
     action["target"] = action.pop("toolId")
     action["params"] = action.pop("arguments")
     Draft202012Validator(schema).validate(payload)
@@ -426,8 +548,18 @@ def test_webui_schema_requires_interval_for_auto_actions() -> None:
                     "pageSchema": {
                         "id": "bad-auto-action",
                         "layout": _layout(),
-                        "widgets": [{"id": "content", "type": "item.details", "area": "main"}],
-                        "autoActions": [{"id": "tick", "action": {"type": "updateState", "params": {"tick": True}}}],
+                        "widgets": [
+                            {"id": "content", "type": "item.details", "area": "main"}
+                        ],
+                        "autoActions": [
+                            {
+                                "id": "tick",
+                                "action": {
+                                    "type": "updateState",
+                                    "params": {"tick": True},
+                                },
+                            }
+                        ],
                     }
                 }
             }
@@ -457,8 +589,17 @@ def test_webui_schema_accepts_responsive_form_layout() -> None:
                                     "layout": "responsiveGrid",
                                     "minFieldWidth": 180,
                                     "fields": [
-                                        {"id": "search", "type": "shortText", "label": "Search"},
-                                        {"id": "notes", "type": "longText", "label": "Notes", "span": "full"},
+                                        {
+                                            "id": "search",
+                                            "type": "shortText",
+                                            "label": "Search",
+                                        },
+                                        {
+                                            "id": "notes",
+                                            "type": "longText",
+                                            "label": "Notes",
+                                            "span": "full",
+                                        },
                                     ],
                                 },
                             }
@@ -467,6 +608,33 @@ def test_webui_schema_accepts_responsive_form_layout() -> None:
                 }
             }
         },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_accepts_provider_projected_dynamic_form_fields() -> None:
+    schema = _load_schema()
+    payload = {
+        "widgets": [
+            {
+                "id": "release-settings",
+                "type": "ui.form",
+                "dataSource": {
+                    "kind": "mcp",
+                    "toolId": "applications.setup.show",
+                    "arguments": {"application_id": "$state.selectedApplicationId"},
+                    "dryRun": True,
+                },
+                "inputs": {
+                    "selectedStateKey": "selectedSetupComponentRef",
+                    "recordsPath": "setup.editors.settings",
+                    "fieldsPath": "fields",
+                    "valuesPath": "values",
+                    "fields": [],
+                },
+            }
+        ]
     }
 
     Draft202012Validator(schema).validate(payload)
@@ -495,7 +663,9 @@ def test_webui_schema_accepts_localized_layout_region_label() -> None:
     Draft202012Validator(schema).validate(payload)
 
 
-def test_webui_schema_accepts_deterministic_tabs_modal_page_and_multistep_behaviors() -> None:
+def test_webui_schema_accepts_deterministic_tabs_modal_page_and_multistep_behaviors() -> (
+    None
+):
     schema = _load_schema()
     payload = {
         "schema": "adaos.webui.v1",
@@ -506,13 +676,37 @@ def test_webui_schema_accepts_deterministic_tabs_modal_page_and_multistep_behavi
                 "statePath": "recipeEditor.step",
                 "initial": "details",
                 "states": [
-                    {"id": "details", "label_i18n": {"key": "recipes.step.details"}, "view": "recipe-details"},
-                    {"id": "ingredients", "label": "Ingredients", "view": "recipe-ingredients"},
-                    {"id": "review", "label": "Review", "view": "recipe-review", "terminal": True},
+                    {
+                        "id": "details",
+                        "label_i18n": {"key": "recipes.step.details"},
+                        "view": "recipe-details",
+                    },
+                    {
+                        "id": "ingredients",
+                        "label": "Ingredients",
+                        "view": "recipe-ingredients",
+                    },
+                    {
+                        "id": "review",
+                        "label": "Review",
+                        "view": "recipe-review",
+                        "terminal": True,
+                    },
                 ],
                 "transitions": [
-                    {"on": "next", "from": "details", "to": "ingredients", "effect": "local_state"},
-                    {"on": "next", "from": "ingredients", "to": "review", "guard": "recipe.valid", "effect": "local_state"},
+                    {
+                        "on": "next",
+                        "from": "details",
+                        "to": "ingredients",
+                        "effect": "local_state",
+                    },
+                    {
+                        "on": "next",
+                        "from": "ingredients",
+                        "to": "review",
+                        "guard": "recipe.valid",
+                        "effect": "local_state",
+                    },
                     {
                         "on": "submit",
                         "from": "review",
@@ -527,14 +721,28 @@ def test_webui_schema_accepts_deterministic_tabs_modal_page_and_multistep_behavi
                 "kind": "tabs",
                 "initial": "all",
                 "states": [{"id": "all"}, {"id": "favorites"}],
-                "transitions": [{"on": "favorite", "from": "all", "to": "favorites", "effect": "none"}],
+                "transitions": [
+                    {
+                        "on": "favorite",
+                        "from": "all",
+                        "to": "favorites",
+                        "effect": "none",
+                    }
+                ],
             },
             {
                 "id": "recipe-modal",
                 "kind": "modal",
                 "initial": "closed",
                 "states": [{"id": "closed"}, {"id": "open"}],
-                "transitions": [{"on": "open", "from": "closed", "to": "open", "effect": "local_state"}],
+                "transitions": [
+                    {
+                        "on": "open",
+                        "from": "closed",
+                        "to": "open",
+                        "effect": "local_state",
+                    }
+                ],
             },
         ],
     }
@@ -617,18 +825,18 @@ def test_webui_schema_accepts_semantic_danger_action_button() -> None:
 
     Draft202012Validator(schema).validate(payload)
 
-    payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["buttons"][0][
-        "kind"
-    ] = "red"
+    payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"][
+        "buttons"
+    ][0]["kind"] = "red"
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
 
-    payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["buttons"][0][
-        "kind"
-    ] = "danger"
-    payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["buttons"][0][
-        "appearance"
-    ] = "danger"
+    payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"][
+        "buttons"
+    ][0]["kind"] = "danger"
+    payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"][
+        "buttons"
+    ][0]["appearance"] = "danger"
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
 
@@ -648,7 +856,10 @@ def test_webui_schema_rejects_unbounded_region_widths() -> None:
                                 {
                                     "id": "main",
                                     "role": "main",
-                                    "presentation": {"wide": "pane", "compact": "stack"},
+                                    "presentation": {
+                                        "wide": "pane",
+                                        "compact": "stack",
+                                    },
                                     "size": {"preferredPx": 2500},
                                 }
                             ],
@@ -679,8 +890,12 @@ def test_webui_schema_rejects_dotted_widget_properties() -> None:
                                 "id": "form",
                                 "type": "ui.form",
                                 "area": "main",
-                                "inputs": {"fields": [{"id": "title", "type": "shortText"}]},
-                                "inputs.secondaryActions": [{"id": "cancel", "label": "Cancel"}],
+                                "inputs": {
+                                    "fields": [{"id": "title", "type": "shortText"}]
+                                },
+                                "inputs.secondaryActions": [
+                                    {"id": "cancel", "label": "Cancel"}
+                                ],
                             }
                         ],
                     }
@@ -703,7 +918,9 @@ def test_webui_schema_validates_widgets_inside_application_modals() -> None:
                     "pageSchema": {
                         "id": "catalog",
                         "layout": _layout(),
-                        "widgets": [{"id": "catalog", "type": "ui.list", "area": "main"}],
+                        "widgets": [
+                            {"id": "catalog", "type": "ui.list", "area": "main"}
+                        ],
                     }
                 },
                 "modals": {
@@ -716,8 +933,12 @@ def test_webui_schema_validates_widgets_inside_application_modals() -> None:
                                     "id": "edit_form",
                                     "type": "ui.form",
                                     "area": "modal",
-                                    "inputs": {"fields": [{"id": "title", "type": "shortText"}]},
-                                    "inputs.secondaryActions": [{"id": "cancel", "label": "Cancel"}],
+                                    "inputs": {
+                                        "fields": [{"id": "title", "type": "shortText"}]
+                                    },
+                                    "inputs.secondaryActions": [
+                                        {"id": "cancel", "label": "Cancel"}
+                                    ],
                                 }
                             ],
                         }
@@ -775,7 +996,11 @@ def test_webui_schema_accepts_staged_load_hints() -> None:
             {
                 "id": "prompt_ide",
                 "title": "Prompt IDE",
-                "load": {"structure": "visible", "data": "interaction", "focus": "primary"},
+                "load": {
+                    "structure": "visible",
+                    "data": "interaction",
+                    "focus": "primary",
+                },
             }
         ],
         "widgets": [
@@ -802,14 +1027,22 @@ def test_webui_schema_accepts_staged_load_hints() -> None:
                     },
                     "schema": {
                         "id": "prompt_modal",
-                        "load": {"structure": "interaction", "data": "deferred", "focus": "off_focus"},
+                        "load": {
+                            "structure": "interaction",
+                            "data": "deferred",
+                            "focus": "off_focus",
+                        },
                         "layout": _layout(),
                         "widgets": [
                             {
                                 "id": "prompt_widget",
                                 "type": "ui.chat",
                                 "area": "main",
-                                "load": {"structure": "visible", "data": "deferred", "focus": "off_focus"},
+                                "load": {
+                                    "structure": "visible",
+                                    "data": "deferred",
+                                    "focus": "off_focus",
+                                },
                             }
                         ],
                     },
@@ -915,13 +1148,20 @@ def test_webui_schema_accepts_runtime_data_sources_and_auto_actions() -> None:
                                 "id": "skill_data",
                                 "type": "ui.jsonViewer",
                                 "area": "main",
-                                "dataSource": {"kind": "skill", "name": "runtime_skill.snapshot"},
+                                "dataSource": {
+                                    "kind": "skill",
+                                    "name": "runtime_skill.snapshot",
+                                },
                             },
                             {
                                 "id": "api_data",
                                 "type": "ui.jsonViewer",
                                 "area": "main",
-                                "dataSource": {"kind": "api", "url": "/api/node/status", "method": "GET"},
+                                "dataSource": {
+                                    "kind": "api",
+                                    "url": "/api/node/status",
+                                    "method": "GET",
+                                },
                             },
                             {
                                 "id": "static_data",
@@ -991,22 +1231,37 @@ def test_webui_schema_accepts_modal_domain_and_ownership_contract() -> None:
                                         "kind": "entity",
                                         "route": "note.edit",
                                         "view": "demo.note.edit",
-                                        "entity": {"type": "note", "idParam": "note_id"},
+                                        "entity": {
+                                            "type": "note",
+                                            "idParam": "note_id",
+                                        },
                                     },
                                 },
                             },
                             "ownership": {
                                 "schema": "adaos.ui.state_ownership.v1",
-                                "domainState": {"owner": "skill:demo_skill", "store": "skill_memory"},
-                                "routeState": {"owner": "browser", "scope": "modal", "keys": ["selectedId"]},
+                                "domainState": {
+                                    "owner": "skill:demo_skill",
+                                    "store": "skill_memory",
+                                },
+                                "routeState": {
+                                    "owner": "browser",
+                                    "scope": "modal",
+                                    "keys": ["selectedId"],
+                                },
                                 "viewState": {"owner": "browser", "scope": "modal"},
-                                "persistence": {"owner": "skill:demo_skill", "ack": "tool:demo_skill.save_note"},
+                                "persistence": {
+                                    "owner": "skill:demo_skill",
+                                    "ack": "tool:demo_skill.save_note",
+                                },
                             },
                             "routes": {
                                 "notes.list": {"view": "demo.notes.list", "params": {}},
                                 "note.edit": {
                                     "view": "demo.note.edit",
-                                    "params": {"note_id": {"type": "string", "required": True}},
+                                    "params": {
+                                        "note_id": {"type": "string", "required": True}
+                                    },
                                 },
                             },
                         },
@@ -1060,7 +1315,10 @@ def test_webui_schema_accepts_interaction_resources_and_action_feedback() -> Non
                         "id": "weather_modal",
                         "layout": _layout(),
                         "interaction": {
-                            "initialFocus": {"ref": "widget:weather-city-input", "strategy": "restore_or_first"},
+                            "initialFocus": {
+                                "ref": "widget:weather-city-input",
+                                "strategy": "restore_or_first",
+                            },
                             "submit": {
                                 "defaultAction": "weather.search",
                                 "enterKey": "submit",
@@ -1072,8 +1330,14 @@ def test_webui_schema_accepts_interaction_resources_and_action_feedback() -> Non
                                 "id": "weather-preview",
                                 "type": "visual.image",
                                 "area": "main",
-                                "dataSource": {"kind": "resource", "resource": "weather.preview"},
-                                "loading": {"skeleton": "card", "emptyText": "No preview yet"},
+                                "dataSource": {
+                                    "kind": "resource",
+                                    "resource": "weather.preview",
+                                },
+                                "loading": {
+                                    "skeleton": "card",
+                                    "emptyText": "No preview yet",
+                                },
                             },
                             {
                                 "id": "weather-city-input",
@@ -1113,9 +1377,16 @@ def test_webui_schema_accepts_interaction_resources_and_action_feedback() -> Non
                                                     "request_id": "$client.requestId",
                                                     "pending": False,
                                                 },
-                                                "advanceFields": ["request_id", "updated_at", "pending"],
+                                                "advanceFields": [
+                                                    "request_id",
+                                                    "updated_at",
+                                                    "pending",
+                                                ],
                                             },
-                                            "timeout": {"state": "degraded", "message": "Weather update timed out"},
+                                            "timeout": {
+                                                "state": "degraded",
+                                                "message": "Weather update timed out",
+                                            },
                                         },
                                     }
                                 ],
@@ -1190,7 +1461,11 @@ def test_webui_schema_accepts_google_forms_like_form_fields() -> None:
                                 "inputs": {
                                     "submitLabel": "Send",
                                     "fields": [
-                                        {"id": "intro", "type": "section", "title": "Feedback"},
+                                        {
+                                            "id": "intro",
+                                            "type": "section",
+                                            "title": "Feedback",
+                                        },
                                         {
                                             "id": "name",
                                             "type": "shortText",
@@ -1198,14 +1473,25 @@ def test_webui_schema_accepts_google_forms_like_form_fields() -> None:
                                             "required": True,
                                             "validation": {"minLength": 2},
                                         },
-                                        {"id": "comment", "type": "paragraph", "label": "Comment"},
+                                        {
+                                            "id": "comment",
+                                            "type": "paragraph",
+                                            "label": "Comment",
+                                        },
                                         {
                                             "id": "segment",
                                             "type": "multipleChoice",
                                             "label": "Segment",
                                             "options": [
-                                                {"label": "Builder", "value": "builder", "gotoSection": "builder_details"},
-                                                {"label": "Operator", "value": "operator"},
+                                                {
+                                                    "label": "Builder",
+                                                    "value": "builder",
+                                                    "gotoSection": "builder_details",
+                                                },
+                                                {
+                                                    "label": "Operator",
+                                                    "value": "operator",
+                                                },
                                             ],
                                         },
                                         {
@@ -1214,9 +1500,22 @@ def test_webui_schema_accepts_google_forms_like_form_fields() -> None:
                                             "label": "Features",
                                             "options": ["Forms", "Charts", "Tables"],
                                         },
-                                        {"id": "priority", "type": "dropdown", "options": ["Low", "Medium", "High"]},
-                                        {"id": "score", "type": "linearScale", "min": 1, "max": 5},
-                                        {"id": "rating", "type": "rating", "ratingMax": 5},
+                                        {
+                                            "id": "priority",
+                                            "type": "dropdown",
+                                            "options": ["Low", "Medium", "High"],
+                                        },
+                                        {
+                                            "id": "score",
+                                            "type": "linearScale",
+                                            "min": 1,
+                                            "max": 5,
+                                        },
+                                        {
+                                            "id": "rating",
+                                            "type": "rating",
+                                            "ratingMax": 5,
+                                        },
                                         {
                                             "id": "matrix_single",
                                             "type": "singleChoiceGrid",
@@ -1233,13 +1532,30 @@ def test_webui_schema_accepts_google_forms_like_form_fields() -> None:
                                         {"id": "time", "type": "time"},
                                         {"id": "window", "type": "dateRange"},
                                         {"id": "time_window", "type": "time_range"},
-                                        {"id": "attachment", "type": "fileUpload", "accept": ".json", "maxFiles": 2},
-                                        {"id": "note", "type": "staticContent", "markdown": "Thanks."},
+                                        {
+                                            "id": "attachment",
+                                            "type": "fileUpload",
+                                            "accept": ".json",
+                                            "maxFiles": 2,
+                                        },
+                                        {
+                                            "id": "note",
+                                            "type": "staticContent",
+                                            "markdown": "Thanks.",
+                                        },
                                     ],
                                 },
                                 "actions": [
-                                    {"on": "submit", "type": "callHost", "target": "survey.submit"},
-                                    {"on": "save_draft", "type": "callHost", "target": "survey.save_draft"},
+                                    {
+                                        "on": "submit",
+                                        "type": "callHost",
+                                        "target": "survey.submit",
+                                    },
+                                    {
+                                        "on": "save_draft",
+                                        "type": "callHost",
+                                        "target": "survey.save_draft",
+                                    },
                                 ],
                             }
                         ],
@@ -1313,8 +1629,17 @@ def test_webui_schema_accepts_frame_viewer_media_surface_contract() -> None:
                             "local": "closeFullscreen",
                         }
                     ],
-                    "keyboardActions": {"ArrowLeft": "next", "ArrowRight": "prev", "ArrowUp": "fav"},
-                    "swipeActions": {"left": "next", "right": "prev", "up": "fav", "down": "hide"},
+                    "keyboardActions": {
+                        "ArrowLeft": "next",
+                        "ArrowRight": "prev",
+                        "ArrowUp": "fav",
+                    },
+                    "swipeActions": {
+                        "left": "next",
+                        "right": "prev",
+                        "up": "fav",
+                        "down": "hide",
+                    },
                     "metrics": [{"label": "Frame", "path": "frame.label"}],
                 },
                 "actions": [
@@ -1433,8 +1758,16 @@ def test_webui_schema_accepts_state_selected_list_sort_and_conditional_action() 
                     "sort": {
                         "stateKey": "sort_by",
                         "options": {
-                            "price_asc": {"key": "price", "direction": "asc", "numeric": True},
-                            "price_desc": {"key": "price", "direction": "desc", "numeric": True},
+                            "price_asc": {
+                                "key": "price",
+                                "direction": "asc",
+                                "numeric": True,
+                            },
+                            "price_desc": {
+                                "key": "price",
+                                "direction": "desc",
+                                "numeric": True,
+                            },
                         },
                     }
                 },
@@ -1527,9 +1860,21 @@ def test_webui_schema_accepts_state_selected_full_surface_layout_variants() -> N
                             ],
                         ),
                         "widgets": [
-                            {"id": "directions", "type": "ui.list", "area": "portfolio"},
-                            {"id": "discussion", "type": "ui.chat", "area": "workspace"},
-                            {"id": "consensus", "type": "static.markdown", "area": "context"},
+                            {
+                                "id": "directions",
+                                "type": "ui.list",
+                                "area": "portfolio",
+                            },
+                            {
+                                "id": "discussion",
+                                "type": "ui.chat",
+                                "area": "workspace",
+                            },
+                            {
+                                "id": "consensus",
+                                "type": "static.markdown",
+                                "area": "context",
+                            },
                         ],
                     }
                 }
@@ -1540,7 +1885,9 @@ def test_webui_schema_accepts_state_selected_full_surface_layout_variants() -> N
     Draft202012Validator(schema).validate(payload)
 
 
-def test_webui_schema_rejects_ambiguous_layout_variant_without_when_or_default() -> None:
+def test_webui_schema_rejects_ambiguous_layout_variant_without_when_or_default() -> (
+    None
+):
     schema = _load_schema()
     payload = {
         "ui": {
@@ -1580,7 +1927,10 @@ def test_webui_schema_accepts_generic_outline_detail_navigation() -> None:
                                 "id": "outline",
                                 "type": "navigation.outline",
                                 "area": "navigation",
-                                "dataSource": {"kind": "static", "value": {"nodes": []}},
+                                "dataSource": {
+                                    "kind": "static",
+                                    "value": {"nodes": []},
+                                },
                                 "inputs": {
                                     "stateKey": "selectedNodeId",
                                     "idKey": "node_id",
@@ -1611,6 +1961,8 @@ def test_webui_schema_accepts_generic_outline_detail_navigation() -> None:
 
     Draft202012Validator(schema).validate(payload)
 
-    del payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"]["stateKey"]
+    del payload["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["inputs"][
+        "stateKey"
+    ]
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)

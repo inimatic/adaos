@@ -57,7 +57,9 @@ def skill_interface(
             "schema": "adaos.ui.skill_interface.v1",
             "defaultView": default_view,
             "views": {key: dict(value) for key, value in views.items()},
-            "transitions": [dict(item) for item in transitions] if transitions is not None else None,
+            "transitions": [dict(item) for item in transitions]
+            if transitions is not None
+            else None,
             "ownership": dict(ownership) if ownership is not None else None,
         }
     )
@@ -230,15 +232,21 @@ def navigate_modal_action(
     }
 
 
-def validate_webui(webui: Mapping[str, Any], *, skill_id: str | None = None) -> list[dict[str, Any]]:
-    return [issue.to_dict() for issue in validate_webui_contract(webui, skill_id=skill_id)]
+def validate_webui(
+    webui: Mapping[str, Any], *, skill_id: str | None = None
+) -> list[dict[str, Any]]:
+    return [
+        issue.to_dict() for issue in validate_webui_contract(webui, skill_id=skill_id)
+    ]
 
 
 def diagnostic_catalog() -> dict[str, dict[str, str]]:
     return webui_contract_diagnostic_catalog()
 
 
-def implementation_binding_contract(*, include_attachments: bool = False) -> dict[str, Any]:
+def implementation_binding_contract(
+    *, include_attachments: bool = False
+) -> dict[str, Any]:
     """Return the bounded Automation UI/owned-tool binding guide and ABI receipts.
 
     Covers record loading, revision-aware form commands, caller authorization,
@@ -248,12 +256,15 @@ def implementation_binding_contract(*, include_attachments: bool = False) -> dic
     abi_root = Path(__file__).resolve().parents[2] / "abi"
     sources = {}
     for name in (
-        "implementation.bindings.v1.json", "webui.v1.schema.json",
+        "implementation.bindings.v1.json",
+        "webui.v1.schema.json",
         "ui.capability_catalog.v1.json",
     ):
         raw = (abi_root / name).read_bytes()
         sources[name] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
-    guide = json.loads((abi_root / "implementation.bindings.v1.json").read_text(encoding="utf-8"))
+    guide = json.loads(
+        (abi_root / "implementation.bindings.v1.json").read_text(encoding="utf-8")
+    )
     if not include_attachments:
         contracts = guide.get("contracts")
         if isinstance(contracts, dict):
@@ -265,6 +276,7 @@ def implementation_binding_contract(*, include_attachments: bool = False) -> dic
     guide["schema_refs"] = {
         "read_collection": "webui.v1.schema.json#/$defs/dataSource",
         "record_editor": "webui.v1.schema.json#/$defs/widgetConfig",
+        "dynamic_record_editor": "webui.v1.schema.json#/$defs/widgetConfig",
         "command": "webui.v1.schema.json#/$defs/action",
         "board_move": "webui.v1.schema.json#/$defs/action",
         "form_inputs": "webui.v1.schema.json#/$defs/formInputs",

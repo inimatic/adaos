@@ -1610,6 +1610,169 @@ def _setup_configuration_rows(
     return rows, values_by_component, credential_presence
 
 
+def _setup_form_field(
+    field_id: str,
+    declaration: Mapping[str, Any],
+    *,
+    required: bool,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Project the supported JSON Schema subset into the public WebUI form ABI."""
+
+    raw_types = declaration.get("type")
+    if isinstance(raw_types, str):
+        types = [raw_types]
+    elif isinstance(raw_types, Sequence) and not isinstance(
+        raw_types, (str, bytes, bytearray)
+    ):
+        types = [str(item) for item in raw_types if str(item) != "null"]
+    else:
+        types = []
+    enum = list(declaration.get("enum") or ())
+    field_type: str
+    if enum:
+        field_type = "dropdown"
+    elif types == ["boolean"]:
+        field_type = "toggle"
+    elif types == ["integer"]:
+        field_type = "integer"
+    elif types == ["number"]:
+        field_type = "number"
+    elif (
+        types == ["array"] and (declaration.get("items") or {}).get("type") == "string"
+    ):
+        field_type = "tagInput"
+    elif not types or types == ["string"]:
+        field_type = {
+            "email": "email",
+            "uri": "url",
+            "url": "url",
+            "date": "date",
+            "time": "time",
+            "date-time": "dateTime",
+        }.get(str(declaration.get("format") or ""), "shortText")
+    else:
+        return None, f"unsupported_type:{','.join(types) or 'unspecified'}"
+    field: dict[str, Any] = {
+        "id": str(field_id),
+        "type": field_type,
+        "label": str(declaration.get("title") or field_id.replace("_", " ")).strip(),
+        "required": bool(required),
+    }
+    description = str(declaration.get("description") or "").strip()
+    if description:
+        field["helpText"] = description
+    if enum:
+        enum_labels = declaration.get("x-enum-labels")
+        enum_labels = (
+            list(enum_labels)
+            if isinstance(enum_labels, Sequence)
+            and not isinstance(enum_labels, (str, bytes, bytearray))
+            else []
+        )
+        field["options"] = [
+            {
+                "value": value,
+                "label": str(enum_labels[index] if index < len(enum_labels) else value),
+            }
+            for index, value in enumerate(enum)
+        ]
+    for source, target in (
+        ("minimum", "min"),
+        ("maximum", "max"),
+        ("minLength", "minLength"),
+        ("maxLength", "maxLength"),
+        ("pattern", "pattern"),
+    ):
+        if declaration.get(source) is not None:
+            field[target] = declaration[source]
+    if declaration.get("default") is not None:
+        field["defaultValue"] = deepcopy(declaration["default"])
+    return field, None
+
+
+def _setup_form_editors(
+    application_id: str,
+    release_digest: str,
+    contract: Any,
+    configuration: Sequence[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Build secret-free dynamic editors while keeping mutation actions UI-owned."""
+
+    state_by_component = {
+        str(item.get("component_ref") or ""): item for item in configuration
+    }
+    settings_editors: list[dict[str, Any]] = []
+    credential_editors: list[dict[str, Any]] = []
+    for component in contract.payload.get("components") or ():
+        component_ref = str(component.get("component_ref") or "")
+        current = state_by_component.get(component_ref, {})
+        settings = dict(component.get("settings") or {})
+        schema = dict(settings.get("schema") or {})
+        required = {str(item) for item in schema.get("required") or ()}
+        fields: list[dict[str, Any]] = []
+        unsupported: list[dict[str, str]] = []
+        for field_id, declaration in (schema.get("properties") or {}).items():
+            if not isinstance(declaration, Mapping):
+                unsupported.append(
+                    {"field_id": str(field_id), "reason": "invalid_schema_property"}
+                )
+                continue
+            field, reason = _setup_form_field(
+                str(field_id),
+                declaration,
+                required=str(field_id) in required,
+            )
+            if field is None:
+                unsupported.append(
+                    {"field_id": str(field_id), "reason": str(reason or "unsupported")}
+                )
+            else:
+                fields.append(field)
+        revision = int(current.get("revision") or 0)
+        settings_editors.append(
+            {
+                "id": component_ref,
+                "application_id": application_id,
+                "release_digest": release_digest,
+                "component_ref": component_ref,
+                "expected_revision": revision,
+                "fields": fields,
+                "values": deepcopy(dict(current.get("values") or {})),
+                "supported": not unsupported,
+                "unsupported_fields": unsupported,
+            }
+        )
+        presence = {
+            str(item.get("slot") or ""): bool(item.get("present"))
+            for item in current.get("credential_presence") or ()
+        }
+        for credential in component.get("credentials") or ():
+            slot = str(credential.get("slot") or "")
+            credential_editors.append(
+                {
+                    "id": f"{component_ref}#{slot}",
+                    "application_id": application_id,
+                    "release_digest": release_digest,
+                    "component_ref": component_ref,
+                    "slot": slot,
+                    "expected_revision": revision,
+                    "present": bool(presence.get(slot)),
+                    "required": bool(credential.get("required")),
+                    "fields": [
+                        {
+                            "id": "value",
+                            "type": "password",
+                            "label": str(credential.get("title") or slot),
+                            "helpText": str(credential.get("purpose") or ""),
+                            "required": bool(credential.get("required")),
+                        }
+                    ],
+                    "values": {},
+                }
+            )
+    return {"settings": settings_editors, "credentials": credential_editors}
+
+
 def get_application_setup(
     application_id: str,
     *,
@@ -1634,6 +1797,7 @@ def get_application_setup(
             "contract": None,
             "state": None,
             "configuration": [],
+            "editors": {"settings": [], "credentials": []},
         }
     configuration, values, credential_presence = _setup_configuration_rows(
         application_id,
@@ -1719,6 +1883,12 @@ def get_application_setup(
         "contract": contract.to_dict(),
         "state": state,
         "configuration": configuration,
+        "editors": _setup_form_editors(
+            application_id,
+            str(release.release_digest or ""),
+            contract,
+            configuration,
+        ),
     }
 
 

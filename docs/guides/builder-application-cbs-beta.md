@@ -46,6 +46,40 @@ read-only preflight: `activation_performed` is always `false`. Exact package
 closure, evidence admission, planning, and activation use the existing CBS
 services after semantic viability succeeds.
 
+### Release-driven setup editors
+
+`applications.setup.show` projects the safe, supported subset of each
+release-owned JSON Schema into `setup.editors.settings` and
+`setup.editors.credentials`. The projection is data, not executable UI: the
+Application-owned WebUI contract still owns the read and mutation actions.
+
+A dynamic `ui.form` binds those rows with:
+
+```json
+{
+  "selectedStateKey": "selectedSetupComponentRef",
+  "recordsPath": "setup.editors.settings",
+  "fieldsPath": "fields",
+  "valuesPath": "values"
+}
+```
+
+The client keeps the selected editor row as `$event.record` and sends the
+edited draft as `$event.values`. Package-owned actions pass
+`application_id`, `release_digest`, `component_ref`, and
+`expected_revision` from the immutable record to
+`applications.setup.configure`; credential actions additionally pass `slot`
+to `applications.setup.credential`. This preserves compare-and-swap behavior
+without hard-coding a release's settings in the Applications package.
+
+Only scalar strings and their common formats, booleans, integers, numbers,
+string arrays, and finite enums are projected in this beta. Unsupported
+schema properties are reported in `unsupported_fields` and set
+`supported=false`; the client must not guess an editor. Credential values are
+write-only: the read projection exposes presence and revision but never a
+secret. Provider-projected fields cannot introduce their own data sources,
+file transports, or mutation targets.
+
 ## Compatibility and migration
 
 The beta keeps the pre-CBS direct Automation path operational. A legacy

@@ -76,9 +76,15 @@ class _StubSdk:
     def get_application_setup(self, *args, **kwargs):
         self.calls.append(("get_application_setup", args, kwargs))
         return {
+            "schema": "adaos.application.setup_surface.v1",
             "available": True,
             "application_id": args[0],
             "release_digest": kwargs.get("release_digest"),
+            "reason": None,
+            "contract": {},
+            "state": {},
+            "configuration": [],
+            "editors": {"settings": [], "credentials": []},
         }
 
     def update_application_configuration(self, *args, **kwargs):
@@ -535,6 +541,18 @@ def test_applications_plane_exposes_release_owned_setup_without_secret_echo(
     )
 
     assert shown["setup"]["available"] is True
+    contract = {item.id: item for item in applications_plane.contracts()}[
+        "applications.setup.show"
+    ]
+    setup_schema = contract.output_schema["properties"]["result"]["properties"]["setup"]
+    assert setup_schema["properties"]["editors"]["properties"]["settings"]["items"][
+        "properties"
+    ]["fields"]["items"]["required"] == [
+        "id",
+        "type",
+        "label",
+        "required",
+    ]
     assert configured["configuration"]["revision"] == 3
     assert credential["credential"] == {
         "slot": "api_token",

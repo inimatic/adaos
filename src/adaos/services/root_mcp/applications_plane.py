@@ -434,6 +434,116 @@ def contracts() -> list[RootMcpToolContract]:
         required=["node_id", "score", "already_active", "reasons"],
         additional_properties=False,
     )
+    dynamic_form_field = schema_object(
+        properties={
+            "id": {"type": "string", "minLength": 1},
+            "type": {
+                "enum": [
+                    "shortText",
+                    "number",
+                    "integer",
+                    "email",
+                    "url",
+                    "date",
+                    "time",
+                    "dateTime",
+                    "toggle",
+                    "dropdown",
+                    "tagInput",
+                    "password",
+                ]
+            },
+            "label": {"type": "string"},
+            "helpText": {"type": "string"},
+            "required": {"type": "boolean"},
+            "options": {"type": "array", "items": {"type": "object"}},
+        },
+        required=["id", "type", "label", "required"],
+        additional_properties=True,
+    )
+    setup_editor = schema_object(
+        properties={
+            "id": {"type": "string", "minLength": 1},
+            "application_id": {"type": "string"},
+            "release_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+            },
+            "component_ref": {"type": "string", "pattern": "^(skill|scenario):"},
+            "slot": {"type": "string"},
+            "expected_revision": {"type": "integer", "minimum": 0},
+            "present": {"type": "boolean"},
+            "required": {"type": "boolean"},
+            "fields": {
+                "type": "array",
+                "items": dynamic_form_field,
+                "maxItems": 200,
+            },
+            "values": {"type": "object"},
+            "supported": {"type": "boolean"},
+            "unsupported_fields": {
+                "type": "array",
+                "items": schema_object(
+                    properties={
+                        "field_id": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    required=["field_id", "reason"],
+                ),
+            },
+        },
+        required=[
+            "id",
+            "application_id",
+            "release_digest",
+            "component_ref",
+            "expected_revision",
+            "fields",
+            "values",
+        ],
+        additional_properties=False,
+    )
+    setup_surface = schema_object(
+        properties={
+            "schema": {"const": "adaos.application.setup_surface.v1"},
+            "application_id": {"type": "string"},
+            "release_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+            },
+            "available": {"type": "boolean"},
+            "reason": {"type": ["string", "null"]},
+            "contract": {"type": ["object", "null"]},
+            "state": {"type": ["object", "null"]},
+            "configuration": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
+            "editors": schema_object(
+                properties={
+                    "settings": {
+                        "type": "array",
+                        "items": setup_editor,
+                        "maxItems": 200,
+                    },
+                    "credentials": {
+                        "type": "array",
+                        "items": setup_editor,
+                        "maxItems": 200,
+                    },
+                },
+                required=["settings", "credentials"],
+            ),
+        },
+        required=[
+            "schema",
+            "application_id",
+            "release_digest",
+            "available",
+            "configuration",
+            "editors",
+        ],
+    )
     string_list = {
         "oneOf": [
             {
@@ -719,7 +829,12 @@ def contracts() -> list[RootMcpToolContract]:
                 },
                 required=["application_id"],
             ),
-            output_schema=response(),
+            output_schema=result_response(
+                schema_object(
+                    properties={"setup": setup_surface},
+                    required=["setup"],
+                )
+            ),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_setup_show"},
         ),
