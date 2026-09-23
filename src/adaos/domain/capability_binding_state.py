@@ -47,7 +47,12 @@ _REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$")
 _LOGICAL_ENTRYPOINT_RE = re.compile(
     r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*(?::[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)?$"
 )
-_PORTABLE_SECRET_KEYS = {"credential", "credentials", "dsn", "password", "secret", "token"}
+_PORTABLE_NON_SECRET_TOKEN_KEYS = {
+    "continuation_token",
+    "next_page_token",
+    "page_token",
+    "pagination_token",
+}
 
 
 class CapabilityBindingStateContractError(ValueError):
@@ -174,8 +179,21 @@ def version_satisfies(version: str, version_range: str) -> bool:
 def _assert_portable(value: Any, *, path: tuple[str, ...] = ()) -> None:
     if isinstance(value, Mapping):
         for key, item in value.items():
-            lowered = str(key).lower()
-            if any(part in lowered for part in _PORTABLE_SECRET_KEYS):
+            lowered = re.sub(
+                r"(?<=[a-z0-9])(?=[A-Z])", "_", str(key)
+            ).lower()
+            normalized = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+            parts = set(normalized.split("_")) if normalized else set()
+            prohibited = bool(
+                parts.intersection(
+                    {"credential", "credentials", "dsn", "password", "secret"}
+                )
+                or (
+                    "token" in parts
+                    and normalized not in _PORTABLE_NON_SECRET_TOKEN_KEYS
+                )
+            )
+            if prohibited:
                 raise CapabilityBindingStateContractError(
                     f"portable record contains prohibited credential field: {'.'.join(path + (str(key),))}"
                 )

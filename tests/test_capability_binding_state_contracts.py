@@ -219,6 +219,39 @@ def test_contracts_reject_unknown_fields_versions_secrets_and_physical_entrypoin
             conformance_obligations=(),
         )
 
+
+def test_portable_contract_distinguishes_pagination_from_credential_tokens() -> None:
+    accepted = CapabilityContract.create(
+        capability_ref="capability:mail.messages.list",
+        version="1.0.0",
+        title="List mail messages",
+        operations=(
+            {
+                "operation_id": "list_messages",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"page_token": {"type": "string"}},
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"next_page_token": {"type": "string"}},
+                },
+                "errors": ["provider_unavailable"],
+            },
+        ),
+    )
+
+    assert accepted.capability_ref == "capability:mail.messages.list"
+    payload = accepted.to_dict()
+    payload.pop(accepted.DIGEST_FIELD)
+    payload["operations"][0]["input_schema"]["properties"]["access_token"] = {
+        "type": "string"
+    }
+    with pytest.raises(
+        CapabilityBindingStateContractError, match="prohibited credential field"
+    ):
+        CapabilityContract.from_mapping(payload)
+
     with pytest.raises(CapabilityBindingStateContractError, match="absolute path"):
         EvidenceClaim.create(
             claim_ref="evidence-claim:bad-path",
