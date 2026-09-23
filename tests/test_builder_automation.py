@@ -2808,6 +2808,74 @@ def test_initial_manifest_guard_failure_preserves_its_own_candidate(
     assert automation_module._continuation_allows_large_manifest_rewrite(checkpoint)
 
 
+def test_structured_manifest_conflict_skips_the_extra_model_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.structured-manifest-conflict"
+    run_root = service.runs_root / task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    (run_root / "output").mkdir(parents=True)
+    continuation_contract = automation_module._continuation_contract()
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {"continuation_contract": continuation_contract}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = (
+        "```adaos-development-feedback\n"
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"conflicting_contract","summary":"Required realization '
+        'conflicts with the bounded declarative rewrite restriction.",'
+        '"blocking":true,"details":"The scaffold manifest needs a large rewrite.",'
+        '"evidence_refs":[{"type":"file",'
+        '"ref":"scenarios/demo/webui.json"}]}]}\n```'
+    )
+    (run_root / "output" / "last_message.md").write_text(
+        json.dumps({"status": "blocked", "report": report, "questions": []}),
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.structured-manifest",
+                    "stage": "development_feedback",
+                    "message": "Automation blocked by reported development feedback",
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: True,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["scenarios/demo/webui.json"],
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": task_id}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["source_task_id"] == task_id
+    assert checkpoint["reason"] == "manifest_scope_requalified_after_guard"
+    assert automation_module._continuation_allows_large_manifest_rewrite(checkpoint)
+
+
 def test_manifest_candidate_survives_a_worker_boundary_compatibility_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -84,6 +84,46 @@ def test_preservable_feedback_unwraps_latest_structured_outcome(tmp_path: Path) 
     assert retained == report
 
 
+def test_manifest_scope_feedback_requires_exact_safe_manifest_evidence(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "run"
+    (run_root / "output").mkdir(parents=True)
+    report = (
+        "```adaos-development-feedback\n"
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"conflicting_contract","summary":"Required realization '
+        'conflicts with the bounded declarative rewrite restriction.",'
+        '"blocking":true,"details":"Replacing scaffold manifests requires a '
+        'large rewrite.","evidence_refs":['
+        '{"type":"file","ref":"scenarios/demo/webui.json"},'
+        '{"type":"file","ref":"skills/demo/skill.yaml"}]}]}\n'
+        "```"
+    )
+    (run_root / "output" / "last_message.md").write_text(
+        json.dumps({"status": "blocked", "report": report, "questions": []}),
+        encoding="utf-8",
+    )
+    failure = {
+        "stage": "development_feedback",
+        "message": "Automation blocked by reported development feedback",
+    }
+
+    assert (
+        worker_module.manifest_scope_blocking_feedback_message(run_root, failure)
+        == report
+    )
+
+    unsafe = report.replace(
+        "scenarios/demo/webui.json", "src/adaos/services/builder/automation.py"
+    )
+    (run_root / "output" / "last_message.md").write_text(
+        json.dumps({"status": "blocked", "report": unsafe, "questions": []}),
+        encoding="utf-8",
+    )
+    assert worker_module.manifest_scope_blocking_feedback_message(run_root, failure) is None
+
+
 def test_explicit_preserved_validation_forbids_model_fallback() -> None:
     checkpoint = {
         "mode": "validate_preserved_candidate",

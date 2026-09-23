@@ -4089,6 +4089,56 @@ def preservable_blocking_feedback_message(
     return message
 
 
+def manifest_scope_blocking_feedback_message(
+    run_root: Path, failure: Mapping[str, Any]
+) -> str | None:
+    """Recognize a narrowly scoped manifest-size guard conflict.
+
+    A model cannot waive the manifest rewrite guard merely by returning a
+    blocking report.  This helper only recognizes the structured conflict
+    shape used when a preserved Prototype-to-Automation candidate necessarily
+    replaces scaffold declarations.  The later continuation remains pinned to
+    the exact failed workspace and deterministic validation still runs.
+    """
+
+    message = preservable_blocking_feedback_message(run_root, failure)
+    if message is None:
+        return None
+    try:
+        items = parse_development_feedback(message)
+    except (ValueError, TypeError):
+        return None
+    blocking = [item for item in items if item.get("blocking")]
+    if not blocking:
+        return None
+    admitted_suffixes = ("scenario.json", "webui.json", "skill.yaml")
+    for item in blocking:
+        if str(item.get("category") or "").strip() != "conflicting_contract":
+            return None
+        explanation = " ".join(
+            str(item.get(field) or "")
+            for field in ("summary", "details", "recommendation")
+        ).casefold()
+        if "rewrite" not in explanation or not any(
+            marker in explanation
+            for marker in ("manifest", "declarative", "scaffold", "inline ui")
+        ):
+            return None
+        evidence = item.get("evidence_refs") or []
+        file_refs = [
+            str(ref.get("ref") or "").replace("\\", "/").strip()
+            for ref in evidence
+            if isinstance(ref, Mapping)
+            and str(ref.get("type") or "").strip() == "file"
+        ]
+        if not file_refs or any(
+            not ref.endswith(admitted_suffixes) or ref.startswith("/") or ".." in ref.split("/")
+            for ref in file_refs
+        ):
+            return None
+    return message
+
+
 class LocalSkillFactoryWorker:
     """One-task local Skill Factory worker used by Prompt IDE automation."""
 
@@ -6428,7 +6478,13 @@ class LocalSkillFactoryWorker:
         )
         manifest_scope_requalified = (
             continuation_reason == "manifest_scope_requalified_after_guard"
-            and "large declarative manifest rewrite is not admitted" in failure_message
+            and (
+                "large declarative manifest rewrite is not admitted" in failure_message
+                or manifest_scope_blocking_feedback_message(
+                    self.runs_root / _safe_token(source_task_id), failure
+                )
+                is not None
+            )
         )
         feedback_message = (
             requalified_feedback_message(

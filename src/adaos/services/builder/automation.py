@@ -48,6 +48,7 @@ from adaos.services.skill_factory_sources import (
 from adaos.services.skill_factory_worker import (
     LocalSkillFactoryWorker,
     context_packet_prompt_projection,
+    manifest_scope_blocking_feedback_message,
     preservable_blocking_feedback_message,
     requalified_feedback_message,
 )
@@ -3928,7 +3929,10 @@ class BuilderAutomationService:
         )
 
         run_root = Path(self.runs_root) / _safe_token(selected_task_id)
-        blocking_feedback = preservable_blocking_feedback_message(
+        manifest_scope_feedback = manifest_scope_blocking_feedback_message(
+            run_root, source_failure
+        )
+        blocking_feedback = manifest_scope_feedback or preservable_blocking_feedback_message(
             run_root, source_failure
         )
         record(
@@ -4230,7 +4234,11 @@ class BuilderAutomationService:
                 "source_task_id": selected_task_id,
                 "failure_id": failure_id,
                 "trigger_failure_id": None,
-                "reason": "blocking_development_feedback",
+                "reason": (
+                    "manifest_scope_requalified_after_guard"
+                    if manifest_scope_feedback
+                    else "blocking_development_feedback"
+                ),
                 "source_changed_paths": changed_paths,
                 "source_continuation_contract": source_contract,
                 "candidate_digest": candidate_digest,
@@ -4239,6 +4247,8 @@ class BuilderAutomationService:
                 "continuation_contract": current_contract,
                 "created_at": _now_iso(),
             }
+            if manifest_scope_feedback:
+                checkpoint["allow_large_manifest_rewrite"] = True
         return {
             "schema": "adaos.builder.preserved_candidate_preflight.v1",
             "eligible": not blockers,
@@ -5223,6 +5233,10 @@ class BuilderAutomationService:
                 Path(self.runs_root) / _safe_token(task_id), failure
             ):
                 retry_reason = "development_feedback_requalified"
+            elif manifest_scope_blocking_feedback_message(
+                Path(self.runs_root) / _safe_token(task_id), failure
+            ):
+                retry_reason = "manifest_scope_requalified_after_guard"
             elif preservable_blocking_feedback_message(
                 Path(self.runs_root) / _safe_token(task_id), failure
             ):
