@@ -15,14 +15,21 @@ import yaml
 from packaging.version import InvalidVersion, Version
 
 from adaos.domain.artifact_release import canonical_payload_digest
+from adaos.domain.capability_binding_state import (
+    BindingDefinition,
+    BindingDelivery,
+    CapabilityContract,
+    EvidenceClaim,
+    StateContract,
+)
 
 
 _PORTABLE_SCHEMAS = {
-    "adaos.capability.contract.v1": "capability_contract",
-    "adaos.state.contract.v1": "state_contract",
-    "adaos.binding.definition.v1": "binding_definition",
-    "adaos.binding.delivery.v1": "binding_delivery",
-    "adaos.evidence.claim.v1": "evidence_claim",
+    "adaos.capability.contract.v1": ("capability_contract", CapabilityContract),
+    "adaos.state.contract.v1": ("state_contract", StateContract),
+    "adaos.binding.definition.v1": ("binding_definition", BindingDefinition),
+    "adaos.binding.delivery.v1": ("binding_delivery", BindingDelivery),
+    "adaos.evidence.claim.v1": ("evidence_claim", EvidenceClaim),
 }
 _HANDOFF_MARKERS = (
     "prototype_acceptance",
@@ -62,8 +69,13 @@ def discover_dev_skills_root(dev_root: Path | None) -> Path | None:
     return candidates[0] if len(candidates) == 1 else None
 
 
-def _portable_artifacts(root: Path) -> dict[str, list[str]]:
-    found: dict[str, list[str]] = {kind: [] for kind in _PORTABLE_SCHEMAS.values()}
+def _portable_artifacts(
+    root: Path,
+) -> tuple[dict[str, list[str]], list[dict[str, str]]]:
+    found: dict[str, list[str]] = {
+        kind: [] for kind, _record_type in _PORTABLE_SCHEMAS.values()
+    }
+    invalid: list[dict[str, str]] = []
     for path in sorted(root.rglob("*.json")):
         relative = path.relative_to(root)
         if any(part.startswith(".") or part in {"tests", "__pycache__"} for part in relative.parts):
@@ -81,10 +93,29 @@ def _portable_artifacts(root: Path) -> dict[str, list[str]]:
         for item in values:
             if not isinstance(item, Mapping):
                 continue
-            kind = _PORTABLE_SCHEMAS.get(str(item.get("schema") or ""))
-            if kind and relative.as_posix() not in found[kind]:
-                found[kind].append(relative.as_posix())
-    return {key: value for key, value in found.items() if value}
+            schema = str(item.get("schema") or "")
+            descriptor = _PORTABLE_SCHEMAS.get(schema)
+            if descriptor is None:
+                continue
+            kind, record_type = descriptor
+            relative_path = relative.as_posix()
+            try:
+                record_type.from_mapping(item)
+            except (TypeError, ValueError) as exc:
+                invalid.append(
+                    {
+                        "path": relative_path,
+                        "schema": schema,
+                        "error": str(exc)[:500],
+                    }
+                )
+                continue
+            if relative_path not in found[kind]:
+                found[kind].append(relative_path)
+    return (
+        {key: value for key, value in found.items() if value},
+        sorted(invalid, key=lambda item: (item["path"], item["schema"], item["error"])),
+    )
 
 
 def _handoff_markers(root: Path, manifest: Mapping[str, Any]) -> list[str]:
@@ -174,7 +205,7 @@ def inventory_installed_skills(
         ) if isinstance(requested, list) else []
         permissions = manifest.get("permissions")
         permissions_count = len(permissions) if isinstance(permissions, (list, Mapping)) else 0
-        artifacts = _portable_artifacts(root)
+        artifacts, invalid_artifacts = _portable_artifacts(root)
         handoff_markers = _handoff_markers(root, manifest)
         state_signals = sorted(
             key
@@ -211,6 +242,11 @@ def inventory_installed_skills(
                 "state_signals": state_signals,
                 "builder_handoff_markers": handoff_markers,
                 "portable_artifacts": artifacts,
+                **(
+                    {"invalid_portable_artifacts": invalid_artifacts}
+                    if invalid_artifacts
+                    else {}
+                ),
                 "migration_class": migration_class,
                 "migration_priority": priority,
                 "migration_action": migration_action,
@@ -227,8 +263,8 @@ def inventory_installed_skills(
         "semantics": {
             "legacy_capabilities_field": "requested_runtime_capabilities",
             "portable_provider_requires": [
-                "adaos.capability.contract.v1",
-                "adaos.binding.definition.v1",
+                "valid adaos.capability.contract.v1",
+                "valid adaos.binding.definition.v1",
             ],
         },
         "summary": {

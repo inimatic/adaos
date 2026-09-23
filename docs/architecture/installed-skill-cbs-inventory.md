@@ -35,6 +35,11 @@ skill. A native provider must ship, at minimum, an explicit
 providers additionally need explicit state contracts and installation-local
 state-space binding.
 
+Discovery validates the complete closed canonical record, including its
+content digest and semantic constraints. A JSON file that merely names a CBS
+schema is reported under `invalid_portable_artifacts` and cannot make a skill
+appear native. Inventory classification is evidence, not a filename heuristic.
+
 This distinction lets existing manifests continue to run while adoption is
 incremental, but source-level reverse compatibility is not a beta requirement
 for maintained Applications. Flowboard, Applications, and AdaOS Drive may be
