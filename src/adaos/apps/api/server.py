@@ -2471,7 +2471,8 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
     # owner. Keep that subject identity through the Root MCP bridge so the
     # access plane can apply and audit its owner policy.
     actor = f"user:{current_user_id(get_ctx())}"
-    response = invoke_root_mcp_tool(
+    response = await asyncio.to_thread(
+        invoke_root_mcp_tool,
         tool_id,
         arguments=dict(body.arguments or {}),
         request_id=body.request_id,

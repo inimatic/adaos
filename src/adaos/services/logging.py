@@ -7,7 +7,7 @@ from pathlib import Path
 import queue
 import threading
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 from datetime import datetime, timezone
 
 from adaos.domain import Event
@@ -20,6 +20,18 @@ _ACTIVE_QUEUE_LOCK = threading.RLock()
 _ORIGINAL_LOGGER_ADD_HANDLER = logging.Logger.addHandler
 _DIRECT_HANDLER_REDIRECT_TOTAL = 0
 _RECENT_DIRECT_HANDLER_REDIRECTS: list[dict[str, object]] = []
+_JSON_APPEND_LOCKS_GUARD = threading.RLock()
+_JSON_APPEND_LOCKS: dict[str, threading.RLock] = {}
+
+_DEFAULT_TRANSPORT_HIDE_LEVELS: dict[str, int] = {
+    "aiortc": logging.WARNING,
+    "aioice": logging.WARNING,
+    "uvicorn.error": logging.INFO,
+    "websockets.client": logging.INFO,
+    "httpcore": logging.INFO,
+    "urllib3.connectionpool": logging.INFO,
+    "ypy_websocket.websocket_server": logging.INFO,
+}
 
 
 def _json_formatter(record: logging.LogRecord) -> str:
@@ -385,10 +397,13 @@ def _parse_hide_rules() -> list[tuple[str, int]]:
         s = str(raw).strip()
     except Exception:
         s = ""
-    if not s:
-        return []
     default_level = _parse_log_level(os.getenv("ADAOS_LOG_HIDE_LEVEL", "WARNING"), default=logging.WARNING)
-    rules: list[tuple[str, int]] = []
+    transport_debug = str(
+        os.getenv("ADAOS_LOG_TRANSPORT_DEBUG") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    rules_by_prefix = (
+        {} if transport_debug else dict(_DEFAULT_TRANSPORT_HIDE_LEVELS)
+    )
     for token in s.split(","):
         try:
             item = str(token).strip()
@@ -406,8 +421,78 @@ def _parse_hide_rules() -> list[tuple[str, int]]:
             min_level = default_level
         if not prefix:
             continue
-        rules.append((prefix, int(min_level)))
-    return rules
+        rules_by_prefix[prefix] = int(min_level)
+    return list(rules_by_prefix.items())
+
+
+def _json_append_lock(path: Path) -> threading.RLock:
+    token = str(path.resolve())
+    with _JSON_APPEND_LOCKS_GUARD:
+        return _JSON_APPEND_LOCKS.setdefault(token, threading.RLock())
+
+
+def _ui_runtime_log_limits() -> tuple[int, int]:
+    try:
+        max_bytes = int(
+            str(os.getenv("ADAOS_UI_RUNTIME_LOG_MAX_BYTES") or "10000000").strip()
+        )
+    except Exception:
+        max_bytes = 10_000_000
+    try:
+        backup_count = int(
+            str(os.getenv("ADAOS_UI_RUNTIME_LOG_BACKUP_COUNT") or "5").strip()
+        )
+    except Exception:
+        backup_count = 5
+    return max(64 * 1024, max_bytes), max(1, min(backup_count, 20))
+
+
+def append_rotating_json_lines(
+    path: Path,
+    records: Iterable[Mapping[str, Any]],
+    *,
+    max_bytes: int | None = None,
+    backup_count: int | None = None,
+) -> None:
+    """Append JSONL records with bounded, process-local Windows-safe rotation."""
+
+    lines = [
+        json.dumps(dict(record), ensure_ascii=False, sort_keys=True) + "\n"
+        for record in records
+    ]
+    if not lines:
+        return
+    encoded_bytes = sum(len(line.encode("utf-8")) for line in lines)
+    default_max, default_backups = _ui_runtime_log_limits()
+    resolved_max = max(1, int(max_bytes or default_max))
+    resolved_backups = max(1, int(backup_count or default_backups))
+    target = Path(path)
+    with _json_append_lock(target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            current_bytes = target.stat().st_size if target.exists() else 0
+        except OSError:
+            current_bytes = 0
+        if current_bytes and current_bytes + encoded_bytes > resolved_max:
+            try:
+                oldest = target.with_name(f"{target.name}.{resolved_backups}")
+                if oldest.exists():
+                    oldest.unlink()
+                for index in range(resolved_backups - 1, 0, -1):
+                    source = target.with_name(f"{target.name}.{index}")
+                    if source.exists():
+                        os.replace(
+                            source,
+                            target.with_name(f"{target.name}.{index + 1}"),
+                        )
+                os.replace(target, target.with_name(f"{target.name}.1"))
+            except OSError:
+                # A diagnostic reader may briefly hold the file on Windows.
+                # Preserve the incoming record and retry rotation on the next
+                # append instead of making diagnostics ingestion fail.
+                pass
+        with target.open("a", encoding="utf-8") as handle:
+            handle.writelines(lines)
 
 
 class PrefixMinLevelFilter(logging.Filter):
@@ -869,8 +954,11 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
         rules = _parse_hide_rules()
         if rules:
             flt = PrefixMinLevelFilter(rules)
+            queue_handler.addFilter(flt)
             for handler in output_handlers:
                 handler.addFilter(flt)
+            for prefix, minimum_level in rules:
+                logging.getLogger(prefix).setLevel(minimum_level)
     except Exception:
         pass
     # logger.info("logging.initialized", extra={"extra": {"logfile": str(logfile)}})

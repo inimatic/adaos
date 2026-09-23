@@ -45,6 +45,78 @@ def test_existing_preview_target_does_not_create_or_repair_topology(tmp_path):
     assert path.stat().st_mtime_ns == before
 
 
+def test_existing_preview_target_resolves_follow_active_automation_revision(tmp_path):
+    relations = SimpleNamespace(
+        get_incoming=lambda token: SimpleNamespace(source_webspace_id="desktop")
+        if token == "desktop-dev"
+        else None,
+    )
+    service = BuilderWorkbenchService(state_dir=tmp_path, relationship_registry=relations)
+    binding_path = service.binding_path("desktop")
+    binding_path.parent.mkdir(parents=True)
+    binding = {
+        "preview_webspace_id": "desktop-dev",
+        "preview_target": {
+            "stage": "automation",
+            "scenario_id": "applications",
+            "revision": "task.old",
+            "follow_active": True,
+        },
+    }
+    binding_path.write_text(json.dumps(binding), encoding="utf-8")
+    snapshot_path = (
+        tmp_path
+        / "builder"
+        / "workflow_snapshots"
+        / "scenario"
+        / "applications"
+        / "automation"
+        / "snapshot.json"
+    )
+    snapshot_path.parent.mkdir(parents=True)
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "object_type": "scenario",
+                "object_id": "applications",
+                "task_id": "task.current",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    target = service.existing_preview_target("desktop-dev")
+
+    assert target is not None
+    assert target["revision"] == "task.current"
+    assert target["resolved_follow_active"] is True
+    assert target["label"] == "active: applications @ task.current"
+    assert json.loads(binding_path.read_text(encoding="utf-8")) == binding
+
+
+def test_existing_preview_target_keeps_exact_automation_pin(tmp_path):
+    relations = SimpleNamespace(
+        get_incoming=lambda token: SimpleNamespace(source_webspace_id="desktop")
+        if token == "desktop-dev"
+        else None,
+    )
+    service = BuilderWorkbenchService(state_dir=tmp_path, relationship_registry=relations)
+    binding_path = service.binding_path("desktop")
+    binding_path.parent.mkdir(parents=True)
+    binding = {
+        "preview_webspace_id": "desktop-dev",
+        "preview_target": {
+            "stage": "automation",
+            "scenario_id": "applications",
+            "revision": "task.pinned",
+            "follow_active": False,
+        },
+    }
+    binding_path.write_text(json.dumps(binding), encoding="utf-8")
+
+    assert service.existing_preview_target("desktop-dev") == binding["preview_target"]
+
+
 def test_preview_lookup_is_named_without_allocating_topology() -> None:
     assert safe_source_webspace_id("desktop") == "desktop"
     assert safe_source_webspace_id("Prompt IDE / Lab") == "Prompt-IDE-Lab"

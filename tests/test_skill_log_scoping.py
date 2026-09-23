@@ -11,10 +11,49 @@ import pytest
 from adaos.adapters.fs.path_provider import PathProvider
 from adaos.adapters.sdk.inproc_skill_context import InprocSkillContext
 from adaos.services.agent_context import clear_ctx, set_ctx
-from adaos.services.logging import configure_skill_module_logging, logging_queue_snapshot, setup_logging
+from adaos.services.logging import (
+    _parse_hide_rules,
+    append_rotating_json_lines,
+    configure_skill_module_logging,
+    logging_queue_snapshot,
+    setup_logging,
+)
 from adaos.services.root_mcp.logs import list_local_logs
 from adaos.services.ui_runtime_diagnostics import ingest_ui_runtime_diagnostics
 import adaos.services.ui_runtime_diagnostics as ui_runtime_diagnostics
+
+
+def test_ui_runtime_json_lines_are_rotated_and_bounded(tmp_path: Path) -> None:
+    path = tmp_path / "ui-runtime.jsonl"
+    path.write_text("x" * 128, encoding="utf-8")
+
+    append_rotating_json_lines(
+        path,
+        [{"code": "runtime.warning", "message": "bounded"}],
+        max_bytes=64,
+        backup_count=2,
+    )
+
+    assert path.with_name("ui-runtime.jsonl.1").read_text(encoding="utf-8") == "x" * 128
+    assert json.loads(path.read_text(encoding="utf-8"))["message"] == "bounded"
+
+
+def test_transport_debug_noise_is_suppressed_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_LOG_HIDE", raising=False)
+    monkeypatch.delenv("ADAOS_LOG_TRANSPORT_DEBUG", raising=False)
+
+    rules = dict(_parse_hide_rules())
+
+    assert rules["aiortc"] == logging.WARNING
+    assert rules["aioice"] == logging.WARNING
+    assert rules["httpcore"] == logging.INFO
+
+
+def test_transport_debug_noise_can_be_explicitly_enabled(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_LOG_HIDE", raising=False)
+    monkeypatch.setenv("ADAOS_LOG_TRANSPORT_DEBUG", "1")
+
+    assert _parse_hide_rules() == []
 
 
 def test_local_log_content_search_is_bounded_paginated_and_cursor_scoped(

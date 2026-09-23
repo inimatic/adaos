@@ -1191,7 +1191,39 @@ class BuilderWorkbenchService:
         if str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or "") != webspace_id:
             return None
         target = binding.get("preview_target")
-        return dict(target) if isinstance(target, Mapping) else None
+        if not isinstance(target, Mapping):
+            return None
+        effective = dict(target)
+        if not bool(effective.get("follow_active")):
+            return effective
+        if str(effective.get("stage") or "").strip().lower() != "automation":
+            return effective
+        scenario_id = str(
+            effective.get("scenario_id") or effective.get("object_id") or ""
+        ).strip()
+        if not scenario_id:
+            return effective
+        metadata = _read_json(
+            Path(self.state_dir or current_state_dir())
+            / "builder"
+            / "workflow_snapshots"
+            / "scenario"
+            / _safe_path_token(scenario_id)
+            / "automation"
+            / "snapshot.json"
+        )
+        retained_revision = str(metadata.get("task_id") or "").strip()
+        if (
+            metadata.get("object_type") != "scenario"
+            or str(metadata.get("object_id") or "").strip() != scenario_id
+            or not retained_revision
+        ):
+            return effective
+        if str(effective.get("revision") or "").strip() != retained_revision:
+            effective["revision"] = retained_revision
+            effective["label"] = f"active: {scenario_id} @ {retained_revision}"
+            effective["resolved_follow_active"] = True
+        return effective
 
     def get_workspace_binding(self, source_webspace_id: str | None = None) -> dict[str, Any]:
         source_id = self.resolve_source_webspace_id(source_webspace_id)
@@ -2306,8 +2338,18 @@ class BuilderWorkbenchService:
         }
 
     async def publish_projection(self, source_webspace_id: str | None = None, *, preview_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        source_id = self.resolve_source_webspace_id(source_webspace_id)
-        snapshot = self.runtime_projection(source_id, preview_state=preview_state)
+        source_id = await asyncio.to_thread(
+            self.resolve_source_webspace_id,
+            source_webspace_id,
+        )
+        # Context inspection walks retained plans, receipts, feedback and
+        # Builder state.  It is intentionally synchronous for CLI callers but
+        # must never monopolize the API/Yjs owner loop.
+        snapshot = await asyncio.to_thread(
+            self.runtime_projection,
+            source_id,
+            preview_state=preview_state,
+        )
         published: list[str] = []
         try:
             from adaos.services.yjs.doc import async_get_ydoc
@@ -2399,7 +2441,8 @@ async def _on_builder_context_selected(evt: Any) -> None:
     if not source_webspace_id or not object_type or not object_id:
         return
     service = BuilderWorkbenchService()
-    service.set_selected_project(
+    await asyncio.to_thread(
+        service.set_selected_project,
         source_webspace_id=source_webspace_id,
         object_type=object_type,
         object_id=object_id,
@@ -2505,7 +2548,7 @@ async def _on_builder_preview_observed(evt: Any) -> None:
     if not source_webspace_id or not operation_id:
         return
     service = BuilderWorkbenchService()
-    current = service.reconciler.describe(source_webspace_id)
+    current = await asyncio.to_thread(service.reconciler.describe, source_webspace_id)
     if (
         str(current.get("operation_id") or "").strip() != operation_id
         or str(current.get("status") or "").strip() != "ready"
@@ -2521,7 +2564,7 @@ async def _on_builder_preview_transitioned(evt: Any) -> None:
     if not source_webspace_id:
         return
     service = BuilderWorkbenchService()
-    current = service.reconciler.describe(source_webspace_id)
+    current = await asyncio.to_thread(service.reconciler.describe, source_webspace_id)
     if int(current.get("generation") or 0) != int(payload.get("generation") or 0):
         return
     _schedule_projection_publish(service, source_webspace_id)
@@ -2542,10 +2585,14 @@ async def _on_builder_preview_webspace_reloaded(evt: Any) -> None:
     if not preview_webspace_id or not observed_scenario:
         return
     service = BuilderWorkbenchService()
-    incoming = service.relationships.get_incoming(preview_webspace_id)
+    incoming = await asyncio.to_thread(
+        service.relationships.get_incoming,
+        preview_webspace_id,
+    )
     if incoming is None or incoming.purpose != BUILDER_PROJECT_PREVIEW:
         return
-    service.reconciler.observe(
+    await asyncio.to_thread(
+        service.reconciler.observe,
         source_webspace_id=incoming.source_webspace_id,
         preview_webspace_id=preview_webspace_id,
         observed_scenario=observed_scenario,

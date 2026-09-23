@@ -1299,10 +1299,10 @@ def _find_param_tokens(value: Any) -> set[str]:
 
 
 def _append_skill_ui_record(skill_id: str, record: Mapping[str, Any]) -> None:
+    from adaos.services.logging import append_rotating_json_lines
+
     path = _skill_ui_log_path(skill_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(dict(record), ensure_ascii=False, sort_keys=True) + "\n")
+    append_rotating_json_lines(path, [record])
 
 
 def _skill_ui_log_path(skill_id: str) -> Path:

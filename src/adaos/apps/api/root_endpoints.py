@@ -3246,7 +3246,8 @@ async def root_mcp_call(
 ) -> dict[str, Any]:
     auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
     scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
-    response = invoke_tool(
+    response = await asyncio.to_thread(
+        invoke_tool,
         payload.tool_id,
         arguments=payload.arguments,
         request_id=payload.request_id,

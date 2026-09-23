@@ -322,6 +322,12 @@ def _hub_route_node_status_supervisor_runtime(ctx: AgentContext) -> dict[str, An
         "yes",
         "on",
     }
+    launch_mode = str(os.getenv("ADAOS_RUNTIME_LAUNCH_MODE") or "").strip().lower()
+    stale_runtime_ignored = bool(
+        runtime_state and launch_mode == "api_serve" and not supervisor_enabled
+    )
+    if stale_runtime_ignored:
+        runtime_state = {}
     runtime_url = str(runtime_state.get("runtime_url") or "").strip()
     supervisor_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
     if not supervisor_url and supervisor_enabled:
@@ -329,6 +335,7 @@ def _hub_route_node_status_supervisor_runtime(ctx: AgentContext) -> dict[str, An
     return {
         "available": bool(supervisor_enabled or runtime_state),
         "enabled": bool(supervisor_enabled),
+        "stale_runtime_ignored": stale_runtime_ignored,
         "status": update_status if isinstance(update_status, dict) else {},
         "attempt": update_attempt if isinstance(update_attempt, dict) else {},
         "runtime": runtime_state if isinstance(runtime_state, dict) else {},

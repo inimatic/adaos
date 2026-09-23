@@ -351,14 +351,13 @@ def _origin_skill_from_modal(modal: Mapping[str, Any]) -> str | None:
 
 
 def _append_records(records: list[tuple[str, dict[str, Any]]]) -> None:
+    from adaos.services.logging import append_rotating_json_lines
+
     grouped: dict[Path, list[dict[str, Any]]] = {}
     for skill_id, record in records:
         grouped.setdefault(_log_path_for_skill(skill_id), []).append(record)
     for path, items in grouped.items():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            for item in items:
-                handle.write(json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n")
+        append_rotating_json_lines(path, items)
 
 
 def _log_path_for_skill(skill_id: str) -> Path:

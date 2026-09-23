@@ -93,6 +93,26 @@ def test_current_node_object_does_not_enter_diagnostic_io(monkeypatch) -> None:
     assert node.status == "online"
 
 
+def test_dev_api_serve_ignores_stale_supervisor_runtime(tmp_path, monkeypatch) -> None:
+    runtime_path = tmp_path / "state" / "supervisor" / "runtime.json"
+    runtime_path.parent.mkdir(parents=True)
+    runtime_path.write_text(
+        json.dumps({"runtime_url": "http://127.0.0.1:8778", "pid": 23964}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ADAOS_RUNTIME_LAUNCH_MODE", "api_serve")
+    monkeypatch.delenv("ADAOS_SUPERVISOR_ENABLED", raising=False)
+    monkeypatch.setattr(system_model_service, "read_core_update_status", lambda: {})
+
+    payload = system_model_service._node_status_supervisor_runtime(tmp_path)
+
+    assert payload["available"] is False
+    assert payload["enabled"] is False
+    assert payload["stale_runtime_ignored"] is True
+    assert payload["runtime"] == {}
+    assert payload["runtime_url"] is None
+
+
 def test_ping_exposes_runtime_identity_for_candidate(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-12345678")
@@ -877,6 +897,38 @@ def test_admin_root_mcp_call_allows_live_nlu_probe(monkeypatch) -> None:
     assert calls[0]["actor"] == "user:local-owner"
     assert calls[0]["auth_method"] == "root_token"
     assert calls[0]["scope"]["target_id"] == "hub:sn-test"
+
+
+def test_admin_root_mcp_call_runs_tool_off_event_loop(monkeypatch) -> None:
+    main_thread_id = threading.get_ident()
+    invoked_on: list[int] = []
+
+    class _Resp:
+        ok = True
+
+        def to_dict(self) -> dict[str, object]:
+            return {"ok": True, "status": "ok", "result": {"items": []}}
+
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(config=types.SimpleNamespace(subnet_id="sn-test")),
+    )
+
+    def _invoke(_tool_id, **_kwargs):
+        invoked_on.append(threading.get_ident())
+        return _Resp()
+
+    monkeypatch.setattr(api_server, "invoke_root_mcp_tool", _invoke)
+
+    payload = asyncio.run(
+        api_server.admin_root_mcp_call(
+            api_server.AdminRootMcpCallRequest(tool_id="applications.list", arguments={})
+        )
+    )
+
+    assert payload["ok"] is True
+    assert invoked_on and invoked_on[0] != main_thread_id
 
 
 @pytest.mark.parametrize(
