@@ -164,6 +164,45 @@ def test_application_registry_is_content_addressed_and_optimistic(tmp_path) -> N
     assert len(service.history("scenario:applications")) == 2
 
 
+def test_application_cbs_lifecycle_projection_is_explicitly_non_authoritative(
+    tmp_path,
+) -> None:
+    service = ApplicationCBSService(tmp_path)
+    compilation = service.compile_and_register(
+        application_ref="scenario:applications",
+        acceptance=_acceptance(),
+    )
+
+    projection = service.lifecycle_projection(
+        "scenario:applications",
+        runtime_selection={
+            "source": "local_trial",
+            "release_digest": DIGEST_A,
+            "revision": 4,
+        },
+        local_development={
+            "trial": {"evidence_present": True},
+            "publication": {"evidence_present": False},
+        },
+    )
+
+    assert projection["authoritative"] is False
+    assert projection["authority"] == "derived_read_only"
+    assert projection["compilation_digest"] == compilation["compilation_digest"]
+    assert [item["id"] for item in projection["stages"]] == [
+        "requirement",
+        "resolution",
+        "plan",
+        "activation",
+        "lock",
+    ]
+    assert projection["requirement"]["status"] == "compiled"
+    assert projection["resolution"]["status"] == "unresolved"
+    assert projection["plan"]["status"] == "not_created"
+    assert projection["activation"]["status"] == "trial_active"
+    assert projection["lock"]["status"] == "unchanged"
+
+
 def test_application_api_compiles_and_assesses_without_activation(tmp_path) -> None:
     app = FastAPI()
     app.include_router(application_cbs.router, prefix="/api")

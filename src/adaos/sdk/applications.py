@@ -1367,11 +1367,53 @@ def get_application(
         application_id=token,
     ):
         if item["application"]["application_id"] == token:
-            return _enrich_application_models(
+            model = _enrich_application_models(
                 [item],
                 development=_local_development_index(),
                 webspace_id=webspace_id,
             )[0]
+            local = (
+                dict(model.get("local_development"))
+                if isinstance(model.get("local_development"), Mapping)
+                else {}
+            )
+            builder = (
+                dict(local.get("builder"))
+                if isinstance(local.get("builder"), Mapping)
+                else {}
+            )
+            object_type = str(builder.get("selected_object_type") or "").strip()
+            object_id = str(builder.get("selected_object_id") or "").strip()
+            application_ref = (
+                f"{object_type}:{object_id}"
+                if object_type in {"scenario", "skill"} and object_id
+                else f"application:{token}"
+            )
+            from adaos.sdk.core.errors import SdkRuntimeNotInitialized
+
+            try:
+                state_dir = _state_dir()
+                try:
+                    selection = _service().store.get_runtime_selection(
+                        str(webspace_id or "desktop"), token
+                    )
+                    selection_value = selection.to_dict()
+                except FileNotFoundError:
+                    selection_value = None
+                from adaos.services.applications.cbs import ApplicationCBSService
+
+                model["cbs_lifecycle"] = ApplicationCBSService(
+                    state_dir
+                ).lifecycle_projection(
+                    application_ref,
+                    runtime_selection=selection_value,
+                    local_development=local,
+                )
+            except SdkRuntimeNotInitialized:
+                # Lightweight SDK contract tests may deliberately replace the
+                # Application store without bootstrapping an AgentContext.
+                pass
+            return model
     raise FileNotFoundError(f"Application not found: {token}")
 
 

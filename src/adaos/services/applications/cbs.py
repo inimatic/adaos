@@ -202,6 +202,134 @@ class ApplicationCBSService:
             "activation_performed": False,
         }
 
+    def lifecycle_projection(
+        self,
+        application_ref: str,
+        *,
+        runtime_selection: Mapping[str, Any] | None = None,
+        local_development: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build the compact read-only CBS lifecycle shown by Applications.
+
+        Missing resolution and plan records remain explicit. An Application
+        Trial is an operational observation, not implicit CBS admission, and
+        this projection never becomes a second activation authority.
+        """
+
+        compilation = self.inspect(application_ref)
+        selection = dict(runtime_selection or {})
+        development = dict(local_development or {})
+        trial = (
+            dict(development.get("trial"))
+            if isinstance(development.get("trial"), Mapping)
+            else {}
+        )
+        publication = (
+            dict(development.get("publication"))
+            if isinstance(development.get("publication"), Mapping)
+            else {}
+        )
+        if compilation is None:
+            requirement = {
+                "status": "not_compiled",
+                "summary": "No CBS semantic compilation is registered.",
+                "count": 0,
+            }
+            resolution_status = "not_started"
+            semantic_revision_digest = None
+            compilation_digest = None
+        else:
+            requirements = list(compilation.get("requirements") or [])
+            requirement = {
+                "status": "compiled",
+                "summary": f"{len(requirements)} semantic requirements compiled",
+                "count": len(requirements),
+            }
+            viability = (
+                dict(compilation.get("viability"))
+                if isinstance(compilation.get("viability"), Mapping)
+                else {}
+            )
+            resolution_status = str(viability.get("production") or "unresolved")
+            semantic_revision_digest = compilation.get("semantic_revision_digest")
+            compilation_digest = compilation.get("compilation_digest")
+
+        resolution_admitted = resolution_status in {"accepted", "admitted", "resolved"}
+        resolution = {
+            "status": "admitted" if resolution_admitted else resolution_status,
+            "summary": (
+                "Exact production resolution admitted"
+                if resolution_admitted
+                else "Production resolution is not admitted"
+            ),
+        }
+        plan = {
+            "status": "not_created" if not resolution_admitted else "not_observed",
+            "summary": (
+                "ResolutionPlan awaits an admitted production resolution"
+                if not resolution_admitted
+                else "No exact ResolutionPlan is attached to this projection"
+            ),
+        }
+
+        source = str(selection.get("source") or "")
+        if source == "local_trial":
+            activation_status = "trial_active"
+            activation_summary = "An isolated beta Trial is selected"
+        elif source == "stable_installation":
+            activation_status = "active"
+            activation_summary = "The Workspace runtime is selected"
+        elif trial.get("evidence_present"):
+            activation_status = "trial_observed"
+            activation_summary = "Trial evidence exists; no current selection was observed"
+        else:
+            activation_status = "inactive"
+            activation_summary = "No Trial or Workspace runtime selection is active"
+        activation = {
+            "status": activation_status,
+            "summary": activation_summary,
+            "source": source or None,
+            "release_digest": selection.get("release_digest"),
+            "revision": selection.get("revision"),
+        }
+
+        workspace_committed = (
+            bool(publication.get("evidence_present"))
+            and source == "stable_installation"
+        )
+        lock = {
+            "status": "committed" if workspace_committed else "unchanged",
+            "summary": (
+                "Workspace publication and stable selection are observed"
+                if workspace_committed
+                else "Workspace authority remains unchanged by this view"
+            ),
+        }
+        return {
+            "schema": "adaos.application.cbs_lifecycle_projection.v1",
+            "application_ref": application_ref,
+            "authoritative": False,
+            "authority": "derived_read_only",
+            "authority_note": (
+                "Derived view only; ApplicationResolution, ResolutionPlan, activation journal, "
+                "and WorkspaceLock remain authoritative in their owning stores."
+            ),
+            "semantic_revision_digest": semantic_revision_digest,
+            "compilation_digest": compilation_digest,
+            "requirement": requirement,
+            "resolution": resolution,
+            "plan": plan,
+            "activation": activation,
+            "lock": lock,
+            "stages": [
+                {"id": "requirement", **requirement},
+                {"id": "resolution", **resolution},
+                {"id": "plan", **plan},
+                {"id": "activation", **activation},
+                {"id": "lock", **lock},
+            ],
+        }
+
     @staticmethod
     def _read_pointer(path: Path) -> dict[str, Any] | None:
         if not path.is_file():
