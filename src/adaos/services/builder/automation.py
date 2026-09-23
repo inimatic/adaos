@@ -4697,7 +4697,22 @@ class BuilderAutomationService:
             ):
                 retry_reason = "trusted_root_mcp_validation_retry"
             if retry_reason is None:
-                return None
+                prior_candidate = (
+                    self._latest_blocking_candidate_source(
+                        session,
+                        exclude_task_id=task_id,
+                    )
+                    if str(failure.get("stage") or "").strip()
+                    == "model_execution"
+                    else None
+                )
+                if prior_candidate is None:
+                    return None
+                source_task_id, source_failure, _ = prior_candidate
+                trigger_failure_id = (
+                    str(failure.get("failure_id") or "").strip() or None
+                )
+                retry_reason = "blocking_development_feedback"
             if retry_reason == "manifest_scope_requalified_after_guard":
                 failed_run_root = Path(self.runs_root) / _safe_token(task_id)
                 assignment_path = failed_run_root / "input" / "assignment.json"
@@ -4894,38 +4909,15 @@ class BuilderAutomationService:
         if reason == "blocking_development_feedback" and not _preserved_candidate_has_changes(
             run_root
         ):
-            for prior_task_id in reversed(
-                [
-                    str(item).strip()
-                    for item in session.get("task_history") or []
-                    if str(item).strip() and str(item).strip() != task_id
-                ]
-            ):
-                try:
-                    prior_task = self.factory.read_task(prior_task_id)
-                except (KeyError, RuntimeError):
-                    continue
-                prior_failures = [
-                    dict(item)
-                    for item in prior_task.get("failure_history") or []
-                    if isinstance(item, Mapping)
-                ]
-                prior_failure = prior_failures[-1] if prior_failures else {}
-                prior_run_root = Path(self.runs_root) / _safe_token(prior_task_id)
-                if (
-                    str(prior_task.get("status") or "").strip() == "failed"
-                    and preservable_blocking_feedback_message(
-                        prior_run_root, prior_failure
-                    )
-                    and _preserved_candidate_has_changes(prior_run_root)
-                ):
-                    source_task_id = prior_task_id
-                    source_failure = prior_failure
-                    trigger_failure_id = (
-                        str(failure.get("failure_id") or "").strip() or None
-                    )
-                    run_root = prior_run_root
-                    break
+            prior_candidate = self._latest_blocking_candidate_source(
+                session,
+                exclude_task_id=task_id,
+            )
+            if prior_candidate is not None:
+                source_task_id, source_failure, run_root = prior_candidate
+                trigger_failure_id = (
+                    str(failure.get("failure_id") or "").strip() or None
+                )
         if not (run_root / "workspace" / ".git").is_dir():
             return None
         source_assignment_path = run_root / "input" / "assignment.json"
@@ -4984,6 +4976,40 @@ class BuilderAutomationService:
             "continuation_contract": continuation_contract,
             "created_at": _now_iso(),
         }
+
+    def _latest_blocking_candidate_source(
+        self,
+        session: Mapping[str, Any],
+        *,
+        exclude_task_id: str,
+    ) -> tuple[str, dict[str, Any], Path] | None:
+        for prior_task_id in reversed(
+            [
+                str(item).strip()
+                for item in session.get("task_history") or []
+                if str(item).strip() and str(item).strip() != exclude_task_id
+            ]
+        ):
+            try:
+                prior_task = self.factory.read_task(prior_task_id)
+            except (KeyError, RuntimeError):
+                continue
+            prior_failures = [
+                dict(item)
+                for item in prior_task.get("failure_history") or []
+                if isinstance(item, Mapping)
+            ]
+            prior_failure = prior_failures[-1] if prior_failures else {}
+            prior_run_root = Path(self.runs_root) / _safe_token(prior_task_id)
+            if (
+                str(prior_task.get("status") or "").strip() == "failed"
+                and preservable_blocking_feedback_message(
+                    prior_run_root, prior_failure
+                )
+                and _preserved_candidate_has_changes(prior_run_root)
+            ):
+                return prior_task_id, prior_failure, prior_run_root
+        return None
 
     def reconcile_checkpoint(
         self, *, object_type: str, object_id: str

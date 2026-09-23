@@ -374,6 +374,9 @@ large-manifest guard may requalify that exact checkpoint once, but the allowance
 remains bound to its source task, changed paths, and continuation contracts. The
 checkpoint reader uses the latest authoritative final message, including an
 in-task validation-repair turn, rather than reviving the initial turn's outcome.
+A transient model-execution failure with no candidate may resume the newest
+guarded blocking candidate from the same session history; the transient task is
+retained as the trigger receipt and never replaces the candidate's source identity.
 historical task and its tickets remain failed/open until ordinary deterministic,
 browser, and Trial gates accept the new result.
 

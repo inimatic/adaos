@@ -3432,6 +3432,22 @@ def test_blocking_feedback_resumes_latest_edited_candidate_after_empty_retry(
         "scenarios/applications/webui.json"
     ]
 
+    tasks[empty_retry_task_id]["failure_history"][-1] = {
+        "failure_id": "failure.transient-model",
+        "stage": "model_execution",
+        "message": "RuntimeError: Codex exited with code 4294967295",
+    }
+    checkpoint = service._budget_continuation_checkpoint(
+        {
+            "current_task_id": empty_retry_task_id,
+            "task_history": [candidate_task_id, empty_retry_task_id],
+        }
+    )
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == candidate_task_id
+    assert checkpoint["trigger_failure_id"] == "failure.transient-model"
+
 
 def test_publication_gate_reuses_related_failed_task_candidate_across_sessions(
     tmp_path: Path,
