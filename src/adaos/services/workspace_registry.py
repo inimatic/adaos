@@ -513,6 +513,13 @@ def format_workspace_registry_not_found(
 
 def build_registry_entry(kind: RegistryKind, artifact_dir: Path) -> dict[str, Any] | None:
     directory = Path(artifact_dir)
+    # Callers such as runtime migration can build one catalog entry directly
+    # instead of going through ``rebuild_workspace_registry``.  Keep the same
+    # sparse-placeholder semantics on that path as well: an abandoned
+    # ``__pycache__`` tree is not a broken workspace artifact and must not
+    # create a repeating startup error.
+    if _is_sparse_placeholder_dir(directory):
+        return None
     manifest_path, manifest = _load_manifest(directory, kind)
     if manifest_path is None:
         return None

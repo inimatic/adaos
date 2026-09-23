@@ -3972,6 +3972,38 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
         node_api._reset_runtime_support_snapshot_cache()
 
 
+def test_runtime_support_snapshot_refreshes_expired_warm_value_on_demand() -> None:
+    from adaos.apps.api import node_api
+
+    def _builder() -> dict[str, object]:
+        return {"state": "ready", "generation": 2}
+
+    key = ("expired-proof", id(_builder))
+    node_api._reset_runtime_support_snapshot_cache()
+    try:
+        with node_api._RUNTIME_SUPPORT_SNAPSHOT_LOCK:
+            node_api._RUNTIME_SUPPORT_SNAPSHOT_CACHE[key] = {
+                "payload": {"state": "ready", "generation": 1},
+                "captured_at": time.monotonic() - 60.0,
+                "refresh_total": 1,
+                "refresh_failure_total": 0,
+                "last_error": None,
+            }
+
+        payload, metadata = node_api._runtime_support_snapshot(
+            "expired-proof",
+            _builder,
+            lambda: {"state": "refreshing"},
+        )
+
+        assert payload == {"state": "ready", "generation": 2}
+        assert metadata["state"] == "fresh"
+        assert metadata["refreshing"] is False
+        assert metadata["refreshTotal"] == 2
+    finally:
+        node_api._reset_runtime_support_snapshot_cache()
+
+
 def test_compact_yjs_selected_webspace_snapshot_avoids_workspace_index(monkeypatch) -> None:
     from adaos.services import reliability
 
@@ -4487,6 +4519,61 @@ def test_node_reliability_summary_thin_mode_keeps_member_runtime_route_ready(mon
     assert payload["connectivity"]["requiredUpstreamLink"]["servedBy"] == "runtime"
     assert payload["stateSync"]["transportState"] == "not_applicable"
     assert payload["stateSync"]["firstSyncState"] == "not_applicable"
+
+
+def test_node_reliability_runtime_sidecar_identity_matches_api_serve(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.services.status import StatusRegistry
+
+    registry = StatusRegistry()
+    monkeypatch.setenv("ADAOS_RUNTIME_LAUNCH_MODE", "api_serve")
+    monkeypatch.setattr(
+        node_api,
+        "get_ctx",
+        lambda: SimpleNamespace(status_registry=registry, paths=SimpleNamespace()),
+    )
+    monkeypatch.setattr(node_api, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api,
+        "_thin_sidecar_runtime_fields",
+        lambda: {
+            "sidecarLifecycleManager": "runtime",
+            "runtimeLaunchMode": "api_serve",
+            "sidecarEnablement": {"enabled": True, "role": "hub"},
+            "sidecarContinuity": {"currentSupport": "ready"},
+            "sidecarProgress": {"state": "ready"},
+            "sidecarTransportReady": True,
+            "sidecarSessionState": "remote_ready",
+            "sidecarStatusReason": "ready",
+            "routeTunnel": {
+                "currentSupport": "ready",
+                "ws": {"current_owner": "sidecar", "handoff_ready": True},
+                "yws": {"current_owner": "sidecar", "handoff_ready": True},
+            },
+            "browserWsHandoffReady": True,
+            "browserYwsHandoffReady": True,
+            "browserWsHandoffState": "ready",
+            "browserYwsHandoffState": "ready",
+        },
+    )
+    monkeypatch.setattr(
+        node_api,
+        "yjs_sync_runtime_snapshot",
+        lambda **_: {
+            "available": False,
+            "assessment": {"state": "not_applicable", "reason": "test"},
+            "transport": {},
+        },
+    )
+
+    payload = node_api._thin_runtime_reliability_payload(
+        registry.snapshot(),
+        webspace_id="desktop",
+    )
+
+    assert payload["connectivity"]["requiredUpstreamLink"]["servedBy"] == "api_serve_sidecar"
+    assert payload["connectivity"]["browserControlRoute"]["servedBy"] == "api_serve_sidecar"
+    assert payload["connectivity"]["requiredUpstreamLink"]["transportState"] == "ready"
 
 
 def test_node_reliability_summary_metrics_exposes_acceptance_diagnostics(monkeypatch) -> None:

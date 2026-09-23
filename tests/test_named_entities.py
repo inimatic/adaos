@@ -1211,6 +1211,71 @@ async def test_subnet_alias_change_projects_named_entities_to_current_and_defaul
     assert default_current["pending_total"] == 0
 
 
+@pytest.mark.anyio
+async def test_sys_ready_reuses_warm_named_entity_sources(monkeypatch) -> None:
+    from adaos.services import named_entity_projection
+
+    webspace_id = f"named-entities-{uuid4().hex}"
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="skill:browsers_skill",
+                kind="skill",
+                display_name="Browsers Skill",
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+    calls = {source: 0 for source in named_entities.REGISTRY_SOURCES}
+    original = service.list_source_entities
+
+    def _counted(source, **kwargs):
+        calls[source] += 1
+        return original(source, **kwargs)
+
+    async def _applied(snapshot, **_kwargs):
+        return {
+            "accepted": True,
+            "written": True,
+            "payload": dict(snapshot.payload),
+            "command": {
+                "accepted": True,
+                "applied": True,
+                "changed": True,
+                "reason": "applied",
+                "room_generation": 1,
+            },
+        }
+
+    monkeypatch.setattr(service, "list_source_entities", _counted)
+    monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: service)
+    monkeypatch.setattr(named_entity_projection, "_current_live_room_generation", lambda _webspace_id: 1)
+    monkeypatch.setattr(named_entity_projection, "_apply_snapshot_to_live_room", _applied)
+    named_entity_projection.clear_named_entity_projection_reconciler(webspace_id=webspace_id)
+    named_entities.clear_named_entity_registry(webspace_id=webspace_id)
+
+    await named_entity_projection.request_named_entity_projection(
+        webspace_id=webspace_id,
+        reason="initial",
+        refresh=True,
+        wait=True,
+    )
+    assert calls == {source: 1 for source in named_entities.REGISTRY_SOURCES}
+
+    await named_entity_projection.on_sys_ready(
+        SimpleNamespace(type="sys.ready", payload={"webspace_id": webspace_id})
+    )
+    await named_entity_projection.request_named_entity_projection(
+        webspace_id=webspace_id,
+        reason="test_wait",
+        refresh=False,
+        wait=True,
+    )
+
+    assert calls == {source: 1 for source in named_entities.REGISTRY_SOURCES}
+
+
 def test_named_entity_projection_v2_is_keyed_and_idempotent(monkeypatch) -> None:
     import json
 

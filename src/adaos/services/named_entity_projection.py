@@ -150,7 +150,13 @@ def _topic(evt: Any) -> str:
 
 def _registry_invalidation_sources(topic: str, payload: Mapping[str, Any]) -> tuple[str, ...]:
     if topic == "sys.ready":
-        return tuple(named_entities.REGISTRY_SOURCES)
+        # ``sys.ready`` is a lifecycle signal, not evidence that any registry
+        # source changed.  An empty dirty set still builds every source for a
+        # cold webspace, while an already materialized snapshot can be
+        # projected into a new live-room generation without re-enumerating the
+        # device inventory or workspace manifests.  Actual catalog/device
+        # changes have dedicated events below.
+        return ()
     if topic == "subnet.alias.changed":
         return ("subnet",)
     source = str(payload.get("source") or "").strip()

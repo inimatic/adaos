@@ -249,8 +249,9 @@ def _complete_runtime_support_snapshot(
             raise TypeError("runtime support snapshot builder must return a mapping")
     except Exception as exc:
         with _RUNTIME_SUPPORT_SNAPSHOT_LOCK:
-            if _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.get(key) is future:
-                _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.pop(key, None)
+            if _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.get(key) is not future:
+                return
+            _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.pop(key, None)
             existing = _RUNTIME_SUPPORT_SNAPSHOT_CACHE.get(key)
             if isinstance(existing, dict):
                 existing["last_error"] = f"{type(exc).__name__}: {exc}"
@@ -260,8 +261,12 @@ def _complete_runtime_support_snapshot(
         return
 
     with _RUNTIME_SUPPORT_SNAPSHOT_LOCK:
-        if _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.get(key) is future:
-            _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.pop(key, None)
+        # A bounded on-demand wait may complete the same Future before its
+        # registered callback gets CPU time. Only the first completion path
+        # may publish it, otherwise refresh counters and captured_at drift.
+        if _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.get(key) is not future:
+            return
+        _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.pop(key, None)
         previous = _RUNTIME_SUPPORT_SNAPSHOT_CACHE.get(key) or {}
         _RUNTIME_SUPPORT_SNAPSHOT_CACHE[key] = {
             "payload": copy.deepcopy(payload),
@@ -303,6 +308,7 @@ def _runtime_support_snapshot(
             minimum=1.0,
         ),
     )
+    expired_refresh: Future[dict[str, Any]] | None = None
     with _RUNTIME_SUPPORT_SNAPSHOT_LOCK:
         entry = _RUNTIME_SUPPORT_SNAPSHOT_CACHE.get(key)
         captured_at = float((entry or {}).get("captured_at") or 0.0)
@@ -321,6 +327,42 @@ def _runtime_support_snapshot(
                     completed,
                 )
             )
+        # A sparse runtime-beacon consumer can poll less often than the stale
+        # window. Returning the fallback immediately on every such poll makes
+        # a healthy sidecar alternate to "refreshing" forever. Give an
+        # already-warm snapshot a small bounded opportunity to refresh; the
+        # very first cold request remains non-blocking.
+        if (
+            captured_at > 0.0
+            and not usable_stale
+            and refreshing
+            and future is not None
+        ):
+            expired_refresh = future
+
+    if expired_refresh is not None:
+        wait_s = _env_float(
+            "ADAOS_RELIABILITY_RUNTIME_SUPPORT_EXPIRED_WAIT_S",
+            0.25,
+            minimum=0.0,
+        )
+        if wait_s > 0.0:
+            try:
+                expired_refresh.result(timeout=min(wait_s, 1.0))
+            except Exception:
+                pass
+            else:
+                _complete_runtime_support_snapshot(key, expired_refresh)
+
+    now = time.monotonic()
+    with _RUNTIME_SUPPORT_SNAPSHOT_LOCK:
+        entry = _RUNTIME_SUPPORT_SNAPSHOT_CACHE.get(key)
+        captured_at = float((entry or {}).get("captured_at") or 0.0)
+        age_s = max(0.0, now - captured_at) if captured_at > 0.0 else None
+        fresh = age_s is not None and age_s <= ttl_s
+        usable_stale = age_s is not None and age_s <= max_stale_s
+        future = _RUNTIME_SUPPORT_SNAPSHOT_IN_FLIGHT.get(key)
+        refreshing = future is not None and not future.done()
         if fresh or usable_stale:
             payload = copy.deepcopy((entry or {}).get("payload") or {})
             state = "fresh" if fresh else "stale"
@@ -1306,7 +1348,16 @@ def _pending_sidecar_runtime_fields() -> dict[str, Any]:
             "env_value": None,
         }
     enabled = bool(enablement.get("enabled"))
+    lifecycle_manager = (
+        "supervisor"
+        if env_bool("ADAOS_SUPERVISOR_ENABLED", default=False)
+        else "runtime"
+    )
     return {
+        "sidecarLifecycleManager": lifecycle_manager,
+        "runtimeLaunchMode": (
+            str(os.getenv("ADAOS_RUNTIME_LAUNCH_MODE") or "").strip() or None
+        ),
         "sidecarEnablement": {
             "enabled": enabled,
             "defaultEnabled": bool(enablement.get("default_enabled")),
@@ -1479,7 +1530,22 @@ def _thin_runtime_reliability_payload(
         if required_ready
         else str(sidecar_fields.get("sidecarStatusReason") or "sidecar_browser_route_starting")
     )
-    required_served_by = "runtime" if not sidecar_enabled else "supervisor_sidecar"
+    sidecar_lifecycle_manager = str(
+        sidecar_fields.get("sidecarLifecycleManager") or "runtime"
+    ).strip().lower()
+    runtime_launch_mode = str(
+        sidecar_fields.get("runtimeLaunchMode")
+        or os.getenv("ADAOS_RUNTIME_LAUNCH_MODE")
+        or ""
+    ).strip().lower()
+    if not sidecar_enabled:
+        required_served_by = "runtime"
+    elif sidecar_lifecycle_manager == "supervisor":
+        required_served_by = "supervisor_sidecar"
+    elif runtime_launch_mode == "api_serve":
+        required_served_by = "api_serve_sidecar"
+    else:
+        required_served_by = "runtime_sidecar"
     connectivity = {
         "requiredUpstreamLink": {
             "kind": "hub_root",
@@ -1507,7 +1573,7 @@ def _thin_runtime_reliability_payload(
             "plannedTransition": {"active": False, "reason": None},
             "reason": browser_reason,
             "blockers": browser_blockers,
-            "servedBy": "runtime" if not sidecar_enabled else "supervisor_sidecar",
+            "servedBy": required_served_by,
         },
     }
     compact_state_sync = {
@@ -2293,6 +2359,13 @@ def _compact_sidecar_runtime_fields(sidecar_runtime: dict[str, Any]) -> dict[str
     ws = _coerce_dict(route_tunnel.get("ws"))
     yws = _coerce_dict(route_tunnel.get("yws"))
     return {
+        "sidecarLifecycleManager": (
+            str(sidecar.get("lifecycle_manager") or "runtime").strip()
+            or "runtime"
+        ),
+        "runtimeLaunchMode": (
+            str(os.getenv("ADAOS_RUNTIME_LAUNCH_MODE") or "").strip() or None
+        ),
         "sidecarContinuity": {
             "currentSupport": str(continuity.get("current_support") or "unknown").strip() or "unknown",
             "hubRuntimeUpdate": str(continuity.get("hub_runtime_update") or "unknown").strip() or "unknown",

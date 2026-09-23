@@ -1301,6 +1301,67 @@ def test_realtime_sidecar_route_proxy_relays_local_websocket_payload(
     asyncio.run(_run())
 
 
+def test_realtime_sidecar_relay_cancellation_retrieves_child_tasks() -> None:
+    async def _run() -> None:
+        never = asyncio.Event()
+
+        class _Reader:
+            async def read(self, _size: int) -> bytes:
+                await never.wait()
+                return b""
+
+        class _Writer:
+            def is_closing(self) -> bool:
+                return False
+
+            def write(self, _payload: bytes) -> None:
+                return None
+
+            async def drain(self) -> None:
+                return None
+
+        class _WebSocket:
+            async def recv(self) -> bytes:
+                await never.wait()
+                return b""
+
+            async def send(self, _payload: bytes) -> None:
+                return None
+
+        server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+        relay = asyncio.create_task(
+            server._relay_local_to_remote(
+                _Reader(),
+                _Writer(),
+                _WebSocket(),
+                session_id="cancel-proof",
+            ),
+            name="relay-cancel-proof",
+        )
+        await asyncio.sleep(0)
+        relay.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await relay
+        await asyncio.sleep(0)
+
+        child_names = {
+            "adaos-realtime-l2r",
+            "adaos-realtime-ws-io",
+            "adaos-realtime-r2l",
+            "adaos-realtime-ws-recv",
+            "adaos-realtime-ws-send",
+        }
+        assert not [
+            task
+            for task in asyncio.all_tasks()
+            if task is not asyncio.current_task()
+            and task.get_name() in child_names
+            and not task.done()
+        ]
+
+    asyncio.run(_run())
+
+
 def test_realtime_sidecar_route_proxy_relays_subnet_member_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

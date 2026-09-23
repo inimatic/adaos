@@ -37,8 +37,6 @@ from adaos.services.nats_config import (
 from adaos.services.node_runtime_state import load_nats_runtime_config, migrate_legacy_nats_runtime_config
 from adaos.services.nats_ws_transport import (
     _set_tcp_keepalive,
-    _ws_heartbeat_s_from_env,
-    _ws_max_queue_from_env,
     _ws_proxy_from_env,
 )
 from adaos.services.runtime_dotenv import merged_runtime_dotenv_env
@@ -4028,7 +4026,6 @@ class RealtimeSidecarServer:
             with contextlib.suppress(Exception):
                 await websocket.close(code=1011, reason="listener_unavailable")
             return
-        target_host = str(listener.get("upstream_host") or "").strip() or "127.0.0.1"
         target_port = int(listener.get("upstream_port") or 0)
         if target_port <= 0:
             with contextlib.suppress(Exception):
@@ -4569,10 +4566,28 @@ class RealtimeSidecarServer:
             asyncio.create_task(_remote_writer_loop(), name="adaos-realtime-ws-io"),
             asyncio.create_task(_remote_reader_loop(), name="adaos-realtime-r2l"),
         ]
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results: list[Any] = []
+        try:
+            _done, pending = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            results = list(await asyncio.gather(*tasks, return_exceptions=True))
+        finally:
+            # Session replacement and runtime shutdown can cancel the relay
+            # while it is still inside ``asyncio.wait``. Always retrieve every
+            # child result so a remote close cannot escape later as
+            # "Task exception was never retrieved".
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            cleanup_results = list(
+                await asyncio.gather(*tasks, return_exceptions=True)
+            )
+            if not results:
+                results = cleanup_results
         for result in results:
             if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
                 raise result

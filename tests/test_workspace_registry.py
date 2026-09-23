@@ -363,6 +363,19 @@ def test_build_registry_entry_skips_non_materialized_catalog_path(tmp_path: Path
     assert "required declaration is missing" not in caplog.text
 
 
+def test_build_registry_entry_skips_cache_only_artifact_dir(tmp_path: Path, caplog, monkeypatch):
+    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
+    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+    cache_dir = tmp_path / "workspace" / "skills" / "stale_skill" / "handlers" / "__pycache__"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "main.cpython-311.pyc").write_bytes(b"stale")
+
+    entry = build_registry_entry("skills", cache_dir.parents[1])
+
+    assert entry is None
+    assert "required declaration is missing" not in caplog.text
+
+
 def test_authoritative_registry_keeps_sparse_placeholder_entries_without_enrichment_errors(
     tmp_path: Path,
     caplog,
