@@ -377,6 +377,7 @@ def test_application_catalog_contracts_publish_exact_records_and_cas_paths() -> 
         "installation",
         "subscription",
         "effective_release",
+        "effective_navigation",
         "attention",
     }.issubset(record["properties"])
     assert record["properties"]["application"]["required"] == ["application_id"]
@@ -396,6 +397,22 @@ def test_application_catalog_contracts_publish_exact_records_and_cas_paths() -> 
     assert development["properties"]["publication"]["required"] == [
         "status",
         "evidence_present",
+    ]
+    effective_navigation = record["properties"]["effective_navigation"]
+    assert effective_navigation["required"] == [
+        "schema",
+        "status",
+        "reason",
+        "target",
+    ]
+    installed_target = effective_navigation["properties"]["target"]["oneOf"][1]
+    assert installed_target["required"] == [
+        "intent",
+        "expected_scenario_id",
+        "webspace_id",
+        "space_kind",
+        "application_id",
+        "release_digest",
     ]
 
     shown_record = shown.output_schema["properties"]["result"]["properties"][
@@ -418,6 +435,8 @@ def test_application_catalog_contracts_publish_exact_records_and_cas_paths() -> 
         "trial_navigation_target_path": (
             "local_development.trial.navigation_target"
         ),
+        "effective_navigation_path": "effective_navigation",
+        "effective_navigation_target_path": "effective_navigation.target",
         "publication_evidence_path": "local_development.publication",
     }
     assert "effective_release" in shown.metadata["webui_data_binding"][

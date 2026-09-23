@@ -511,6 +511,77 @@ def _home_projection(
     }
 
 
+def _effective_navigation(
+    model: Mapping[str, Any],
+    *,
+    webspace_id: str | None,
+    home: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project one secret-free logical target for an installed Application."""
+
+    webspace = str(webspace_id or "").strip()
+    application = (
+        dict(model.get("application") or {})
+        if isinstance(model.get("application"), Mapping)
+        else {}
+    )
+    application_id = str(application.get("application_id") or "").strip()
+    release = (
+        dict(model.get("effective_release") or {})
+        if isinstance(model.get("effective_release"), Mapping)
+        else {}
+    )
+
+    def unavailable(reason: str) -> dict[str, Any]:
+        return {
+            "schema": "adaos.application.effective_navigation.v1",
+            "status": "unavailable",
+            "reason": reason,
+            "target": None,
+        }
+
+    if not webspace:
+        return unavailable("webspace_not_selected")
+    if str(home.get("status") or "") != "ready":
+        return unavailable("webspace_projection_unavailable")
+    if not bool(home.get("installed")):
+        return unavailable("not_installed_in_webspace")
+
+    scenario_entrypoints: list[tuple[str, str]] = []
+    for entrypoint in application.get("entrypoints") or ():
+        if not isinstance(entrypoint, Mapping):
+            continue
+        entrypoint_id = str(entrypoint.get("entrypoint_id") or "").strip()
+        presentation_ref = str(entrypoint.get("presentation_ref") or "").strip()
+        kind, separator, scenario_id = presentation_ref.partition(":")
+        if separator and kind == "scenario" and scenario_id:
+            scenario_entrypoints.append((entrypoint_id, scenario_id))
+    if not scenario_entrypoints:
+        return unavailable("scenario_entrypoint_unavailable")
+    _, scenario_id = next(
+        (
+            item
+            for item in scenario_entrypoints
+            if item[0] in {"main", "default", "primary"}
+        ),
+        scenario_entrypoints[0],
+    )
+    return {
+        "schema": "adaos.application.effective_navigation.v1",
+        "status": "ready",
+        "reason": "installed_scenario_entrypoint",
+        "target": {
+            "intent": "webspace.open",
+            "expected_scenario_id": scenario_id,
+            "webspace_id": webspace,
+            "space_kind": "workspace",
+            "application_id": application_id,
+            "release_digest": str(release.get("release_digest") or "").strip()
+            or None,
+        },
+    }
+
+
 def _empty_execution_placement(
     application_id: str, *, status: str, managed: bool, partial: bool
 ) -> dict[str, Any]:
@@ -1232,6 +1303,11 @@ def _enrich_application_models(
         home = _home_projection(model, webspace_id, snapshot=home_snapshot)
         model["home"] = home
         model["pinned"] = bool(home.get("pinned"))
+        model["effective_navigation"] = _effective_navigation(
+            model,
+            webspace_id=webspace_id,
+            home=home,
+        )
         model["installation_summary"] = _installation_summary(
             model, webspace_id=webspace_id
         )

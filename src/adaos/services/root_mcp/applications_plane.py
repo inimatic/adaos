@@ -445,6 +445,48 @@ def contracts() -> list[RootMcpToolContract]:
         ],
         additional_properties=False,
     )
+    installed_navigation_target = schema_object(
+        properties={
+            "intent": {"const": "webspace.open"},
+            "expected_scenario_id": {"type": "string", "minLength": 1},
+            "webspace_id": {"type": "string", "minLength": 1},
+            "space_kind": {"const": "workspace"},
+            "application_id": {"type": "string", "minLength": 1},
+            "release_digest": {"type": ["string", "null"]},
+        },
+        required=[
+            "intent",
+            "expected_scenario_id",
+            "webspace_id",
+            "space_kind",
+            "application_id",
+            "release_digest",
+        ],
+        additional_properties=False,
+    )
+    effective_navigation = schema_object(
+        properties={
+            "schema": {"const": "adaos.application.effective_navigation.v1"},
+            "status": {"enum": ["ready", "unavailable"]},
+            "reason": {
+                "enum": [
+                    "installed_scenario_entrypoint",
+                    "webspace_not_selected",
+                    "webspace_projection_unavailable",
+                    "not_installed_in_webspace",
+                    "scenario_entrypoint_unavailable",
+                ]
+            },
+            "target": {
+                "oneOf": [
+                    {"type": "null"},
+                    installed_navigation_target,
+                ]
+            },
+        },
+        required=["schema", "status", "reason", "target"],
+        additional_properties=False,
+    )
     local_development = {
         "oneOf": [
             {"type": "null"},
@@ -516,6 +558,7 @@ def contracts() -> list[RootMcpToolContract]:
             "effective_release": effective_release,
             "channels": {"type": "object"},
             "local_development": local_development,
+            "effective_navigation": effective_navigation,
             "installation_summary": {"type": "object"},
             "attention": schema_object(
                 properties={
@@ -549,6 +592,7 @@ def contracts() -> list[RootMcpToolContract]:
             "effective_release",
             "channels",
             "local_development",
+            "effective_navigation",
             "installation_summary",
             "attention",
         ],
@@ -567,6 +611,8 @@ def contracts() -> list[RootMcpToolContract]:
             "trial_navigation_target_path": (
                 "local_development.trial.navigation_target"
             ),
+            "effective_navigation_path": "effective_navigation",
+            "effective_navigation_target_path": "effective_navigation.target",
             "publication_evidence_path": "local_development.publication",
         },
         "unavailable_state": {

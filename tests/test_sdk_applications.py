@@ -114,6 +114,94 @@ def test_installation_summary_prefers_selected_webspace_runtime() -> None:
     assert summary["auto_update_enabled"] is True
 
 
+def test_effective_navigation_projects_installed_primary_scenario() -> None:
+    release_digest = "sha256:" + "c" * 64
+
+    navigation = applications._effective_navigation(
+        {
+            "application": {
+                "application_id": "recipes",
+                "entrypoints": [
+                    {
+                        "entrypoint_id": "secondary",
+                        "presentation_ref": "scenario:recipes_admin",
+                    },
+                    {
+                        "entrypoint_id": "main",
+                        "presentation_ref": "scenario:recipes",
+                    },
+                ],
+            },
+            "effective_release": {"release_digest": release_digest},
+        },
+        webspace_id="family",
+        home={"status": "ready", "installed": True},
+    )
+
+    assert navigation == {
+        "schema": "adaos.application.effective_navigation.v1",
+        "status": "ready",
+        "reason": "installed_scenario_entrypoint",
+        "target": {
+            "intent": "webspace.open",
+            "expected_scenario_id": "recipes",
+            "webspace_id": "family",
+            "space_kind": "workspace",
+            "application_id": "recipes",
+            "release_digest": release_digest,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("webspace_id", "home", "entrypoints", "reason"),
+    [
+        (None, {"status": "ready", "installed": True}, [], "webspace_not_selected"),
+        (
+            "family",
+            {"status": "unavailable", "installed": True},
+            [],
+            "webspace_projection_unavailable",
+        ),
+        (
+            "family",
+            {"status": "ready", "installed": False},
+            [],
+            "not_installed_in_webspace",
+        ),
+        (
+            "family",
+            {"status": "ready", "installed": True},
+            [{"entrypoint_id": "main", "presentation_ref": "widget:recipes"}],
+            "scenario_entrypoint_unavailable",
+        ),
+    ],
+)
+def test_effective_navigation_has_explicit_unavailable_semantics(
+    webspace_id,
+    home,
+    entrypoints,
+    reason,
+) -> None:
+    navigation = applications._effective_navigation(
+        {
+            "application": {
+                "application_id": "recipes",
+                "entrypoints": entrypoints,
+            }
+        },
+        webspace_id=webspace_id,
+        home=home,
+    )
+
+    assert navigation == {
+        "schema": "adaos.application.effective_navigation.v1",
+        "status": "unavailable",
+        "reason": reason,
+        "target": None,
+    }
+
+
 def test_active_release_follows_the_selected_webspace_beta() -> None:
     beta_a = "sha256:" + "a" * 64
     beta_b = "sha256:" + "b" * 64
