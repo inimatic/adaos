@@ -92,6 +92,12 @@ contains `account_id` and `revision`, so account updates can bind identity and
 binding declares revision `0` for create and the selected record's `revision`
 for update.
 
+The same access read also publishes exact grant, role and permission
+declarations. Grant rows carry `grant_id` and `revision` for CAS updates; role
+and permission choices bind canonical `id` values and safe titles. Consumers
+use the declared result paths and do not copy these release-owned choices into
+their package.
+
 `applications.list` and `applications.show` publish the same exact Application
 record schema. The list collection is `response.result.applications`; the
 selected record is `response.result.application`. Both contracts identify a

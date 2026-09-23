@@ -787,6 +787,40 @@ def test_application_access_contracts_are_secret_free_and_reads_share_sdk_projec
     accounts = access_show.output_schema["properties"]["result"]["properties"][
         "access"
     ]["properties"]["sections"]["properties"]["connected_accounts"]
+    sections = access_show.output_schema["properties"]["result"]["properties"][
+        "access"
+    ]["properties"]["sections"]["properties"]
+    assert sections["access"]["items"]["required"] == [
+        "schema",
+        "grant_id",
+        "subject_ref",
+        "application_id",
+        "application_roles",
+        "permission_ceiling",
+        "explicit_denies",
+        "constraints",
+        "issuer_ref",
+        "reviewed_permission_profile_digest",
+        "status",
+        "expires_at",
+        "revision",
+        "created_at",
+        "updated_at",
+    ]
+    assert sections["roles"]["items"]["required"] == [
+        "id",
+        "title",
+        "grants",
+        "assignable_to",
+        "default_for",
+        "requires_permissions",
+    ]
+    profile = sections["permissions"]["properties"]["profile"]
+    assert profile["properties"]["required"]["items"]["required"] == [
+        "id",
+        "purpose",
+        "approval_policy",
+    ]
     assert accounts["items"]["required"] == [
         "account_id",
         "provider_id",
@@ -804,6 +838,15 @@ def test_application_access_contracts_are_secret_free_and_reads_share_sdk_projec
         "create_expected_revision": 0,
         "update_expected_revision_path": "revision",
     }
+    assert access_show.metadata["webui_data_binding"]["grant_record"] == {
+        "identity_path": "grant_id",
+        "revision_path": "revision",
+        "create_expected_revision": 0,
+        "update_expected_revision_path": "revision",
+    }
+    assert access_show.metadata["webui_data_binding"]["result_paths"]["roles"] == (
+        "response.result.access.sections.roles"
+    )
     assert access_show.metadata["webui_data_binding"]["examples"][
         "connected_account"
     ]["revision"] == 3

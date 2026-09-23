@@ -796,6 +796,137 @@ def contracts() -> list[RootMcpToolContract]:
         ],
         additional_properties=False,
     )
+    permission_declaration = schema_object(
+        properties={
+            "id": {"type": "string", "minLength": 1},
+            "title": {"type": "string"},
+            "purpose": {"type": "string"},
+            "authorization_details": {"type": "object"},
+            "approval_policy": {"type": "string"},
+            "sensitive": {"type": "boolean"},
+        },
+        required=["id", "purpose", "approval_policy"],
+        additional_properties=False,
+    )
+    role_declaration = schema_object(
+        properties={
+            "id": {"type": "string", "minLength": 1},
+            "title": {"type": "string", "minLength": 1},
+            "grants": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            },
+            "assignable_to": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            },
+            "default_for": {"type": "object"},
+            "requires_permissions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            },
+            "sensitive": {"type": "boolean"},
+        },
+        required=[
+            "id",
+            "title",
+            "grants",
+            "assignable_to",
+            "default_for",
+            "requires_permissions",
+        ],
+        additional_properties=False,
+    )
+    access_grant = schema_object(
+        properties={
+            "schema": {"const": "adaos.application.access_grant.v1"},
+            "grant_id": {"type": "string", "minLength": 1},
+            "subject_ref": {"type": "string", "minLength": 1},
+            "application_id": {"type": "string", "minLength": 1},
+            "application_roles": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            },
+            "permission_ceiling": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            },
+            "explicit_denies": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            },
+            "constraints": {"type": "object"},
+            "issuer_ref": {"type": "string"},
+            "reviewed_permission_profile_digest": {"type": "string"},
+            "status": {"type": "string"},
+            "expires_at": {"type": ["string", "null"]},
+            "revision": {"type": "integer", "minimum": 1},
+            "created_at": {"type": "string"},
+            "updated_at": {"type": "string"},
+        },
+        required=[
+            "schema",
+            "grant_id",
+            "subject_ref",
+            "application_id",
+            "application_roles",
+            "permission_ceiling",
+            "explicit_denies",
+            "constraints",
+            "issuer_ref",
+            "reviewed_permission_profile_digest",
+            "status",
+            "expires_at",
+            "revision",
+            "created_at",
+            "updated_at",
+        ],
+        additional_properties=False,
+    )
+    permission_profile = schema_object(
+        properties={
+            "schema": {"type": "string"},
+            "required": {
+                "type": "array",
+                "items": permission_declaration,
+            },
+            "optional": {
+                "type": "array",
+                "items": permission_declaration,
+            },
+            "secrets": {"type": "array", "items": {"type": "object"}},
+            "data_practices": {"type": "object"},
+            "llm_model_use": {"type": "array", "items": {"type": "object"}},
+            "notifications": {"type": "array", "items": {"type": "object"}},
+            "background_actions": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
+            "external_providers": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
+            "privacy_labels": {"type": "object"},
+        },
+        required=["schema", "required", "optional"],
+        additional_properties=True,
+    )
+    permission_section = schema_object(
+        properties={
+            "profile": permission_profile,
+            "digest": {"type": ["string", "null"]},
+            "privacy_report": {"type": ["object", "null"]},
+            "badges": {"type": "array", "items": {"type": "object"}},
+        },
+        required=["profile", "digest", "privacy_report", "badges"],
+        additional_properties=False,
+    )
     access_surface = schema_object(
         properties={
             "schema": {"const": "adaos.application.access_surface.v1"},
@@ -804,9 +935,17 @@ def contracts() -> list[RootMcpToolContract]:
             "installation": {"type": ["object", "null"]},
             "sections": schema_object(
                 properties={
-                    "permissions": {"type": "object"},
-                    "access": {"type": "array", "items": {"type": "object"}},
-                    "roles": {"type": "array", "items": {"type": "object"}},
+                    "permissions": permission_section,
+                    "access": {
+                        "type": "array",
+                        "items": access_grant,
+                        "maxItems": 5000,
+                    },
+                    "roles": {
+                        "type": "array",
+                        "items": role_declaration,
+                        "maxItems": 500,
+                    },
                     "connected_accounts": {
                         "type": "array",
                         "items": connected_account,
@@ -1346,9 +1485,35 @@ def contracts() -> list[RootMcpToolContract]:
                     "schema": "adaos.root_mcp.webui_data_binding.v1",
                     "transport_envelope": "node_root_mcp_bridge.v1",
                     "result_paths": {
+                        "grants": "response.result.access.sections.access",
+                        "roles": "response.result.access.sections.roles",
+                        "required_permissions": (
+                            "response.result.access.sections.permissions.profile.required"
+                        ),
+                        "optional_permissions": (
+                            "response.result.access.sections.permissions.profile.optional"
+                        ),
+                        "declared_permission_ids": (
+                            "response.result.access.sections.permissions.privacy_report."
+                            "declared.permissions"
+                        ),
                         "connected_accounts": (
                             "response.result.access.sections.connected_accounts"
                         )
+                    },
+                    "grant_record": {
+                        "identity_path": "grant_id",
+                        "revision_path": "revision",
+                        "create_expected_revision": 0,
+                        "update_expected_revision_path": "revision",
+                    },
+                    "role_choice": {
+                        "value_path": "id",
+                        "label_paths": ["title", "id"],
+                    },
+                    "permission_choice": {
+                        "value_path": "id",
+                        "label_paths": ["title", "id"],
                     },
                     "connected_account_record": {
                         "identity_path": "account_id",
