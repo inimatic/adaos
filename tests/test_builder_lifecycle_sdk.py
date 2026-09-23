@@ -10,6 +10,16 @@ def production_host(monkeypatch):
     from adaos.sdk.builder import applications
 
     monkeypatch.setattr(WebspaceRelationshipRegistry, "resolve_production_host", lambda self, value: value)
+    monkeypatch.setattr(
+        applications,
+        "verify_candidate_access",
+        lambda project_id, candidate_id, **_kwargs: {
+            "required": False,
+            "status": "not_required",
+            "project_id": project_id,
+            "candidate_id": candidate_id,
+        },
+    )
     def place(candidate_id, *, webspace_id, actor_ref):
         return {"ok": True, "trial_activation": {
             "activation_id": f"trial:{candidate_id}", "data_mode": "empty",
@@ -294,6 +304,60 @@ def test_prepare_trial_routes_component_checkpoint_through_owning_project(
     assert captured["permission_decision"] == permission_decision
     assert transitions == ["candidate_preparation_started", "candidate_prepared"]
     assert result["release"]["project_id"] == "semantic_ui_demo"
+
+
+def test_prepare_trial_composes_fresh_project_candidate_when_checkpoint_replaces_old_candidate(
+    monkeypatch,
+) -> None:
+    state = _checkpoint_state()
+    state["delivery"]["replaces_candidate_id"] = "candidate-stale"
+    captured: dict = {}
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: state)
+    monkeypatch.setattr(
+        lifecycle.workflow,
+        "transition",
+        lambda _kind, _project, action, **_kwargs: {
+            "workflow": {"governed": {"state": action}}
+        },
+    )
+
+    def prepare(project_id, **kwargs):
+        captured.update({"project_id": project_id, **kwargs})
+        return {
+            "ok": True,
+            "candidate": {
+                "candidate_id": "candidate-fresh",
+                "release_digest": "sha256:" + "c" * 64,
+                "package_digest": "sha256:" + "d" * 64,
+            },
+            "release": {
+                "project_id": "applications",
+                "version": "0.1.34",
+                "release_digest": "sha256:" + "c" * 64,
+            },
+        }
+
+    monkeypatch.setattr(lifecycle.compositions, "prepare_candidate", prepare)
+    monkeypatch.setattr(
+        lifecycle.projects,
+        "prepare_rebased_candidate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("project checkpoint must be composed, not rebased standalone")
+        ),
+    )
+
+    result = lifecycle.prepare_trial(
+        "scenario",
+        "applications",
+        actor="builder.automation",
+        idempotency_key="trial-project-replacement",
+        publication_project_ref="project:applications",
+    )
+
+    assert captured["project_id"] == "applications"
+    assert captured["source_revision"] == "b" * 40
+    assert captured["change_ids"] == ["change-1"]
+    assert result["candidate"]["candidate_id"] == "candidate-fresh"
 
 
 @pytest.mark.parametrize("changed", [None, "status", "candidate_id", "package_digest", "release_digest"])

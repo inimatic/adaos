@@ -163,11 +163,11 @@ def prepare_trial(
         project_ref = str(publication_project_ref or "").strip()
         if project_ref and not project_ref.startswith("project:"):
             raise ValueError("publication_project_ref must use project:<id>")
-        if stale_candidate and project_ref:
-            raise ValueError(
-                "Project Trial rebase requires a fresh immutable project candidate"
-            )
         if project_ref:
+            # A project-backed Builder checkpoint must always be composed into a
+            # fresh immutable project candidate.  ``replaces_candidate_id`` is
+            # evidence about the superseded checkpoint, not a reason to route
+            # the component through the standalone candidate rebase path.
             result = compositions.prepare_candidate(
                 project_ref.split(":", 1)[1],
                 source_kind=object_type,
