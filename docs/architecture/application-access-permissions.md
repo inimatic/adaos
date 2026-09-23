@@ -77,6 +77,10 @@ As of 2026-09-16, AdaOS has the complete non-deferred V1 slice:
   webspace scope, and trusted device/session constraints;
 - Application access audit records for grant, revoke, and allow/deny/pending
   decisions;
+- publisher-owner grants for both role-based and roleless Applications. A
+  roleless release still requires a reviewed permission ceiling and trusted
+  component capability evidence; only the optional Application-local RBAC
+  intersection is omitted;
 - Applications SDK helpers for listing, granting, revoking, deciding, and
   auditing Application access;
 - registry-projection indexes for permission profiles and Application roles

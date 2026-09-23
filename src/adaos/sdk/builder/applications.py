@@ -151,13 +151,14 @@ def _ensure_publisher_owner_access(
 
     service = _application_service()
     release = service.store.get_release(application_id, release_digest)
-    if not release.application_roles:
-        return {
-            "required": False,
-            "reason": "application_declares_no_roles",
-            "permission_profile_digest": release.permission_profile.digest,
-        }
-    role_ids, resolution = _publisher_owner_role_ids(release)
+    if release.application_roles:
+        role_ids, resolution = _publisher_owner_role_ids(release)
+    else:
+        # A roleless Application still needs a reviewed permission grant.  Its
+        # authority is the intersection of the release permission profile,
+        # component capabilities and this ceiling; it deliberately has no
+        # Application-local RBAC layer.
+        role_ids, resolution = (), "permission_profile_only"
     owner_ref = f"user:{current_user_id(_ctx())}"
     constraints = {
         "platform_role": "owner",

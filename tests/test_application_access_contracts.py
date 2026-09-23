@@ -176,6 +176,65 @@ def test_application_roles_validate_permissions_and_diff_update_impact() -> None
         )
 
 
+def test_roleless_application_uses_reviewed_permission_grant_without_local_rbac() -> None:
+    profile = ApplicationPermissionProfile.from_mapping(
+        {
+            "schema": "adaos.application.permission_profile.v1",
+            "required": [
+                {"id": "workspace.write", "purpose": "Update workspace content"}
+            ],
+            "optional": [],
+        }
+    )
+    grant = ApplicationAccessGrant(
+        grant_id="appgrant.roleless-owner",
+        subject_ref="user:owner",
+        application_id="adaos_drive",
+        application_roles=(),
+        permission_ceiling=("workspace.write",),
+        explicit_denies=(),
+        constraints={"subject_kind": "user", "platform_role": "owner"},
+        issuer_ref="user:owner",
+        reviewed_permission_profile_digest=profile.digest,
+    )
+
+    allowed = evaluate_application_access(
+        profile=profile,
+        roles=(),
+        grant=grant,
+        permission_id="workspace.write",
+        app_capability="workspace.write",
+        component_capabilities=("workspace.write",),
+        actor_chain={"application_id": "adaos_drive", "subject_ref": "user:owner"},
+    )
+
+    assert allowed.decision == "allow"
+    assert allowed.reason_code == "allowed"
+    assert "role" not in allowed.policy_explanation.lower()
+
+    undeclared_role = evaluate_application_access(
+        profile=profile,
+        roles=(),
+        grant=ApplicationAccessGrant(
+            grant_id="appgrant.invalid-role",
+            subject_ref="user:owner",
+            application_id="adaos_drive",
+            application_roles=("owner",),
+            permission_ceiling=("workspace.write",),
+            explicit_denies=(),
+            constraints={"subject_kind": "user", "platform_role": "owner"},
+            issuer_ref="user:owner",
+            reviewed_permission_profile_digest=profile.digest,
+        ),
+        permission_id="workspace.write",
+        app_capability="workspace.write",
+        component_capabilities=("workspace.write",),
+        actor_chain={"application_id": "adaos_drive", "subject_ref": "user:owner"},
+    )
+    assert undeclared_role.decision == "deny"
+    assert undeclared_role.reason_code == "application_role_undeclared"
+
+
 def test_application_access_decision_intersects_profile_grant_role_component_and_floors() -> None:
     profile = _profile()
     roles = _roles(profile)

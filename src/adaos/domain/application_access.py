@@ -897,15 +897,18 @@ def evaluate_application_access(
         return decision("deny", "session_scope_required", "Application grant requires a bound session.")
 
     role_map = {item.role_id: item for item in roles}
-    selected_roles = [role_map[role_id] for role_id in grant.application_roles if role_id in role_map]
-    if not selected_roles:
-        return decision("deny", "application_role_missing", "Subject has no valid Application role.")
-    if not any(capability in role.grants for role in selected_roles):
-        return decision("deny", "application_role_capability_missing", "Application role does not grant this capability.")
-    required_permissions = set().union(*(set(role.requires_permissions) for role in selected_roles))
-    missing_role_permissions = sorted(required_permissions - set(grant.permission_ceiling))
-    if missing_role_permissions:
-        return decision("pending_action", "role_required_permission_missing", "Role requires a permission not granted to the subject.")
+    if role_map:
+        selected_roles = [role_map[role_id] for role_id in grant.application_roles if role_id in role_map]
+        if not selected_roles:
+            return decision("deny", "application_role_missing", "Subject has no valid Application role.")
+        if not any(capability in role.grants for role in selected_roles):
+            return decision("deny", "application_role_capability_missing", "Application role does not grant this capability.")
+        required_permissions = set().union(*(set(role.requires_permissions) for role in selected_roles))
+        missing_role_permissions = sorted(required_permissions - set(grant.permission_ceiling))
+        if missing_role_permissions:
+            return decision("pending_action", "role_required_permission_missing", "Role requires a permission not granted to the subject.")
+    elif grant.application_roles:
+        return decision("deny", "application_role_undeclared", "Roleless Application release cannot accept Application roles.")
 
     kind = _subject_kind(grant)
     if kind == "guest" and is_high_risk_permission(permission):
@@ -920,7 +923,15 @@ def evaluate_application_access(
         if not (approval_id or grant.constraints.get("guardian_approval_id")):
             return decision("pending_action", "guardian_approval_required", "Child access requires guardian approval for external data sharing.")
 
-    return decision("allow", "allowed", "Application permission, grant, role, component, and subject floors allow the action.")
+    return decision(
+        "allow",
+        "allowed",
+        (
+            "Application permission, grant, role, component, and subject floors allow the action."
+            if role_map
+            else "Application permission, grant, component, and subject floors allow the action."
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -357,6 +357,58 @@ def test_builder_provisions_and_rebinds_publisher_owner_access(monkeypatch) -> N
     assert second["revision"] == 2
 
 
+def test_builder_provisions_roleless_publisher_permission_grant(monkeypatch) -> None:
+    profile = SimpleNamespace(
+        flat_permissions=("workspace.read", "workspace.write"),
+        digest="sha256:" + "c" * 64,
+    )
+    release = SimpleNamespace(application_roles=(), permission_profile=profile)
+    grants = []
+
+    class Access:
+        def grant_access(self, _application_id, **values):
+            grant = SimpleNamespace(
+                grant_id="appgrant.roleless-owner",
+                status="active",
+                application_roles=tuple(values["application_roles"]),
+                permission_ceiling=tuple(values["permission_ceiling"]),
+                explicit_denies=tuple(values.get("explicit_denies") or ()),
+                constraints=dict(values["constraints"]),
+                reviewed_permission_profile_digest=profile.digest,
+                expires_at=values.get("expires_at"),
+                revision=1,
+            )
+            grants.append(grant)
+            return grant
+
+    store = SimpleNamespace(
+        get_release=lambda *_args: release,
+        list_application_access_grants=lambda *_args, **_kwargs: tuple(grants),
+    )
+    service = SimpleNamespace(store=store)
+    monkeypatch.setattr(applications, "_application_service", lambda: service)
+    monkeypatch.setattr(
+        applications,
+        "_ctx",
+        lambda: SimpleNamespace(settings=SimpleNamespace(owner_id="owner")),
+    )
+    monkeypatch.setattr(
+        applications,
+        "ApplicationAccessManagementService",
+        lambda _service: SimpleNamespace(access=Access()),
+    )
+
+    result = applications._ensure_publisher_owner_access(
+        "adaos_drive", release_digest="sha256:" + "3" * 64
+    )
+
+    assert result["required"] is True
+    assert result["application_roles"] == []
+    assert result["role_resolution"] == "permission_profile_only"
+    assert result["permission_profile_digest"] == profile.digest
+    assert grants[0].permission_ceiling == profile.flat_permissions
+
+
 @pytest.mark.parametrize("difference", ["selection", "workflow", "publication_unconfirmed"])
 def test_local_trial_acceptance_preserves_selection_on_stale_or_unconfirmed_publication(monkeypatch, difference):
     from adaos.sdk.builder import lifecycle, workflow
