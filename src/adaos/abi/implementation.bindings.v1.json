@@ -71,7 +71,201 @@
         "archive": "Call modify_message(remove_label_ids=['INBOX']).",
         "read_state": "Call modify_message(add_label_ids=['UNREAD']) or remove_label_ids=['UNREAD'].",
         "star_state": "Call modify_message(add_label_ids=['STARRED']) or remove_label_ids=['STARRED'].",
-        "send_semantics": "Create an RFC 2822 message and URL-safe base64 encode it without persisting body text. Deduplicate the user command in app-owned storage before the single SDK call. Core never automatically retries a send."
+        "send_semantics": "Create an RFC 2822 message and URL-safe base64 encode it without persisting body text. Deduplicate the user command in app-owned storage before the single SDK call. Core never automatically retries a send.",
+        "error": "Catch gmail.GmailProviderError. Its public fields are code:str, status_code:int|null and retryable:bool; to_dict() returns {ok:false,error:<code>,status_code,retryable}. Do not expose exception causes or remote response bodies.",
+        "success_envelopes": {
+          "begin_connection": {
+            "shape": "{ok:true,provider_id:'google.gmail',account_id:'google.gmail',authorization_url:string,expires_at:ISO-8601}",
+            "persistence": "authorization_url and OAuth state are ephemeral; do not persist or log them"
+          },
+          "connection_status": {
+            "shape": "{ok:true,provider_id:'google.gmail',account_id:'google.gmail',status:'connected',email_address:string,scopes:[string]}",
+            "missing": "A missing connection raises GmailProviderError(code='gmail_account_not_connected'); map it to the accepted disconnected/setup-required UI state."
+          },
+          "operation": {
+            "shape": "{ok:true,provider_id:'google.gmail',operation:<exact SDK operation>,result:<decoded Gmail REST object>}",
+            "rule": "The owned skill validates and projects result into its own bounded output schema. It never returns or persists a raw provider object that is not required by the accepted UI."
+          },
+          "list_messages_result": "{messages?:[{id:string,threadId:string}],nextPageToken?:string,resultSizeEstimate?:integer}",
+          "get_message_result": "The Gmail users.messages.get object. Project only id, threadId, labelIds, snippet and decoded headers/body fields required for the selected transient reader; never log or persist payload body data.",
+          "list_labels_result": "{labels?:[{id:string,name:string,type?:string,messageListVisibility?:string,labelListVisibility?:string}]}",
+          "modify_or_trash_result": "The resulting Gmail message object; project only confirmation identity and current labels.",
+          "send_message_result": "{id:string,threadId:string,labelIds?:[string]}; treat success only after this envelope is returned. A transport failure is not a confirmed send."
+        },
+        "response_schemas": {
+          "connection_status": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ok", "provider_id", "account_id", "status", "email_address", "scopes"],
+            "properties": {
+              "ok": {"const": true},
+              "provider_id": {"const": "google.gmail"},
+              "account_id": {"const": "google.gmail"},
+              "status": {"const": "connected"},
+              "email_address": {"type": "string"},
+              "scopes": {"type": "array", "items": {"type": "string"}}
+            }
+          },
+          "operation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ok", "provider_id", "operation", "result"],
+            "properties": {
+              "ok": {"const": true},
+              "provider_id": {"const": "google.gmail"},
+              "operation": {
+                "enum": ["list_messages", "get_message", "list_labels", "modify_message", "trash_message", "send_message"]
+              },
+              "result": {"type": "object"}
+            },
+            "allOf": [
+              {
+                "if": {"properties": {"operation": {"const": "list_messages"}}, "required": ["operation"]},
+                "then": {
+                  "properties": {
+                    "result": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "messages": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "required": ["id", "threadId"],
+                            "properties": {"id": {"type": "string"}, "threadId": {"type": "string"}}
+                          }
+                        },
+                        "nextPageToken": {"type": "string"},
+                        "resultSizeEstimate": {"type": "integer", "minimum": 0}
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {"properties": {"operation": {"const": "get_message"}}, "required": ["operation"]},
+                "then": {
+                  "properties": {
+                    "result": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "required": ["id", "threadId"],
+                      "properties": {
+                        "id": {"type": "string"},
+                        "threadId": {"type": "string"},
+                        "labelIds": {"type": "array", "items": {"type": "string"}},
+                        "snippet": {"type": "string"},
+                        "historyId": {"type": "string"},
+                        "internalDate": {"type": "string"},
+                        "sizeEstimate": {"type": "integer", "minimum": 0},
+                        "payload": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "properties": {
+                            "mimeType": {"type": "string"},
+                            "filename": {"type": "string"},
+                            "headers": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": true,
+                                "required": ["name", "value"],
+                                "properties": {"name": {"type": "string"}, "value": {"type": "string"}}
+                              }
+                            },
+                            "body": {
+                              "type": "object",
+                              "additionalProperties": true,
+                              "properties": {
+                                "attachmentId": {"type": "string"},
+                                "size": {"type": "integer", "minimum": 0},
+                                "data": {"type": "string", "description": "URL-safe base64 MIME body bytes; transiently decode in the owning skill and never log or persist the value."}
+                              }
+                            },
+                            "parts": {"type": "array", "items": {"type": "object"}}
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {"properties": {"operation": {"const": "list_labels"}}, "required": ["operation"]},
+                "then": {
+                  "properties": {
+                    "result": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "labels": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "required": ["id", "name"],
+                            "properties": {
+                              "id": {"type": "string"},
+                              "name": {"type": "string"},
+                              "type": {"type": "string"},
+                              "messageListVisibility": {"type": "string"},
+                              "labelListVisibility": {"type": "string"}
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {"properties": {"operation": {"enum": ["modify_message", "trash_message"]}}, "required": ["operation"]},
+                "then": {
+                  "properties": {
+                    "result": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "required": ["id", "threadId"],
+                      "properties": {
+                        "id": {"type": "string"},
+                        "threadId": {"type": "string"},
+                        "labelIds": {"type": "array", "items": {"type": "string"}}
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {"properties": {"operation": {"const": "send_message"}}, "required": ["operation"]},
+                "then": {
+                  "properties": {
+                    "result": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "required": ["id", "threadId"],
+                      "properties": {
+                        "id": {"type": "string"},
+                        "threadId": {"type": "string"},
+                        "labelIds": {"type": "array", "items": {"type": "string"}}
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "synthetic_examples": {
+          "connection_status": {"ok": true, "provider_id": "google.gmail", "account_id": "google.gmail", "status": "connected", "email_address": "owner@example.test", "scopes": ["https://www.googleapis.com/auth/gmail.modify"]},
+          "list_messages": {"ok": true, "provider_id": "google.gmail", "operation": "list_messages", "result": {"messages": [{"id": "msg-1", "threadId": "thread-1"}], "nextPageToken": "page-2", "resultSizeEstimate": 1}},
+          "get_message": {"ok": true, "provider_id": "google.gmail", "operation": "get_message", "result": {"id": "msg-1", "threadId": "thread-1", "labelIds": ["INBOX", "UNREAD"], "snippet": "Example preview", "payload": {"mimeType": "text/plain", "headers": [{"name": "From", "value": "Sender <sender@example.test>"}, {"name": "Subject", "value": "Example"}], "body": {"size": 12, "data": "RXhhbXBsZSBib2R5"}}}},
+          "list_labels": {"ok": true, "provider_id": "google.gmail", "operation": "list_labels", "result": {"labels": [{"id": "INBOX", "name": "INBOX", "type": "system"}]}},
+          "modify_message": {"ok": true, "provider_id": "google.gmail", "operation": "modify_message", "result": {"id": "msg-1", "threadId": "thread-1", "labelIds": ["STARRED"]}},
+          "trash_message": {"ok": true, "provider_id": "google.gmail", "operation": "trash_message", "result": {"id": "msg-1", "threadId": "thread-1", "labelIds": ["TRASH"]}},
+          "send_confirmed": {"ok": true, "provider_id": "google.gmail", "operation": "send_message", "result": {"id": "sent-1", "threadId": "thread-1", "labelIds": ["SENT"]}},
+          "send_uncertain": {"ok": false, "error": "gmail_provider_unavailable", "status_code": 503, "retryable": true, "delivery_status": "unknown", "rule": "Keep the app-owned idempotency record pending/unknown and require explicit reconciliation; do not automatically call send_message again."}
+        }
       },
       "webui_connection": {
         "steps": [

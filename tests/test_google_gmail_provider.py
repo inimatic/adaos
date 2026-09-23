@@ -360,6 +360,19 @@ def test_sdk_accepts_trusted_user_subject_for_a_session_caller(monkeypatch) -> N
     assert gmail_sdk._invocation() == (provider, application, "user:owner")
 
 
+def test_sdk_exports_the_bounded_public_provider_error() -> None:
+    error = gmail_sdk.GmailProviderError(
+        "gmail_provider_unavailable", status_code=503, retryable=True
+    )
+
+    assert error.to_dict() == {
+        "ok": False,
+        "error": "gmail_provider_unavailable",
+        "status_code": 503,
+        "retryable": True,
+    }
+
+
 def test_oauth_callback_returns_safe_error_when_provider_is_unavailable(
     monkeypatch,
 ) -> None:

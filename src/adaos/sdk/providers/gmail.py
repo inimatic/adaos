@@ -12,6 +12,7 @@ from adaos.services.providers.google_gmail import (
     GOOGLE_GMAIL_PROVIDER_ID,
     GOOGLE_GMAIL_SKILL_CAPABILITY,
     GoogleGmailProvider,
+    GoogleGmailProviderError as GmailProviderError,
 )
 
 
@@ -151,6 +152,7 @@ def send_message(
 
 
 __all__ = [
+    "GmailProviderError",
     "begin_connection",
     "connection_status",
     "get_message",

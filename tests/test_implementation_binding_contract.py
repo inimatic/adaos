@@ -98,6 +98,30 @@ def test_google_gmail_contract_is_loaded_only_for_relevant_automation_context():
         "https://www.googleapis.com/auth/gmail.modify"
     ]
     assert "adaos.sdk.providers" in contract["sdk"]["import"]
+    assert "gmail.GmailProviderError" in contract["sdk"]["error"]
+    assert "result:<decoded Gmail REST object>" in contract["sdk"][
+        "success_envelopes"
+    ]["operation"]["shape"]
+    assert "gmail_account_not_connected" in contract["sdk"]["success_envelopes"][
+        "connection_status"
+    ]["missing"]
+    schemas = contract["sdk"]["response_schemas"]
+    examples = contract["sdk"]["synthetic_examples"]
+    jsonschema.Draft202012Validator(schemas["connection_status"]).validate(
+        examples["connection_status"]
+    )
+    operation_validator = jsonschema.Draft202012Validator(schemas["operation"])
+    for name in (
+        "list_messages",
+        "get_message",
+        "list_labels",
+        "modify_message",
+        "trash_message",
+        "send_confirmed",
+    ):
+        operation_validator.validate(examples[name])
+    assert examples["send_uncertain"]["delivery_status"] == "unknown"
+    assert "do not automatically" in examples["send_uncertain"]["rule"]
 
 
 def test_creation_contract_matches_state_hydration_instead_of_dynamic_defaults():

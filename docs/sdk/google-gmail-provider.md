@@ -56,6 +56,14 @@ gmail.trash_message(message_id)
 gmail.send_message(raw_base64url, idempotency_key=stable_command_id)
 ```
 
+Provider failures use the public `gmail.GmailProviderError` with stable `code`,
+`status_code`, and `retryable` fields plus a secret-free `to_dict()` envelope.
+Successful mail operations return
+`{ok, provider_id, operation, result}`; the owning skill validates the Gmail
+result and projects only the fields required by its bounded tool output. A
+missing account raises `gmail_account_not_connected`, which maps to the
+setup-required UI state rather than a fabricated empty mailbox.
+
 Only these fixed operations are admitted. Hard deletion and arbitrary URLs or
 HTTP methods are unavailable. `send_message` is never retried by Core and
 requires an Application-owned idempotency key; the Application must suppress a
