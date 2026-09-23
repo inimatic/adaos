@@ -68,6 +68,45 @@ explicitly reconciled into `ApplicationInstallation` and `RuntimeSelection`.
 Running a new Application Trial after low-level Workspace promotion would
 correctly select the Trial again and is not an acceptance workflow.
 
+## Bounded network snapshot update
+
+The stable `adaos_drive@0.1.12` release removes a user-visible latency debt in
+the two-panel snapshot path. A snapshot whose panels address the same source
+and directory now performs one physical directory enumeration and reuses a
+bounded process-local result for the other panel and immediately following
+reads. The cache has a two-second TTL, a hard maximum of 64 entries, returns
+copies rather than mutable shared values, and is invalidated by explicit
+refresh and every Drive mutation that can affect a directory view. Runtime
+drain and reset clear it completely.
+
+- Candidate: `adaos_drive-0-1-12-4c2af41022e0`;
+- release digest:
+  `sha256:159b225d39d93eb46a67bf96ad562e740ea2a3b105d8b07f8e654c2af41022e0`;
+- scenario package: `adaos_drive@0.1.6`, digest
+  `sha256:ea99794abef3353277a15b8de2d61e38ede33c04622eb12485293e4b35edfd4b`;
+- skill package: `adaos_drive@0.1.9`, digest
+  `sha256:b7572a1753aa949cd59c354ed5d66b599895ed611ec4a2ba9a2e7fc5861613d6`;
+- stable RuntimeSelection revision: 6;
+- WorkspaceLock revision: 66, digest
+  `sha256:072c43a32f8fe35d0956592c208d28ff48fca4ac1e0f25cb5d1eec0897f478b4`;
+- declared permissions and permission-profile digest are unchanged.
+
+The package passed all 20 Drive tests, focused Ruff validation of the changed
+handler, and the skill validator with no issues. Trial, Application access
+verification, Trial placement, Candidate acceptance, promotion, runtime
+reload, and stable Application reconciliation all passed in that order.
+
+After restarting the development runtime exclusively through `api serve` on
+port 8777, one and only one listener was active and the node reported ready.
+Live stable calls measured 458 ms for an expired-cache snapshot and 393 ms for
+the immediately repeated snapshot, including HTTP, access-admission, workspace
+setup and tool-bridge overhead. The earlier 10.9-second Drive tool execution
+did not recur. The same live run selected and activated `Annaarch` and returned
+to the root; all three calls completed with `ok=true` and without an
+Application permission denial. The unit proof separately asserts one physical
+enumeration for equal left/right views and explicit-refresh invalidation, so
+the optimization does not rely on the timing difference alone.
+
 Legacy undeclared Drive data was preserved in the private runtime recovery
 area. It is not an active compatibility dependency and must not be deleted
 until the native state adoption, backup/restore, and retention decision are
