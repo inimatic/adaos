@@ -291,6 +291,51 @@ class EvidenceAssessmentService:
         return "Evidence has been revoked" + (f": {detail}." if detail else ".")
 
 
+def explain_evidence_assessment(
+    claim: EvidenceClaim,
+    assessment: EvidenceAssessment,
+    *,
+    purpose: str = "production",
+) -> dict[str, Any]:
+    """Project an immutable claim/assessment pair for operator and Builder UI."""
+
+    claim_value = claim.to_dict()
+    assessment_value = assessment.to_dict()
+    if assessment_value["claim_ref"] != claim.claim_ref:
+        raise EvidenceFreshnessError("evidence assessment references another claim")
+    if assessment_value["claim_digest"] != claim.digest:
+        raise EvidenceFreshnessError("evidence assessment pins another claim digest")
+    status = str(assessment_value["status"])
+    reasons = list(assessment_value.get("reasons") or [])
+    historically_verified = claim_value["result"] == "verified"
+    newly_proven_incompatible = (
+        status == "incompatible" and claim_value["result"] == "incompatible"
+    )
+    if status == "stale" and historically_verified:
+        message = "Evidence was historically verified but is stale; reverify before production use."
+    elif newly_proven_incompatible:
+        message = "A new verification proved this binding incompatible."
+    elif status == "incompatible" and historically_verified:
+        message = "Historical verification is currently inadmissible under the active trust policy."
+    else:
+        message = EvidenceAssessmentService._message(status, reasons, purpose=purpose)
+    return {
+        "schema": "adaos.evidence.explanation.v1",
+        "claim_ref": claim.claim_ref,
+        "claim_digest": claim.digest,
+        "claim_kind": claim_value["claim_kind"],
+        "status": status,
+        "purpose": str(purpose),
+        "historically_verified": historically_verified,
+        "newly_proven_incompatible": newly_proven_incompatible,
+        "requires_reverification": status == "stale",
+        "admissible_for_use": status == "admissible",
+        "message": message,
+        "reasons": reasons,
+        "evaluated_at": assessment_value["evaluated_at"],
+    }
+
+
 class ExternalChangeMonitorStore:
     """Content-addressed store for immutable external observations."""
 

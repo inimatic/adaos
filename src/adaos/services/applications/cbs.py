@@ -8,10 +8,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from adaos.domain.capability_binding_state import ApplicationRequirement, CapabilityContract
+from adaos.domain.capability_binding_state import (
+    ApplicationRequirement,
+    CapabilityContract,
+    EvidenceAssessment,
+    EvidenceClaim,
+)
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.builder.cbs import compile_prototype_cbs, validate_cbs_compilation
-from adaos.services.capability_binding_state import SemanticResolver
+from adaos.services.capability_binding_state import (
+    SemanticResolver,
+    explain_evidence_assessment,
+)
 
 
 class ApplicationCBSConflict(ValueError):
@@ -141,6 +149,8 @@ class ApplicationCBSService:
         application_ref: str,
         *,
         capability_contracts: Iterable[Mapping[str, Any] | CapabilityContract],
+        evidence_claims: Iterable[Mapping[str, Any] | EvidenceClaim] = (),
+        evidence_assessments: Iterable[Mapping[str, Any] | EvidenceAssessment] = (),
     ) -> dict[str, Any]:
         compilation = self.inspect(application_ref)
         if compilation is None:
@@ -154,6 +164,26 @@ class ApplicationCBSService:
             ApplicationRequirement.from_mapping(item)
             for item in compilation["requirements"]
         ]
+        claims = tuple(
+            item if isinstance(item, EvidenceClaim) else EvidenceClaim.from_mapping(item)
+            for item in evidence_claims
+        )
+        current_assessments = tuple(
+            item
+            if isinstance(item, EvidenceAssessment)
+            else EvidenceAssessment.from_mapping(item)
+            for item in evidence_assessments
+        )
+        assessment_by_claim = {
+            str(item.to_dict()["claim_digest"]): item
+            for item in sorted(
+                current_assessments,
+                key=lambda item: (
+                    str(item.to_dict()["evaluated_at"]),
+                    item.digest,
+                ),
+            )
+        }
         assessments = []
         evidence_obligations: list[dict[str, Any]] = []
         for requirement in requirements:
@@ -161,18 +191,54 @@ class ApplicationCBSService:
             required_claim_kinds = list(
                 requirement.to_dict()["evidence_threshold"]["required_claim_kinds"]
             )
-            assessment["evidence_obligations"] = [
-                {"claim_kind": kind, "status": "unassessed"}
-                for kind in required_claim_kinds
+            matching_claims = [
+                claim
+                for claim in claims
+                if any(
+                    str(subject["ref"]) == requirement.capability_ref
+                    for subject in claim.to_dict()["subjects"]
+                )
             ]
+            obligations = []
+            for kind in required_claim_kinds:
+                candidates = [
+                    claim
+                    for claim in matching_claims
+                    if claim.to_dict()["claim_kind"] == kind
+                    and claim.digest in assessment_by_claim
+                ]
+                if not candidates:
+                    obligations.append({"claim_kind": kind, "status": "unassessed"})
+                    continue
+                claim = sorted(
+                    candidates,
+                    key=lambda item: (
+                        str(assessment_by_claim[item.digest].to_dict()["evaluated_at"]),
+                        item.digest,
+                    ),
+                )[-1]
+                explanation = explain_evidence_assessment(
+                    claim,
+                    assessment_by_claim[claim.digest],
+                    purpose="production",
+                )
+                obligations.append(
+                    {
+                        "claim_kind": kind,
+                        "status": explanation["status"],
+                        "claim_ref": claim.claim_ref,
+                        "claim_digest": claim.digest,
+                        "explanation": explanation,
+                    }
+                )
+            assessment["evidence_obligations"] = obligations
             assessments.append(assessment)
             evidence_obligations.extend(
                 {
                     "requirement_ref": requirement.requirement_ref,
-                    "claim_kind": kind,
-                    "status": "unassessed",
+                    **obligation,
                 }
-                for kind in required_claim_kinds
+                for obligation in obligations
             )
         unresolved = [
             requirement.requirement_ref

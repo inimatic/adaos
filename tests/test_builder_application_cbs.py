@@ -13,6 +13,8 @@ from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.domain.capability_binding_state import (
     BindingInstance,
     CapabilityContract,
+    EvidenceAssessment,
+    EvidenceClaim,
     LocalRevisionObservation,
     StateSpace,
 )
@@ -241,6 +243,60 @@ def test_application_api_compiles_and_assesses_without_activation(tmp_path) -> N
     assert viability.json()["activation_performed"] is False
     assert viability.json()["evidence_obligations"]
     assert viability.json()["capability_gaps"] == []
+
+    ui_contract = _contract("capability:application.ui.render")
+    claim = EvidenceClaim.create(
+        claim_ref="evidence-claim:applications/ui-render",
+        claim_kind="capability_conformance",
+        subjects=(
+            {
+                "kind": "capability_contract",
+                "ref": ui_contract.capability_ref,
+                "digest": ui_contract.digest,
+            },
+        ),
+        environment={
+            "profile_ref": "profile:local/default",
+            "profile_digest": DIGEST_C,
+        },
+        dependencies=(),
+        suite_digest=DIGEST_A,
+        evidence_digest=DIGEST_B,
+        provenance={"issuer": "adaos:test", "runner": "pytest"},
+        issued_at="2026-09-22T12:00:00+00:00",
+        freshness={
+            "max_age_seconds": 86400,
+            "invalidated_by": ["dependency_change"],
+        },
+        result="verified",
+        redaction={"portable": True, "omitted_fields": []},
+        portability_scope="portable",
+    )
+    assessment = EvidenceAssessment.create(
+        assessment_ref="evidence-assessment:applications/ui-render",
+        claim_ref=claim.claim_ref,
+        claim_digest=claim.digest,
+        evaluated_at="2026-09-23T12:00:00+00:00",
+        policy_digest=DIGEST_A,
+        status="stale",
+        reasons=("external renderer dependency changed",),
+    )
+    explained = client.post(
+        "/api/v1/applications/scenario:applications/cbs/semantic-viability",
+        json={
+            "capability_contracts": contracts,
+            "evidence_claims": [claim.to_dict()],
+            "evidence_assessments": [assessment.to_dict()],
+        },
+    )
+    assert explained.status_code == 200, explained.text
+    obligation = next(
+        item
+        for item in explained.json()["evidence_obligations"]
+        if item.get("claim_ref") == claim.claim_ref
+    )
+    assert obligation["status"] == "stale"
+    assert "historically verified but is stale" in obligation["explanation"]["message"]
 
     identities = LocalIdentityStore(
         tmp_path / "capability-binding-state" / "identities"

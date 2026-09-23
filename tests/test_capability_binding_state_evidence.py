@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from adaos.domain.artifact_release import canonical_payload_digest
-from adaos.domain.capability_binding_state import EvidenceClaim
+from adaos.domain.capability_binding_state import EvidenceAssessment, EvidenceClaim
 from adaos.services.capability_binding_state import (
     EvidenceAssessmentService,
     ExternalChangeMonitorStore,
     build_reverification_claim,
     dependency_evidence_impact,
+    explain_evidence_assessment,
 )
 
 
@@ -226,6 +227,24 @@ def test_reverification_emits_new_verified_or_incompatible_claim(tmp_path) -> No
     assert incompatible_result.status == "incompatible"
     assert historical.status == "superseded"
     assert previous.to_dict()["dependencies"][0]["observed_version"] == "3"
+
+    stale_assessment = EvidenceAssessment.create(
+        assessment_ref="evidence-assessment:jira/stale-ui",
+        claim_ref=previous.claim_ref,
+        claim_digest=previous.digest,
+        evaluated_at="2026-09-23T00:25:00+00:00",
+        policy_digest=canonical_payload_digest({"policy": "production"}),
+        status="stale",
+        reasons=("dependency fingerprint changed",),
+    )
+    stale_explanation = explain_evidence_assessment(previous, stale_assessment)
+    incompatible_explanation = explain_evidence_assessment(
+        incompatible,
+        incompatible_result.assessment,
+    )
+    assert "historically verified but is stale" in stale_explanation["message"]
+    assert incompatible_explanation["newly_proven_incompatible"] is True
+    assert "new verification proved" in incompatible_explanation["message"]
 
 
 def test_revocation_subject_change_and_dependency_impact_are_derived(tmp_path) -> None:

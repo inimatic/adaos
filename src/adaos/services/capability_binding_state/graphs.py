@@ -427,6 +427,8 @@ def build_evolver_observations(records: Iterable[Any]) -> dict[str, Any]:
     sources = [_mapping(record) for record in records]
     observations: list[dict[str, Any]] = []
     operations: dict[str, set[str]] = {}
+    schema_users: dict[str, set[str]] = {}
+    package_pairs: dict[tuple[str, str], set[str]] = {}
     for value in sources:
         schema = str(value["schema"])
         if schema == "adaos.capability.contract.v1":
@@ -434,6 +436,12 @@ def build_evolver_observations(records: Iterable[Any]) -> dict[str, Any]:
                 if isinstance(operation, Mapping) and operation.get("operation_id"):
                     operations.setdefault(str(operation["operation_id"]), set()).add(
                         str(value.get("capability_ref"))
+                    )
+        elif schema == "adaos.state.contract.v1":
+            for lock in value.get("schema_locks") or []:
+                if isinstance(lock, Mapping) and lock.get("digest"):
+                    schema_users.setdefault(str(lock["digest"]), set()).add(
+                        str(value.get("state_contract_ref"))
                     )
         elif (
             schema == "adaos.evidence.assessment.v1"
@@ -463,6 +471,38 @@ def build_evolver_observations(records: Iterable[Any]) -> dict[str, Any]:
                         "source_digest": _digest(value),
                     }
                 )
+        elif schema == "adaos.application.resolution.v1":
+            resolution_ref = str(value.get("resolution_ref") or _digest(value))
+            rejections = [
+                dict(item)
+                for item in value.get("rejection_explanations") or []
+                if isinstance(item, Mapping)
+            ]
+            if rejections:
+                observations.append(
+                    {
+                        "kind": "capability_gap",
+                        "subject_ref": resolution_ref,
+                        "codes": sorted(
+                            {
+                                str(item.get("code") or "unclassified")
+                                for item in rejections
+                            }
+                        ),
+                        "source_digest": _digest(value),
+                    }
+                )
+            packages = sorted(
+                {
+                    str(item.get("digest") or item.get("ref") or "")
+                    for item in value.get("package_closure") or []
+                    if isinstance(item, Mapping)
+                    and str(item.get("digest") or item.get("ref") or "")
+                }
+            )
+            for index, left in enumerate(packages):
+                for right in packages[index + 1 :]:
+                    package_pairs.setdefault((left, right), set()).add(resolution_ref)
     for operation, contracts in operations.items():
         if len(contracts) > 1:
             observations.append(
@@ -470,6 +510,24 @@ def build_evolver_observations(records: Iterable[Any]) -> dict[str, Any]:
                     "kind": "operation_overlap",
                     "operation_id": operation,
                     "capability_refs": sorted(contracts),
+                }
+            )
+    for schema_digest, state_contract_refs in schema_users.items():
+        if len(state_contract_refs) > 1:
+            observations.append(
+                {
+                    "kind": "repeated_schema",
+                    "schema_digest": schema_digest,
+                    "state_contract_refs": sorted(state_contract_refs),
+                }
+            )
+    for packages, resolution_refs in package_pairs.items():
+        if len(resolution_refs) > 1:
+            observations.append(
+                {
+                    "kind": "package_cooccurrence",
+                    "package_digests": list(packages),
+                    "resolution_refs": sorted(resolution_refs),
                 }
             )
     observations.sort(

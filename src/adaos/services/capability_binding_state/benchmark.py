@@ -23,8 +23,63 @@ _METRICS = {
     "end_to_end_duration_ms": "lower",
     "package_reuse_rate": "higher",
     "contract_reuse_rate": "higher",
+    "independent_reuse_rate": "higher",
+    "composition_complexity": "lower",
+    "semantic_overlap_rate": "lower",
+    "substitution_cost": "lower",
+    "migration_count": "lower",
+    "regression_count": "lower",
+    "marginal_cost": "lower",
     "invariant_pass_rate": "higher",
 }
+
+_DIGEST_PREFIX = "sha256:"
+
+
+def _require_digest(value: Any, *, field: str) -> str:
+    token = str(value or "")
+    if (
+        not token.startswith(_DIGEST_PREFIX)
+        or len(token) != len(_DIGEST_PREFIX) + 64
+        or any(character not in "0123456789abcdef" for character in token[7:])
+    ):
+        raise CBSBenchmarkError(f"{field} must be a sha256 digest")
+    return token
+
+
+def _evaluation_controls(
+    value: Mapping[str, Any] | None,
+    *,
+    cohort: str,
+) -> dict[str, Any]:
+    evaluation = dict(value or {})
+    required = (
+        "input_digest",
+        "rubric_digest",
+        "target_labels_digest",
+        "solution_recipe_digest",
+    )
+    missing = [field for field in required if not evaluation.get(field)]
+    if missing:
+        raise CBSBenchmarkError(
+            "benchmark evaluation controls are missing: " + ", ".join(missing)
+        )
+    for field in required:
+        evaluation[field] = _require_digest(evaluation[field], field=field)
+    visibility = str(evaluation.get("authoring_visibility") or "").strip()
+    if visibility not in {"input_only", "input_and_rubric"}:
+        raise CBSBenchmarkError(
+            "evaluation authoring_visibility must be input_only or input_and_rubric"
+        )
+    evaluation["authoring_visibility"] = visibility
+    evaluation["sealed"] = bool(evaluation.get("sealed"))
+    if cohort == "heldout" and (
+        not evaluation["sealed"] or visibility != "input_only"
+    ):
+        raise CBSBenchmarkError(
+            "heldout evaluation must be sealed and expose only its input to authoring"
+        )
+    return evaluation
 
 
 def _digest(value: Mapping[str, Any]) -> str:
@@ -41,6 +96,9 @@ def freeze_benchmark_case(
     model_id: str,
     tool_budget: Mapping[str, Any],
     requirement_total: int,
+    sequence_index: int = 1,
+    inventory_size: int = 0,
+    evaluation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Freeze the controls required for a meaningful legacy/CBS pair."""
 
@@ -48,6 +106,10 @@ def freeze_benchmark_case(
         raise CBSBenchmarkError("cohort must be representative or heldout")
     if requirement_total < 1:
         raise CBSBenchmarkError("benchmark cases require at least one requirement")
+    if sequence_index < 1:
+        raise CBSBenchmarkError("benchmark sequence_index must be positive")
+    if inventory_size < 0:
+        raise CBSBenchmarkError("benchmark inventory_size cannot be negative")
     body = {
         "schema": "adaos.cbs.benchmark_case.v1",
         "case_ref": str(case_ref),
@@ -55,6 +117,9 @@ def freeze_benchmark_case(
         "cohort": cohort,
         "workload_digest": str(workload_digest),
         "environment_profile_digest": str(environment_profile_digest),
+        "sequence_index": int(sequence_index),
+        "inventory_size": int(inventory_size),
+        "evaluation": _evaluation_controls(evaluation, cohort=cohort),
         "controls": {
             "model_id": str(model_id),
             "tool_budget": dict(tool_budget),
@@ -74,6 +139,9 @@ def create_benchmark_observation(
     controls: Mapping[str, Any],
     metrics: Mapping[str, Any],
     source_digests: Iterable[str],
+    treatment: Mapping[str, Any] | None = None,
+    identity_digests: Iterable[str] = (),
+    evidence_digests: Iterable[str] = (),
 ) -> dict[str, Any]:
     if variant not in {"legacy", "cbs"}:
         raise CBSBenchmarkError("benchmark variant must be legacy or cbs")
@@ -87,6 +155,32 @@ def create_benchmark_observation(
         if value is not None and not isinstance(value, (int, float)):
             raise CBSBenchmarkError(f"metric {metric} must be numeric or missing")
         normalized[metric] = value
+    sources = sorted({_require_digest(item, field="source_digest") for item in source_digests})
+    if not sources:
+        raise CBSBenchmarkError("benchmark observation requires source digests")
+    identities = sorted(
+        {_require_digest(item, field="identity_digest") for item in identity_digests}
+    )
+    evidence = sorted(
+        {_require_digest(item, field="evidence_digest") for item in evidence_digests}
+    )
+    treatment_value = dict(treatment or {})
+    treatment_kind = str(treatment_value.get("kind") or variant).strip()
+    if treatment_kind != variant:
+        raise CBSBenchmarkError("observation treatment kind must match its variant")
+    maturity = treatment_value.get("inventory_maturity") or {}
+    if not isinstance(maturity, Mapping):
+        raise CBSBenchmarkError("inventory_maturity must be an object")
+    maturity_value = {
+        str(key): int(count)
+        for key, count in maturity.items()
+        if int(count) >= 0
+    }
+    treatment_value = {
+        **treatment_value,
+        "kind": treatment_kind,
+        "inventory_maturity": dict(sorted(maturity_value.items())),
+    }
     body = {
         "schema": "adaos.cbs.benchmark_observation.v1",
         "case_ref": case["case_ref"],
@@ -97,7 +191,10 @@ def create_benchmark_observation(
         "environment_profile_digest": case["environment_profile_digest"],
         "controls": actual,
         "metrics": normalized,
-        "source_digests": sorted({str(item) for item in source_digests}),
+        "treatment": treatment_value,
+        "source_digests": sources,
+        "identity_digests": identities,
+        "evidence_digests": evidence,
     }
     return {**body, "observation_digest": _digest(body)}
 
@@ -176,6 +273,18 @@ def observation_from_cbs_telemetry(
         controls=controls,
         metrics=metrics,
         source_digests=[str(value["telemetry_digest"])],
+        treatment={
+            "kind": "cbs",
+            "inventory_maturity": {},
+            "telemetry_schema": value["schema"],
+        },
+        identity_digests=(
+            str(value["semantic_revision_digest"]),
+            str(value["application_resolution_digest"]),
+            str(value["resolution_plan_digest"]),
+            str(value["workspace_lock_digest"]),
+        ),
+        evidence_digests=(str(value["telemetry_digest"]),),
     )
 
 
@@ -265,6 +374,83 @@ def build_benchmark_report(
             }
         )
     matched = [item for item in results if item["matched"]]
+    matched_refs = {str(item["case_ref"]) for item in matched}
+    matched_cases = [
+        case for case in case_values if str(case["case_ref"]) in matched_refs
+    ]
+    maturity_distribution: dict[str, dict[str, int]] = {
+        "legacy": {},
+        "cbs": {},
+    }
+    for case in matched_cases:
+        for variant in ("legacy", "cbs"):
+            treatment = (
+                by_case.get(str(case["case_ref"]), {})
+                .get(variant, {})
+                .get("treatment")
+                or {}
+            )
+            for maturity, count in (treatment.get("inventory_maturity") or {}).items():
+                maturity_distribution[variant][str(maturity)] = (
+                    maturity_distribution[variant].get(str(maturity), 0) + int(count)
+                )
+    ordered = sorted(
+        matched_cases,
+        key=lambda item: (int(item.get("sequence_index") or 0), str(item["case_ref"])),
+    )
+    series: list[dict[str, Any]] = []
+    for case in ordered:
+        arms = by_case[str(case["case_ref"])]
+        series.append(
+            {
+                "case_ref": case["case_ref"],
+                "sequence_index": case.get("sequence_index"),
+                "inventory_size": case.get("inventory_size"),
+                "legacy": (arms["legacy"].get("metrics") or {}).get("marginal_cost"),
+                "cbs": (arms["cbs"].get("metrics") or {}).get("marginal_cost"),
+                "legacy_regressions": (arms["legacy"].get("metrics") or {}).get(
+                    "regression_count"
+                ),
+                "cbs_regressions": (arms["cbs"].get("metrics") or {}).get(
+                    "regression_count"
+                ),
+            }
+        )
+    complete_series = [
+        item
+        for item in series
+        if all(
+            isinstance(item[field], (int, float))
+            for field in (
+                "legacy",
+                "cbs",
+                "legacy_regressions",
+                "cbs_regressions",
+            )
+        )
+    ]
+    claim_status = "insufficient_data"
+    claim_reasons: list[str] = []
+    if len(complete_series) >= 2:
+        first = complete_series[0]
+        last = complete_series[-1]
+        declining = last["cbs"] < first["cbs"]
+        no_regression_increase = sum(item["cbs_regressions"] for item in complete_series) <= sum(
+            item["legacy_regressions"] for item in complete_series
+        )
+        beats_legacy_last = last["cbs"] < last["legacy"]
+        if declining and no_regression_increase and beats_legacy_last:
+            claim_status = "supported_bounded"
+        else:
+            claim_status = "not_supported"
+        if not declining:
+            claim_reasons.append("CBS marginal cost did not decline across the frozen sequence")
+        if not beats_legacy_last:
+            claim_reasons.append("CBS did not beat the matched legacy arm on the final case")
+        if not no_regression_increase:
+            claim_reasons.append("CBS increased the matched regression count")
+    else:
+        claim_reasons.append("at least two complete matched sequence points are required")
     body = {
         "schema": "adaos.cbs.benchmark_report.v1",
         "case_count": len(results),
@@ -276,6 +462,16 @@ def build_benchmark_report(
             item["matched"] and item["cohort"] == "heldout" for item in results
         ),
         "causal_claim_admissible": bool(matched) and len(matched) == len(results),
+        "maturity_distribution": maturity_distribution,
+        "marginal_cost_series": series,
+        "primary_claim": {
+            "statement": (
+                "marginal cost declines as verified reusable inventory grows without "
+                "increasing semantic or E2E regression rate"
+            ),
+            "status": claim_status,
+            "reasons": claim_reasons,
+        },
         "cases": results,
     }
     return {**body, "report_digest": _digest(body)}

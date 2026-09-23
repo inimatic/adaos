@@ -33,6 +33,7 @@ from adaos.services.capability_binding_state import (
     ProviderTimeout,
     ReconciliationRequired,
     ResolutionFailure,
+    ResolutionPlanner,
     SemanticResolver,
     SimulationReservationProvider,
     StaleAvailability,
@@ -482,6 +483,7 @@ def test_resolver_explains_composition_and_all_state_attachments(tmp_path: Path)
         package_resolver=lambda _candidate: release,
     )
     payload = resolution.to_dict()
+    plan = ResolutionPlanner(now=lambda: NOW).build(resolution, current_lock=None)
 
     assert {item["ref"] for item in payload["selected_contracts"] if item["kind"] == "capability"} == {
         contracts.capability.capability_ref,
@@ -492,6 +494,7 @@ def test_resolver_explains_composition_and_all_state_attachments(tmp_path: Path)
         "bookings",
         "audit",
     }
+    assert plan.to_dict()["application_resolution_digest"] == resolution.digest
 
     stale = tuple(
         EvidenceAssessment.create(
@@ -520,6 +523,45 @@ def test_resolver_explains_composition_and_all_state_attachments(tmp_path: Path)
             relations=relations,
             evidence_claims=tuple(item[0] for item in pairs),
             evidence_assessments=stale,
+            package_resolver=lambda _candidate: release,
+        )
+
+    incompatible = tuple(
+        EvidenceAssessment.create(
+            assessment_ref=item[1].to_dict()["assessment_ref"],
+            claim_ref=item[0].claim_ref,
+            claim_digest=item[0].digest,
+            evaluated_at="2026-09-23T09:06:00+00:00",
+            policy_digest=item[1].to_dict()["policy_digest"],
+            status="incompatible",
+            reasons=("calendar v2 failed reverification",),
+        )
+        for item in pairs
+    )
+    with pytest.raises(ResolutionFailure, match="missing_evidence"):
+        resolver.resolve(
+            contracts.requirement,
+            semantic_revision_digest=canonical_payload_digest(
+                contracts.semantic_application
+            ),
+            target_mode="production",
+            capability_contracts=(
+                contracts.capability,
+                contracts.availability_capability,
+            ),
+            state_contracts=(
+                contracts.availability_state,
+                contracts.booking_state,
+                contracts.audit_state,
+            ),
+            binding_definitions=(contracts.production_binding,),
+            deliveries=(delivery,),
+            environment_profile=contracts.profile,
+            binding_instances=(instance,),
+            state_spaces=states,
+            relations=relations,
+            evidence_claims=tuple(item[0] for item in pairs),
+            evidence_assessments=incompatible,
             package_resolver=lambda _candidate: release,
         )
 

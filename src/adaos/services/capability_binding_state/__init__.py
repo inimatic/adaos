@@ -45,6 +45,7 @@ from .evidence import (
     ExternalChangeMonitorStore,
     build_reverification_claim,
     dependency_evidence_impact,
+    explain_evidence_assessment,
 )
 from .booking import (
     BookingCommand,
@@ -151,6 +152,7 @@ __all__ = [
     "calculate_effective_guarantees",
     "build_reverification_claim",
     "dependency_evidence_impact",
+    "explain_evidence_assessment",
     "redacted_graph_record",
     "stage_authority_transition",
     "validate_state_attachment",

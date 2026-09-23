@@ -130,3 +130,31 @@ def test_evolver_maturity_requires_evidence_and_remains_advisory() -> None:
     )
     assert reusable["maturity"] == "reusable"
     assert reusable["authority"] == "advisory_only"
+
+
+def test_evolver_observes_gaps_repeated_schemas_and_package_cooccurrence() -> None:
+    contracts = flowboard_contracts()
+    state_copy = contracts.state.to_dict()
+    state_copy["state_contract_ref"] = "state-contract:inventory.items"
+    state_copy["contract_digest"] = "sha256:" + "5" * 64
+    package_a = "sha256:" + "1" * 64
+    package_b = "sha256:" + "2" * 64
+    resolutions = []
+    for suffix in ("one", "two"):
+        value = _resolution(f"evidence-claim:flowboard/{suffix}")
+        value["resolution_ref"] = f"application-resolution:flowboard/{suffix}"
+        value["resolution_digest"] = "sha256:" + ("3" if suffix == "one" else "4") * 64
+        value["package_closure"] = [{"digest": package_a}, {"digest": package_b}]
+        value["rejection_explanations"] = [
+            {"code": "missing_capability_dependency"}
+        ]
+        resolutions.append(value)
+
+    result = build_evolver_observations(
+        [contracts.state, state_copy, *resolutions]
+    )
+    kinds = [item["kind"] for item in result["observations"]]
+
+    assert kinds.count("capability_gap") == 2
+    assert "repeated_schema" in kinds
+    assert "package_cooccurrence" in kinds

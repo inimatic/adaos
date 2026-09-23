@@ -35,6 +35,8 @@ class CBSCompilationRequest(BaseModel):
 
 class CBSSemanticViabilityRequest(BaseModel):
     capability_contracts: list[dict[str, Any]] = Field(default_factory=list, max_length=256)
+    evidence_claims: list[dict[str, Any]] = Field(default_factory=list, max_length=256)
+    evidence_assessments: list[dict[str, Any]] = Field(default_factory=list, max_length=256)
 
 
 def _service(ctx: AgentContext) -> ApplicationCBSService:
@@ -92,6 +94,8 @@ def assess_application_cbs(
         return _service(ctx).semantic_viability(
             application_ref,
             capability_contracts=body.capability_contracts,
+            evidence_claims=body.evidence_claims,
+            evidence_assessments=body.evidence_assessments,
         )
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CBS compilation not found") from exc

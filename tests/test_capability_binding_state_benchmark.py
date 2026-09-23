@@ -17,6 +17,17 @@ from adaos.services.capability_binding_state import (
 DIGESTS = ["sha256:" + token * 64 for token in "123456789abcdef"]
 
 
+def _evaluation(*, sealed: bool = False) -> dict:
+    return {
+        "input_digest": DIGESTS[9],
+        "rubric_digest": DIGESTS[10],
+        "target_labels_digest": DIGESTS[11],
+        "solution_recipe_digest": DIGESTS[12],
+        "authoring_visibility": "input_only" if sealed else "input_and_rubric",
+        "sealed": sealed,
+    }
+
+
 def _telemetry() -> CBSBenchmarkTelemetry:
     return CBSBenchmarkTelemetry.create(
         run_id="cbs-run",
@@ -66,6 +77,7 @@ def _case(cohort: str = "representative") -> dict:
         model_id="none",
         tool_budget={"max_calls": 20},
         requirement_total=1,
+        evaluation=_evaluation(sealed=cohort == "heldout"),
     )
 
 
@@ -103,9 +115,19 @@ def test_matched_pair_has_deltas_and_heldout_accounting() -> None:
             "end_to_end_duration_ms": 50,
             "package_reuse_rate": 0,
             "contract_reuse_rate": 0,
+            "independent_reuse_rate": 0,
+            "composition_complexity": 1,
+            "semantic_overlap_rate": 1,
+            "substitution_cost": 30,
+            "migration_count": 1,
+            "regression_count": 0,
+            "marginal_cost": 230,
             "invariant_pass_rate": 0.4,
         },
         source_digests=[DIGESTS[8]],
+        treatment={"kind": "legacy", "inventory_maturity": {}},
+        identity_digests=[DIGESTS[8]],
+        evidence_digests=[DIGESTS[8]],
     )
     cbs = observation_from_cbs_telemetry(
         case, _telemetry(), model_id="none", tool_budget={"max_calls": 20}
@@ -117,6 +139,68 @@ def test_matched_pair_has_deltas_and_heldout_accounting() -> None:
     assert report["heldout_matched"] == 1
     assert report["causal_claim_admissible"] is True
     assert report["cases"][0]["metrics"]["manual_interventions"]["improved"] is True
+    assert report["primary_claim"]["status"] == "insufficient_data"
+
+
+def test_primary_claim_uses_frozen_sequence_and_reports_maturity() -> None:
+    first = _case()
+    second = freeze_benchmark_case(
+        case_ref="benchmark-case:booking/reserve",
+        title="Booking reserve",
+        cohort="heldout",
+        workload_digest=DIGESTS[1],
+        environment_profile_digest=DIGESTS[1],
+        model_id="none",
+        tool_budget={"max_calls": 20},
+        requirement_total=1,
+        sequence_index=2,
+        inventory_size=2,
+        evaluation=_evaluation(sealed=True),
+    )
+
+    def observation(case, variant, cost, regressions, maturity):
+        return create_benchmark_observation(
+            case=case,
+            variant=variant,
+            run_ref=f"{variant}-{case['sequence_index']}",
+            controls=case["controls"],
+            metrics={"marginal_cost": cost, "regression_count": regressions},
+            source_digests=[DIGESTS[8]],
+            treatment={"kind": variant, "inventory_maturity": maturity},
+            identity_digests=[DIGESTS[8]],
+            evidence_digests=[DIGESTS[8]],
+        )
+
+    report = build_benchmark_report(
+        [first, second],
+        [
+            observation(first, "legacy", 100, 0, {}),
+            observation(first, "cbs", 90, 0, {"candidate": 1}),
+            observation(second, "legacy", 110, 0, {}),
+            observation(second, "cbs", 70, 0, {"reusable": 2}),
+        ],
+    )
+
+    assert report["primary_claim"]["status"] == "supported_bounded"
+    assert report["maturity_distribution"]["cbs"] == {
+        "candidate": 1,
+        "reusable": 2,
+    }
+
+
+def test_heldout_case_must_be_sealed_from_authoring() -> None:
+    with pytest.raises(CBSBenchmarkError, match="heldout"):
+        freeze_benchmark_case(
+            case_ref="benchmark-case:leaky",
+            title="Leaky case",
+            cohort="heldout",
+            workload_digest=DIGESTS[0],
+            environment_profile_digest=DIGESTS[1],
+            model_id="none",
+            tool_budget={"max_calls": 1},
+            requirement_total=1,
+            evaluation=_evaluation(sealed=False),
+        )
 
 
 def test_control_mismatch_is_rejected() -> None:
