@@ -1020,6 +1020,12 @@ def get_ydoc(
                 pass
             _record_doc_timing(timings, "ystore_stop", stage_started, prefix=timing_prefix)
             _record_doc_timing(timings, "total", session_started, prefix=timing_prefix)
+            # ``_load`` and ``_flush`` close over this cell.  Letting the
+            # completed generator/coroutine cycle retain the native wrapper
+            # allows a later GC pass on an arbitrary caller thread to perform
+            # its final decref.  y_py wrappers are unsendable, so release the
+            # cell explicitly while this session still owns the worker.
+            ydoc = None
             _release_sync_get_ydoc_session(sync_slot_key, sync_session_lock)
 
 
@@ -1463,8 +1469,14 @@ async def async_get_ydoc(
                 _record_doc_timing(timings, "ystore_stop", stage_started, prefix=timing_prefix)
             _record_doc_timing(timings, "total", session_started, prefix=timing_prefix)
         finally:
-            if detached_session_lock is not None:
-                detached_session_lock.release()
+            try:
+                # Keep the last native decref on the event-loop/thread that
+                # created (or directly owns) this document instead of leaving
+                # it to cyclic GC on a downstream executor.
+                ydoc = None
+            finally:
+                if detached_session_lock is not None:
+                    detached_session_lock.release()
 
 
 @asynccontextmanager
