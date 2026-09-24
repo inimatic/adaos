@@ -670,6 +670,31 @@ def test_store_quarantines_corrupt_existing_package(tmp_path: Path) -> None:
     )
 
 
+def test_store_preserves_existing_package_on_transient_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _scenario(tmp_path / "source")
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    store = ContentAddressedPackageStore(tmp_path / "packages")
+    store.put(built.archive_bytes)
+    package_path = store.package_path(built.ref.digest)
+    original_read_bytes = Path.read_bytes
+
+    def transient_read_failure(path: Path) -> bytes:
+        if path == package_path:
+            raise PermissionError("simulated sharing violation")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", transient_read_failure)
+
+    with pytest.raises(PermissionError, match="simulated sharing violation"):
+        store.put(built.archive_bytes)
+
+    assert package_path.exists()
+    assert not (tmp_path / "packages" / "quarantine").exists()
+
+
 def test_store_verify_and_extract_each_use_one_verification_pass(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

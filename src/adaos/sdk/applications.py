@@ -1680,6 +1680,7 @@ def _application_setup_target(
         )
     release = _service().store.get_release(application_id, selected_digest)
     selection = get_runtime_selection(str(webspace_id or "desktop"), application_id)
+    model["_setup_runtime_selection"] = selection
     channel = (
         "beta"
         if str((selection or {}).get("runtime_root_ref") or "").startswith("trial:")
@@ -1957,8 +1958,19 @@ def get_application_setup(
     }
     placement = model.get("execution_placement") or {}
     placement_state = str(placement.get("status") or "unknown").lower()
+    runtime_selection = model.get("_setup_runtime_selection") or {}
+    runtime_selected = (
+        isinstance(runtime_selection, Mapping)
+        and str(runtime_selection.get("source") or "")
+        in {"local_trial", "stable_installation"}
+        and str(runtime_selection.get("release_digest") or "")
+        == str(release.release_digest)
+        and bool(str(runtime_selection.get("runtime_root_ref") or "").strip())
+    )
     if not bool(contract.payload.get("placement", {}).get("required")):
         placement_status = "not_applicable"
+    elif runtime_selected:
+        placement_status = "ready"
     elif placement_state in {"active", "ready", "synced"} and not bool(
         placement.get("partial")
     ):

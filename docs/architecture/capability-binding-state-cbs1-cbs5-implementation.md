@@ -265,13 +265,17 @@ Provider packages have a separate compact, package-local authoring seam:
 `adaos.cbs.provider_authoring.v1`. It names semantic operations and references
 the already declared `skill.yaml` tools, so input/output schemas are not copied.
 The deterministic package compiler emits canonical
-`CapabilityContract` and package-neutral `BindingDefinition` files, records
-their digests and authoring provenance in the immutable package manifest, and
-creates the exact `BindingDelivery` only after the package digest exists. A
-verifier recompiles the descriptor and rejects modified generated contracts or
-metadata. Therefore a physical member can move between packages without
-changing the binding-definition digest, while the delivery and package digests
-change as required.
+`CapabilityContract` and package-neutral `BindingDefinition` files and creates
+the exact `BindingDelivery` only after the package digest exists. Digests,
+delivery templates, and authoring provenance are deterministically derived from
+the packaged descriptor and generated contracts instead of extending the
+closed `adaos.artifact.component_package.v1` transport manifest. A verifier
+recompiles the descriptor and rejects modified generated contracts or any
+historical embedded metadata that no longer matches. Therefore a physical
+member can move between packages without changing the binding-definition
+digest, while the delivery and package digests change as required. Keeping CBS
+metadata derived also permits current native-provider packages to pass older
+v1 registry validators during a rolling Root/Core upgrade.
 
 The provider compiler also reports `human_authored`, `builder_inferred`, and
 `compiler_generated` counts independently from Application-requirement

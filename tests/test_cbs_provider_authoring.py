@@ -158,11 +158,7 @@ def test_compact_provider_compiles_canonical_contracts_and_exact_delivery(
     delivery = built.binding_deliveries[0]
     assert delivery.package_digest == built.ref.digest
     assert delivery.to_dict()["physical_member"] == "handlers/main.py"
-    assert built.package_manifest["cbs"]["authorship_counts"] == {
-        "human_authored": 0,
-        "builder_inferred": 1,
-        "compiler_generated": 2,
-    }
+    assert "cbs" not in built.package_manifest
     with zipfile.ZipFile(io.BytesIO(built.archive_bytes), "r") as archive:
         capability = CapabilityContract.from_mapping(
             json.loads(archive.read(CAPABILITY_OUTPUT_PATH))

@@ -2031,6 +2031,27 @@ def test_application_setup_surface_is_release_owned_and_secret_free(
     assert "top-secret" not in str(surface)
 
 
+def test_application_setup_accepts_exact_active_runtime_as_placement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    digest, release, model = _setup_release_fixture()
+    model["execution_placement"] = {
+        "status": "not_materialized",
+        "partial": False,
+    }
+    model["_setup_runtime_selection"] = {
+        "source": "local_trial",
+        "release_digest": digest,
+        "runtime_root_ref": "trial:app-weather-candidate",
+    }
+    _admit_setup_test_surface(monkeypatch, tmp_path, release, model, digest)
+
+    surface = applications.get_application_setup("app_weather", release_digest=digest)
+
+    assert surface["state"]["status"] == "ready"
+
+
 def test_application_setup_editor_marks_unsupported_schema_without_guessing() -> None:
     field, reason = applications._setup_form_field(
         "nested",

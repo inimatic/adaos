@@ -165,7 +165,13 @@ def _build_policy_digest() -> str:
                 "workspace_host_metadata_files": sorted(_WORKSPACE_HOST_METADATA_FILES),
             },
             "scrub_policy": "adaos.package_scrub.v1",
-            "generators": {"cbs_provider": CBS_PROVIDER_COMPILER_ID},
+            "generators": {
+                "cbs_provider": CBS_PROVIDER_COMPILER_ID,
+                # Keep the transport manifest compatible with the closed v1
+                # registry schema. Trusted CBS metadata is deterministically
+                # derived from the packaged descriptor and generated files.
+                "cbs_metadata": "derive_from_packaged_descriptor",
+            },
         }
     )
 
@@ -619,8 +625,6 @@ def build_artifact_package(
         package_manifest["workflow_role_policy_digest"] = role_policy_digest
     if conversational_lock is not None:
         package_manifest["conversational_lock"] = conversational_lock.to_dict()
-    if cbs_compilation is not None:
-        package_manifest["cbs"] = dict(cbs_compilation.package_metadata)
     manifest_bytes = canonical_json_bytes(package_manifest)
     manifest_digest = sha256_digest(manifest_bytes)
 
@@ -868,7 +872,11 @@ def _verify_artifact_package(
         expected_cbs_metadata = (
             dict(expected_cbs.package_metadata) if expected_cbs is not None else None
         )
-        if raw_cbs != expected_cbs_metadata:
+        # Historical/local packages may carry the early manifest extension.
+        # Verify it when present, but do not require it: component_package.v1
+        # is a closed registry transport contract and CBS metadata is already
+        # authenticated by recompiling the packaged descriptor below.
+        if raw_cbs is not None and raw_cbs != expected_cbs_metadata:
             raise PackageVerificationError(
                 "package cbs metadata does not match packaged authoring source"
             )
@@ -1186,7 +1194,7 @@ class ContentAddressedPackageStore:
                     expected_digest=verified.ref.digest,
                     limits=self.limits,
                 )
-            except Exception:
+            except PackageVerificationError:
                 self._quarantine_path(target, reason="corrupt-existing")
         fd, temporary_name = tempfile.mkstemp(
             prefix=f".{target.name}.", dir=str(target.parent)
