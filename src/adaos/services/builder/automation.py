@@ -9872,6 +9872,17 @@ class BuilderAutomationService:
             cbs_model_view = cbs_compiler_view(canonical_cbs_compilation)
         else:
             cbs_model_view = None
+        validation_scope = (
+            "owned_artifacts"
+            if iteration_instruction == _UNCHANGED_RETRY_INSTRUCTION
+            else "changed_paths"
+        )
+        if isinstance(session, dict):
+            # Finalization runs after the Worker result is persisted and must
+            # apply the same artifact authority used to produce its evidence.
+            # An unchanged retry intentionally has no Git diff, but it still
+            # owns fresh release evidence for the complete application slice.
+            session["validation_scope"] = validation_scope
         request = {
             "request_id": request_id,
             "user_subnet_id": subnet_id,
@@ -9902,11 +9913,7 @@ class BuilderAutomationService:
                 # Its Git diff is intentionally empty, so the Worker cannot
                 # use changed paths alone to decide which package-owned test
                 # contracts must be revalidated for Trial admission.
-                "validation_scope": (
-                    "owned_artifacts"
-                    if iteration_instruction == _UNCHANGED_RETRY_INSTRUCTION
-                    else "changed_paths"
-                ),
+                "validation_scope": validation_scope,
                 "workflow_transition": session.get("pending_workflow_transition"),
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "continuation_contract": _continuation_contract(),
@@ -12186,7 +12193,10 @@ class BuilderAutomationService:
             artifacts.append((object_type, object_id))
 
         changed_paths_value = result.get("changed_paths")
-        if isinstance(changed_paths_value, list):
+        validation_scope = str(session.get("validation_scope") or "changed_paths")
+        if validation_scope != "owned_artifacts" and isinstance(
+            changed_paths_value, list
+        ):
             changed_paths = {
                 str(path or "").replace("\\", "/").lstrip("./")
                 for path in changed_paths_value

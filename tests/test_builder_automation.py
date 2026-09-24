@@ -12395,6 +12395,49 @@ def test_automation_does_not_checkpoint_unchanged_companion_skill(
     assert checkpoints == [{"ok": True, "kind": "scenario", "name": "recipes"}]
 
 
+def test_owned_artifact_validation_checkpoints_complete_application_slice(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = _service(tmp_path)
+    calls: list[dict] = []
+
+    class _Workspace:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def checkpoint_artifact(self, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True, "kind": kwargs["kind"], "name": kwargs["artifact_id"]}
+
+    import adaos.services.builder.workspace as workspace
+
+    monkeypatch.setattr(workspace, "BuilderWorkspaceService", _Workspace)
+
+    checkpoints = service._checkpoint_completed_artifacts(
+        {
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "companion_skill_ids": ["recipes_skill"],
+            "validation_scope": "owned_artifacts",
+            "last_result": {
+                "summary": "Revalidated the unchanged application release.",
+                "changed_paths": [],
+                "no_source_change": True,
+            },
+        }
+    )
+
+    assert [(item["kind"], item["artifact_id"]) for item in calls] == [
+        ("skill", "recipes_skill"),
+        ("scenario", "recipes"),
+    ]
+    assert [(item["kind"], item["name"]) for item in checkpoints] == [
+        ("skill", "recipes_skill"),
+        ("scenario", "recipes"),
+    ]
+
+
 def test_validation_only_checkpoints_artifact_guarded_before_worker_run(
     tmp_path: Path,
     monkeypatch,
