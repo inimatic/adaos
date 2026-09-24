@@ -41,7 +41,10 @@ DEFAULT_CALLBACK_PATH = "/api/providers/google/gmail/oauth/callback"
 _TOKEN_TYPE = "Bearer"
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 _MAX_SEND_BYTES = 5 * 1024 * 1024
-_MAX_BATCH_MESSAGES = 20
+# The portable mail capability admits pages of at most 25 summaries.  Keep the
+# provider boundary identical so an otherwise valid contract request cannot be
+# rejected before reaching Gmail's bounded HTTP batch endpoint.
+_MAX_BATCH_MESSAGES = 25
 _OAUTH_STATE_TTL_S = 10 * 60
 _REFRESH_SKEW_S = 60
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.@+-]{1,180}$")

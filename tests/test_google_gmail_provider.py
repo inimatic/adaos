@@ -647,6 +647,29 @@ def test_provider_batch_listing_omits_a_message_removed_after_listing(
     assert len(transport.calls) == 2
 
 
+def test_provider_accepts_portable_contract_page_boundary(
+    tmp_path: Path,
+) -> None:
+    provider, _vault, transport, release, _result = _connect(tmp_path)
+    transport.calls.clear()
+    transport.responses.append(FakeResponse(200, {"messages": []}))
+
+    result = provider.execute(
+        "list_message_summaries",
+        application_id="gmail_mail_client",
+        release_digest=release.release_digest,
+        subject_ref="user:owner",
+        arguments={"max_results": 25},
+    )
+
+    assert result["result"] == {
+        "messages": [],
+        "fetch_strategy": "gmail_http_batch",
+        "network_round_trips": 1,
+    }
+    assert transport.calls[0][2]["params"] == {"maxResults": 25}
+
+
 def test_sdk_projects_message_summary_arguments_to_the_bounded_operation(
     monkeypatch,
 ) -> None:
