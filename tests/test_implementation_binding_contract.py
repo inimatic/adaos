@@ -98,6 +98,37 @@ def test_google_gmail_contract_is_loaded_only_for_relevant_automation_context():
         "https://www.googleapis.com/auth/gmail.modify"
     ]
     native = contract["skill_manifest"]["native_cbs"]
+    assert native["semantic_intent"]["owner"] == "accepted_prototype"
+    assert native["semantic_intent"]["source"].endswith(
+        "/ui/application/pageSchema/meta/builder/cbs_intent"
+    )
+    assert "production resolution and evidence checks" in native["lifecycle"][
+        "trusted_worker_owns"
+    ]
+    assert "adaos.sdk.developer.validation" in native["lifecycle"]["validation"]
+    example = native["authoring_example"]
+    assert example["schema"] == "adaos.cbs.provider_authoring.v1"
+    cbs_schema = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "src/adaos/abi/cbs.provider_authoring.v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    jsonschema.Draft202012Validator(cbs_schema).validate(example)
+    assert example["capability"]["ref"] == "capability:mail.messages.manage"
+    assert example["binding"]["logical_entrypoint"] == (
+        "mail.messages.manage.google-gmail"
+    )
+    assert {item["tool"] for item in example["capability"]["operations"]} == {
+        "begin_connection",
+        "connection_status",
+        "get_message",
+        "list_labels",
+        "list_messages",
+        "mutate_message",
+        "prepare_send",
+        "send_message",
+    }
     assert native["path"] == "contracts/provider.cbs.yaml"
     assert native["capability_ref"] == "capability:mail.messages.manage"
     assert native["compiler_owned_outputs"] == [

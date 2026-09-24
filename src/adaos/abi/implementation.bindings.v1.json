@@ -17,7 +17,7 @@
     "failure": "A thrown handler error, failed transport, or returned {ok:false,error:<code>,message:<human reason>} rejects the command. Form commands await completion even if background=true. A denied/skipped command or pending approval is not form success. inputs.closeOnSuccess with explicit buttons closes only after success; leave resetOnSuccess false to retain a failed draft. Server enforces rights, invariants and revision conflicts independently of UI enabledIf/readOnlyIf. Do not return ok:true for an unsuccessful mutation.",
     "authorization": "Call adaos.sdk.access.require('workspace.read') or require('workspace.write') inside each tool BEFORE touching data. Use adaos.sdk.access.caller() only for verified caller attribution. An absent caller is not owner. Personal DEV preview uses the same /api/tools/call ingress: the Client supplies its existing node-owner credential, Core verifies it and propagates the owner identity into the selected DEV skill handler. The app does not configure this transport, create grants, inject identity or require installation to use this owner path. Owner-issued scoped session credentials admit only their named installed skill; they are deliberately rejected in personal DEV. DEV-owner acceptance therefore cannot prove delegated reader/writer access. Application unit tests may isolate the SDK access boundary and assert denials; independent Core/HTTP tests qualify real ingress. No custom authentication or role registry belongs in the app.",
     "persistence": "Use adaos.sdk.data.skill_env.skill_data_root() for owned durable data, outside source/package files. Standard-library sqlite3 is allowed for atomic relationships, optimistic revisions and app-owned business rules. New installation starts empty; keep representative Prototype records only in tests. Add versioned compatible schema initialization/migration and persistence tests. The SDK resources facade does not register arbitrary transaction handlers.",
-    "google_gmail": "For Google Gmail use only adaos.sdk.providers.gmail. The Core adapter owns OAuth state, PKCE, access/refresh tokens, refresh and the fixed gmail.googleapis.com destination. Skills must not use requests/httpx, adaos.sdk.net.external_api, secrets slots or arbitrary URLs for Gmail. Declare the exact provider and skill capability from contracts.google_gmail, author contracts/provider.cbs.yaml from contracts.google_gmail.skill_manifest.native_cbs, and expose application-owned mail tools that wrap the typed SDK methods and preserve accepted UI states. The package compiler, not the author, emits contracts/capability.contract.json and contracts/binding.definition.json.",
+    "google_gmail": "For Google Gmail use only adaos.sdk.providers.gmail. The Core adapter owns OAuth state, PKCE, access/refresh tokens, refresh and the fixed gmail.googleapis.com destination. Skills must not use requests/httpx, adaos.sdk.net.external_api, secrets slots or arbitrary URLs for Gmail. The accepted Prototype already owns and registers its package-neutral semantic intent; preserve pageSchema.meta.builder.cbs_intent and do not invent another intent-registration path. Author only contracts/provider.cbs.yaml from contracts.google_gmail.skill_manifest.native_cbs.authoring_example and expose application-owned mail tools that wrap the typed SDK methods and preserve accepted UI states. The trusted package compiler automatically emits the canonical contracts and the trusted Builder worker owns PackageRelease closure, production resolution and admission after candidate validation. Candidate source must not call runtime-backed developer validation, publication, compilation or admission APIs.",
     "attachments": "Prototype and production attachment storage are different contracts. fileStorage=prototype uploads only to disposable Preview resource storage. For durable app-owned bytes, declare storage.blob in the skill and Project permission profile, use fileStorage=skill, and set qualified uploadTarget and readTarget from the same owned skill. The upload tool is a mutating tool with narrow permissions [storage.blob, workspace.write], application_access permission workspace.write, and it calls adaos.sdk.data.blob.put_upload(<logical-store>) exactly once; bytes never appear in arguments. It returns that blob receipt directly or under blob. The read tool is read-only with narrow permissions [storage.blob, workspace.read], application_access permission workspace.read, accepts ref plus optional field_id/webspace_id, and returns {ok:true,ref:<the exact requested sha256 ref>} after applying app rules; Core then serves the verified content-addressed object. Form fields should set maxBytes <= 10485760 and an image accept filter when appropriate. Persist the returned /api/tools/... attachment reference in owned relational data and render it through normal media/attachment fields. Without fileStorage, forms collect metadata only. Missing upload/read tools, storage.blob, exact permission declarations, byte persistence tests, denied-writer tests, or authenticated read evidence is a blocking capability gap; never present metadata as an uploaded file or weaken the accepted requirement silently.",
     "discovery": "The supplied owned skill manifest and handlers define the local tool declaration pattern. Add tools to its exports and declarations with accurate read/write side effects; never infer caller rights from those effects. Consult targeted public SDK descriptors only for contracts still missing after this capsule. Preserve the accepted workflows, not Prototype storage or sample records. Larger new UX choices need review, not extra speculative hard acceptance requirements."
   },
@@ -63,7 +63,71 @@
           "modes": ["production"],
           "profile_classes": ["local"],
           "operation_mapping": "Map every accepted semantic mail operation exactly once to an existing tools[].name. Do not copy input_schema or output_schema into the descriptor; the compiler takes them from skill.yaml. Declare bounded errors for every operation.",
-          "compiler_owned_outputs": ["contracts/capability.contract.json", "contracts/binding.definition.json"]
+          "compiler_owned_outputs": ["contracts/capability.contract.json", "contracts/binding.definition.json"],
+          "semantic_intent": {
+            "owner": "accepted_prototype",
+            "source": "scenarios/<scenario-id>/webui.json#/ui/application/pageSchema/meta/builder/cbs_intent",
+            "candidate_action": "preserve exactly; do not register, copy into the provider descriptor, or select a package in the semantic Application"
+          },
+          "lifecycle": {
+            "candidate_owns": [
+              "contracts/provider.cbs.yaml",
+              "skill.yaml tools and exports",
+              "application-owned provider wrappers",
+              "focused hermetic tests"
+            ],
+            "trusted_worker_owns": [
+              "canonical CapabilityContract and BindingDefinition generation",
+              "exact PackageRelease closure",
+              "production resolution and evidence checks",
+              "native CBS admission"
+            ],
+            "validation": "Run focused package tests only. Do not call adaos.sdk.developer.validation from the isolated model process because it has no AgentContext. Returning the bounded source is sufficient; the trusted worker compiles, validates and admits it."
+          },
+          "authoring_example": {
+            "schema": "adaos.cbs.provider_authoring.v1",
+            "authorship": {
+              "origin": "builder_inferred"
+            },
+            "capability": {
+              "ref": "capability:mail.messages.manage",
+              "version": "1.0.0",
+              "title": "Manage mail messages",
+              "operations": [
+                {"operation_id": "connection_status", "tool": "connection_status", "errors": ["gmail_account_not_connected", "gmail_reconnect_required", "gmail_permission_denied", "gmail_provider_unavailable"]},
+                {"operation_id": "begin_connection", "tool": "begin_connection", "errors": ["google_oauth_not_configured", "gmail_permission_denied", "gmail_provider_unavailable"]},
+                {"operation_id": "list_messages", "tool": "list_messages", "errors": ["gmail_account_not_connected", "gmail_permission_denied", "gmail_provider_unavailable"]},
+                {"operation_id": "get_message", "tool": "get_message", "errors": ["gmail_account_not_connected", "gmail_permission_denied", "gmail_provider_unavailable"]},
+                {"operation_id": "list_labels", "tool": "list_labels", "errors": ["gmail_account_not_connected", "gmail_permission_denied", "gmail_provider_unavailable"]},
+                {"operation_id": "mutate_message", "tool": "mutate_message", "errors": ["gmail_account_not_connected", "gmail_permission_denied", "gmail_provider_unavailable"]},
+                {"operation_id": "prepare_send", "tool": "prepare_send", "errors": ["gmail_permission_denied"]},
+                {"operation_id": "send_message", "tool": "send_message", "errors": ["gmail_account_not_connected", "gmail_permission_denied", "gmail_provider_unavailable", "gmail_send_unconfirmed"]}
+              ],
+              "invariants": [
+                "credentials and OAuth tokens never cross the Core provider boundary",
+                "one application command id causes at most one provider send call",
+                "mail content remains transient and is not persisted by the binding"
+              ],
+              "effects": [
+                "read and organize mail through the explicitly connected account",
+                "send mail only after an explicit user command"
+              ],
+              "authority_requirements": ["providers.google.gmail"],
+              "conformance_refs": ["scenario:mail.messages.manage.v1"]
+            },
+            "binding": {
+              "ref": "binding-definition:mail.messages.manage.google-gmail-local",
+              "version": "1.0.0",
+              "entry_protocol": "adaos.skill.tools.v1",
+              "logical_entrypoint": "mail.messages.manage.google-gmail",
+              "physical_member": "handlers/main.py",
+              "modes": ["production"],
+              "profile_classes": ["local"],
+              "provider_features": ["oauth_pkce", "gmail_modify", "send_idempotency"],
+              "authority_requirements": ["providers.google.gmail", "storage.relational", "workspace.read", "workspace.write"],
+              "conformance_obligations": ["capability_conformance", "external_evidence_freshness"]
+            }
+          }
         },
         "tool_rules": "Each public tool declares narrow permissions, accurate side_effects and application_access.permission=providers.google.gmail. Read tools use read_only/none; label, archive, trash and send tools use external_write. Require workspace.read/write first when the tool also reads or mutates app-owned state."
       },
