@@ -410,7 +410,7 @@ class WebspaceMaterializationService:
                         operations.set_map_value_if_changed(ui_map, txn, "current_scenario", seed_scenario)
                     operations.record_timing(ydoc_timings, "seed_initial_scenario", stage_started)
                 stage_started = time.perf_counter()
-                entry = runtime._rebuild_in_doc(
+                entry = await runtime._rebuild_in_doc_async(
                     ydoc,
                     webspace_id,
                     expected_request_id=request_id,

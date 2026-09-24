@@ -5355,6 +5355,7 @@ class WebspaceScenarioRuntime:
         scenario_id_override: str | None = None,
         skill_decls_override: Iterable[Mapping[str, Any]] | None = None,
         skill_decls_fingerprint_override: str | None = None,
+        desktop_scenarios_override: Iterable[tuple[str, ...]] | None = None,
         scenario_content_override: Mapping[str, Any] | None = None,
     ) -> WebspaceResolverInputs:
         return _RUNTIME.resolution.collect_inputs(
@@ -5366,6 +5367,7 @@ class WebspaceScenarioRuntime:
             scenario_id_override=scenario_id_override,
             skill_decls_override=skill_decls_override,
             skill_decls_fingerprint_override=skill_decls_fingerprint_override,
+            desktop_scenarios_override=desktop_scenarios_override,
             scenario_content_override=scenario_content_override,
         )
 
@@ -5614,6 +5616,75 @@ class WebspaceScenarioRuntime:
 
         return entry
 
+    async def _rebuild_in_doc_async(
+        self,
+        ydoc: Y.YDoc,
+        webspace_id: str,
+        *,
+        expected_request_id: str | None = None,
+        materialization_identity: Mapping[str, Any] | None = None,
+    ) -> WebUIRegistryEntry:
+        """Resolve plain materialization data off the YDoc owner event loop."""
+
+        rebuild_started = time.perf_counter()
+        timings: Dict[str, float] = {}
+        self._last_resolver_debug = None
+        self._last_collect_inputs_timings_ms = None
+        self._last_apply_summary = None
+        self._last_apply_phase_timings_ms = None
+        self._last_materialized_payload = None
+
+        stage_started = time.perf_counter()
+        prepared_skill_decls, prepared_skill_fingerprint, desktop_scenarios = (
+            await _run_materialization_cpu(
+                self._prepare_materialization_catalog_sources_sync,
+                webspace_id,
+            )
+        )
+        _record_timing(timings, "prepare_catalog_sources", stage_started)
+
+        _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
+        stage_started = time.perf_counter()
+        inputs = self._collect_resolver_inputs_in_doc(
+            ydoc,
+            webspace_id,
+            materialization_identity=materialization_identity,
+            skill_decls_override=prepared_skill_decls,
+            skill_decls_fingerprint_override=prepared_skill_fingerprint,
+            desktop_scenarios_override=desktop_scenarios,
+        )
+        _record_timing(timings, "collect_inputs", stage_started)
+        timings.update(_copy_timing_map(self._last_collect_inputs_timings_ms) or {})
+
+        _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
+        resolved, payload, worker_timings = await _run_materialization_cpu(
+            self._resolve_materialized_payload_from_inputs_sync,
+            inputs,
+        )
+        timings.update(worker_timings)
+
+        _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
+        stage_started = time.perf_counter()
+        self._apply_resolved_state_in_doc(
+            ydoc,
+            webspace_id,
+            resolved,
+            inputs=inputs,
+            expected_request_id=expected_request_id,
+        )
+        _record_timing(timings, "apply", stage_started)
+        timings.update(_copy_timing_map(self._last_apply_phase_timings_ms) or {})
+
+        stage_started = time.perf_counter()
+        entry = resolved.to_registry_entry()
+        _record_timing(timings, "to_registry_entry", stage_started)
+        self._last_rebuild_timings_ms = _finalize_timing_map(
+            timings,
+            started_at=rebuild_started,
+        )
+        self._last_materialized_payload = payload
+        return entry
+
     def _resolve_materialized_payload_from_inputs_sync(
         self,
         inputs: WebspaceResolverInputs,
@@ -5638,6 +5709,18 @@ class WebspaceScenarioRuntime:
         declarations = self._collect_skill_decls(source_mode)
         fingerprint = str(getattr(self, "_last_skill_decls_fingerprint", "") or "").strip()
         return declarations, fingerprint
+
+    def _prepare_materialization_catalog_sources_sync(
+        self,
+        webspace_id: str,
+    ) -> tuple[List[Dict[str, Any]], str, List[Tuple[str, ...]]]:
+        """Collect filesystem-backed resolver inputs outside the owner loop."""
+
+        source_mode = _resolve_projection_refresh_space(webspace_id)
+        declarations = self._collect_skill_decls(source_mode)
+        fingerprint = str(getattr(self, "_last_skill_decls_fingerprint", "") or "").strip()
+        desktop_scenarios = self._list_desktop_scenarios(space=source_mode)
+        return declarations, fingerprint, desktop_scenarios
 
     async def resolve_materialized_payload_from_doc_async(
         self,

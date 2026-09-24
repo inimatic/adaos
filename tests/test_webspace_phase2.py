@@ -3918,14 +3918,23 @@ def test_rebuild_webspace_async_prefers_live_room_ydoc_session(monkeypatch) -> N
         return _CapturedAsyncDoc()
 
     monkeypatch.setattr(webspace_runtime_module, "async_get_ydoc", _fake_async_get_ydoc)
-    monkeypatch.setattr(
-        webspace_runtime_module.WebspaceScenarioRuntime,
-        "_rebuild_in_doc",
-        lambda self, ydoc, webspace_id, expected_request_id=None, materialization_identity=None: {
+    async def _fake_rebuild_in_doc_async(
+        self,
+        ydoc,
+        webspace_id,
+        expected_request_id=None,
+        materialization_identity=None,
+    ):
+        return {
             "webspace_id": webspace_id,
             "expected_request_id": expected_request_id,
             "doc": ydoc,
-        },
+        }
+
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "_rebuild_in_doc_async",
+        _fake_rebuild_in_doc_async,
     )
 
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(ctx=SimpleNamespace())
@@ -3940,6 +3949,73 @@ def test_rebuild_webspace_async_prefers_live_room_ydoc_session(monkeypatch) -> N
         "timings_is_dict": True,
         "timing_prefix": "",
     }
+
+
+def test_rebuild_in_doc_async_offloads_catalog_and_resolution(monkeypatch) -> None:
+    calls: list[str] = []
+    applied: list[tuple[str, str | None]] = []
+    inputs = webspace_runtime_module.WebspaceResolverInputs(
+        webspace_id="desktop",
+        scenario_id="builder",
+        source_mode="workspace",
+    )
+    resolved = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id="desktop",
+        scenario_id="builder",
+        source_mode="workspace",
+    )
+    payload = {"schema": "adaos.webspace.materialized_payload.v1"}
+
+    async def _fake_run_cpu(function, *args, **kwargs):
+        calls.append(function.__name__)
+        return function(*args, **kwargs)
+
+    def _prepare_catalog_sources(_webspace_id):
+        return [], "skills-fingerprint", []
+
+    def _resolve_payload(_inputs):
+        return resolved, payload, {"resolve": 3.0}
+
+    monkeypatch.setattr(webspace_runtime_module, "_run_materialization_cpu", _fake_run_cpu)
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
+    monkeypatch.setattr(
+        runtime,
+        "_prepare_materialization_catalog_sources_sync",
+        _prepare_catalog_sources,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_collect_resolver_inputs_in_doc",
+        lambda *_args, **_kwargs: inputs,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_resolve_materialized_payload_from_inputs_sync",
+        _resolve_payload,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_apply_resolved_state_in_doc",
+        lambda _doc, webspace_id, _resolved, **kwargs: applied.append(
+            (webspace_id, kwargs.get("expected_request_id"))
+        ),
+    )
+
+    entry = asyncio.run(
+        runtime._rebuild_in_doc_async(
+            object(),
+            "desktop",
+            expected_request_id="request-1",
+        )
+    )
+
+    assert calls == [
+        "_prepare_catalog_sources",
+        "_resolve_payload",
+    ]
+    assert applied == [("desktop", "request-1")]
+    assert entry.scenario_id == "builder"
+    assert runtime._last_materialized_payload == payload
 
 
 def test_go_home_webspace_uses_manifest_home_scenario(monkeypatch) -> None:

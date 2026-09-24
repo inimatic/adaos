@@ -154,6 +154,7 @@ class WebspaceResolutionService:
         scenario_id_override: str | None = None,
         skill_decls_override: Any = None,
         skill_decls_fingerprint_override: str | None = None,
+        desktop_scenarios_override: Any = None,
         scenario_content_override: Mapping[str, Any] | None = None,
     ) -> Any:
         collect_timings: Dict[str, float] = {}
@@ -171,13 +172,25 @@ class WebspaceResolutionService:
         from adaos.services.applications.runtime_selection import selected_trial, trial_launcher_entries
 
         trial = selected_trial(runtime.ctx, webspace_id, "scenario", scenario_id)
+        trial_ambient_prepared = False
         if trial is not None:
+            ambient_skill_decls = skill_decls_override
             source = trial.verified_source(trial.component("scenario", scenario_id))
             import json
 
             scenario_content_override = json.loads((source / "webui.json").read_text(encoding="utf-8"))
-            skill_decls_override = runtime._collect_skill_decls_from_root(trial.root / "skills")
-            skill_decls_fingerprint_override = runtime._last_skill_decls_fingerprint
+            trial_skill_decls = runtime._collect_skill_decls_from_root(trial.root / "skills")
+            if ambient_skill_decls is None:
+                skill_decls_override = trial_skill_decls
+            else:
+                skill_decls_override = _merge_trial_and_ambient_skill_decls(
+                    trial_skill_decls,
+                    ambient_skill_decls,
+                )
+                trial_ambient_prepared = True
+            skill_decls_fingerprint_override = operations.fingerprint_json_like(
+                skill_decls_override
+            )
             materialization_identity = dict(materialization_identity or {}) | {
                 "webspace_id": webspace_id, "scenario_id": scenario_id,
                 "revision": trial.candidate_id, "source_fingerprint": f"trial:{trial.release_digest}",
@@ -297,7 +310,7 @@ class WebspaceResolutionService:
             skill_decls_fingerprint = str(getattr(runtime, "_last_skill_decls_fingerprint", "") or "").strip()
         else:
             skill_decls = [dict(item) for item in skill_decls_override if isinstance(item, Mapping)]
-            if trial is not None:
+            if trial is not None and not trial_ambient_prepared:
                 try:
                     ambient_skill_decls = runtime._collect_skill_decls(mode=mode)
                 except Exception:
@@ -321,7 +334,11 @@ class WebspaceResolutionService:
         operations.record_timing(collect_timings, "collect_inputs_skill_decls", stage_started)
 
         stage_started = time.perf_counter()
-        desktop_scenarios = runtime._list_desktop_scenarios(space=mode)
+        desktop_scenarios = (
+            [tuple(item) for item in desktop_scenarios_override]
+            if desktop_scenarios_override is not None
+            else runtime._list_desktop_scenarios(space=mode)
+        )
         operations.record_timing(collect_timings, "collect_inputs_desktop_scenarios", stage_started)
         runtime._last_collect_inputs_timings_ms = collect_timings
 
@@ -1268,7 +1285,6 @@ class WebspaceResolutionService:
                         runtime._apply_ydoc_defaults_in_txn(ydoc, txn, resolved.skill_decls)
                     except Exception:
                         defaults_failed = True
-                        phase_defaults_failed = True
                         operations.logger.warning("failed to apply ydoc_defaults for webspace=%s", webspace_id, exc_info=True)
 
                 if name == "structure":
