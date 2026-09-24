@@ -231,6 +231,68 @@ def test_automation_resolves_project_to_its_primary_component(
     assert service._project_ref("project", "recipes_app") == ("scenario", "recipes")
 
 
+def test_project_automation_requires_exact_technical_application_id_before_side_effects(
+    tmp_path, monkeypatch
+) -> None:
+    from adaos.sdk.developer import compositions
+
+    service = _service(tmp_path)
+    monkeypatch.setattr(
+        compositions,
+        "get",
+        lambda project_id: {
+            "id": project_id,
+            "ref": f"project:{project_id}",
+            "components": {
+                "owned": [{"ref": "scenario:recipes", "role": "primary"}]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        compositions,
+        "ensure_owned_component",
+        lambda project_id, component_ref: {
+            "ok": True,
+            "idempotent": True,
+            "project": {"id": project_id},
+            "component_ref": component_ref,
+        },
+    )
+
+    with pytest.raises(ValueError, match="confirmation is required"):
+        service.start_from_execute(
+            object_type="project",
+            object_id="recipes",
+            implementation_brief="Implement the accepted mail interface.",
+        )
+    assert service.get_session("scenario", "recipes") is None
+    assert service.factory.snapshot(include_tasks=True)["tasks"] == []
+
+    with pytest.raises(ValueError, match="does not match"):
+        service.start_from_execute(
+            object_type="project",
+            object_id="recipes",
+            implementation_brief="Implement the accepted mail interface.",
+            confirmed_technical_application_id="another_app",
+        )
+    assert service.get_session("scenario", "recipes") is None
+    assert service.factory.snapshot(include_tasks=True)["tasks"] == []
+
+    started = service.start_from_execute(
+        object_type="project",
+        object_id="recipes",
+        implementation_brief="Implement the accepted mail interface.",
+        confirmed_technical_application_id="recipes",
+    )
+
+    assert started["ok"] is True
+    confirmation = started["session"][
+        "technical_application_identity_confirmation"
+    ]
+    assert confirmation["technical_application_id"] == "recipes"
+    assert confirmation["target_ref"] == "scenario:recipes"
+
+
 def test_automation_reuses_context_scoped_workflow_service(
     tmp_path, monkeypatch
 ) -> None:
@@ -371,6 +433,7 @@ def test_completed_builder_context_restores_from_cold_service(tmp_path: Path) ->
         object_type="scenario",
         object_id="recipes",
         implementation_brief="Implement recipe search and detail actions.",
+        confirmed_technical_application_id="recipe_suite",
         webspace_id="prompt-dev",
         links={
             "development_ticket_id": "dticket.cold-restore",
@@ -689,6 +752,7 @@ def test_dev_ticket_repair_projects_minimal_diff_constraints(tmp_path: Path) -> 
                 },
             }
         ),
+        confirmed_technical_application_id="recipe_suite",
         links={
             "development_ticket_id": "dticket.demo",
             "development_ticket_project_ref": "project:recipe_suite",
@@ -769,6 +833,7 @@ def test_dev_ticket_repair_with_root_mcp_admits_sdk_metadata_and_bound_validatio
                 },
             }
         ),
+        confirmed_technical_application_id="recipe_suite",
         links={
             "development_ticket_id": "dticket.root-data",
             "development_ticket_project_ref": "project:recipe_suite",
@@ -5991,6 +6056,7 @@ def test_writable_resource_prototype_materializes_project_owned_provider_skill(
         object_type="scenario",
         object_id="recipes",
         implementation_brief="Implement the accepted writable recipe board.",
+        confirmed_technical_application_id="recipes",
         webspace_id="prompt-dev",
         links={"project_ref": "project:recipes"},
     )

@@ -131,6 +131,10 @@ class BuilderAutomationStartRequest(BaseModel):
     object_type: str = Field(..., pattern="^(skill|scenario|project)$")
     object_id: str = Field(..., min_length=1)
     implementation_brief: str = Field(..., min_length=1)
+    confirmed_technical_application_id: str | None = Field(
+        default=None,
+        pattern="^[a-z0-9][a-z0-9_.-]{0,127}$",
+    )
     webspace_id: str = "desktop"
     conversation_id: str | None = None
     brief_path: str | None = None
@@ -455,6 +459,7 @@ def start_automation(
             object_type=body.object_type,
             object_id=body.object_id,
             implementation_brief=body.implementation_brief,
+            confirmed_technical_application_id=body.confirmed_technical_application_id,
             webspace_id=body.webspace_id,
             conversation_id=body.conversation_id,
             brief_path=body.brief_path,

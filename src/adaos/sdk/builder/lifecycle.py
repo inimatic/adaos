@@ -770,6 +770,10 @@ def invoke_activity_command(
             object_id=object_id,
             implementation_brief=str(details.get("implementation_brief") or "").strip()
             or _implementation_brief(state),
+            confirmed_technical_application_id=str(
+                details.get("confirmed_technical_application_id") or ""
+            ).strip()
+            or None,
             webspace_id=webspace_id,
             conversation_id=conversation_id,
             change_set_id=str(

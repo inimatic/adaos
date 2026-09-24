@@ -810,11 +810,13 @@ def test_activity_dispatch_builds_implementation_brief_from_change(monkeypatch) 
         "recipes",
         actor="user:test",
         idempotency_key="automation-1",
+        input_value={"confirmed_technical_application_id": "recipe_suite"},
         metadata={"webspace_id": "dev1"},
     )
 
     assert captured["change_set_id"] == "change-1"
     assert captured["webspace_id"] == "dev1"
+    assert captured["confirmed_technical_application_id"] == "recipe_suite"
     assert "Add a recipe search." in captured["implementation_brief"]
     assert "Search is deterministic." in captured["implementation_brief"]
 

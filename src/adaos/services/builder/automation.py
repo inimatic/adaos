@@ -2270,6 +2270,7 @@ class BuilderAutomationService:
         object_type: str,
         object_id: str,
         implementation_brief: str,
+        confirmed_technical_application_id: str | None = None,
         webspace_id: str = "desktop",
         conversation_id: str | None = None,
         brief_path: str | None = None,
@@ -2309,6 +2310,49 @@ class BuilderAutomationService:
             if owner is not None:
                 external_links["project_ref"] = str(owner["ref"])
                 external_links["project_id"] = str(owner["id"])
+        application_identity_candidates = {
+            str(value).strip().split(":", 1)[1]
+            for value in (
+                external_links.get("development_ticket_project_ref"),
+                external_links.get("project_ref"),
+                f"project:{str(object_id).strip()}"
+                if requested_object_type == "project"
+                else None,
+            )
+            if str(value or "").strip().startswith("project:")
+            and str(value).strip().split(":", 1)[1]
+        }
+        if len(application_identity_candidates) > 1:
+            raise ValueError(
+                "Automation target has ambiguous technical Application identity: "
+                + ", ".join(sorted(application_identity_candidates))
+            )
+        expected_technical_application_id = next(
+            iter(application_identity_candidates), None
+        )
+        identity_confirmation: dict[str, Any] | None = None
+        if expected_technical_application_id:
+            confirmed_identity = str(
+                confirmed_technical_application_id or ""
+            ).strip()
+            if not confirmed_identity:
+                raise ValueError(
+                    "technical Application id confirmation is required before "
+                    f"Automation starts: {expected_technical_application_id}"
+                )
+            if confirmed_identity != expected_technical_application_id:
+                raise ValueError(
+                    "technical Application id confirmation does not match the "
+                    f"Automation target: expected {expected_technical_application_id}, "
+                    f"received {confirmed_identity}"
+                )
+            identity_confirmation = {
+                "schema": "adaos.builder.technical_application_identity_confirmation.v1",
+                "technical_application_id": expected_technical_application_id,
+                "project_ref": f"project:{expected_technical_application_id}",
+                "target_ref": f"{kind}:{project_id}",
+                "confirmed_at": _now_iso(),
+            }
         external_ticket_ids = list(
             dict.fromkeys(
                 [
@@ -2903,6 +2947,7 @@ class BuilderAutomationService:
                 )
                 or None,
                 "project_ownership": project_ownership,
+                "technical_application_identity_confirmation": identity_confirmation,
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "status": "starting",
                 "iteration": 0,
@@ -2974,6 +3019,7 @@ class BuilderAutomationService:
         object_id: str,
         implementation_brief: str,
         links: Mapping[str, Any],
+        confirmed_technical_application_id: str | None = None,
         webspace_id: str = "desktop",
         conversation_id: str | None = None,
         execution_budget: Mapping[str, Any] | None = None,
@@ -3052,6 +3098,7 @@ class BuilderAutomationService:
         object_id: str,
         implementation_brief: str,
         links: Mapping[str, Any],
+        confirmed_technical_application_id: str | None = None,
         webspace_id: str = "desktop",
         conversation_id: str | None = None,
         execution_budget: Mapping[str, Any] | None = None,
@@ -3127,6 +3174,7 @@ class BuilderAutomationService:
         object_id: str,
         implementation_brief: str,
         links: Mapping[str, Any],
+        confirmed_technical_application_id: str | None = None,
         webspace_id: str = "desktop",
         conversation_id: str | None = None,
         execution_budget: Mapping[str, Any] | None = None,

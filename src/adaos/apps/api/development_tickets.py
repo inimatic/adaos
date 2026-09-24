@@ -135,6 +135,10 @@ class DevTicketAutonomousRepairRequest(BaseModel):
     actor: str = "ui"
     webspace_id: str = "desktop"
     conversation_id: str | None = None
+    confirmed_technical_application_id: str | None = Field(
+        default=None,
+        pattern="^[a-z0-9][a-z0-9_.-]{0,127}$",
+    )
     source_strategy: str | None = Field(
         default=None,
         pattern="^(materialize_dev_source|create_local_fork|defer)$",
@@ -158,6 +162,10 @@ class DevTicketPackageStartRequest(BaseModel):
     actor: str = Field(default="builder", min_length=1)
     webspace_id: str = "desktop"
     conversation_id: str | None = None
+    confirmed_technical_application_id: str | None = Field(
+        default=None,
+        pattern="^[a-z0-9][a-z0-9_.-]{0,127}$",
+    )
     source_strategy: str | None = Field(
         default=None,
         pattern="^(materialize_dev_source|create_local_fork)$",
@@ -1512,6 +1520,7 @@ def start_builder_package(
             automation_service=_get_automation_service(),
             webspace_id=body.webspace_id,
             conversation_id=body.conversation_id,
+            confirmed_technical_application_id=body.confirmed_technical_application_id,
             source_strategy=body.source_strategy,
             agent_profile=body.agent_profile,
             mcp=body.mcp,
@@ -1965,6 +1974,7 @@ def start_autonomous_repair(
             automation_service=automation_service,
             webspace_id=body.webspace_id,
             conversation_id=body.conversation_id,
+            confirmed_technical_application_id=body.confirmed_technical_application_id,
             source_strategy=body.source_strategy,
             execution_budget=body.execution_budget,
             agent_profile=body.agent_profile,

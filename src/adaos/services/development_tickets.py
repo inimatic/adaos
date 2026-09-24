@@ -2685,6 +2685,7 @@ class DevelopmentTicketService:
         automation_service: Any | None = None,
         webspace_id: str = "desktop",
         conversation_id: str | None = None,
+        confirmed_technical_application_id: str | None = None,
         source_strategy: str | None = None,
         execution_budget: Mapping[str, Any] | None = None,
         agent_profile: Mapping[str, Any] | None = None,
@@ -2913,6 +2914,9 @@ class DevelopmentTicketService:
                 implementation_brief=brief,
                 webspace_id=_text(webspace_id) or "desktop",
                 conversation_id=_text(conversation_id) or f"dev-ticket:{ticket['ticket_id']}",
+                confirmed_technical_application_id=(
+                    _text(confirmed_technical_application_id) or None
+                ),
                 execution_budget=bounded_budget,
                 agent_profile=dict(agent_profile) if isinstance(agent_profile, Mapping) else None,
                 mcp=dict(mcp) if isinstance(mcp, Mapping) else None,
@@ -3354,6 +3358,7 @@ class DevelopmentTicketService:
         automation_service: Any | None = None,
         webspace_id: str = "desktop",
         conversation_id: str | None = None,
+        confirmed_technical_application_id: str | None = None,
         source_strategy: str | None = None,
         agent_profile: Mapping[str, Any] | None = None,
         mcp: Mapping[str, Any] | None = None,
@@ -3759,6 +3764,9 @@ class DevelopmentTicketService:
                 implementation_brief=brief,
                 webspace_id=_text(webspace_id) or "desktop",
                 conversation_id=_text(conversation_id) or f"dev-ticket-package:{package_id}",
+                confirmed_technical_application_id=(
+                    _text(confirmed_technical_application_id) or None
+                ),
                 execution_budget=budget,
                 agent_profile=dict(agent_profile) if isinstance(agent_profile, Mapping) else None,
                 mcp=dict(mcp) if isinstance(mcp, Mapping) else None,

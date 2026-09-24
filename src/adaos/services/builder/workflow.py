@@ -3679,7 +3679,7 @@ class BuilderWorkflowService:
                     }
                 )
             commands.append(
-                {"command": "builder.project.archive", "risk": "destructive"}
+                {"command": "builder.project.archive", "risk": "isolated_write"}
             )
         return {
             "schema": "adaos.builder.project_summary.v1",
@@ -5006,6 +5006,19 @@ class BuilderWorkflowService:
     ) -> dict[str, Any]:
         """Invoke an SDK command through the same normalized ingress as chat."""
 
+        if str(command or "").strip() in {
+            "builder.project.archive",
+            "builder.project.restore",
+        }:
+            return self._invoke_project_lifecycle_command(
+                object_type,
+                object_id,
+                str(command).strip(),
+                actor=actor,
+                idempotency_key=idempotency_key,
+                input_value=input_value,
+            )
+
         current = self.describe(object_type, object_id)
         canonical = _mapping(current.get("governed"))
         command_projection = next(
@@ -5069,6 +5082,248 @@ class BuilderWorkflowService:
             actor=actor,
             metadata=metadata,
         )
+
+    @staticmethod
+    def _project_has_development_evidence(workflow: Mapping[str, Any]) -> bool:
+        project = _mapping(workflow.get("project"))
+        prototype = _mapping(workflow.get("prototype"))
+        automation = _mapping(workflow.get("automation"))
+        delivery = _mapping(workflow.get("delivery"))
+        publication = _mapping(workflow.get("publication"))
+        return bool(
+            project.get("changes")
+            or project.get("placements")
+            or project.get("candidate_ref")
+            or prototype.get("acceptance")
+            or bool(prototype.get("stable"))
+            or str(automation.get("status") or "not_started") != "not_started"
+            or int(automation.get("iteration") or 0) != 0
+            or str(delivery.get("status") or "idle") != "idle"
+            or str(delivery.get("candidate_id") or "").strip()
+            or str(publication.get("status") or "not_started") != "not_started"
+            or str(publication.get("current_version") or "").strip()
+        )
+
+    def _invoke_project_lifecycle_command(
+        self,
+        object_type: str,
+        object_id: str,
+        command: str,
+        *,
+        actor: str,
+        idempotency_key: str,
+        input_value: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Archive or restore a DEV Project through a fenced, audited command."""
+
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        if kind != "project":
+            raise BuilderWorkflowError(
+                "Builder Project lifecycle commands require a project target"
+            )
+        command_input = _mapping(input_value)
+        confirmed_identity = str(
+            command_input.get("confirmed_technical_application_id") or ""
+        ).strip()
+        if confirmed_identity != project_id:
+            raise BuilderWorkflowError(
+                "exact technical Application id confirmation is required: "
+                f"{project_id}"
+            )
+        if command == "builder.project.archive" and command_input.get("confirmed") is not True:
+            raise BuilderWorkflowError("explicit Project archive confirmation is required")
+        key = str(idempotency_key or "").strip()
+        if not key or len(key) > 300:
+            raise BuilderWorkflowError(
+                "Builder Project lifecycle command requires a bounded idempotency key"
+            )
+        try:
+            expected_project_generation = int(
+                command_input["expected_project_generation"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise BuilderWorkflowError(
+                "expected_project_generation is required"
+            ) from exc
+        if expected_project_generation < 0:
+            raise BuilderWorkflowError(
+                "expected_project_generation must be non-negative"
+            )
+        reason = str(command_input.get("reason") or "").strip()
+        if len(reason) > 1000:
+            raise BuilderWorkflowError("Project lifecycle reason exceeds 1000 characters")
+        input_digest = _stable_digest(
+            {
+                "command": command,
+                "project_id": project_id,
+                "expected_project_generation": expected_project_generation,
+                "confirmed_technical_application_id": confirmed_identity,
+                "confirmed": command_input.get("confirmed") is True,
+                "require_no_development_evidence": command_input.get(
+                    "require_no_development_evidence", True
+                )
+                is not False,
+                "reason": reason,
+            }
+        )
+        changed_at = _now()
+        duplicate_receipt: dict[str, Any] | None = None
+        receipt: dict[str, Any] | None = None
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            receipts = [
+                dict(item)
+                for item in state.get("project_command_receipts") or []
+                if isinstance(item, Mapping)
+            ]
+            existing = next(
+                (
+                    item
+                    for item in receipts
+                    if str(item.get("idempotency_key") or "") == key
+                ),
+                None,
+            )
+            if existing is not None:
+                if (
+                    str(existing.get("command") or "") != command
+                    or str(existing.get("input_digest") or "") != input_digest
+                ):
+                    raise BuilderWorkflowError(
+                        "Project lifecycle idempotency key was reused with another intent"
+                    )
+                duplicate_receipt = {**existing, "duplicate": True}
+            else:
+                archived_before = bool(state.get("archived"))
+                target_archived = command == "builder.project.archive"
+                workflow = self._normalized_workflow(
+                    state, object_type=kind, object_id=project_id
+                )
+                project = _mapping(workflow.get("project"))
+                current_project_generation = int(project.get("generation") or 0)
+                if current_project_generation != expected_project_generation:
+                    raise BuilderWorkflowError(
+                        "stale Builder Project generation: expected "
+                        f"{expected_project_generation}, current {current_project_generation}"
+                    )
+                if archived_before == target_archived:
+                    outcome = "already_archived" if target_archived else "already_active"
+                else:
+                    if target_archived and command_input.get(
+                        "require_no_development_evidence", True
+                    ) is not False:
+                        evidence_refs: list[str] = []
+                        if self._project_has_development_evidence(workflow):
+                            evidence_refs.append(f"project:{project_id}")
+                        manifest_path = self.project_root(kind, project_id) / "project.yaml"
+                        try:
+                            manifest = yaml.safe_load(
+                                manifest_path.read_text(encoding="utf-8-sig")
+                            ) or {}
+                        except (OSError, ValueError, yaml.YAMLError) as exc:
+                            raise BuilderWorkflowError(
+                                "cannot verify Project components before archive"
+                            ) from exc
+                        for component_ref in _project_component_refs_from_manifest(
+                            manifest if isinstance(manifest, Mapping) else {}
+                        ):
+                            component_kind, separator, component_id = component_ref.partition(":")
+                            if separator != ":" or component_kind not in {"scenario", "skill"}:
+                                continue
+                            component_state = self._read_state(component_kind, component_id)
+                            component_workflow = _mapping(component_state.get("workflow"))
+                            if component_workflow and self._project_has_development_evidence(
+                                component_workflow
+                            ):
+                                evidence_refs.append(component_ref)
+                        if evidence_refs:
+                            raise BuilderWorkflowError(
+                                "Project archive requires no development evidence; found: "
+                                + ", ".join(sorted(set(evidence_refs)))
+                            )
+                    state["archived"] = target_archived
+                    workflow["generation"] = int(workflow.get("generation") or 0) + 1
+                    project = normalize_project(
+                        project,
+                        object_type=kind,
+                        object_id=project_id,
+                        archived=target_archived,
+                        workflow=workflow,
+                        title=str(_mapping(project.get("identity")).get("title") or project_id),
+                        description=str(
+                            _mapping(project.get("identity")).get("description") or ""
+                        )
+                        or None,
+                        now=changed_at,
+                    )
+                    project["generation"] = current_project_generation + 1
+                    lifecycle = _mapping(project.get("lifecycle"))
+                    lifecycle["reason"] = reason or (
+                        "empty_or_erroneous_project"
+                        if target_archived
+                        else "project_restored"
+                    )
+                    project["lifecycle"] = lifecycle
+                    workflow["project"] = project
+                    workflow["updated_at"] = changed_at
+                    history = [
+                        dict(item)
+                        for item in workflow.get("history") or []
+                        if isinstance(item, Mapping)
+                    ]
+                    history.append(
+                        {
+                            "generation": workflow["generation"],
+                            "action": "project_archived"
+                            if target_archived
+                            else "project_restored",
+                            "actor": str(actor or "builder"),
+                            "reason": lifecycle["reason"],
+                            "at": changed_at,
+                            "metadata": {
+                                "command": command,
+                                "idempotency_key": key,
+                                "technical_application_id": project_id,
+                                "input_digest": input_digest,
+                            },
+                        }
+                    )
+                    workflow["history"] = history[-_MAX_HISTORY:]
+                    state["workflow"] = workflow
+                    state["workflow_state"] = workflow.get("active_phase")
+                    state["updated_at"] = changed_at
+                    outcome = "archived" if target_archived else "restored"
+                receipt = {
+                    "schema": "adaos.builder.project_command_receipt.v1",
+                    "command": command,
+                    "idempotency_key": key,
+                    "input_digest": input_digest,
+                    "project_ref": f"project:{project_id}",
+                    "technical_application_id": project_id,
+                    "actor_ref": str(actor or "builder"),
+                    "outcome": outcome,
+                    "archived": target_archived,
+                    "project_generation_before": current_project_generation,
+                    "project_generation_after": int(project.get("generation") or 0),
+                    "recorded_at": changed_at,
+                    "duplicate": False,
+                }
+                receipts.append(receipt)
+                state["project_command_receipts"] = receipts[-100:]
+                self._write_state(kind, project_id, state)
+
+        projection = self.describe(kind, project_id)
+        receipt = duplicate_receipt or receipt
+        if receipt is None:  # Defensive: every successful branch records a receipt.
+            raise BuilderWorkflowError("Project lifecycle command produced no receipt")
+        if callable(self.event_sink):
+            self.event_sink(projection)
+        return {
+            "ok": True,
+            "receipt": copy.deepcopy(receipt),
+            "workflow": projection,
+        }
 
     def _invoke_prepared_command(
         self,

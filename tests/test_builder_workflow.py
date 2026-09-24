@@ -208,6 +208,93 @@ def test_component_acceptance_rejects_ambiguous_project_ownership(
         service._target_domain_packs("scenario", "recipes")
 
 
+def test_empty_project_archive_is_confirmed_fenced_idempotent_and_reversible(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    project_root = Path(service.dev_projects_root) / "mail_inbox_triage"
+    _write_json_yaml(
+        project_root / "project.yaml",
+        {
+            "id": "mail_inbox_triage",
+            "version": "0.1.0",
+            "components": {"owned": []},
+            "entrypoints": [],
+            "catalog": {"title": "Mail Inbox Triage"},
+        },
+    )
+    initial = service.describe("project", "mail_inbox_triage")
+    assert initial["archived"] is False
+    generation = initial["project"]["generation"]
+
+    with pytest.raises(BuilderWorkflowError, match="exact technical Application id"):
+        service.invoke_command(
+            "project",
+            "mail_inbox_triage",
+            "builder.project.archive",
+            actor="user:owner",
+            idempotency_key="archive-mail-inbox-triage",
+            input_value={
+                "confirmed": True,
+                "confirmed_technical_application_id": "inbox_triage",
+                "expected_project_generation": generation,
+            },
+        )
+
+    archived = service.invoke_command(
+        "project",
+        "mail_inbox_triage",
+        "builder.project.archive",
+        actor="user:owner",
+        idempotency_key="archive-mail-inbox-triage",
+        input_value={
+            "confirmed": True,
+            "confirmed_technical_application_id": "mail_inbox_triage",
+            "expected_project_generation": generation,
+            "require_no_development_evidence": True,
+            "reason": "Erroneous empty project created before identity confirmation.",
+        },
+    )
+    assert archived["receipt"]["outcome"] == "archived"
+    assert archived["workflow"]["archived"] is True
+    assert archived["workflow"]["project"]["lifecycle"]["reason"].startswith(
+        "Erroneous empty"
+    )
+
+    duplicate = service.invoke_command(
+        "project",
+        "mail_inbox_triage",
+        "builder.project.archive",
+        actor="user:owner",
+        idempotency_key="archive-mail-inbox-triage",
+        input_value={
+            "confirmed": True,
+            "confirmed_technical_application_id": "mail_inbox_triage",
+            "expected_project_generation": generation,
+            "require_no_development_evidence": True,
+            "reason": "Erroneous empty project created before identity confirmation.",
+        },
+    )
+    assert duplicate["receipt"]["duplicate"] is True
+
+    restored = service.invoke_command(
+        "project",
+        "mail_inbox_triage",
+        "builder.project.restore",
+        actor="user:owner",
+        idempotency_key="restore-mail-inbox-triage",
+        input_value={
+            "confirmed_technical_application_id": "mail_inbox_triage",
+            "expected_project_generation": archived["receipt"][
+                "project_generation_after"
+            ],
+            "reason": "Recovery verification.",
+        },
+    )
+    assert restored["receipt"]["outcome"] == "restored"
+    assert restored["workflow"]["archived"] is False
+
+
 def _write_minimal_conversational_package(root: Path) -> None:
     (root / "scenario.yaml").write_text(
         "id: recipes\nversion: 0.1.0\nworkflow:\n  manifest: workflow.json\nconversational:\n  manifest: conversational/manifest.yaml\n",
