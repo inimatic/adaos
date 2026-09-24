@@ -8978,7 +8978,11 @@ def test_worker_admits_exact_bindings_for_incremental_scenario_automation(
 def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     tmp_path: Path,
 ) -> None:
-    from adaos.domain.capability_binding_state import CapabilityContract
+    from adaos.domain.capability_binding_state import (
+        BindingDefinition,
+        BindingDelivery,
+        CapabilityContract,
+    )
     from adaos.services.capability_binding_state import PortableContractCatalog
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -9036,9 +9040,39 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
         ],
         authority_requirements=["providers.google.gmail"],
     )
-    PortableContractCatalog(
+    binding = BindingDefinition.create(
+        binding_definition_ref="binding-definition:mail.messages.manage.google-gmail-local",
+        version="1.0.0",
+        capability_ref=capability.capability_ref,
+        capability_version=capability.version,
+        entry_protocol="adaos.skill.tools.v1",
+        implementation_entrypoint="mail.messages.manage.google-gmail",
+        state_support=(),
+        modes=("production",),
+        environment_constraints={
+            "profile_classes": ["local"],
+            "provider_features": ["gmail_modify"],
+        },
+        authority_requirements=("providers.google.gmail",),
+        conformance_obligations=("capability_conformance",),
+    )
+    delivery = BindingDelivery.create(
+        binding_definition_ref=binding.binding_definition_ref,
+        binding_definition_digest=binding.digest,
+        logical_entrypoint="mail.messages.manage.google-gmail",
+        package={
+            "kind": "skill",
+            "id": "gmail_provider_skill",
+            "version": "1.2.3",
+            "digest": "sha256:" + "a" * 64,
+        },
+        physical_member="handlers/main.py",
+    )
+    catalog = PortableContractCatalog(
         tmp_path / "state/capability-binding-state/portable"
-    ).put(capability)
+    )
+    for record in (capability, binding, delivery):
+        catalog.put(record)
     assignment = {
         "task_id": "task.gmail-portable-reuse",
         "target": {"type": "scenario", "id": project_id},
@@ -9076,9 +9110,16 @@ def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     reuse = bindings["portable_contract_reuse"]
     assert reuse["requirements"][0]["selected_digest"] == capability.digest
     assert reuse["requirements"][0]["contract"] == capability.to_dict()
+    assert reuse["requirements"][0]["reusable_bindings"] == [
+        {
+            "binding_definition": binding.to_dict(),
+            "deliveries": [delivery.to_dict()],
+        }
+    ]
     prompt = (tmp_path / "input/task.md").read_text(encoding="utf-8")
     assert "installed canonical authority" in prompt
     assert "application-specific presentation adapters" in prompt
+    assert "shared component" in prompt
 
 
 def test_worker_does_not_admit_attachment_bindings_from_system_context(

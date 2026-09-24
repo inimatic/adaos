@@ -2750,6 +2750,12 @@ class BuilderAutomationService:
                 raise ValueError(
                     "Automation is already the active process; submit a new Automation iteration instead"
                 )
+            portable_cbs_artifacts = self._ensure_portable_cbs_dependencies(
+                kind=kind,
+                project_id=project_id,
+                links=external_links,
+                cbs_compilation=cbs_compilation,
+            )
             provider_artifacts = self._ensure_resource_provider_companion(
                 kind=kind,
                 project_id=project_id,
@@ -2766,6 +2772,7 @@ class BuilderAutomationService:
                 ),
             )
             created_artifacts = [
+                *portable_cbs_artifacts,
                 *provider_artifacts,
                 *self._ensure_automation_artifacts_created(
                     kind=kind,
@@ -3460,6 +3467,112 @@ class BuilderAutomationService:
             }
             return [created]
         return []
+
+    def _ensure_portable_cbs_dependencies(
+        self,
+        *,
+        kind: str,
+        project_id: str,
+        links: Mapping[str, Any],
+        cbs_compilation: Mapping[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """Attach installed reusable CBS deliveries as shared dependencies.
+
+        Semantic compilation remains package-neutral.  This is the later
+        materialization boundary: an installed delivery may influence the
+        mutable Project composition, but never the accepted Application intent.
+        """
+
+        if kind != "scenario" or not isinstance(cbs_compilation, Mapping):
+            return []
+        project_ref = str(
+            links.get("development_ticket_project_ref")
+            or links.get("project_ref")
+            or ""
+        ).strip()
+        if not project_ref.startswith("project:"):
+            return []
+        owner_project_id = project_ref.split(":", 1)[1].strip()
+        if not owner_project_id:
+            return []
+
+        from adaos.services.capability_binding_state import PortableContractCatalog
+        from adaos.sdk.developer import compositions
+
+        catalog = PortableContractCatalog(
+            self.state_dir / "capability-binding-state" / "portable"
+        )
+        created: list[dict[str, Any]] = []
+        selected_refs: set[str] = set()
+        for raw_requirement in cbs_compilation.get("requirements") or []:
+            if not isinstance(raw_requirement, Mapping):
+                continue
+            capability_ref = str(raw_requirement.get("capability_ref") or "")
+            if capability_ref == "capability:application.ui.render":
+                continue
+            matches = catalog.matching_capabilities(
+                capability_ref,
+                str(raw_requirement.get("contract_range") or ""),
+            )
+            if not matches:
+                continue
+            contract = matches[0]
+            candidate: tuple[Any, Any] | None = None
+            for binding in catalog.matching_bindings(
+                contract.capability_ref, contract.version
+            ):
+                deliveries = catalog.deliveries_for_binding(binding.digest)
+                if deliveries:
+                    candidate = (binding, deliveries[0])
+                    break
+            if candidate is None:
+                continue
+            binding, delivery = candidate
+            package = delivery.to_dict()["package"]
+            package_kind = str(package.get("kind") or "")
+            package_id = _safe_token(str(package.get("id") or ""), fallback="")
+            if package_kind not in {"skill", "scenario"} or not package_id:
+                continue
+            dependency_ref = f"{package_kind}:{package_id}"
+            if dependency_ref in selected_refs:
+                continue
+            source_root = (
+                self.dev_skills_root / package_id
+                if package_kind == "skill"
+                else self.dev_scenarios_root / package_id
+            )
+            workspace_root = (
+                self._workspace_skills_root() / package_id
+                if package_kind == "skill"
+                else self._workspace_skills_root().parent / "scenarios" / package_id
+            )
+            if not source_root.is_dir() and not workspace_root.is_dir():
+                continue
+            result = compositions.ensure_dependency(
+                owner_project_id,
+                dependency_ref,
+                version=f"=={package['version']}",
+                relations=("realizes", "uses"),
+            )
+            selected_refs.add(dependency_ref)
+            created.append(
+                {
+                    "kind": package_kind,
+                    "name": package_id,
+                    "source": "portable_cbs_shared_dependency",
+                    "project_ref": project_ref,
+                    "component_ref": dependency_ref,
+                    "component_version": str(package["version"]),
+                    "package_digest": str(package["digest"]),
+                    "capability_ref": contract.capability_ref,
+                    "capability_digest": contract.digest,
+                    "binding_definition_ref": binding.binding_definition_ref,
+                    "binding_definition_digest": binding.digest,
+                    "delivery_digest": delivery.digest,
+                    "idempotent": bool(result.get("idempotent")),
+                }
+            )
+        return created
 
     @staticmethod
     def _ensure_project_component_ownership(
@@ -4774,13 +4887,25 @@ class BuilderAutomationService:
                 "clarification",
             ):
                 session.pop(stale_key, None)
+            portable_cbs_artifacts = self._ensure_portable_cbs_dependencies(
+                kind=str(session["object_type"]),
+                project_id=str(session["object_id"]),
+                links=dict(session.get("links") or {}),
+                cbs_compilation=(
+                    session.get("cbs_compilation")
+                    if isinstance(session.get("cbs_compilation"), Mapping)
+                    else None
+                ),
+            )
             provider_artifacts = self._ensure_resource_provider_companion(
                 kind=str(session["object_type"]),
                 project_id=str(session["object_id"]),
                 links=dict(session.get("links") or {}),
                 prototype_acceptance=session.get("prototype_acceptance"),
             )
-            session.setdefault("created_artifacts", []).extend(provider_artifacts)
+            session.setdefault("created_artifacts", []).extend(
+                [*portable_cbs_artifacts, *provider_artifacts]
+            )
             self._refresh_session_companion_skill_ids(session)
             self._capture_preview_binding(session)
             submitted = self._submit(

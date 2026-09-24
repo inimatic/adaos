@@ -33,6 +33,12 @@ from .store import _read
 _log = logging.getLogger("adaos.applications.access")
 
 
+def _verification_now() -> str:
+    """Preserve ordering when several immutable reports share one second."""
+
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
 ROLE_TEMPLATES: dict[str, tuple[dict[str, Any], ...]] = {
     "classroom": (
         {
@@ -168,6 +174,7 @@ def _subject_kind(grant: ApplicationAccessGrant) -> str:
 
 def _redacted_account(value: Mapping[str, Any]) -> dict[str, Any]:
     allowed = {
+        "application_id",
         "account_id",
         "provider_id",
         "subject_ref",
@@ -1672,7 +1679,7 @@ class ApplicationAccessManagementService:
             trial,
             checks=tuple(checks.values()),
             release_scope="publication",
-            created_at=utc_now(),
+            created_at=_verification_now(),
             report_digest=None,
         ).seal()
         saved = self.save_verification_report(promoted)
@@ -1732,6 +1739,11 @@ class ApplicationAccessManagementService:
             pending_action_fallbacks=pending_action_evidence,
             audit_evidence=audit_evidence,
         )
+        base = replace(
+            base,
+            created_at=_verification_now(),
+            report_digest=None,
+        ).seal()
         extra = (
             VerificationCheck(
                 "disclosures.external_effects",

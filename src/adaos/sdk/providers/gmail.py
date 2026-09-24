@@ -74,6 +74,32 @@ def begin_connection(
     )
 
 
+def reusable_connections(
+    *, account_id: str = GOOGLE_GMAIL_PROVIDER_ID
+) -> dict[str, Any]:
+    provider, application, subject_ref = _invocation()
+    return provider.reusable_connections(
+        application_id=str(application["application_id"]),
+        release_digest=str(application["release_digest"]),
+        subject_ref=subject_ref,
+        account_id=account_id,
+        candidate_permission_profile=_permission_profile(application),
+    )
+
+
+def attach_reusable_connection(
+    *, account_id: str = GOOGLE_GMAIL_PROVIDER_ID
+) -> dict[str, Any]:
+    provider, application, subject_ref = _invocation()
+    return provider.attach_reusable_connection(
+        application_id=str(application["application_id"]),
+        release_digest=str(application["release_digest"]),
+        subject_ref=subject_ref,
+        account_id=account_id,
+        candidate_permission_profile=_permission_profile(application),
+    )
+
+
 def connection_status(
     *, account_id: str = GOOGLE_GMAIL_PROVIDER_ID
 ) -> dict[str, Any]:
@@ -164,12 +190,14 @@ def send_message(
 
 __all__ = [
     "GmailProviderError",
+    "attach_reusable_connection",
     "begin_connection",
     "connection_status",
     "get_message",
     "list_labels",
     "list_messages",
     "modify_message",
+    "reusable_connections",
     "send_message",
     "trash_message",
 ]

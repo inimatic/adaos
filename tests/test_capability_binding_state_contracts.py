@@ -483,6 +483,20 @@ def test_package_relocation_changes_delivery_not_binding_identity(tmp_path: Path
     assert first_path.is_file()
     assert second_path.is_file()
     assert first_path != second_path
+    catalog.put(definition)
+    assert catalog.matching_bindings(
+        definition.capability_ref, "1.0.0"
+    ) == (definition,)
+    assert catalog.deliveries_for_binding(definition.digest) == tuple(
+        sorted(
+            deliveries,
+            key=lambda item: (
+                str(item.to_dict()["package"].get("version") or ""),
+                item.package_digest,
+            ),
+            reverse=True,
+        )
+    )
 
 
 def test_portable_catalog_is_content_addressed_and_rejects_identity_mutation(tmp_path: Path) -> None:

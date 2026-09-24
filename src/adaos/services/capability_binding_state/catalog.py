@@ -10,7 +10,11 @@ from typing import Any, Mapping, TypeVar
 from packaging.version import Version
 
 from adaos.domain.capability_binding_state import (
+    BINDING_DEFINITION_SCHEMA,
+    BINDING_DELIVERY_SCHEMA,
     CAPABILITY_CONTRACT_SCHEMA,
+    BindingDefinition,
+    BindingDelivery,
     CanonicalRecord,
     CapabilityContract,
     version_satisfies,
@@ -151,6 +155,64 @@ class PortableContractCatalog:
             matches.append(self.load(str(digest), CapabilityContract))
         return tuple(
             sorted(matches, key=lambda item: Version(item.version), reverse=True)
+        )
+
+    def matching_bindings(
+        self, capability_ref: str, capability_version: str
+    ) -> tuple[BindingDefinition, ...]:
+        """Return portable binding semantics for one exact contract identity."""
+
+        matches: list[BindingDefinition] = []
+        index = self._read_index()
+        for digest, raw_entry in index["records"].items():
+            if (
+                not isinstance(raw_entry, Mapping)
+                or raw_entry.get("schema") != BINDING_DEFINITION_SCHEMA
+            ):
+                continue
+            binding = self.load(str(digest), BindingDefinition)
+            value = binding.to_dict()
+            if (
+                binding.capability_ref == str(capability_ref)
+                and value.get("capability_version") == str(capability_version)
+            ):
+                matches.append(binding)
+        return tuple(
+            sorted(
+                matches,
+                key=lambda item: (
+                    Version(str(item.to_dict()["version"])),
+                    item.binding_definition_ref,
+                ),
+                reverse=True,
+            )
+        )
+
+    def deliveries_for_binding(
+        self, binding_definition_digest: str
+    ) -> tuple[BindingDelivery, ...]:
+        """Return package-specific deliveries for an installed binding digest."""
+
+        matches: list[BindingDelivery] = []
+        index = self._read_index()
+        for digest, raw_entry in index["records"].items():
+            if (
+                not isinstance(raw_entry, Mapping)
+                or raw_entry.get("schema") != BINDING_DELIVERY_SCHEMA
+            ):
+                continue
+            delivery = self.load(str(digest), BindingDelivery)
+            if delivery.binding_definition_digest == str(binding_definition_digest):
+                matches.append(delivery)
+        return tuple(
+            sorted(
+                matches,
+                key=lambda item: (
+                    str(item.to_dict()["package"].get("version") or ""),
+                    item.package_digest,
+                ),
+                reverse=True,
+            )
         )
 
     def _read_index(self) -> dict[str, Any]:

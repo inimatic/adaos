@@ -87,18 +87,18 @@ class FakeTransport:
         return self.responses.pop(0)
 
 
-def _application() -> Application:
+def _application(application_id: str = "gmail_mail_client") -> Application:
     return Application(
-        application_id="gmail_mail_client",
-        legacy_project_id="gmail_mail_client",
+        application_id=application_id,
+        legacy_project_id=application_id,
         publisher_ref="subnet:home",
-        slug="gmail_mail_client",
+        slug=application_id,
         display={"title": "Gmail Mail Client", "summary": "Mail"},
         visibility="private",
         entrypoints=(
             {
                 "entrypoint_id": "main",
-                "presentation_ref": "scenario:gmail_mail_client",
+                "presentation_ref": f"scenario:{application_id}",
             },
         ),
         publisher={
@@ -113,7 +113,9 @@ def _application() -> Application:
     )
 
 
-def _release(service: ApplicationService) -> ApplicationRelease:
+def _release(
+    service: ApplicationService, application_id: str = "gmail_mail_client"
+) -> ApplicationRelease:
     profile = ApplicationPermissionProfile.from_mapping(
         {
             "schema": "adaos.application.permission_profile.v1",
@@ -141,9 +143,9 @@ def _release(service: ApplicationService) -> ApplicationRelease:
     )
     source = ArtifactSourceRef(
         forge="github",
-        repository="inimatic/gmail-mail-client",
+        repository=f"inimatic/{application_id.replace('_', '-')}",
         revision="0123456789abcdef0123456789abcdef01234567",
-        path_scope=("projects/gmail_mail_client/",),
+        path_scope=(f"projects/{application_id}/",),
     )
     package = ArtifactPackageRef(
         kind="skill",
@@ -155,7 +157,7 @@ def _release(service: ApplicationService) -> ApplicationRelease:
     )
     composition = ProjectCompositionLock(
         project_definition_digest=canonical_payload_digest(
-            {"id": "gmail_mail_client", "profile": profile.to_dict()}
+            {"id": application_id, "profile": profile.to_dict()}
         ),
         profiles=("adaos.application.v1",),
         members=(
@@ -176,7 +178,7 @@ def _release(service: ApplicationService) -> ApplicationRelease:
         application_roles=(),
     )
     project = ProjectRelease(
-        project_id="gmail_mail_client",
+        project_id=application_id,
         version="1.0.0",
         source_ref=source,
         components=(package,),
@@ -186,10 +188,10 @@ def _release(service: ApplicationService) -> ApplicationRelease:
     ).seal()
     return service.register_release(
         ApplicationRelease(
-            application_id="gmail_mail_client",
+            application_id=application_id,
             publisher_ref="subnet:home",
             project_release=project,
-            accepted_candidate_id="candidate.gmail.1",
+            accepted_candidate_id=f"candidate.{application_id}.1",
             acceptance_evidence=({"status": "accepted"},),
             provenance_refs=(DIGEST_C,),
             lifecycle="trial",
@@ -276,6 +278,74 @@ def test_oauth_connection_uses_state_pkce_and_keeps_tokens_out_of_application_st
     assert "refresh-secret" not in serialized_accounts
     assert any("access-secret" in value for value in vault.values.values())
     assert not any("oauth-state" in key for key in vault.values)
+
+
+def test_second_application_explicitly_attaches_the_same_vault_credential(
+    tmp_path: Path,
+) -> None:
+    provider, vault, transport, _release_one, _result = _connect(tmp_path)
+    second_id = "gmail_inbox_triage"
+    provider.applications.register(_application(second_id))
+    second_release = _release(provider.applications, second_id)
+    vault_before = dict(vault.values)
+    transport.calls.clear()
+
+    available = provider.reusable_connections(
+        application_id=second_id,
+        release_digest=second_release.release_digest,
+        subject_ref="user:owner",
+    )
+
+    assert available == {
+        "ok": True,
+        "provider_id": "google.gmail",
+        "accounts": [
+            {
+                "provider_id": "google.gmail",
+                "account_id": "google.gmail",
+                "email_address": "owner@example.test",
+                "scopes": [GMAIL_MODIFY_SCOPE],
+                "status": "connected",
+                "attached": False,
+            }
+        ],
+    }
+    assert "access-secret" not in json.dumps(available)
+    assert "refresh-secret" not in json.dumps(available)
+
+    attached = provider.attach_reusable_connection(
+        application_id=second_id,
+        release_digest=second_release.release_digest,
+        subject_ref="user:owner",
+    )
+
+    assert attached["attached"] is True
+    assert attached["reused_credential"] is True
+    assert attached["email_address"] == "owner@example.test"
+    assert vault.values == vault_before
+    assert transport.calls == []
+    first_account = provider.access.connected_accounts("gmail_mail_client")[0]
+    second_account = provider.access.connected_accounts(second_id)[0]
+    assert first_account["application_id"] == "gmail_mail_client"
+    assert second_account["application_id"] == second_id
+    assert second_account["revision"] == 1
+
+    repeated = provider.attach_reusable_connection(
+        application_id=second_id,
+        release_digest=second_release.release_digest,
+        subject_ref="user:owner",
+    )
+    assert repeated["reused_credential"] is True
+    assert provider.access.connected_accounts(second_id)[0]["revision"] == 1
+
+    status = provider.execute(
+        "connection_status",
+        application_id=second_id,
+        release_digest=second_release.release_digest,
+        subject_ref="user:owner",
+    )
+    assert status["email_address"] == "owner@example.test"
+    assert transport.calls == []
 
 
 def test_dev_preview_uses_pinned_verified_provider_declaration_without_release(

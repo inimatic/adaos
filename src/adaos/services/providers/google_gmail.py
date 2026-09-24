@@ -391,6 +391,183 @@ class GoogleGmailProvider:
             "expires_at": _utc_iso(pending["expires_at"]),
         }
 
+    def reusable_connections(
+        self,
+        *,
+        application_id: str,
+        release_digest: str,
+        subject_ref: str,
+        account_id: str = GOOGLE_GMAIL_PROVIDER_ID,
+        candidate_permission_profile: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Project provider-owned credentials that this Application may attach.
+
+        Credentials remain in the Core vault.  The projection is intentionally
+        redacted and is available only for the resolved user subject and an
+        Application release which declares the same provider contract.
+        """
+
+        _release, declaration = self._provider_declaration(
+            application_id,
+            release_digest,
+            candidate_permission_profile=candidate_permission_profile,
+        )
+        declared_account_id = self._declared_account_id(declaration)
+        if _text(account_id) != declared_account_id:
+            raise GoogleGmailProviderError("gmail_account_not_declared")
+        subject = _text(subject_ref)
+        if not subject.startswith("user:"):
+            raise GoogleGmailProviderError("gmail_delegated_user_required")
+
+        target = next(
+            (
+                item
+                for item in self.access.connected_accounts(
+                    application_id, subject_ref=subject
+                )
+                if item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
+                and item.get("account_id") == declared_account_id
+            ),
+            None,
+        )
+        shared = [
+            item
+            for item in self.access.connected_accounts(subject_ref=subject)
+            if item.get("application_id") != application_id
+            and item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
+            and item.get("account_id") == declared_account_id
+            and item.get("status") in {"connected", "expired"}
+        ]
+        credential = self._vault_get_json(
+            self._account_key(subject, declared_account_id)
+        )
+        identity = {
+            "schema": "adaos.provider.google.gmail.credential.v1",
+            "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+            "subject_ref": subject,
+            "account_id": declared_account_id,
+        }
+        usable = bool(shared) and credential is not None and all(
+            credential.get(key) == value for key, value in identity.items()
+        )
+        usable = usable and GMAIL_MODIFY_SCOPE in set(
+            (credential or {}).get("scopes") or ()
+        )
+        accounts: list[dict[str, Any]] = []
+        if usable:
+            expires_at = float((credential or {}).get("expires_at") or 0.0)
+            accounts.append(
+                {
+                    "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                    "account_id": declared_account_id,
+                    "email_address": _text(
+                        (credential or {}).get("email_address")
+                    ),
+                    "scopes": [GMAIL_MODIFY_SCOPE],
+                    "status": (
+                        "connected"
+                        if expires_at > float(self.clock())
+                        else "expired"
+                    ),
+                    "attached": bool(
+                        target
+                        and target.get("status") in {"connected", "expired"}
+                    ),
+                }
+            )
+        return {
+            "ok": True,
+            "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+            "accounts": accounts,
+        }
+
+    def attach_reusable_connection(
+        self,
+        *,
+        application_id: str,
+        release_digest: str,
+        subject_ref: str,
+        account_id: str = GOOGLE_GMAIL_PROVIDER_ID,
+        candidate_permission_profile: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Attach an existing provider credential to a second Application.
+
+        This mutates only the target Application's redacted access record.  The
+        provider credential is neither copied nor returned.
+        """
+
+        available = self.reusable_connections(
+            application_id=application_id,
+            release_digest=release_digest,
+            subject_ref=subject_ref,
+            account_id=account_id,
+            candidate_permission_profile=candidate_permission_profile,
+        )
+        if not available["accounts"]:
+            raise GoogleGmailProviderError("gmail_reusable_account_not_found")
+        projected = dict(available["accounts"][0])
+        existing = next(
+            (
+                item
+                for item in self.access.connected_accounts(
+                    application_id, subject_ref=subject_ref
+                )
+                if item.get("provider_id") == GOOGLE_GMAIL_PROVIDER_ID
+                and item.get("account_id") == account_id
+            ),
+            None,
+        )
+        if existing and existing.get("status") in {"connected", "expired"}:
+            return {
+                "ok": True,
+                **projected,
+                "attached": True,
+                "reused_credential": True,
+            }
+
+        credential = self._vault_get_json(
+            self._account_key(subject_ref, account_id)
+        )
+        if credential is None:
+            raise GoogleGmailProviderError("gmail_reusable_account_not_found")
+        expires_at = float(credential.get("expires_at") or 0.0)
+        account = self.access.put_connected_account(
+            application_id,
+            {
+                "release_digest": release_digest,
+                "account_id": account_id,
+                "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                "subject_ref": subject_ref,
+                "mode": "delegated_user",
+                "scopes": [GMAIL_MODIFY_SCOPE],
+                "status": (
+                    "connected" if expires_at > float(self.clock()) else "expired"
+                ),
+                "token_expires_at": _utc_iso(expires_at) if expires_at else None,
+            },
+            expected_revision=int((existing or {}).get("revision") or 0),
+            candidate_permission_profile=candidate_permission_profile,
+        )
+        self.applications.store.append_application_access_audit(
+            {
+                "occurred_at": _utc_iso(float(self.clock())),
+                "action": "connected_account_attached",
+                "application_id": application_id,
+                "subject_ref": subject_ref,
+                "provider_id": GOOGLE_GMAIL_PROVIDER_ID,
+                "account_id": account_id,
+                "status": account["status"],
+                "credential_reused": True,
+            }
+        )
+        return {
+            "ok": True,
+            **projected,
+            "status": account["status"],
+            "attached": True,
+            "reused_credential": True,
+        }
+
     def _transport_request(self, method: str, url: str, **kwargs: Any) -> Any:
         try:
             return self.transport.request(method, url, **kwargs)

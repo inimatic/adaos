@@ -7,10 +7,11 @@ token refresh, and all HTTP calls to `gmail.googleapis.com`. Application skills
 use the typed `adaos.sdk.providers.gmail` facade. They must not use a generic
 HTTP SDK, credential slots, or receive OAuth tokens.
 
-This boundary is intentionally narrower than a general email abstraction. It
-is the first governed external-provider primitive needed by the Gmail beta;
-it is not yet a reusable CBS `CapabilityContract`, a registry entry, or a
-provider-selection mechanism.
+This boundary is intentionally narrower than a general email abstraction. The
+installed CBS inventory supplies `capability:mail.messages.manage@1.0.0` and a
+Google Gmail binding. A second Application can reuse the Core-owned Gmail
+credential after an explicit per-Application attach; it never receives or
+copies OAuth tokens.
 
 ## Release declaration
 
@@ -47,6 +48,8 @@ execution time.
 from adaos.sdk.providers import gmail
 
 gmail.begin_connection()
+gmail.reusable_connections()
+gmail.attach_reusable_connection()
 gmail.connection_status()
 gmail.list_messages(query="is:unread", max_results=50)
 gmail.get_message(message_id, format="full")
@@ -74,6 +77,14 @@ with `withAuth=false`. The callback is
 `/api/providers/google/gmail/oauth/callback` on the configured local API base.
 OAuth state is single-use and expires after ten minutes.
 
+`reusable_connections` returns only a redacted account projection for the
+resolved owner. `attach_reusable_connection` creates the second Application's
+connected-account authorization record after its immutable permission profile
+has passed the same provider, destination, account-mode, and scope checks. The
+provider/user/account vault key does not change, so no credential is copied.
+Builder-generated UI must present this as an explicit user choice; discovery
+alone must not attach the account.
+
 ## Node configuration
 
 Configure a Google OAuth client through either environment variables:
@@ -91,14 +102,43 @@ provider:google.oauth:client_secret
 ```
 
 `ADAOS_SELF_BASE_URL` may override the callback base. Otherwise Core uses its
-configured local API URL and finally `http://127.0.0.1:8777`. The Google client
-must admit the resulting exact callback URI.
+configured local API URL and finally `http://127.0.0.1:8777`. For the current
+desktop/dev beta the Google Web Application client must admit exactly:
+
+```text
+http://127.0.0.1:8777/api/providers/google/gmail/oauth/callback
+```
+
+Do not use a Google OAuth client of type **Desktop application** for this flow;
+create one of type **Web application** so the exact redirect URI can be
+registered.
+
+## Google Cloud setup for the beta
+
+1. In the same Google Cloud project enable **Gmail API**
+   (`gmail.googleapis.com`). Allow a few minutes for a newly enabled API to
+   propagate.
+2. In Google Auth Platform configure **Branding** and **Audience**. For an
+   External app in Testing, add the Gmail address under **Test users**. Google
+   Testing refresh tokens normally expire after seven days.
+3. Under **Data Access** add the restricted scope
+   `https://www.googleapis.com/auth/gmail.modify`. A personal/dev test can
+   continue through Google's unverified-app warning; public production use
+   requires the applicable Google verification.
+4. Create an OAuth client of type **Web application** and register the exact
+   redirect URI shown above. Scheme, IP, port, path, and lack of trailing slash
+   must match.
+5. In AdaOS Applications Settings save its **Google OAuth client ID** and
+   **Google OAuth client secret**. AdaOS stores both in the local credential
+   vault; never put them in chat, source, fixtures, logs, or telemetry.
+6. Open the Application, choose **Connect Gmail**, select the test account, and
+   approve access. After the `Gmail connected` callback page appears, close it
+   and return to AdaOS.
 
 Applications store only redacted connected-account metadata and revisions.
 The provider credential key is scoped by provider, user subject, and logical
-account rather than by Application, which permits later controlled reuse. The
-second-Application attach/consent flow is deliberately not implemented by this
-stage-one boundary.
+account rather than by Application. Each consuming Application still has its
+own redacted, revisioned connected-account authorization record.
 
 ## Setup and Builder
 

@@ -4251,6 +4251,17 @@ class LocalSkillFactoryWorker:
             if not matches:
                 continue
             selected = matches[0]
+            reusable_bindings = []
+            for binding in catalog.matching_bindings(
+                selected.capability_ref, selected.version
+            ):
+                deliveries = catalog.deliveries_for_binding(binding.digest)
+                reusable_bindings.append(
+                    {
+                        "binding_definition": binding.to_dict(),
+                        "deliveries": [item.to_dict() for item in deliveries],
+                    }
+                )
             requirements.append(
                 {
                     "requirement_id": str(requirement["id"]),
@@ -4259,6 +4270,7 @@ class LocalSkillFactoryWorker:
                     "selected_version": selected.version,
                     "selected_digest": selected.digest,
                     "contract": selected.to_dict(),
+                    "reusable_bindings": reusable_bindings,
                 }
             )
         if not requirements:
@@ -4270,8 +4282,10 @@ class LocalSkillFactoryWorker:
                 "CapabilityContract digest by mapping conforming adapter tools, or "
                 "use an explicit incompatible major identity outside the accepted "
                 "requirement. Never relabel incompatible schemas as the installed "
-                "version. Application-specific presentation tools may remain outside "
-                "the capability operation mapping."
+                "version. Prefer an admitted reusable delivery over creating another "
+                "physical provider. Treat its package as a shared dependency and do "
+                "not modify or copy it. Application-specific presentation tools may "
+                "remain outside the capability operation mapping."
             ),
             "requirements": requirements,
         }
@@ -8236,10 +8250,12 @@ missing contract.
 `implementation-bindings.json` contains `portable_contract_reuse`. Its selected
 contract is installed canonical authority. Make the mapped provider operations
 conform to its exact schemas, errors and semantics so compilation reproduces
-its digest. Keep application-specific presentation adapters outside that
-semantic mapping. Do not overwrite the catalog, silently redefine the identity,
-or bump a major version that no longer satisfies the accepted semantic
-Application.
+its digest. When `reusable_bindings[].deliveries` contains the shared component
+selected by the Project, call that component's exported tools from the accepted
+scenario and do not create, copy or edit a second provider implementation. Keep
+application-specific presentation adapters outside that semantic mapping. Do
+not overwrite the catalog, silently redefine the identity, or bump a major
+version that no longer satisfies the accepted semantic Application.
 """
             if portable_contract_reuse_present
             else ""
