@@ -1368,6 +1368,7 @@ def main() -> None:
         advertised_base = _advertise_base(host, port)
         os.environ["ADAOS_AUTOSTART_MODE"] = "1"
         os.environ["ADAOS_RUNTIME_LAUNCH_MODE"] = "autostart_runner"
+        os.environ.setdefault("ADAOS_RUNTIME_PROCESS_STARTED_AT", str(time.time()))
         if _supervisor_owns_runtime_lifecycle():
             phase = "supervisor_owned_bind"
             _LOG.info(

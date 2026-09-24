@@ -72,10 +72,16 @@ _YSTORE_RUNTIME_PROJECTION_PREPARE_TIMEOUT_S = _env_float(
     30.0,
     minimum=1.0,
 )
+_YSTORE_RUNTIME_PROJECTION_PREPARE_STARTUP_GRACE_S = _env_float(
+    "ADAOS_YSTORE_RUNTIME_PROJECTION_PREPARE_STARTUP_GRACE_S",
+    30.0,
+    minimum=0.0,
+)
 _YSTORE_RUNTIME_PROJECTION_PREPARE_LIMITER = anyio.CapacityLimiter(
     _env_int("ADAOS_YSTORE_RUNTIME_PROJECTION_PREPARE_WORKERS", 1, minimum=1)
 )
 _YSTORE_SNAPSHOT_SUFFIX = ".ysnap"
+_MODULE_IMPORTED_AT = time.time()
 
 
 def _is_fatal_base_exception(exc: BaseException) -> bool:
@@ -323,6 +329,25 @@ def _preflight_snapshot_file(path: Path) -> tuple[bool, str]:
     return False, f"returncode={result.returncode} stderr={stderr}"
 
 
+def _runtime_projection_prepare_startup_defer_reason() -> str | None:
+    grace_s = float(_YSTORE_RUNTIME_PROJECTION_PREPARE_STARTUP_GRACE_S)
+    if grace_s <= 0:
+        return None
+    launch_mode = str(os.getenv("ADAOS_RUNTIME_LAUNCH_MODE") or "").strip().lower()
+    autostart_mode = _env_flag("ADAOS_AUTOSTART_MODE", False)
+    if not autostart_mode and launch_mode not in {"autostart_runner", "supervisor"}:
+        return None
+    started_raw = str(os.getenv("ADAOS_RUNTIME_PROCESS_STARTED_AT") or "").strip()
+    try:
+        started_at = float(started_raw) if started_raw else _MODULE_IMPORTED_AT
+    except Exception:
+        started_at = _MODULE_IMPORTED_AT
+    age_s = max(0.0, time.time() - started_at)
+    if age_s <= grace_s:
+        return "startup_deferred"
+    return None
+
+
 def _prepare_runtime_projection_snapshot(path: Path) -> dict[str, Any]:
     if not _YSTORE_RUNTIME_PROJECTION_PREPARE:
         return {"changed": False, "applied": False, "reason": "disabled"}
@@ -334,6 +359,14 @@ def _prepare_runtime_projection_snapshot(path: Path) -> dict[str, Any]:
             "changed": False,
             "applied": False,
             "reason": "below_size_threshold",
+            "source_bytes": size,
+        }
+    defer_reason = _runtime_projection_prepare_startup_defer_reason()
+    if defer_reason:
+        return {
+            "changed": False,
+            "applied": False,
+            "reason": defer_reason,
             "source_bytes": size,
         }
     script = (

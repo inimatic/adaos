@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 
 import pytest
 import y_py as Y
 
 from adaos.services.yjs import structural_compaction as compaction
 from adaos.services.yjs import snapshot_projection
+from adaos.services.yjs import store as ystore
 
 
 def _snapshot_with_history() -> bytes:
@@ -149,3 +151,23 @@ def test_runtime_projection_prepare_bounds_teacher_before_cold_replay(tmp_path) 
     assert len(bounded["llm_logs"]) <= 12
     assert isinstance(application, Y.YMap)
     assert application.get("title") == "desktop"
+
+
+def test_runtime_projection_prepare_defers_during_managed_startup(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "desktop.ysnap"
+    path.write_bytes(b"not-a-yjs-snapshot-but-large-enough")
+    monkeypatch.setattr(ystore, "_YSTORE_RUNTIME_PROJECTION_PREPARE", True)
+    monkeypatch.setattr(ystore, "_YSTORE_RUNTIME_PROJECTION_PREPARE_MIN_BYTES", 1)
+    monkeypatch.setattr(ystore, "_YSTORE_RUNTIME_PROJECTION_PREPARE_STARTUP_GRACE_S", 30.0)
+    monkeypatch.setenv("ADAOS_AUTOSTART_MODE", "1")
+    monkeypatch.setenv("ADAOS_RUNTIME_LAUNCH_MODE", "autostart_runner")
+    monkeypatch.setenv("ADAOS_RUNTIME_PROCESS_STARTED_AT", str(time.time()))
+
+    result = ystore._prepare_runtime_projection_snapshot(path)
+
+    assert result == {
+        "changed": False,
+        "applied": False,
+        "reason": "startup_deferred",
+        "source_bytes": path.stat().st_size,
+    }
