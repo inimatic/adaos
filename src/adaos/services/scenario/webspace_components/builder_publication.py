@@ -887,12 +887,15 @@ class WebspaceBuilderPublicationService:
             for mode in ("workspace", "dev"):
                 mode_started = time.perf_counter()
                 decls = runtime._collect_skill_decls(mode=mode)
+                fingerprint = str(
+                    getattr(runtime, "_last_skill_decls_fingerprint", "") or ""
+                )
                 modes[mode] = {
                     "declarations": len(decls),
-                    "fingerprint": str(
-                        getattr(runtime, "_last_skill_decls_fingerprint", "") or ""
-                    ),
+                    "fingerprint": fingerprint,
                     "elapsed_ms": operations.elapsed_ms(mode_started),
+                    "skill_decls_snapshot": [dict(item) for item in decls if isinstance(item, Mapping)],
+                    "skill_decls_fingerprint": fingerprint,
                 }
                 operations.skill_sources_fingerprint_for_materialization(mode)
             return modes
@@ -903,8 +906,18 @@ class WebspaceBuilderPublicationService:
             "modes": modes,
             "elapsed_ms": operations.elapsed_ms(started),
         }
+        log_modes = {
+            mode: {
+                "declarations": details.get("declarations"),
+                "fingerprint": details.get("fingerprint"),
+                "elapsed_ms": details.get("elapsed_ms"),
+            }
+            for mode, details in modes.items()
+            if isinstance(details, Mapping)
+        }
         operations.logger.info(
-            "prewarmed webspace materialization sources result=%s", result
+            "prewarmed webspace materialization sources result=%s",
+            {"ok": result["ok"], "modes": log_modes, "elapsed_ms": result["elapsed_ms"]},
         )
         return result
 

@@ -1244,10 +1244,11 @@ async def _runtime_context(app: FastAPI):
         )
 
         with _StartupTimer("prewarm_webspace_materialization_sources"):
-            await prewarm_webspace_materialization_sources()
+            materialization_prewarm = await prewarm_webspace_materialization_sources()
+            app.state.webspace_materialization_source_prewarm = materialization_prewarm
         with _StartupTimer("hydrate_webspace_materialization_statuses"):
             app.state.webspace_materialization_hydration = (
-                await hydrate_webspace_materialization_statuses()
+                await hydrate_webspace_materialization_statuses(materialization_prewarm)
             )
     except Exception:
         logging.getLogger("adaos.api.server").warning(

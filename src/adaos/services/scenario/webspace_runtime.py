@@ -8446,28 +8446,54 @@ def _startup_materialization_allowed(
     row: Any,
     *,
     default_webspace: bool = False,
-) -> tuple[bool, str, str]:
+) -> tuple[bool, str, str, str]:
     mode = _startup_materialization_hydration_mode()
     scenario_id, source_mode = _startup_materialization_scenario(row)
     if mode == "all":
-        return True, scenario_id, "compatibility_all"
+        return True, scenario_id, source_mode, "compatibility_all"
     if mode == "none":
-        return False, scenario_id, "disabled"
+        return False, scenario_id, source_mode, "disabled"
     if not scenario_id:
-        return False, scenario_id, "scenario_unknown"
+        return False, scenario_id, source_mode, "scenario_unknown"
     if default_webspace:
-        return True, scenario_id, "default_webspace"
+        return True, scenario_id, source_mode, "default_webspace"
     try:
         manifest = scenarios_loader.read_manifest(scenario_id, space=source_mode)
     except Exception:
-        return False, scenario_id, "manifest_unavailable"
+        return False, scenario_id, source_mode, "manifest_unavailable"
     runtime = manifest.get("runtime") if isinstance(manifest, Mapping) else None
     activation = runtime.get("activation") if isinstance(runtime, Mapping) else None
     allowed = isinstance(activation, Mapping) and activation.get("startup_allowed") is True
-    return allowed, scenario_id, "manifest_opt_in" if allowed else "manifest_not_opted_in"
+    return allowed, scenario_id, source_mode, "manifest_opt_in" if allowed else "manifest_not_opted_in"
 
 
-async def hydrate_webspace_materialization_statuses() -> dict[str, Any]:
+def _startup_materialization_skill_decls(
+    prewarm_sources: Mapping[str, Any] | None,
+    source_mode: str,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    if not isinstance(prewarm_sources, Mapping):
+        return None, None
+    modes = prewarm_sources.get("modes")
+    if not isinstance(modes, Mapping):
+        return None, None
+    details = modes.get(str(source_mode or "").strip() or "workspace")
+    if not isinstance(details, Mapping):
+        return None, None
+    raw_decls = details.get("skill_decls_snapshot")
+    declarations = (
+        [dict(item) for item in raw_decls if isinstance(item, Mapping)]
+        if isinstance(raw_decls, list)
+        else None
+    )
+    fingerprint = str(
+        details.get("skill_decls_fingerprint") or details.get("fingerprint") or ""
+    ).strip()
+    return declarations, fingerprint or None
+
+
+async def hydrate_webspace_materialization_statuses(
+    prewarm_sources: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Hydrate explicitly opted-in scenarios and defer inactive webspaces."""
     started = time.perf_counter()
     rows = await asyncio.to_thread(workspace_index.list_workspaces)
@@ -8484,7 +8510,7 @@ async def hydrate_webspace_materialization_statuses() -> dict[str, Any]:
     async def _hydrate(webspace_id: str) -> dict[str, Any]:
         item_started = time.perf_counter()
         row = rows_by_id[webspace_id]
-        allowed, scenario_id, admission_reason = await asyncio.to_thread(
+        allowed, scenario_id, source_mode, admission_reason = await asyncio.to_thread(
             _startup_materialization_allowed,
             row,
             default_webspace=webspace_id == default_id,
@@ -8521,12 +8547,18 @@ async def hydrate_webspace_materialization_statuses() -> dict[str, Any]:
                 "duration_ms": _elapsed_ms(item_started),
             }
         try:
+            skill_decls_snapshot, skill_decls_fingerprint = _startup_materialization_skill_decls(
+                prewarm_sources,
+                source_mode,
+            )
             async with semaphore:
                 result = await rebuild_webspace_from_sources(
                     webspace_id,
                     action="startup_materialization_hydration",
                     source_of_truth="startup_runtime",
                     request_id=f"startup-materialization:{webspace_id}:{time.time_ns()}",
+                    skill_decls_snapshot=skill_decls_snapshot,
+                    skill_decls_fingerprint=skill_decls_fingerprint,
                 )
         except asyncio.CancelledError:
             raise

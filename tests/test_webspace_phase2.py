@@ -4861,6 +4861,53 @@ def test_startup_materialization_always_hydrates_default_webspace(monkeypatch) -
     assert result["deferred_total"] == 1
 
 
+def test_startup_materialization_passes_prewarmed_skill_declarations(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("ADAOS_WEBSPACE_STARTUP_HYDRATION_MODE", "all")
+    monkeypatch.setattr(webspace_runtime_module, "default_webspace_id", lambda: "desktop")
+    monkeypatch.setattr(
+        webspace_runtime_module.workspace_index,
+        "list_workspaces",
+        lambda: [
+            SimpleNamespace(
+                workspace_id="desktop",
+                home_scenario="web_desktop",
+                effective_source_mode="dev",
+            )
+        ],
+    )
+
+    async def _fake_rebuild(webspace_id: str, **kwargs) -> dict[str, object]:
+        calls.append({"webspace_id": webspace_id, **kwargs})
+        return {
+            "ok": True,
+            "accepted": True,
+            "scenario_id": "web_desktop",
+            "error": None,
+            "materialization": {"ready": True},
+        }
+
+    monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _fake_rebuild)
+
+    result = asyncio.run(
+        webspace_runtime_module.hydrate_webspace_materialization_statuses(
+            {
+                "modes": {
+                    "dev": {
+                        "skill_decls_snapshot": [{"skill": "dev-only"}],
+                        "skill_decls_fingerprint": "fp-dev",
+                    }
+                }
+            }
+        )
+    )
+
+    assert result["ready_total"] == 1
+    assert len(calls) == 1
+    assert calls[0]["skill_decls_snapshot"] == [{"skill": "dev-only"}]
+    assert calls[0]["skill_decls_fingerprint"] == "fp-dev"
+
+
 def test_startup_materialization_uses_isolated_payload_without_live_mutation(monkeypatch) -> None:
     materialize_calls: list[dict[str, object]] = []
     direct_rebuild_calls: list[str] = []
