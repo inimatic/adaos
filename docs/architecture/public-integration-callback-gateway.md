@@ -1,211 +1,404 @@
-# Public Integration Callback Gateway
+# External Integration Ingress And Public Callback Gateway
 
-## Status and scope
+Status: target architecture. OAuth redirect materialization is the first
+delivery slice; durable webhooks and other callback classes follow only after
+the OAuth slice is proven.
 
-This document defines the target route for external services which must call an
-AdaOS installation that is not directly reachable from the public Internet.
-OAuth redirect callbacks are the first use case. Provider webhooks may reuse the
-ingress and routing infrastructure later, but they have different delivery and
-retention semantics and are not part of the first implementation.
+Last reviewed: 2026-09-24.
 
-The current Gmail development callback remains unchanged:
+Roadmap: [External Integration Ingress Roadmap](public-integration-callback-gateway-roadmap.md).
+
+## Decision
+
+AdaOS standardizes the control plane for callbacks, not one universal callback
+protocol. `ExternalIntegrationIngress` owns endpoint registration,
+materialization, routing, verification policy, delivery evidence and lifecycle.
+OAuth redirects, webhooks, provider challenges and asynchronous continuations
+remain distinct ingress classes because they have different authority,
+retention, acknowledgement and retry semantics.
+
+A callback URL is not an architectural identity. It is an environment-specific
+materialization of an admitted `IngressEndpointRevision`:
+
+```text
+public_uri = materialize(IngressEndpointRevision, EnvironmentProfile)
+```
+
+Applications and skills never construct this URI, use it as authority, or
+persist physical subnet and node routes in portable artifacts.
+
+The current Gmail development callback remains valid while the public gateway
+is not implemented:
 
 ```text
 http://127.0.0.1:8777/api/providers/google/gmail/oauth/callback
 ```
 
-It is the correct route for local development while the public gateway is not
-implemented. Skills and Applications must not invent tunnels or alternative
-ports.
+It is the `local-development` materialization of the first OAuth ingress
+profile. Skills and Applications must not invent tunnels, callback ports or
+alternative public routes.
 
-## Canonical public route
+## Ingress Classes
 
-The target provider-registered redirect URI is stable and independent of an
-Application, account, subnet, node, or current physical route:
+| Class | Identity and lifecycle | Verification | Delivery and acknowledgement |
+| --- | --- | --- | --- |
+| `oauth.authorization_response` | one short-lived `CallbackAttempt` initiated locally | exact profile and issuer, high-entropy `state`, PKCE where supported, expiry and replay check | immediate single-use delivery; local code exchange; neutral browser result |
+| `webhook.event` | long-lived `WebhookSubscription` and repeated `IngressDelivery` records | provider signature or other admitted verifier, timestamp window, event type and delivery identity | durable at-least-once acceptance, deduplication, retry and dead-letter policy |
+| `provider.challenge` | bounded endpoint-registration or ownership challenge | provider-specific challenge profile | synchronous deterministic response or fail closed |
+| `async.continuation` | one bounded external operation correlated with a local attempt | signed/opaque correlation, expected provider and response schema | single-use or explicitly bounded retry according to profile |
 
-```text
-https://integrations.inimatic.com/v1/oauth/callback/{provider_id}
-```
+New classes may reuse the ingress registry, TLS edge, rate limiting, encrypted
+route delivery and redacted evidence. They do not inherit OAuth or webhook
+semantics implicitly.
 
-For Gmail the initial value is:
+## Canonical Model
 
-```text
-https://integrations.inimatic.com/v1/oauth/callback/google.gmail
-```
+### IngressProfile
 
-Provider paths are owned by AdaOS Core. Applications and skills request a
-callback by logical provider reference; they do not concatenate this URL.
-
-## Authority boundary
-
-The public gateway owns only Internet ingress and short-lived rendezvous:
-
-- TLS termination, provider path admission, size and rate limits;
-- lookup of a one-time callback transaction from an opaque `state` value;
-- delivery to the exact admitted Root, subnet and node route;
-- replay prevention, expiry, acknowledgement and redacted audit evidence;
-- a neutral success/error page for the browser.
-
-The gateway does not own:
-
-- OAuth client secrets, refresh tokens or access tokens;
-- the provider account or Application attachment;
-- provider-specific business operations;
-- selection of another node when the admitted target is unavailable;
-- a general public proxy into the subnet.
-
-The target AdaOS Core/provider adapter remains the credential authority. It
-validates the callback transaction and exchanges the authorization code for
-tokens locally. Long-lived credentials remain in the Core-owned credential
-vault.
-
-## Initiation and completion
-
-```text
-Application
-  -> provider adapter: begin_authorization(application_ref, return_intent)
-  -> Core callback broker: create one-time transaction
-  -> Root ingress registry: admit hashed rendezvous and exact route
-  -> provider authorization URL with opaque state
-
-provider
-  -> integrations.inimatic.com callback
-  -> validate provider/path/state/expiry/replay
-  -> encrypted route delivery to exact subnet/node
-  -> local provider adapter validates transaction and exchanges code
-  -> Core records connected account and emits completion
-  -> gateway renders neutral result page
-```
-
-The callback transaction has a stable contract such as:
+`IngressProfile` is a portable, immutable description of the protocol and the
+requirements that an environment must satisfy. Its minimum contents are:
 
 ```yaml
-schema: adaos.integration.callback_transaction.v1
-transaction_ref: callback-transaction:<opaque-id>
-provider_ref: provider:google.gmail
-route:
-  root_zone: ru
-  subnet_ref: subnet:<opaque-id>
-  node_ref: node:<opaque-id>
+schema: adaos.integration.ingress_profile.v1
+profile_ref: ingress-profile:oauth.authorization-code.google@1
+ingress_class: oauth.authorization_response
+protocol: oauth2.authorization_code
+issuer_ref: issuer:google
+request_schema_ref: schema:oauth.authorization-response@1
+verification:
+  state: required
+  pkce: S256
+  issuer_binding: required
+delivery:
+  mode: immediate_single_use
+  acknowledgement: local_acceptance
+retention:
+  ttl_seconds: 600
+response:
+  mode: neutral_browser_result
+compatibility:
+  major: 1
+```
+
+The profile describes guarantees and policies. It contains no tenant, account,
+Application, subnet, node, callback host, credential or secret.
+
+### IngressEndpoint
+
+`IngressEndpoint` is a stable local identity. An immutable
+`IngressEndpointRevision` materializes one profile in one environment:
+
+```yaml
+schema: adaos.integration.ingress_endpoint_revision.v1
+endpoint_ref: ingress-endpoint:<opaque-id>
+revision: 3
+profile_ref: ingress-profile:oauth.authorization-code.google@1
+environment_profile_ref: environment-profile:public-connected@1
+public_uri: https://integrations.inimatic.com/v1/oauth/callback/cbp_<opaque-id>
+provider_registration_ref: provider-registration:<opaque-id>
+route_binding_ref: ingress-route:<opaque-id>
+credential_authority_ref: credential-authority:core-local
+generation: 7
+status: active
+```
+
+`endpoint_ref` is stable; revision, route, health and generation are not
+silently mutated. An exact endpoint revision is admitted before use and can be
+pinned by a local binding or activation record.
+
+The public endpoint identifier is not a secret. It reveals no tenant, subject,
+Application, skill, subnet or node. Those values are resolved from admitted
+server-side records.
+
+### CallbackAttempt
+
+`CallbackAttempt` represents one locally initiated request/response exchange.
+For OAuth it contains at least:
+
+```yaml
+schema: adaos.integration.callback_attempt.v1
+attempt_ref: callback-attempt:<opaque-id>
+endpoint_ref: ingress-endpoint:<opaque-id>
+endpoint_revision: 3
+provider_connection_ref: provider-connection:<opaque-id>
+binding_instance_ref: binding-instance:<opaque-id>
 application_ref: application:<id>
 subject_ref: user:<id>
 return_intent: application.connection.refresh
 state_hash: sha256:<digest>
-pkce_challenge: <value>
 issued_at: <timestamp>
 expires_at: <timestamp>
 max_deliveries: 1
+status: pending
 ```
 
-Only the minimum routing projection is registered publicly. The local record
-may contain the PKCE verifier and local correlation data; the public record must
-not. Raw `state`, authorization codes, client secrets, tokens and provider error
-descriptions must not be written to request logs, traces, telemetry or model
-context.
+The local record may hold a PKCE verifier and local correlation data in the
+credential authority. The public rendezvous receives only the minimum route
+projection. Raw `state`, authorization codes, secrets, tokens and provider
+error payloads must not enter request logs, traces, telemetry, YJS state or
+model context.
 
-## Routing transport
+### WebhookSubscription And IngressDelivery
 
-Root already acts as rendezvous for an outbound-connected hub. The gateway
-should deliver a compact encrypted callback envelope through the existing
-scoped route family, for example:
+A webhook is not represented as a repeating `CallbackAttempt`.
+`WebhookSubscription` binds a provider-side subscription to an exact endpoint
+revision, verifier and allowed event set. Every accepted request creates an
+immutable `IngressDelivery` with provider delivery identity, digest, receive
+time, verification outcome, acknowledgement and redacted processing state.
+
+Deduplication is scoped by subscription and provider delivery identity. A
+successful duplicate returns the same terminal acknowledgement without
+repeating an effect. Durable payload retention, retry and dead-letter policies
+are explicit and bounded by the profile.
+
+## Public URI Namespace
+
+Use one isolated integration origin with separate operational route classes:
 
 ```text
-route.v2.to_hub.<hub_id>.<callback_key>
+https://integrations.inimatic.com/v1/oauth/callback/{callback_profile_id}
+https://integrations.inimatic.com/v1/webhooks/{endpoint_id}
+https://integrations.inimatic.com/v1/continuations/{attempt_id}
 ```
 
-The concrete NATS subject is transport metadata, not part of the skill-facing
-contract. A dedicated callback route kind must enforce:
+`callback_profile_id` identifies a stable OAuth authorization-server/client
+registration profile, not a skill or business capability. A Google OAuth
+registration may serve Gmail, Drive and Calendar capabilities; conversely two
+Google registrations may require different consent, scopes, regions or
+verification. Therefore `google.gmail` is not a canonical public route
+identity.
 
-- exact target hub/subnet/node binding from the admitted transaction;
-- authenticated Root-to-hub delivery with an audience-bound envelope;
-- one successful delivery and idempotent duplicate acknowledgement;
-- a short deadline compatible with provider authorization-code expiry;
+One OAuth redirect URI is registered per admitted callback profile by default.
+Sharing a URI across issuers is allowed only when the profile has an explicit
+issuer-identification and mix-up defense. Changing a provider-registered URI is
+a coordinated endpoint migration, not a normal package or Application update.
+Old URI revisions remain routable only for their bounded migration window.
+
+`integrations.inimatic.com` is intentionally separate from the main
+`inimatic.com` web origin. It has independent cookies, CSP, request limits,
+WAF policy, logging redaction and operational ownership. The main client must
+not observe authorization codes or raw webhook payloads.
+
+## CBS Placement
+
+The ingress service is a native AdaOS infrastructure provider. A provider
+`BindingDefinition` declares typed ingress ports required by its
+implementation:
+
+```yaml
+ingress_ports:
+  - name: authorization_return
+    profile_ref: ingress-profile:oauth.authorization-code.google@1
+    required_guarantees:
+      single_use: true
+      local_acceptance: true
+```
+
+Resolution admits an environment/provider combination only when:
+
+```text
+Requirements(ingress_port) subset_of Guarantees(IngressEndpointRevision)
+```
+
+The local `BindingInstance` attaches the exact endpoint revision and provider
+connection. The Application depends only on its semantic capability. It does
+not name the ingress host, callback path, OAuth registration, secret, provider
+account or physical route.
+
+Completing an authorization flow creates or updates a Core-owned
+`ProviderConnection`. Attaching that connection to an Application remains an
+explicit permissioned operation. Multiple Applications can reuse a connection
+without copying its credentials.
+
+## Authority Boundary
+
+The public gateway owns only Internet ingress and bounded rendezvous:
+
+- TLS termination, route-class admission, body-size and rate limits;
+- lookup of an admitted endpoint revision and attempt/subscription projection;
+- protocol-neutral envelope capture and exact route delivery;
+- replay, expiry, acknowledgement and redacted operational evidence;
+- a neutral OAuth completion page or the response required by an admitted
+  synchronous challenge profile.
+
+The public gateway does not own:
+
+- OAuth client secrets, refresh tokens, access tokens or provider credentials;
+- the provider account or Application attachment;
+- provider-specific business operations;
+- selection of another node when the admitted target is unavailable;
+- arbitrary redirects supplied by query parameters;
+- a general public proxy into the subnet.
+
+The target Core/provider adapter is the credential and provider-semantic
+authority. It validates the local record, performs an OAuth code exchange,
+verifies provider-specific webhook semantics and records the provider
+connection or effect locally.
+
+## OAuth Initiation And Completion
+
+```text
+Application
+  -> provider adapter: begin_authorization(binding_instance_ref, return_intent)
+  -> Core ingress broker: create CallbackAttempt
+  -> Root ingress registry: admit hashed rendezvous and exact route
+  -> provider authorization URL with exact redirect_uri and opaque state
+
+provider authorization server
+  -> integrations.inimatic.com OAuth route
+  -> validate endpoint profile, state projection, expiry and replay
+  -> encrypted delivery to the exact admitted subnet/node route
+  -> local broker and adapter validate the full attempt and issuer
+  -> local adapter exchanges code and stores tokens in Core vault
+  -> Core records ProviderConnection and explicit completion evidence
+  -> gateway renders a neutral result page
+```
+
+`return_intent` is an allow-listed semantic intent, never an arbitrary return
+URL. The browser completion page contains no authorization code or token and
+uses a restrictive CSP and referrer policy.
+
+If the target is offline, the gateway may retain an encrypted OAuth envelope
+only for a short bounded TTL compatible with authorization-code expiry. It must
+not exchange the code centrally or silently attach another connection. On
+expiry the operation fails closed and the user starts a new authorization
+attempt.
+
+## Webhook Acceptance And Delivery
+
+```text
+provider
+  -> integrations.inimatic.com webhook endpoint
+  -> endpoint/profile lookup, generic admission and bounded body capture
+  -> verification according to the admitted verifier placement
+  -> durable encrypted IngressDelivery acceptance
+  -> timely provider acknowledgement
+  -> authenticated delivery to the exact Core binding
+  -> provider adapter verifies semantic envelope and applies idempotently
+  -> receipt, retry or dead-letter transition
+```
+
+Verifier placement is explicit. A public-key verifier may run at ingress. A
+shared-secret verifier runs locally unless a separately admitted minimal
+verification projection is provisioned to the edge. The edge never acquires a
+long-lived provider credential merely for convenience.
+
+Acknowledging a webhook means the admitted durability boundary has accepted
+it, not that a NATS publication was attempted. Ordering guarantees are absent
+unless declared by the profile. Consumers must tolerate duplicate and, where
+the provider permits it, out-of-order delivery.
+
+## Routing Transport
+
+Root already provides rendezvous for an outbound-connected hub. The gateway
+delivers a compact encrypted envelope through a dedicated scoped route family,
+for example:
+
+```text
+route.v2.to_hub.<hub_id>.<ingress_key>
+```
+
+The concrete subject is transport metadata, not part of a portable contract.
+The route must enforce:
+
+- exact Root/hub/subnet/node binding from the admitted endpoint revision;
+- authenticated, audience-bound and encrypted delivery;
 - no fallback to another tenant, subnet or node;
-- encrypted sensitive fields and redacted operational diagnostics;
-- an acknowledgement proving local acceptance, not merely NATS publication.
+- an acknowledgement proving local acceptance;
+- class-specific retention and replay rules;
+- redaction of URI query data and sensitive payloads from diagnostics.
 
-If the target is offline, the gateway may retain an encrypted envelope only for
-a small bounded TTL. It must not exchange the code centrally or silently attach
-another connection. On expiry it shows a retryable failure and the user starts
-a new authorization transaction.
+Regional ingress origins may be introduced for data-residency requirements.
+The selected region becomes part of the endpoint materialization and provider
+registration. It is not inferred or changed during a callback.
 
-## Skill-facing API
+## Core And Skill-Facing API
 
-Core should expose one callback broker SDK instead of provider-specific public
-route code in every skill:
+Core exposes typed operations rather than a protocol-erasing
+`begin_callback`:
 
 ```python
-callback = integrations.begin_callback(
-    provider_ref="provider:google.gmail",
+authorization = integrations.begin_authorization(
+    binding_instance_ref=binding_instance_ref,
     application_ref=application_ref,
     return_intent="application.connection.refresh",
 )
+
+subscription = integrations.ensure_webhook_subscription(
+    binding_instance_ref=binding_instance_ref,
+    ingress_port="change_events",
+)
 ```
 
-The selected `EnvironmentProfile` decides the materialization:
+The selected `EnvironmentProfile` decides materialization:
 
-- `local-development` returns the current loopback callback;
-- `public-connected` returns the canonical `integrations.inimatic.com` route;
-- an offline profile fails closed with an actionable explanation.
+- `local-development` returns an admitted loopback endpoint;
+- `public-connected` returns the admitted `integrations.inimatic.com` endpoint;
+- a profile without the required ingress guarantees fails closed with an
+  actionable explanation.
 
-Provider packages declare a logical callback profile, allowed response fields,
-TTL, PKCE policy and completion handler. Applications reference the capability
-and provider binding; they never declare a host, subnet route, OAuth secret or
-callback handler.
+Provider packages declare logical ingress profiles, request/response schemas,
+allowed fields, verifier requirements, TTL/retention policies and completion
+handlers. Applications never declare a callback URL or handler.
 
-This makes callback routing reusable across skills while preserving CBS
-separation: the portable capability describes the integration semantics, the
-binding selects the provider adapter, and the local BindingInstance supplies the
-route and credential authority.
+## Security Invariants
 
-## Security invariants
+1. Public routes match an admitted class and exact endpoint revision; unknown,
+   inactive and ambiguous endpoints fail closed.
+2. OAuth `state` is high-entropy, single-use, time-bounded and stored only as a
+   hash in public authority.
+3. An OAuth attempt is bound to endpoint revision, issuer, provider connection,
+   binding, subject, Application, route and return intent.
+4. PKCE S256 is required where supported. The verifier remains in local
+   credential authority.
+5. Authorization codes, tokens, secrets and unredacted provider error payloads
+   never enter logs, telemetry, browser storage, YJS or model context.
+6. No callback endpoint is an open redirector. Post-completion navigation is
+   selected from an allow-listed server-side intent.
+7. Webhook signatures are checked against the raw body; timestamp/replay and
+   provider delivery-identity policies are profile-defined and fail closed.
+8. Callback and webhook completion is idempotent. A replay cannot repeat token
+   exchange, account attachment or a provider effect.
+9. Public and local records must agree before an OAuth completion is accepted.
+10. Application attachment remains separately authorized; a successful
+    callback grants no implicit Application access.
+11. Gateway records are deleted after their retention boundary. Durable audit
+    contains only digests, timestamps, route/profile refs and redacted outcomes.
+12. Public ingress never broadens an unreachable Core into a general inbound
+    network route.
 
-1. `state` is high-entropy, single-use, time-bounded and stored only as a hash
-   in public authority.
-2. The transaction is bound to provider, subject, Application, route and return
-   intent; none may be changed at callback time.
-3. PKCE is required where the provider supports it. The verifier remains local.
-4. Authorization codes and tokens never appear in URLs after ingress, logs,
-   telemetry, browser local storage, YJS documents or model context.
-5. The callback is not accepted unless both public and local transaction records
-   agree and the target node acknowledges it.
-6. Completion is idempotent. Replay produces the same redacted terminal result
-   and cannot repeat token exchange or attachment.
-7. Application attachment remains an explicit, separately authorized operation;
-   completing OAuth does not implicitly grant every Application access.
-8. Gateway records are deleted after completion or expiry. Durable audit stores
-   contain only digests, timestamps, route class and redacted outcomes.
+## Compatibility And Migration
 
-## Delivery plan
+The provider-specific Gmail loopback endpoint is retained until the Core
+broker owns the same behavior and regression evidence. During migration it is
+an adapter into the canonical broker, not a second authority.
 
-1. Define and validate `callback_transaction`, routed callback envelope,
-   acknowledgement and redacted audit schemas.
-2. Add the Core callback broker with loopback materialization, keeping the Gmail
-   route and behavior unchanged.
-3. Implement the Root ingress registry and the TLS endpoint on
-   `integrations.inimatic.com` with replay/TTL/rate-limit tests.
-4. Add authenticated encrypted delivery over the existing outbound hub route and
-   explicit offline/expired behavior.
-5. Pilot public materialization with the existing Gmail provider while retaining
-   loopback as the development profile.
-6. Move all provider adapters to the Core SDK and prohibit literal public
-   callback URLs in skill/application manifests.
-7. Add Applications UI for callback route health, pending transaction expiry,
-   connected-account ownership and explicit per-Application attachment.
-8. Only after OAuth is stable, define a separate durable webhook subscription
-   contract on the same ingress infrastructure.
+Portable provider packages migrate from literal callback paths to
+`ingress_ports`. Existing local OAuth configurations remain usable until their
+environment profile is explicitly switched. Public callback activation
+requires the exact public URI to be registered at the provider before the new
+endpoint revision can become active.
 
-## Acceptance criteria
+Webhook support does not block the OAuth slice. No generic webhook contract is
+accepted until durable acceptance, signature verification, deduplication,
+retry and dead-letter behavior have executable evidence.
 
-- one provider-registered public URI works for every admitted subnet without
-  exposing subnet or node identifiers;
-- the external provider can complete OAuth while the node has only an outbound
-  Root connection;
-- the code-to-token exchange and all long-lived credentials stay on the target
-  Core;
-- wrong-provider, wrong-route, expired, replayed and offline callbacks fail
-  closed with redacted evidence;
-- two Applications can explicitly attach the same Core-owned connected account
-  without copying its credentials;
-- changing the physical Root/hub route does not change Application semantics or
-  the provider-registered callback URI.
+## Acceptance Criteria
+
+- one provider-registered OAuth URI per callback profile serves every admitted
+  subnet without exposing tenant, subnet or node identifiers;
+- the provider completes OAuth while the target node has only an outbound Root
+  connection;
+- code exchange and all long-lived credentials remain in target Core;
+- wrong class, issuer, endpoint, route, state, generation, expiry and replay
+  fail closed with redacted evidence;
+- local-development and public-connected materializations preserve portable
+  binding and Application semantics;
+- two Applications explicitly reuse one Core-owned provider connection without
+  credential copying;
+- physical Root/hub route changes do not change provider registration or
+  portable artifacts;
+- webhook admission, when enabled, proves signature verification, durable
+  acknowledgement, duplicate delivery, offline retry and dead-letter recovery;
+- derived health and audit views can be rebuilt from canonical endpoint,
+  attempt/subscription and delivery records.
