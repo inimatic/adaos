@@ -55,6 +55,22 @@ def test_idle_legacy_selection_is_adopted_without_changing_revision(tmp_path):
         assert channel.read() == (current,)
 
 
+def test_list_selections_does_not_realpath_each_channel(tmp_path, monkeypatch):
+    channel = ApplicationRuntimeChannel(tmp_path, "sample")
+    current = selection()
+    channel.select(current, expected_revision=0)
+
+    monkeypatch.setattr(
+        Path,
+        "resolve",
+        lambda *_args, **_kwargs: pytest.fail(
+            "trusted runtime channel paths must not require filesystem realpath"
+        ),
+    )
+
+    assert ApplicationRuntimeChannel.list_selections(tmp_path) == (current,)
+
+
 def test_concurrent_readers_keep_cutover_blocked_even_after_caller_stops_waiting(tmp_path):
     channel = ApplicationRuntimeChannel(tmp_path, "sample")
     channel.select(selection(), expected_revision=0)

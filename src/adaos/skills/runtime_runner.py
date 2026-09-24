@@ -15,10 +15,11 @@ from typing import Any, Iterable, Mapping
 
 from adaos.services.logging import configure_skill_module_logging
 
-_SKILL_SOURCE_SNAPSHOTS: dict[str, int] = {}
+_SKILL_SOURCE_SNAPSHOTS: dict[str, int | str] = {}
 _MODULE_LOAD_LOCK = threading.RLock()
 _MODULE_LOAD_COMPLETE = "__adaos_runtime_load_complete__"
 _MODULE_LOAD_SLOW_SECONDS = 0.25
+_PREPARED_IMPORT_CONTEXT: tuple[str, str, tuple[str, ...]] | None = None
 
 
 @contextmanager
@@ -35,8 +36,11 @@ def isolated_skill_import_state(
     for the bounded operation, then restore the prior process state.
     """
 
+    global _PREPARED_IMPORT_CONTEXT
+
     skill_path = Path(skill_dir).resolve()
     with _MODULE_LOAD_LOCK:
+        _PREPARED_IMPORT_CONTEXT = None
         original_sys_path = list(sys.path)
         local_roots = _local_import_roots(skill_path)
         previous_modules = {
@@ -60,6 +64,7 @@ def isolated_skill_import_state(
             sys.modules.update(previous_modules)
             sys.path[:] = original_sys_path
             importlib.invalidate_caches()
+            _PREPARED_IMPORT_CONTEXT = None
 
 
 def execute_tool(
@@ -69,8 +74,11 @@ def execute_tool(
     attr: str,
     payload: Mapping[str, Any],
     extra_paths: Iterable[Path] | None = None,
+    source_revision: str | None = None,
 ) -> Any:
     """Execute a tool callable inside the skill package and return the result."""
+
+    global _PREPARED_IMPORT_CONTEXT
 
     skill_path = Path(skill_dir).resolve()
     # Importing a source-backed skill is process-global work: importlib writes
@@ -82,6 +90,7 @@ def execute_tool(
     with _MODULE_LOAD_LOCK:
         lock_wait_seconds = time.perf_counter() - lock_started
         load_started = time.perf_counter()
+        module_name = module or "handlers.main"
         # Skill handlers commonly import sibling packages by their short name
         # (for example ``from research.manager import ...``). Keep the active
         # skill first and evict a same-named package left by another skill before
@@ -89,11 +98,21 @@ def execute_tool(
         # state can route an otherwise valid skill to a sibling's package.
         import_paths = [skill_path, skill_path.parent]
         import_paths.extend(Path(extra).resolve() for extra in extra_paths or ())
-        _prioritize_import_paths(import_paths)
-        _purge_conflicting_local_modules(skill_path)
-        _reload_skill_modules_if_sources_changed(skill_path)
-        _bind_owned_namespace_packages(skill_path)
-        module_name = module or "handlers.main"
+        revision = str(source_revision or "").strip()
+        prepared_key = (
+            str(skill_path),
+            revision,
+            tuple(str(path) for path in import_paths),
+        )
+        if not revision or _PREPARED_IMPORT_CONTEXT != prepared_key:
+            _prioritize_import_paths(import_paths)
+            _purge_conflicting_local_modules(skill_path)
+            _reload_skill_modules_if_sources_changed(
+                skill_path,
+                source_revision=revision or None,
+            )
+            _bind_owned_namespace_packages(skill_path)
+            _PREPARED_IMPORT_CONTEXT = prepared_key if revision else None
         mod = _load_skill_module(skill_path, module_name)
         load_seconds = time.perf_counter() - load_started
     if lock_wait_seconds >= _MODULE_LOAD_SLOW_SECONDS or load_seconds >= _MODULE_LOAD_SLOW_SECONDS:
@@ -314,21 +333,48 @@ def _purge_skill_source_modules(skill_path: Path) -> None:
             sys.modules.pop(key, None)
 
 
-def _reload_skill_modules_if_sources_changed(skill_path: Path) -> None:
+def _purge_skill_bytecode(skill_path: Path) -> None:
+    """Remove interpreter caches when an exact source revision changes.
+
+    A/B slots are reused.  Filesystems with coarse timestamps can otherwise
+    make importlib accept bytecode from an older revision whose source has the
+    same size and timestamp.
+    """
+
+    for cache_dir in skill_path.rglob("__pycache__"):
+        if not cache_dir.is_dir():
+            continue
+        for bytecode in cache_dir.glob("*.py[co]"):
+            try:
+                bytecode.unlink()
+            except OSError:
+                continue
+
+
+def _reload_skill_modules_if_sources_changed(
+    skill_path: Path,
+    *,
+    source_revision: str | None = None,
+) -> None:
     key = str(skill_path)
-    current = _source_snapshot_mtime_ns(skill_path)
+    revision = str(source_revision or "").strip()
+    current: int | str = f"revision:{revision}" if revision else _source_snapshot_mtime_ns(skill_path)
     previous = _SKILL_SOURCE_SNAPSHOTS.get(key)
     if previous is None:
         # A/B activation changes the skill source path. The first invocation
         # from a freshly activated slot must not reuse a module imported from
         # the previous slot under the same ``skills.<name>`` package.
         _purge_skill_source_modules(skill_path)
+        if revision:
+            _purge_skill_bytecode(skill_path)
         importlib.invalidate_caches()
         _SKILL_SOURCE_SNAPSHOTS[key] = current
         return
     if previous == current:
         return
     _purge_skill_source_modules(skill_path)
+    if revision:
+        _purge_skill_bytecode(skill_path)
     importlib.invalidate_caches()
     _SKILL_SOURCE_SNAPSHOTS[key] = current
 

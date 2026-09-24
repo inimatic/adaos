@@ -32,6 +32,84 @@ from adaos.services.skill.declarations import runtime_stream_receiver_patterns
 from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 
 
+def test_loaded_handler_lookup_uses_path_index_without_scanning_unrelated_records(
+    tmp_path: Path, monkeypatch
+) -> None:
+    handler = tmp_path / "indexed_skill" / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+    unrelated = tmp_path / "unrelated" / "handlers" / "main.py"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("VALUE = 2\n", encoding="utf-8")
+    loader = ImportlibSkillsLoader()
+    module_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+    before_sources = dict(skills_loader_module._LOADED_HANDLER_SOURCES)
+    before_index = dict(skills_loader_module._LOADED_HANDLER_PATH_INDEX)
+    before_misses = dict(skills_loader_module._LOADED_HANDLER_MISS_CACHE)
+    original_resolve = Path.resolve
+    try:
+        loader._load_handler(handler)
+        loaded = sys.modules[module_name]
+        skills_loader_module._LOADED_HANDLER_SOURCES["unrelated-module"] = {
+            "module": "unrelated-module",
+            "path": str(unrelated),
+            "loaded_at": time.time() + 10,
+        }
+
+        def guarded_resolve(path: Path, *args, **kwargs):
+            if str(path) == str(unrelated):
+                raise AssertionError("indexed lookup traversed an unrelated handler record")
+            return original_resolve(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", guarded_resolve)
+        assert skills_loader_module.loaded_handler_module_for_path(handler) is loaded
+    finally:
+        sys.modules.pop(module_name, None)
+        skills_loader_module._LOADED_HANDLER_SOURCES.clear()
+        skills_loader_module._LOADED_HANDLER_SOURCES.update(before_sources)
+        skills_loader_module._LOADED_HANDLER_PATH_INDEX.clear()
+        skills_loader_module._LOADED_HANDLER_PATH_INDEX.update(before_index)
+        skills_loader_module._LOADED_HANDLER_MISS_CACHE.clear()
+        skills_loader_module._LOADED_HANDLER_MISS_CACHE.update(before_misses)
+
+
+def test_loaded_handler_lookup_caches_unchanged_path_misses(
+    tmp_path: Path, monkeypatch
+) -> None:
+    target = tmp_path / "dev_skill" / "handlers" / "main.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+    unrelated = tmp_path / "unrelated" / "handlers" / "main.py"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("VALUE = 2\n", encoding="utf-8")
+    before_sources = dict(skills_loader_module._LOADED_HANDLER_SOURCES)
+    before_index = dict(skills_loader_module._LOADED_HANDLER_PATH_INDEX)
+    before_misses = dict(skills_loader_module._LOADED_HANDLER_MISS_CACHE)
+    original_resolve = Path.resolve
+    try:
+        skills_loader_module._LOADED_HANDLER_SOURCES["unrelated-module"] = {
+            "module": "unrelated-module",
+            "path": str(unrelated),
+            "loaded_at": time.time(),
+        }
+        assert skills_loader_module.loaded_handler_module_for_path(target) is None
+
+        def guarded_resolve(path: Path, *args, **kwargs):
+            if str(path) == str(unrelated):
+                raise AssertionError("cached miss rescanned unrelated handler records")
+            return original_resolve(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", guarded_resolve)
+        assert skills_loader_module.loaded_handler_module_for_path(target) is None
+    finally:
+        skills_loader_module._LOADED_HANDLER_SOURCES.clear()
+        skills_loader_module._LOADED_HANDLER_SOURCES.update(before_sources)
+        skills_loader_module._LOADED_HANDLER_PATH_INDEX.clear()
+        skills_loader_module._LOADED_HANDLER_PATH_INDEX.update(before_index)
+        skills_loader_module._LOADED_HANDLER_MISS_CACHE.clear()
+        skills_loader_module._LOADED_HANDLER_MISS_CACHE.update(before_misses)
+
+
 def test_importlib_loader_keeps_event_loop_responsive_during_discovery_and_import(tmp_path, monkeypatch) -> None:
     handler = tmp_path / "slow_skill" / "handlers" / "main.py"
     handler.parent.mkdir(parents=True)

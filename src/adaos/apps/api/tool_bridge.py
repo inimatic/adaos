@@ -34,7 +34,7 @@ from adaos.services.runtime_action_grants import (
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.tool_contract import (
     declared_tool_application_access as _declared_tool_application_access,
-    declared_tool_approval_scope as _declared_tool_approval_scope,
+    declared_tool_contract as _declared_tool_contract,
     declared_tool_permissions as _declared_tool_permissions,
     declared_tool_side_effects as _declared_tool_side_effects,
     side_effects_are_read_only as _declared_side_effects_are_read_only,
@@ -1355,6 +1355,44 @@ def _resolve_tool_webspace_id(
     return token or default_webspace_id()
 
 
+def _dev_application_project_ref(body: "ToolCall", ctx: AgentContext) -> str | None:
+    """Resolve the DEV Project from the server-owned webspace selection.
+
+    Tool arguments and request context are caller-controlled, so neither may
+    select one of several Projects that share a component.  The workspace
+    index is the local authority for the current DEV scenario.  Builder uses
+    the same stable id for an application's Project and owned scenario; the
+    Project ownership check still verifies that it owns the executing skill.
+    """
+
+    webspace_id = _resolve_tool_webspace_id(body.arguments or {}, context=body.context)
+    try:
+        from adaos.services.workspaces import index as workspace_index
+
+        manifest = workspace_index.get_workspace(webspace_id)
+        if manifest is None or not bool(getattr(manifest, "is_dev", False)):
+            return None
+        scenario_id = str(
+            getattr(manifest, "current_scenario_overlay", None)
+            or getattr(manifest, "home_scenario", None)
+            or ""
+        ).strip()
+        projects_dir = getattr(getattr(ctx, "paths", None), "dev_projects_dir", None)
+        if not scenario_id or not callable(projects_dir):
+            return None
+        project_manifest = Path(projects_dir()) / scenario_id / "project.yaml"
+        if not project_manifest.is_file():
+            return None
+        return f"project:{scenario_id}"
+    except Exception:
+        _log.debug(
+            "failed to resolve DEV Application Project from webspace=%s",
+            webspace_id,
+            exc_info=True,
+        )
+        return None
+
+
 def _resolve_target_node_id(
     payload: Dict[str, Any],
     *,
@@ -1920,10 +1958,16 @@ async def _authorize_application_tool_call(
                 status_code=503,
                 detail={"error": "dev_application_authority_unavailable"},
             )
+        request_context = _mapping(body.context)
+        requested_project_ref = await asyncio.to_thread(
+            _dev_application_project_ref,
+            body,
+            ctx,
+        )
         authority = await asyncio.to_thread(
             application_permissions_context,
             component_ref=f"skill:{skill_name}",
-            requested_project_ref=None,
+            requested_project_ref=requested_project_ref or None,
             dev_projects_root=Path(projects_dir()),
             dev_skills_root=Path(skills_dir()),
         )
@@ -1978,7 +2022,6 @@ async def _authorize_application_tool_call(
                 status_code=403,
                 detail={"error": "dev_application_context_invalid"},
             )
-        request_context = _mapping(body.context)
         verified = {
             "application_id": application_id,
             "application_title": application_id,
@@ -2694,33 +2737,28 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         declared_component_permissions: tuple[str, ...] = ()
         declared_application_access: dict[str, Any] = {}
     else:
-        declared_side_effects = await asyncio.to_thread(
-            _declared_tool_side_effects,
+        declared_contract = await asyncio.to_thread(
+            _declared_tool_contract,
             mgr,
             skill_name=skill_name,
             public_tool=public_tool,
             dev=bool(body.dev),
         )
-        declared_approval_scope = await asyncio.to_thread(
-            _declared_tool_approval_scope,
-            mgr,
-            skill_name=skill_name,
-            public_tool=public_tool,
-            dev=bool(body.dev),
+        declared_side_effects = str(declared_contract.get("side_effects") or "")
+        declared_approval_scope = dict(
+            declared_contract.get("approval_scope")
+            if isinstance(declared_contract.get("approval_scope"), Mapping)
+            else {}
         )
-        declared_component_permissions = await asyncio.to_thread(
-            _declared_tool_permissions,
-            mgr,
-            skill_name=skill_name,
-            public_tool=public_tool,
-            dev=bool(body.dev),
+        declared_component_permissions = tuple(
+            str(item)
+            for item in declared_contract.get("permissions") or ()
+            if str(item)
         )
-        declared_application_access = await asyncio.to_thread(
-            _declared_tool_application_access,
-            mgr,
-            skill_name=skill_name,
-            public_tool=public_tool,
-            dev=bool(body.dev),
+        declared_application_access = dict(
+            declared_contract.get("application_access")
+            if isinstance(declared_contract.get("application_access"), Mapping)
+            else {}
         )
     trusted_read_only = _declared_side_effects_are_read_only(declared_side_effects)
     if body.intent == "read" and not trusted_read_only:

@@ -4022,6 +4022,84 @@ def test_rebuild_in_doc_async_offloads_catalog_and_resolution(monkeypatch) -> No
     assert runtime._last_materialized_payload == payload
 
 
+def test_payload_from_doc_offloads_catalog_and_resolution(monkeypatch) -> None:
+    calls: list[str] = []
+    captured: dict[str, object] = {}
+    inputs = webspace_runtime_module.WebspaceResolverInputs(
+        webspace_id="desktop",
+        scenario_id="builder",
+        source_mode="workspace",
+    )
+    resolved = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id="desktop",
+        scenario_id="builder",
+        source_mode="workspace",
+    )
+    payload = {"schema": "adaos.webspace.materialized_payload.v1"}
+
+    async def _fake_run_cpu(function, *args, **kwargs):
+        calls.append(function.__name__)
+        return function(*args, **kwargs)
+
+    def _prepare_catalog_sources(
+        _webspace_id,
+        scenario_id,
+        _materialization_identity,
+        **_kwargs,
+    ):
+        assert scenario_id == "builder"
+        return (
+            [{"skill": "worker"}],
+            "skills-fingerprint",
+            [("builder", "Builder", "hammer")],
+            {"prepared": True, "trial_active": False},
+        )
+
+    def _collect_inputs(_doc, _webspace_id, **kwargs):
+        captured.update(kwargs)
+        return inputs
+
+    def _resolve_payload(_inputs):
+        return resolved, payload, {"resolve": 3.0}
+
+    monkeypatch.setattr(webspace_runtime_module, "_run_materialization_cpu", _fake_run_cpu)
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
+    monkeypatch.setattr(
+        runtime,
+        "_prepare_materialization_catalog_sources_sync",
+        _prepare_catalog_sources,
+    )
+    monkeypatch.setattr(runtime, "_collect_resolver_inputs_in_doc", _collect_inputs)
+    monkeypatch.setattr(
+        runtime,
+        "_resolve_materialized_payload_from_inputs_sync",
+        _resolve_payload,
+    )
+
+    entry = asyncio.run(
+        runtime.resolve_materialized_payload_from_doc_async(
+            _FakeDoc({"ui": _FakeMap({"current_scenario": "builder"})}),
+            "desktop",
+        )
+    )
+
+    assert calls == [
+        "_selected_preview_inputs",
+        "_prepare_catalog_sources",
+        "_resolve_payload",
+    ]
+    assert captured["skill_decls_override"] == [{"skill": "worker"}]
+    assert captured["desktop_scenarios_override"] == [
+        ("builder", "Builder", "hammer")
+    ]
+    assert captured["external_inputs_override"] == {
+        "prepared": True,
+        "trial_active": False,
+    }
+    assert entry.scenario_id == "builder"
+    assert runtime._last_materialized_payload == payload
+
+
 def test_go_home_webspace_uses_manifest_home_scenario(monkeypatch) -> None:
     webspace_id = "phase2-go-home"
     _pair_preview(webspace_id)

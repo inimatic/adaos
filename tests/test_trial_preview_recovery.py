@@ -102,6 +102,21 @@ async def test_room_resolution_recovers_selected_trial_before_generic_source_loa
         def collect(*args, **kwargs):
             captured.update(kwargs)
             return SimpleNamespace()
+        monkeypatch.setattr(
+            runtime,
+            "_prepare_materialization_external_sources_sync",
+            lambda _webspace_id, _scenario_id, declarations, fingerprint,
+            materialization_identity, **_kwargs: (
+                list(declarations),
+                fingerprint,
+                [],
+                {
+                    "prepared": True,
+                    "trial_active": False,
+                    "materialization_identity": dict(materialization_identity or {}),
+                },
+            ),
+        )
         monkeypatch.setattr(runtime, "_collect_resolver_inputs_in_doc", collect)
         monkeypatch.setattr(runtime, "_resolve_materialized_payload_from_inputs_sync", lambda inputs: (
             SimpleNamespace(to_registry_entry=lambda: expected), {}, {},

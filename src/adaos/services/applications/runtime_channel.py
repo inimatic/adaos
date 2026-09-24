@@ -90,10 +90,13 @@ class ApplicationRuntimeChannel:
     @classmethod
     def list_selections(cls, state_dir: Path, *, include_pending: bool = False) -> tuple[RuntimeSelection, ...]:
         values = []
-        root = Path(state_dir) / "applications/runtime_channels"
+        # The channel root is local authority, not an untrusted path.  Resolve
+        # it lexically once; resolving every SQLite file performs avoidable
+        # filesystem realpath work and was visible as an owner-loop stall.
+        root = (Path(state_dir) / "applications/runtime_channels").absolute()
         for path in root.glob("*.sqlite3"):
             try:
-                with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.25)) as connection:
+                with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.25)) as connection:
                     if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel'").fetchone():
                         continue
                     row = connection.execute("SELECT document FROM channel WHERE id=1").fetchone()

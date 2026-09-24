@@ -41,3 +41,42 @@ permission_profile:
         "tests/test_application_contract.py" in requirement
         for requirement in context["authoring_requirements"]
     )
+
+
+def test_requested_project_resolves_owner_without_ambiguous_global_scan(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    skills = tmp_path / "skills"
+    for project_id in ("mail_client", "mail_manager"):
+        project = projects / project_id
+        project.mkdir(parents=True)
+        (project / "project.yaml").write_text(
+            f"""
+id: {project_id}
+components:
+  owned:
+    - ref: skill:gmail_provider
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: providers.google.gmail
+      purpose: Use Gmail.
+  optional: []
+""".lstrip(),
+            encoding="utf-8",
+        )
+    skill = skills / "gmail_provider"
+    skill.mkdir(parents=True)
+    (skill / "skill.yaml").write_text(
+        "name: gmail_provider\ncapabilities: [providers.google.gmail]\n",
+        encoding="utf-8",
+    )
+
+    context = application_permissions_context(
+        component_ref="skill:gmail_provider",
+        requested_project_ref="project:mail_client",
+        dev_projects_root=projects,
+        dev_skills_root=skills,
+    )
+
+    assert context["authority_status"] == "valid"
+    assert context["project_ref"] == "project:mail_client"

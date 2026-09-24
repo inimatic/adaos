@@ -34,6 +34,73 @@ def _resolved_tool_spec(
         return {}
 
 
+def _application_access(spec: dict[str, Any]) -> dict[str, str]:
+    value = spec.get("application_access")
+    if not isinstance(value, dict):
+        return {}
+    allowed = {"permission", "capability", "resource_argument", "provider_argument"}
+    if set(value) - allowed:
+        return {}
+    return {
+        key: str(value.get(key) or "").strip().lower()
+        for key in sorted(allowed)
+        if str(value.get(key) or "").strip()
+    }
+
+
+def declared_tool_contract(
+    manager: Any,
+    *,
+    skill_name: str,
+    public_tool: str,
+    dev: bool,
+) -> dict[str, Any]:
+    """Read all trusted execution fields from one resolved-manifest snapshot.
+
+    Authorization must not assemble one decision from several independently
+    selected runtime revisions.  Reading the manifest once is both cheaper and
+    gives the caller a coherent contract when an A/B slot changes concurrently.
+    """
+
+    spec = _resolved_tool_spec(
+        manager,
+        skill_name=skill_name,
+        public_tool=public_tool,
+        dev=dev,
+    )
+    governance = spec.get("yjs_governance") if isinstance(spec.get("yjs_governance"), dict) else {}
+    raw_permissions = spec.get("permissions")
+    permission_values: list[Any] = []
+    if isinstance(raw_permissions, dict):
+        for key in ("required", "optional"):
+            candidate = raw_permissions.get(key)
+            if isinstance(candidate, list):
+                permission_values.extend(candidate)
+    elif isinstance(raw_permissions, list):
+        permission_values.extend(raw_permissions)
+    approval_scope = spec.get("approval_scope")
+    return {
+        "side_effects": str(
+            governance.get("side_effects")
+            or spec.get("side_effects")
+            or spec.get("sideEffects")
+            or spec.get("effects")
+            or ""
+        ).strip(),
+        "approval_scope": dict(approval_scope) if isinstance(approval_scope, dict) else {},
+        "permissions": tuple(
+            sorted(
+                {
+                    str(item).strip().lower()
+                    for item in permission_values
+                    if str(item).strip()
+                }
+            )
+        ),
+        "application_access": _application_access(spec),
+    }
+
+
 def declared_tool_side_effects(
     manager: Any,
     *,
@@ -48,20 +115,13 @@ def declared_tool_side_effects(
     method-name heuristics are deliberately excluded from this contract.
     """
 
-    spec = _resolved_tool_spec(
+    contract = declared_tool_contract(
         manager,
         skill_name=skill_name,
         public_tool=public_tool,
         dev=dev,
     )
-    governance = spec.get("yjs_governance") if isinstance(spec.get("yjs_governance"), dict) else {}
-    return str(
-        governance.get("side_effects")
-        or spec.get("side_effects")
-        or spec.get("sideEffects")
-        or spec.get("effects")
-        or ""
-    ).strip()
+    return str(contract.get("side_effects") or "")
 
 
 def declared_tool_approval_scope(
@@ -73,13 +133,13 @@ def declared_tool_approval_scope(
 ) -> dict[str, Any]:
     """Return a trusted, manifest-declared reusable approval scope."""
 
-    spec = _resolved_tool_spec(
+    contract = declared_tool_contract(
         manager,
         skill_name=skill_name,
         public_tool=public_tool,
         dev=dev,
     )
-    scope = spec.get("approval_scope")
+    scope = contract.get("approval_scope")
     return dict(scope) if isinstance(scope, dict) else {}
 
 
@@ -92,22 +152,14 @@ def declared_tool_permissions(
 ) -> tuple[str, ...]:
     """Return normalized capability ids admitted by the resolved tool manifest."""
 
-    spec = _resolved_tool_spec(
+    contract = declared_tool_contract(
         manager,
         skill_name=skill_name,
         public_tool=public_tool,
         dev=dev,
     )
-    raw = spec.get("permissions")
-    values: list[Any] = []
-    if isinstance(raw, dict):
-        for key in ("required", "optional"):
-            candidate = raw.get(key)
-            if isinstance(candidate, list):
-                values.extend(candidate)
-    elif isinstance(raw, list):
-        values.extend(raw)
-    return tuple(sorted({str(item).strip().lower() for item in values if str(item).strip()}))
+    raw = contract.get("permissions")
+    return tuple(raw) if isinstance(raw, tuple) else ()
 
 
 def declared_tool_application_access(
@@ -119,27 +171,19 @@ def declared_tool_application_access(
 ) -> dict[str, Any]:
     """Return a bounded Application permission/capability mapping from the manifest."""
 
-    spec = _resolved_tool_spec(
+    contract = declared_tool_contract(
         manager,
         skill_name=skill_name,
         public_tool=public_tool,
         dev=dev,
     )
-    value = spec.get("application_access")
-    if not isinstance(value, dict):
-        return {}
-    allowed = {"permission", "capability", "resource_argument", "provider_argument"}
-    if set(value) - allowed:
-        return {}
-    return {
-        key: str(value.get(key) or "").strip().lower()
-        for key in sorted(allowed)
-        if str(value.get(key) or "").strip()
-    }
+    value = contract.get("application_access")
+    return dict(value) if isinstance(value, dict) else {}
 
 
 __all__ = [
     "READ_ONLY_SIDE_EFFECTS",
+    "declared_tool_contract",
     "declared_tool_application_access",
     "declared_tool_approval_scope",
     "declared_tool_permissions",

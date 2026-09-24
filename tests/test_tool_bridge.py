@@ -447,7 +447,11 @@ def test_call_tool_rejects_read_intent_for_trusted_mutating_tool(monkeypatch) ->
     monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
     monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
     monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(tool_bridge_module, "_declared_tool_side_effects", lambda *_args, **_kwargs: "local_write")
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "_declared_tool_contract",
+        lambda *_args, **_kwargs: {"side_effects": "local_write"},
+    )
 
     with pytest.raises(HTTPException) as excinfo:
         asyncio.run(tool_bridge_module.call_tool(
@@ -492,8 +496,10 @@ def test_call_tool_allows_trusted_reads_but_rejects_mutations_while_draining(mon
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
     monkeypatch.setattr(
         tool_bridge_module,
-        "_declared_tool_side_effects",
-        lambda _manager, *, public_tool, **_kwargs: "none" if public_tool == "list" else "local_write",
+        "_declared_tool_contract",
+        lambda _manager, *, public_tool, **_kwargs: {
+            "side_effects": "none" if public_tool == "list" else "local_write"
+        },
     )
 
     result = asyncio.run(tool_bridge_module.call_tool(
@@ -798,7 +804,11 @@ def test_call_tool_does_not_proxy_domain_failure_from_ready_read_runtime(monkeyp
     monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
     monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
-    monkeypatch.setattr(tool_bridge_module, "_declared_tool_side_effects", lambda *_args, **_kwargs: "read_only")
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "_declared_tool_contract",
+        lambda *_args, **_kwargs: {"side_effects": "read_only"},
+    )
     monkeypatch.setattr(tool_bridge_module, "_runtime_ready", lambda *_args: True)
     monkeypatch.setattr(
         tool_bridge_module,
@@ -1328,6 +1338,80 @@ capabilities:
         assert updated.context["_verified_application_access"] == verified
     finally:
         clear_application()
+
+
+def test_dev_application_context_uses_server_owned_webspace_project(
+    tmp_path, monkeypatch
+) -> None:
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.policy.caller import verified_caller
+
+    projects = tmp_path / "projects"
+    skills = tmp_path / "skills"
+    (projects / "mail_client").mkdir(parents=True)
+    (skills / "mail_provider").mkdir(parents=True)
+    (projects / "mail_client" / "project.yaml").write_text(
+        """
+id: mail_client
+components:
+  owned:
+    - ref: scenario:mail_client
+    - ref: skill:mail_provider
+permission_profile:
+  schema: adaos.application.permission_profile.v1
+  required:
+    - id: providers.google.gmail
+      purpose: Use Gmail.
+  optional: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (skills / "mail_provider" / "skill.yaml").write_text(
+        "name: mail_provider\ncapabilities: [providers.google.gmail]\n",
+        encoding="utf-8",
+    )
+
+    class _Paths:
+        def dev_projects_dir(self):
+            return projects
+
+        def dev_skills_dir(self):
+            return skills
+
+    monkeypatch.setattr(
+        "adaos.services.workspaces.index.get_workspace",
+        lambda _webspace_id: SimpleNamespace(
+            is_dev=True,
+            current_scenario_overlay="mail_client",
+            home_scenario="web_desktop",
+        ),
+    )
+    body = tool_bridge_module.ToolCall(
+        tool="mail_provider:list_messages",
+        arguments={"webspace_id": "desktop-dev"},
+        context={"application_id": "caller-controlled-project"},
+        dev=True,
+    )
+    with verified_caller(SubjectRef("user", "owner")):
+        _, access = asyncio.run(
+            tool_bridge_module._authorize_application_tool_call(
+                body=body,
+                request=SimpleNamespace(headers={}),
+                ctx=SimpleNamespace(paths=_Paths()),
+                skill_name="mail_provider",
+                public_tool="list_messages",
+                manager=object(),
+                declared_side_effects="none",
+                component_capabilities=("providers.google.gmail",),
+                application_contract={
+                    "permission": "providers.google.gmail",
+                    "capability": "mail.read",
+                },
+            )
+        )
+
+    assert access is not None
+    assert access["context"]["application_id"] == "mail_client"
 
 
 def test_dev_application_context_rejects_undeclared_tool_permission(
@@ -2389,7 +2473,11 @@ def test_call_tool_uses_timeout_header_for_local_runtime(monkeypatch) -> None:
     monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-timeout")
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
-    monkeypatch.setattr(tool_bridge_module, "_declared_tool_side_effects", lambda *_args, **_kwargs: "local_write")
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "_declared_tool_contract",
+        lambda *_args, **_kwargs: {"side_effects": "local_write"},
+    )
     monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", _allow_action)
     monkeypatch.setattr(tool_bridge_module, "_workspace_skill_source_exists", lambda *_args, **_kwargs: False)
 
@@ -2984,7 +3072,11 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
     monkeypatch.setattr(tool_bridge_module, "get_directory", lambda: _FakeDirectory())
     monkeypatch.setattr(tool_bridge_module, "get_hub_link_manager", lambda: _FakeLinkManager())
-    monkeypatch.setattr(tool_bridge_module, "_declared_tool_side_effects", lambda *_args, **_kwargs: "none")
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "_declared_tool_contract",
+        lambda *_args, **_kwargs: {"side_effects": "none"},
+    )
 
     result = asyncio.run(
         tool_bridge_module.call_tool(

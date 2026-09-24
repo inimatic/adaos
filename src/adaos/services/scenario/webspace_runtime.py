@@ -5730,6 +5730,8 @@ class WebspaceScenarioRuntime:
         webspace_id: str,
         scenario_id: str,
         materialization_identity: Mapping[str, Any] | None = None,
+        *,
+        source_mode_override: str | None = None,
     ) -> tuple[
         List[Dict[str, Any]],
         str,
@@ -5738,23 +5740,64 @@ class WebspaceScenarioRuntime:
     ]:
         """Collect filesystem-backed resolver inputs outside the owner loop."""
 
-        source_mode = _resolve_projection_refresh_space(webspace_id)
+        source_mode = (
+            str(source_mode_override or "").strip()
+            or _resolve_projection_refresh_space(webspace_id)
+        )
         declarations = self._collect_skill_decls(source_mode)
         fingerprint = str(getattr(self, "_last_skill_decls_fingerprint", "") or "").strip()
+        return self._prepare_materialization_external_sources_sync(
+            webspace_id,
+            scenario_id,
+            declarations,
+            fingerprint,
+            materialization_identity,
+            source_mode_override=source_mode,
+        )
+
+    def _prepare_materialization_external_sources_sync(
+        self,
+        webspace_id: str,
+        scenario_id: str,
+        declarations: Iterable[Mapping[str, Any]],
+        fingerprint: str,
+        materialization_identity: Mapping[str, Any] | None = None,
+        *,
+        source_mode_override: str | None = None,
+    ) -> tuple[
+        List[Dict[str, Any]],
+        str,
+        List[Tuple[str, ...]],
+        Dict[str, Any],
+    ]:
+        """Prepare filesystem-backed inputs when declarations already exist."""
+
+        source_mode = (
+            str(source_mode_override or "").strip()
+            or _resolve_projection_refresh_space(webspace_id)
+        )
+        prepared_declarations = [
+            dict(item) for item in declarations if isinstance(item, Mapping)
+        ]
         desktop_scenarios = self._list_desktop_scenarios(space=source_mode)
-        declarations, fingerprint, external_inputs = (
+        prepared_declarations, prepared_fingerprint, external_inputs = (
             _RUNTIME.resolution.prepare_external_inputs(
                 self,
                 _resolution_operations(self.ctx),
                 webspace_id,
                 scenario_id,
                 source_mode=source_mode,
-                skill_decls=declarations,
-                skill_decls_fingerprint=fingerprint,
+                skill_decls=prepared_declarations,
+                skill_decls_fingerprint=str(fingerprint or "").strip(),
                 materialization_identity=materialization_identity,
             )
         )
-        return declarations, fingerprint, desktop_scenarios, external_inputs
+        return (
+            prepared_declarations,
+            prepared_fingerprint,
+            desktop_scenarios,
+            external_inputs,
+        )
 
     async def resolve_materialized_payload_from_doc_async(
         self,
@@ -5793,14 +5836,45 @@ class WebspaceScenarioRuntime:
 
         prepared_skill_decls = skill_decls_snapshot
         prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
+        prepared_scenario_id = str(scenario_id or "").strip()
+        if not prepared_scenario_id:
+            ui_map = ydoc.get_map("ui")
+            prepared_scenario_id = (
+                str(ui_map.get("current_scenario") or "web_desktop").strip()
+                or "web_desktop"
+            )
         if prepared_skill_decls is None:
             stage_started = time.perf_counter()
-            prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
-                self._prepare_materialization_skill_decls_sync,
+            (
+                prepared_skill_decls,
+                prepared_skill_fingerprint,
+                desktop_scenarios,
+                external_inputs,
+            ) = await _run_materialization_cpu(
+                self._prepare_materialization_catalog_sources_sync,
                 webspace_id,
-                skill_source_mode,
+                prepared_scenario_id,
+                materialization_identity,
+                source_mode_override=skill_source_mode,
             )
-            _record_timing(timings, "prepare_skill_decls", stage_started)
+            _record_timing(timings, "prepare_catalog_sources", stage_started)
+        else:
+            stage_started = time.perf_counter()
+            (
+                prepared_skill_decls,
+                prepared_skill_fingerprint,
+                desktop_scenarios,
+                external_inputs,
+            ) = await _run_materialization_cpu(
+                self._prepare_materialization_external_sources_sync,
+                webspace_id,
+                prepared_scenario_id,
+                prepared_skill_decls,
+                prepared_skill_fingerprint,
+                materialization_identity,
+                source_mode_override=skill_source_mode,
+            )
+            _record_timing(timings, "prepare_external_sources", stage_started)
 
         _raise_if_rebuild_request_superseded(webspace_id, request_id)
         stage_started = time.perf_counter()
@@ -5811,7 +5885,9 @@ class WebspaceScenarioRuntime:
             scenario_id_override=scenario_id,
             skill_decls_override=prepared_skill_decls,
             skill_decls_fingerprint_override=prepared_skill_fingerprint,
+            desktop_scenarios_override=desktop_scenarios,
             scenario_content_override=scenario_content_override,
+            external_inputs_override=external_inputs,
         )
         _record_timing(timings, "collect_inputs", stage_started)
         timings.update(_copy_timing_map(self._last_collect_inputs_timings_ms) or {})

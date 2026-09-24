@@ -3065,6 +3065,7 @@ class SkillManager:
             "runtime_bucket": env.runtime_bucket(version),
             "active_slot": active_slot,
             "resolved_manifest": str(resolved_path),
+            "source_manifest_digest": slot_meta.get("source_manifest_digest"),
             "ready": ready,
             "active_selection_valid": bool(active_selection["valid"]),
             "active_selection_reason": active_selection["reason"],
@@ -3144,6 +3145,7 @@ class SkillManager:
             "runtime_bucket": env.runtime_bucket(version),
             "active_slot": active_slot,
             "resolved_manifest": str(resolved_path),
+            "source_manifest_digest": slot_meta.get("source_manifest_digest"),
             "ready": ready,
             "active_selection_valid": bool(active_selection["valid"]),
             "active_selection_reason": active_selection["reason"],
@@ -3412,6 +3414,7 @@ class SkillManager:
         active_slot = status.get("active_slot")
         manifest_path = Path(status["resolved_manifest"])
         slot_name = active_slot
+        source_revision = str(status.get("source_manifest_digest") or "").strip() or None
 
         if not status.get("ready", True):
             target_slot = slot or status.get("pending_slot")
@@ -3425,6 +3428,7 @@ class SkillManager:
             metadata = env.read_version_metadata(target_version)
             slot_paths = env.build_slot_paths(target_version, target_slot)
             slot_meta = metadata.get("slots", {}).get(target_slot, {})
+            source_revision = str(slot_meta.get("source_manifest_digest") or "").strip() or None
             manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
             if not manifest_path.exists():
                 raise RuntimeError(f"slot {target_slot} for version {target_version} is not prepared")
@@ -3435,6 +3439,7 @@ class SkillManager:
             metadata = env.read_version_metadata(version)
             slot_paths = env.build_slot_paths(version, slot)
             slot_meta = metadata.get("slots", {}).get(slot, {})
+            source_revision = str(slot_meta.get("source_manifest_digest") or "").strip() or None
             candidate = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
             if not candidate.exists():
                 raise RuntimeError(f"slot {slot} for version {version} is not prepared")
@@ -3545,6 +3550,7 @@ class SkillManager:
                     attr=attr,
                     payload=payload,
                     extra_paths=extra_paths,
+                    source_revision=source_revision,
                 )
                 call_timings["execute_tool_ms"] = (time.perf_counter() - step_started) * 1000.0
                 step_started = time.perf_counter()
@@ -3637,6 +3643,7 @@ class SkillManager:
         active_slot = status.get("active_slot")
         manifest_path = Path(status["resolved_manifest"])
         slot_name = active_slot
+        source_revision = str(status.get("source_manifest_digest") or "").strip() or None
 
         if not status.get("ready", True):
             target_slot = slot or status.get("pending_slot")
@@ -3650,6 +3657,7 @@ class SkillManager:
             metadata = env.read_version_metadata(target_version)
             slot_paths = env.build_slot_paths(target_version, target_slot)
             slot_meta = metadata.get("slots", {}).get(target_slot, {})
+            source_revision = str(slot_meta.get("source_manifest_digest") or "").strip() or None
             manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
             if not manifest_path.exists():
                 raise RuntimeError(f"slot {target_slot} for version {target_version} is not prepared")
@@ -3660,6 +3668,7 @@ class SkillManager:
             metadata = env.read_version_metadata(version)
             slot_paths = env.build_slot_paths(version, slot)
             slot_meta = metadata.get("slots", {}).get(slot, {})
+            source_revision = str(slot_meta.get("source_manifest_digest") or "").strip() or None
             candidate = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
             if not candidate.exists():
                 raise RuntimeError(f"slot {slot} for version {version} is not prepared")
@@ -3754,6 +3763,7 @@ class SkillManager:
                     attr=attr,
                     payload=payload,
                     extra_paths=extra_paths,
+                    source_revision=source_revision,
                 )
                 return _resolve_sync_tool_result(result)
 

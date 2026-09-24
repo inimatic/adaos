@@ -254,6 +254,82 @@ def test_execute_tool_reloads_skill_modules_when_source_changes(tmp_path: Path) 
     assert second["marker"] == "two"
 
 
+def test_execute_tool_reuses_prepared_import_context_for_immutable_revision(
+    tmp_path: Path, monkeypatch
+) -> None:
+    skill_dir = _write_skill(tmp_path, "immutable_skill", "one")
+    purge_calls = 0
+    original_purge = runtime_runner_module._purge_conflicting_local_modules
+
+    def counted_purge(skill_path: Path) -> None:
+        nonlocal purge_calls
+        purge_calls += 1
+        original_purge(skill_path)
+
+    monkeypatch.setattr(
+        runtime_runner_module,
+        "_purge_conflicting_local_modules",
+        counted_purge,
+    )
+    previous_context = runtime_runner_module._PREPARED_IMPORT_CONTEXT
+    runtime_runner_module._PREPARED_IMPORT_CONTEXT = None
+    try:
+        first = runtime_runner_module.execute_tool(
+            skill_dir,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+            source_revision="sha256:one",
+        )
+        second = runtime_runner_module.execute_tool(
+            skill_dir,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+            source_revision="sha256:one",
+        )
+    finally:
+        runtime_runner_module._PREPARED_IMPORT_CONTEXT = previous_context
+
+    assert first["marker"] == "one"
+    assert second["marker"] == "one"
+    assert purge_calls == 1
+
+
+def test_execute_tool_revision_change_reloads_even_with_preserved_mtime(tmp_path: Path) -> None:
+    skill_dir = _write_skill(tmp_path, "revisioned_skill", "one")
+    handler = skill_dir / "handlers" / "main.py"
+    original_mtime_ns = handler.stat().st_mtime_ns
+    previous_context = runtime_runner_module._PREPARED_IMPORT_CONTEXT
+    runtime_runner_module._PREPARED_IMPORT_CONTEXT = None
+    try:
+        first = runtime_runner_module.execute_tool(
+            skill_dir,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+            source_revision="sha256:one",
+        )
+        handler.write_text(
+            "def get_snapshot(**kwargs):\n"
+            "    return {'skill': 'revisioned_skill', 'marker': 'two', 'kwargs': dict(kwargs)}\n",
+            encoding="utf-8",
+        )
+        os.utime(handler, ns=(original_mtime_ns, original_mtime_ns))
+        second = runtime_runner_module.execute_tool(
+            skill_dir,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+            source_revision="sha256:two",
+        )
+    finally:
+        runtime_runner_module._PREPARED_IMPORT_CONTEXT = previous_context
+
+    assert first["marker"] == "one"
+    assert second["marker"] == "two"
+
+
 def test_execute_tool_does_not_reuse_stale_skill_module_across_slot_paths(tmp_path: Path) -> None:
     slot_a = tmp_path / "slots" / "A" / "src" / "skills"
     slot_b = tmp_path / "slots" / "B" / "src" / "skills"
@@ -298,7 +374,7 @@ def test_execute_tool_uses_exact_active_slot_when_old_skills_package_is_loaded(t
     slot_b = tmp_path / "slots" / "B" / "src"
     (slot_a / "skills").mkdir(parents=True, exist_ok=True)
     (slot_a / "skills" / "__init__.py").write_text("", encoding="utf-8")
-    old_skill = _write_skill(slot_a / "skills", "builder_skill", "old-slot")
+    _write_skill(slot_a / "skills", "builder_skill", "old-slot")
     new_skill = _write_skill(slot_b / "skills", "builder_skill", "new-slot")
 
     tracked_prefixes = ("skills", "builder_skill", "handlers", "_adaos_runtime.builder_skill")

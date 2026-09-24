@@ -24,6 +24,8 @@ import yaml
 _LOG = logging.getLogger("adaos.services.skills_loader")
 _HANDLER_IMPORT_LOCK = threading.RLock()
 _LOADED_HANDLER_SOURCES: dict[str, dict[str, Any]] = {}
+_LOADED_HANDLER_PATH_INDEX: dict[str, str] = {}
+_LOADED_HANDLER_MISS_CACHE: dict[str, tuple[tuple[int, int, int, int], int]] = {}
 _RETIRED_HANDLER_SOURCES: list[dict[str, Any]] = []
 _RETIRED_HANDLER_SOURCES_LIMIT = 128
 _RETIRED_HANDLER_TOTAL = 0
@@ -76,6 +78,7 @@ def _record_loaded_handler_source(module_name: str, path: Path) -> dict[str, Any
     global _RETIRED_HANDLER_TOTAL
     previous_same_module = _LOADED_HANDLER_SOURCES.get(str(module_name))
     resolved = path.resolve()
+    path_key = os.path.normcase(str(resolved))
     stat = resolved.stat()
     loaded_at = time.time()
     loaded_digest = _source_digest(resolved)
@@ -130,7 +133,11 @@ def _record_loaded_handler_source(module_name: str, path: Path) -> dict[str, Any
             declarations = retire_module_declarations(superseded_modules)
             retired_at = time.time()
             for name in superseded_modules:
-                _LOADED_HANDLER_SOURCES.pop(name, None)
+                retired = _LOADED_HANDLER_SOURCES.pop(name, None)
+                if isinstance(retired, dict):
+                    retired_path = os.path.normcase(str(retired.get("path") or ""))
+                    if _LOADED_HANDLER_PATH_INDEX.get(retired_path) == name:
+                        _LOADED_HANDLER_PATH_INDEX.pop(retired_path, None)
                 sys.modules.pop(name, None)
             for name, previous in superseded_records:
                 _RETIRED_HANDLER_SOURCES.append(
@@ -154,7 +161,13 @@ def _record_loaded_handler_source(module_name: str, path: Path) -> dict[str, Any
                 ",".join(sorted(name for name, _previous in superseded_records)),
                 json.dumps(declarations, sort_keys=True, separators=(",", ":")),
             )
+    if isinstance(previous_same_module, dict):
+        previous_path = os.path.normcase(str(previous_same_module.get("path") or ""))
+        if _LOADED_HANDLER_PATH_INDEX.get(previous_path) == str(module_name):
+            _LOADED_HANDLER_PATH_INDEX.pop(previous_path, None)
     _LOADED_HANDLER_SOURCES[str(module_name)] = record
+    _LOADED_HANDLER_PATH_INDEX[path_key] = str(module_name)
+    _LOADED_HANDLER_MISS_CACHE.clear()
     return record
 
 
@@ -181,6 +194,9 @@ def _retire_loaded_skill_sources(skill_name: str, *, retired_by: str) -> dict[st
         retired_at = time.time()
         for name, previous in records:
             _LOADED_HANDLER_SOURCES.pop(name, None)
+            retired_path = os.path.normcase(str(previous.get("path") or ""))
+            if _LOADED_HANDLER_PATH_INDEX.get(retired_path) == name:
+                _LOADED_HANDLER_PATH_INDEX.pop(retired_path, None)
             sys.modules.pop(name, None)
             _RETIRED_HANDLER_SOURCES.append(
                 {
@@ -196,6 +212,7 @@ def _retire_loaded_skill_sources(skill_name: str, *, retired_by: str) -> dict[st
             )
         _RETIRED_HANDLER_TOTAL += len(records)
         del _RETIRED_HANDLER_SOURCES[:-_RETIRED_HANDLER_SOURCES_LIMIT]
+        _LOADED_HANDLER_MISS_CACHE.clear()
     _LOG.info(
         "retired skill handlers skill=%s modules=%s declarations=%s reason=%s",
         target,
@@ -222,12 +239,27 @@ def loaded_handler_module_for_path(path: Path) -> Any | None:
     except OSError:
         return None
     path_key = os.path.normcase(str(resolved))
+    fingerprint = (
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+        int(stat.st_ctime_ns),
+        int(stat.st_ino),
+    )
     with _HANDLER_IMPORT_LOCK:
-        records = sorted(
-            (dict(item) for item in _LOADED_HANDLER_SOURCES.values()),
-            key=lambda item: float(item.get("loaded_at") or 0.0),
-            reverse=True,
-        )
+        miss = _LOADED_HANDLER_MISS_CACHE.get(path_key)
+        if miss == (fingerprint, len(_LOADED_HANDLER_SOURCES)):
+            return None
+        indexed_name = _LOADED_HANDLER_PATH_INDEX.get(path_key)
+        indexed_record = _LOADED_HANDLER_SOURCES.get(indexed_name or "")
+        records = [dict(indexed_record)] if isinstance(indexed_record, dict) else []
+        if not records:
+            if indexed_name:
+                _LOADED_HANDLER_PATH_INDEX.pop(path_key, None)
+            records = sorted(
+                (dict(item) for item in _LOADED_HANDLER_SOURCES.values()),
+                key=lambda item: float(item.get("loaded_at") or 0.0),
+                reverse=True,
+            )
         for record in records:
             try:
                 record_path = Path(str(record.get("path") or "")).resolve()
@@ -235,6 +267,9 @@ def loaded_handler_module_for_path(path: Path) -> Any | None:
                 continue
             if os.path.normcase(str(record_path)) != path_key:
                 continue
+            module_name = str(record.get("module") or "")
+            if module_name:
+                _LOADED_HANDLER_PATH_INDEX[path_key] = module_name
             fingerprint_matches = (
                 int(record.get("loaded_size", -1)) == int(stat.st_size)
                 and int(record.get("loaded_mtime_ns", -1)) == int(stat.st_mtime_ns)
@@ -243,7 +278,7 @@ def loaded_handler_module_for_path(path: Path) -> Any | None:
             )
             if not fingerprint_matches:
                 return None
-            module = sys.modules.get(str(record.get("module") or ""))
+            module = sys.modules.get(module_name)
             if module is None:
                 return None
             try:
@@ -251,6 +286,10 @@ def loaded_handler_module_for_path(path: Path) -> Any | None:
             except OSError:
                 return None
             return module if os.path.normcase(str(module_path)) == path_key else None
+        _LOADED_HANDLER_MISS_CACHE[path_key] = (
+            fingerprint,
+            len(_LOADED_HANDLER_SOURCES),
+        )
     return None
 
 
