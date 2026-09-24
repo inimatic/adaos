@@ -9764,7 +9764,7 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             workspace,
             checks,
             errors,
-            changed_paths=changed_paths,
+            changed_paths=contract_test_paths,
         )
         self._validate_shared_delivery_tool_effects(
             assignment,
@@ -10579,12 +10579,14 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
         target_id = str(target.get("id") or "").strip()
         if target_id and Path(target_id).name == target_id:
             if target_kind == "skill":
+                result.add(f"skills/{target_id}/skill.yaml")
                 owned_test_roots.add(workspace / "skills" / target_id / "tests")
             elif target_kind == "scenario":
                 owned_test_roots.add(workspace / "scenarios" / target_id / "tests")
         for skill_id in artifacts.get("companion_skill_ids") or []:
             token = str(skill_id or "").strip()
             if token and Path(token).name == token:
+                result.add(f"skills/{token}/skill.yaml")
                 owned_test_roots.add(workspace / "skills" / token / "tests")
         for tests_root in owned_test_roots:
             if not tests_root.is_dir():

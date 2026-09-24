@@ -9516,7 +9516,10 @@ def test_worker_revalidates_owned_tests_for_unchanged_retry(tmp_path: Path) -> N
         request, workspace, changed_paths=set()
     )
 
-    assert selected == {"skills/owned/tests/test_behavior.py"}
+    assert selected == {
+        "skills/owned/skill.yaml",
+        "skills/owned/tests/test_behavior.py",
+    }
 
 
 def test_worker_does_not_admit_attachment_bindings_from_system_context(
